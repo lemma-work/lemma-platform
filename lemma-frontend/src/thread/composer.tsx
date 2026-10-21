@@ -3,6 +3,7 @@ import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type DragEve
 import {
     canSend,
     describeSize,
+    namePasted,
     offered,
     type Attachment,
 } from "./attachments";
@@ -86,6 +87,7 @@ export const Composer = memo(function Composer({
     choices,
     onTall,
     draftKey,
+    model,
 }: {
     placeholder: string;
     note?: string;
@@ -128,6 +130,11 @@ export const Composer = memo(function Composer({
      *  after switching away and back (`drafts.ts`). Null keeps it only as long
      *  as the box. */
     draftKey?: string | null;
+    /** Which model this conversation answers on, drawn in the action row
+     *  beside the paperclip. A node rather than a prop per field, because what
+     *  it holds — the runtimes, the conversation's own pin — is the pane's to
+     *  read, and the box has no business knowing about either. */
+    model?: ReactNode;
 }) {
     const hintId = useId();
     const chosen = choices?.options.find((option) => option.id === choices.value) ?? null;
@@ -322,6 +329,7 @@ export const Composer = memo(function Composer({
             <div className="composer__row">
                 {choices && <Choices choices={choices} />}
                 <div className="composer__box">
+                    {model}
                     {takesFiles && (
                         <>
                             <input
@@ -365,7 +373,11 @@ export const Composer = memo(function Composer({
                             const files = Array.from(event.clipboardData.files);
                             if (files.length === 0) return;
                             event.preventDefault();
-                            offer(files);
+                            /* Named here: every clipboard image is called
+                               `image.png`, so two of them in one message would
+                               be one name, and a folder already holding one
+                               would have nowhere to put either. */
+                            offer(namePasted(files));
                         } : undefined}
                         onKeyDown={(event) => {
                             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {

@@ -27,6 +27,7 @@ from uuid import UUID
 
 from opentelemetry import metrics
 from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models import Model
 
 from app.modules.agent.config import agent_settings
@@ -82,11 +83,15 @@ _OUTCOME_FALLBACK = "fallback"
 _OUTCOME_FAILED = "failed"
 
 _MAX_TITLE_LEN = 80
+#: A runaway guard, not a budget. It is checked after the response, so a cap a
+#: finished title can exceed throws the title away: a model that reasons anyway
+#: (it ignored ``none``, or was asked without it) spends hundreds of tokens
+#: before the few words, and 256 discarded every one of those titles.
 _TITLE_USAGE_LIMITS = UsageLimits(
     request_limit=1,
     input_tokens_limit=12_000,
-    output_tokens_limit=256,
-    total_tokens_limit=12_256,
+    output_tokens_limit=4_096,
+    total_tokens_limit=16_096,
     count_tokens_before_request=True,
 )
 
@@ -224,14 +229,34 @@ class ConversationTitleGenerator:
         agent = (self._llm_agent or PydanticAIAgent)(
             model, system_prompt=_TITLE_SYSTEM_PROMPT
         )
+        prompt = _build_user_prompt(user_text, reply_text)
+        limits = usage_limits_for(model, _TITLE_USAGE_LIMITS)
+        # No reasoning for a few words, asked of every model.
+        asked = title_model_settings(resolved)
+        plain = title_model_settings(resolved, ask_no_reasoning=False)
         async with metering_execution(usage_context):
-            result = await agent.run(
-                _build_user_prompt(user_text, reply_text),
-                usage_limits=usage_limits_for(model, _TITLE_USAGE_LIMITS),
-                # No reasoning for a few words -- said only to a model that
-                # declares it reasons; see `title_model_settings`.
-                model_settings=provider_model_settings(title_model_settings(resolved)),
-            )
+            try:
+                result = await agent.run(
+                    prompt,
+                    usage_limits=limits,
+                    model_settings=provider_model_settings(asked),
+                )
+            except ModelHTTPError as error:
+                # A strict endpoint refuses a request field it does not know
+                # (400/422): asked once more without the reasoning field --
+                # only when it was sent. A refusal of anything else, or an
+                # auth or rate-limit answer, is the caller's fallback.
+                if asked == plain or error.status_code not in (400, 422):
+                    raise
+                logger.info(
+                    "agent.conversation_title.reasoning_field_refused",
+                    status_code=error.status_code,
+                )
+                result = await agent.run(
+                    prompt,
+                    usage_limits=limits,
+                    model_settings=provider_model_settings(plain),
+                )
 
         return _sanitize_title(str(result.output))
 

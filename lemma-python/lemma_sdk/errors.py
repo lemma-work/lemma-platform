@@ -12,6 +12,22 @@ class LemmaConfigError(LemmaError):
     """Raised when SDK configuration is missing or invalid."""
 
 
+class LemmaInvalidIdError(LemmaError, ValueError):
+    """An id that is not one: Lemma's ids are UUIDs.
+
+    Raised before any request is made. Still a ``ValueError``, so code that
+    caught the bare ``UUID()`` failure keeps working; the message says what was
+    given and what an id looks like, where Python's said "badly formed
+    hexadecimal UUID string"."""
+
+    def __init__(self, value: object) -> None:
+        self.value = value
+        super().__init__(
+            f"{str(value)!r} is not an id: Lemma ids are UUIDs, "
+            "like 0190f2c4-6a1e-7b3d-9c2a-4e5f6a7b8c9d."
+        )
+
+
 @dataclass
 class LemmaAPIError(LemmaError):
     status_code: int

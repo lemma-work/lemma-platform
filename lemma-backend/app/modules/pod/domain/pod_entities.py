@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Mapping, Optional
+from typing import Literal, Mapping, Optional
 from uuid import UUID
 from pydantic import (
     BaseModel,
@@ -37,6 +37,38 @@ class PodRecipe(BaseModel):
     imported_by: UUID
 
 
+TriggerWriteModeSetting = Literal["skip", "each", "batch"]
+
+
+class PodTriggerSettings(BaseModel):
+    """Pod-wide defaults for the pod's DATASTORE triggers."""
+
+    bulk_writes_default: TriggerWriteModeSetting | None = Field(
+        default=None,
+        description=(
+            "What a bulk write does to this pod's triggers that do not say: "
+            "skip (recorded as skipped), each (fire per matching row) or batch "
+            "(one fire with the rows). Omitted means skip."
+        ),
+    )
+
+
+class PodContactSettings(BaseModel):
+    """How the pod treats the people outside it who write to it."""
+
+    auto_acknowledge: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+        description=(
+            "Said once to a contact who writes while their channel's agents are "
+            'off -- for example "Thanks, someone from {pod} will reply" -- '
+            "until a member writes to them or their channel is closed. "
+            "``{pod}`` is the pod's name. Omitted means nothing is said."
+        ),
+    )
+
+
 class PodConfig(BaseModel):
     """Typed pod-level configuration."""
 
@@ -50,6 +82,8 @@ class PodConfig(BaseModel):
     # Bundles installed into this pod, appended on each successful import. Omitted
     # from the serialized config when empty so legacy config blobs are unchanged.
     recipes: list[PodRecipe] = Field(default_factory=list)
+    triggers: PodTriggerSettings | None = None
+    contacts: PodContactSettings | None = None
 
     @field_validator("default_profile_id")
     @classmethod
@@ -93,6 +127,10 @@ class PodConfig(BaseModel):
             data.pop("default_runtime", None)
         if not data.get("recipes"):
             data.pop("recipes", None)
+        if data.get("triggers") is None:
+            data.pop("triggers", None)
+        if data.get("contacts") is None:
+            data.pop("contacts", None)
         return data
 
 

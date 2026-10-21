@@ -124,8 +124,10 @@ class ResendSurfaceAdapter(EmailOneReplyMixin, BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await ResendPlatformService(credentials).send_message(event, message, metadata)
+    ) -> str | None:
+        return await ResendPlatformService(credentials).send_message(
+            event, message, metadata
+        )
 
     async def send_cold_email(
         self,

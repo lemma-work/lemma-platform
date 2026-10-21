@@ -6,14 +6,21 @@ import type { AgentSurfaceListResponse } from '../models/AgentSurfaceListRespons
 import type { AgentSurfaceResponse } from '../models/AgentSurfaceResponse.js';
 import type { AvailableSurfaceChannelsResponse } from '../models/AvailableSurfaceChannelsResponse.js';
 import type { AvailableSurfacesResponse } from '../models/AvailableSurfacesResponse.js';
-import type { GroupDetailResponse } from '../models/GroupDetailResponse.js';
-import type { GroupLinkRequest } from '../models/GroupLinkRequest.js';
-import type { GroupLinkResponse } from '../models/GroupLinkResponse.js';
-import type { GroupListResponse } from '../models/GroupListResponse.js';
-import type { GroupResponse } from '../models/GroupResponse.js';
-import type { GroupStartRequest } from '../models/GroupStartRequest.js';
-import type { GroupTimelineResponse } from '../models/GroupTimelineResponse.js';
-import type { GroupUpdateRequest } from '../models/GroupUpdateRequest.js';
+import type { NoticeRequest } from '../models/NoticeRequest.js';
+import type { NoticeResponse } from '../models/NoticeResponse.js';
+import type { SlackAppCreateRequest } from '../models/SlackAppCreateRequest.js';
+import type { SlackAppCreateResponse } from '../models/SlackAppCreateResponse.js';
+import type { SlackAppWorkspaceListResponse } from '../models/SlackAppWorkspaceListResponse.js';
+import type { SlackAppWorkspaceResponse } from '../models/SlackAppWorkspaceResponse.js';
+import type { SlackConfigurationTokenRequest } from '../models/SlackConfigurationTokenRequest.js';
+import type { SlackInstallAvailabilityResponse } from '../models/SlackInstallAvailabilityResponse.js';
+import type { SlackInstallRequest } from '../models/SlackInstallRequest.js';
+import type { SlackInstallResponse } from '../models/SlackInstallResponse.js';
+import type { SlackManagedWorkspaceListResponse } from '../models/SlackManagedWorkspaceListResponse.js';
+import type { SlackManagedWorkspaceResponse } from '../models/SlackManagedWorkspaceResponse.js';
+import type { SlackManagerBindRequest } from '../models/SlackManagerBindRequest.js';
+import type { SlackSignInRequest } from '../models/SlackSignInRequest.js';
+import type { SlackSignInResponse } from '../models/SlackSignInResponse.js';
 import type { SurfaceCreateRequest } from '../models/SurfaceCreateRequest.js';
 import type { SurfacePlatformSetupGuide } from '../models/SurfacePlatformSetupGuide.js';
 import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
@@ -57,45 +64,79 @@ export class AgentSurfacesService {
         });
     }
     /**
-     * List Groups
-     * Every group the pod's bots are in, most recently changed first.
+     * Send Notice
+     * Tell another member of the pod something, in their own channel. The
+     * same `Idempotency-Key` from the same member is the same notice; sent with
+     * other text, it is refused (422). A member sends at most
+     * `NOTICES_PER_MINUTE` a minute (429).
      * @param podId
-     * @returns GroupListResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentGroupList(
-        podId: string,
-    ): CancelablePromise<GroupListResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/groups',
-            path: {
-                'pod_id': podId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Start Group
-     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
-     *
-     * WhatsApp confirms the group moments later: it comes back ``pending``, and
-     * its invite link appears once confirmed. Telegram and Slack cannot create
-     * groups for a bot; add the bot to one of theirs instead.
-     * @param podId
+     * @param member The member to tell: a pod member id, user id, or email address.
      * @param requestBody
-     * @returns GroupResponse Successful Response
+     * @param idempotencyKey
+     * @returns NoticeResponse Successful Response
      * @throws ApiError
      */
-    public static agentGroupStart(
+    public static agentNoticeSend(
         podId: string,
-        requestBody: GroupStartRequest,
-    ): CancelablePromise<GroupResponse> {
+        member: string,
+        requestBody: NoticeRequest,
+        idempotencyKey?: (string | null),
+    ): CancelablePromise<NoticeResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/pods/{pod_id}/groups',
+            url: '/pods/{pod_id}/members/{member}/notices',
+            path: {
+                'pod_id': podId,
+                'member': member,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                404: `Nobody in this pod is that member.`,
+                422: `Validation Error`,
+                429: `Too many notices this minute; see Retry-After.`,
+            },
+        });
+    }
+    /**
+     * List Slack App Workspaces
+     * The Slack workspaces this pod's organization lets Lemma create apps in.
+     * @param podId
+     * @returns SlackAppWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationList(
+        podId: string,
+    ): CancelablePromise<SlackAppWorkspaceListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Save Slack Configuration Token
+     * Let Lemma create Slack apps in the workspace this token is for.
+     * @param podId
+     * @param requestBody
+     * @returns SlackAppWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreationSave(
+        podId: string,
+        requestBody: SlackConfigurationTokenRequest,
+    ): CancelablePromise<SlackAppWorkspaceResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation',
             path: {
                 'pod_id': podId,
             },
@@ -107,52 +148,84 @@ export class AgentSurfacesService {
         });
     }
     /**
-     * Group Link
-     * A one-use link that adds the pod's Telegram bot to a group the caller picks.
+     * Forget Slack Configuration Token
+     * Stop Lemma creating apps there. Apps it already made are not touched.
      *
-     * The group is then the caller's to answer for. Which Telegram account is
-     * theirs is still their profile's to say: a link is easily passed on, so the
-     * one that used it is never taken for them. The link works for an hour.
+     * Slack offers no way to revoke a configuration token, so it stays valid at
+     * Slack: revoke it on api.slack.com/apps as well.
      * @param podId
-     * @param requestBody
-     * @returns GroupLinkResponse Successful Response
+     * @param teamId
+     * @returns void
      * @throws ApiError
      */
-    public static agentGroupLink(
+    public static agentSurfaceSlackAppCreationForget(
         podId: string,
-        requestBody: GroupLinkRequest,
-    ): CancelablePromise<GroupLinkResponse> {
+        teamId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}',
+            path: {
+                'pod_id': podId,
+                'team_id': teamId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create Slack App
+     * Create an agent's own Slack app, named after it. What is left is
+     * authorising it.
+     *
+     * One app per agent per workspace: until it is authorised, asking again
+     * answers with the same app, and so does the same `Idempotency-Key` from the
+     * same member for a day.
+     * @param podId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns SlackAppCreateResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackAppCreate(
+        podId: string,
+        requestBody: SlackAppCreateRequest,
+        idempotencyKey?: (string | null),
+    ): CancelablePromise<SlackAppCreateResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/pods/{pod_id}/groups/links',
+            url: '/pods/{pod_id}/surface-setup/slack/apps',
             path: {
                 'pod_id': podId,
+            },
+            headers: {
+                'Idempotency-Key': idempotencyKey,
             },
             body: requestBody,
             mediaType: 'application/json',
             errors: {
+                409: `Not set up, the token needs replacing, or busy.`,
                 422: `Validation Error`,
+                429: `Slack is rate-limiting app creation.`,
             },
         });
     }
     /**
-     * Get Group
-     * One group: who is in it, and what its outsiders are waiting on you for.
+     * List Slack Managed Workspaces
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
      * @param podId
-     * @param groupId
-     * @returns GroupDetailResponse Successful Response
+     * @returns SlackManagedWorkspaceListResponse Successful Response
      * @throws ApiError
      */
-    public static agentGroupGet(
+    public static agentSurfaceSlackManagerList(
         podId: string,
-        groupId: string,
-    ): CancelablePromise<GroupDetailResponse> {
+    ): CancelablePromise<SlackManagedWorkspaceListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/pods/{pod_id}/groups/{group_id}',
+            url: '/pods/{pod_id}/surface-setup/slack/manager',
             path: {
                 'pod_id': podId,
-                'group_id': groupId,
             },
             errors: {
                 422: `Validation Error`,
@@ -160,66 +233,29 @@ export class AgentSurfacesService {
         });
     }
     /**
-     * Update Group
-     * Switch outsiders on or off in one group, or take it over.
+     * Bind Slack Manager
+     * Make Lemma's own app this workspace's manager. The workspace becomes the
+     * organization's, and the person who authorised it is known in Slack.
      *
-     * The member who answers for the group may; so may anybody who configures the
-     * bot when nobody in the pod answers for it, and an admin of the pod, whose
-     * change the member is told about.
+     * Only for a grant this browser finished signed in as the caller: a consent
+     * link somebody else completed is refused.
      * @param podId
-     * @param groupId
      * @param requestBody
-     * @returns GroupResponse Successful Response
+     * @returns SlackManagedWorkspaceResponse Successful Response
      * @throws ApiError
      */
-    public static agentGroupUpdate(
+    public static agentSurfaceSlackManagerBind(
         podId: string,
-        groupId: string,
-        requestBody: GroupUpdateRequest,
-    ): CancelablePromise<GroupResponse> {
+        requestBody: SlackManagerBindRequest,
+    ): CancelablePromise<SlackManagedWorkspaceResponse> {
         return __request(OpenAPI, {
-            method: 'PATCH',
-            url: '/pods/{pod_id}/groups/{group_id}',
+            method: 'PUT',
+            url: '/pods/{pod_id}/surface-setup/slack/manager',
             path: {
                 'pod_id': podId,
-                'group_id': groupId,
             },
             body: requestBody,
             mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Group Timeline
-     * What was said in the group, oldest first, as far as the pod kept it.
-     *
-     * Kept for WhatsApp and Telegram groups. A Slack channel's history is
-     * Slack's; it comes back empty here. An answer the bot made with one member's
-     * own access comes back withheld to everybody else: they may not be able to
-     * see what it was made from.
-     * @param podId
-     * @param groupId
-     * @param limit
-     * @returns GroupTimelineResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentGroupTimeline(
-        podId: string,
-        groupId: string,
-        limit: number = 60,
-    ): CancelablePromise<GroupTimelineResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/pods/{pod_id}/groups/{group_id}/timeline',
-            path: {
-                'pod_id': podId,
-                'group_id': groupId,
-            },
-            query: {
-                'limit': limit,
-            },
             errors: {
                 422: `Validation Error`,
             },
@@ -425,9 +461,9 @@ export class AgentSurfacesService {
      * Send Surface Message
      * Proactively send a message to a pod member on this surface.
      *
-     * Powers notifications from functions/workflows. Reuses the member's existing
-     * thread (bots can't cold-DM), and a 404 carries the reason it could not be
-     * reached, in the vocabulary the notification API uses.
+     * For functions and workflows that message a member on one platform. Reuses
+     * the member's existing thread (bots can't cold-DM), and a 404 carries the
+     * reason they could not be reached.
      * @param podId
      * @param surfaceName
      * @param requestBody
@@ -650,6 +686,47 @@ export class AgentSurfacesService {
         });
     }
     /**
+     * Slack Install Availability
+     * Whether Lemma's own Slack app is set up on this server, so "Add to
+     * Slack" can work -- checked before a person with no organization is given
+     * one for it.
+     * @returns SlackInstallAvailabilityResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackInstallAvailability(): CancelablePromise<SlackInstallAvailabilityResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/surface-setup/slack/install',
+        });
+    }
+    /**
+     * Start Slack Install Flow
+     * Add Lemma to a Slack workspace from "Add to Slack", for this organization.
+     *
+     * Answers with Slack's consent page for Lemma's own app, asking for its bot
+     * alone. Refused before anything is made when Slack isn't set up here, or
+     * the caller may not add the organization's installs. When the grant comes
+     * back to this same signed-in browser, the workspace becomes the
+     * organization's and Lemma's app says hello there; a grant finished anywhere
+     * else adopts nothing.
+     * @param requestBody
+     * @returns SlackInstallResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackInstallStart(
+        requestBody: SlackInstallRequest,
+    ): CancelablePromise<SlackInstallResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/install',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Get Slack App Manifest
      * The Slack app manifest to paste when running your own Slack app.
      *
@@ -674,6 +751,30 @@ export class AgentSurfacesService {
             query: {
                 'agent_name': agentName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Start Slack Sign In
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's link was for.
+     *
+     * Connects nothing. The callback connects only when it sees this same Lemma
+     * session and Slack names this same Slack user and workspace.
+     * @param requestBody
+     * @returns SlackSignInResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceSlackPersonSignIn(
+        requestBody: SlackSignInRequest,
+    ): CancelablePromise<SlackSignInResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surface-setup/slack/people/sign-in',
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

@@ -107,7 +107,12 @@ async def create_resource(
 
 @asynccontextmanager
 async def running_host(
-    root: Path, base_url: str, pairing_code: SecretStr, *, scenario_file: str
+    root: Path,
+    base_url: str,
+    pairing_code: SecretStr,
+    *,
+    scenario_file: str | None = None,
+    mode: str | None = None,
 ) -> AsyncIterator[Path]:
     assert os.name == "posix", "The scripted ACP process lane runs on macOS or Linux"
     binary = agent_host_binary()
@@ -115,15 +120,8 @@ async def running_host(
     shims = root / "shim-bin"
     shims.mkdir()
     traffic = root / "acp-stream.jsonl"
-    scenario_path = fixture.parent / "scenarios" / scenario_file
-    command = shlex.join(
-        [
-            sys.executable,
-            str(fixture),
-            str(traffic),
-            f"json:{scenario_path}",
-        ]
-    )
+    agent_mode = mode or f"json:{fixture.parent / 'scenarios' / str(scenario_file)}"
+    command = shlex.join([sys.executable, str(fixture), str(traffic), agent_mode])
     script = (
         "#!/bin/sh\n"
         'case "$1" in\n'
@@ -427,6 +425,115 @@ async def test_rust_host_streams_into_the_real_conversation_and_persists_its_ans
             if turn_count == 2:
                 assert "Stream turn 1." in str(prompts[1].params)
                 assert "Stream turn 2." in str(prompts[1].params)
+
+
+@pytest.mark.asyncio
+async def test_an_image_larger_than_a_link_frame_reaches_the_agent_whole(
+    scenario: E2EScenario,
+    backend_server: dict[str, str],
+    worker: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Lemma tool returns a 3 MiB image; the real host's agent gets it intact.
+
+    No frame Lemma sends a host passes the link's 1 MiB ceiling
+    (docs/architecture/agent-host.md#bulk-bytes), so the result is staged and
+    the real binary fetches it over HTTP before its MCP bridge answers the
+    agent. The tool is the one thing stated here: nothing in the product
+    returns a known image without a document pipeline behind it.
+    """
+    import base64
+    import hashlib
+
+    from mcp.types import CallToolResult, ImageContent, Tool
+    from starlette.websockets import WebSocket
+
+    from app.core.server_limits import WS_MAX_BYTES
+    from app.modules.agent.services.conversation_mcp_service import (
+        conversation_mcp_service,
+    )
+
+    del worker
+    image = b"\x89PNG\r\n\x1a\n" + os.urandom(3 * 1024 * 1024)
+    listed = conversation_mcp_service.list_tools
+    called = conversation_mcp_service.call_tool
+
+    async def list_tools(**kwargs: object) -> list[Tool]:
+        tools = await listed(**kwargs)
+        return [
+            *tools,
+            Tool(name="lemma_image", description="An image", inputSchema={}),
+        ]
+
+    async def call_tool(**kwargs: object) -> CallToolResult:
+        if kwargs.get("name") != "lemma_image":
+            return await called(**kwargs)
+        return CallToolResult(
+            content=[
+                ImageContent(
+                    type="image",
+                    data=base64.b64encode(image).decode(),
+                    mimeType="image/png",
+                )
+            ]
+        )
+
+    monkeypatch.setattr(conversation_mcp_service, "list_tools", list_tools)
+    monkeypatch.setattr(conversation_mcp_service, "call_tool", call_tool)
+    largest = [0]
+    send_text = WebSocket.send_text
+
+    async def measured(self: WebSocket, data: str) -> None:
+        largest[0] = max(largest[0], len(data.encode()))
+        await send_text(self, data)
+
+    monkeypatch.setattr(WebSocket, "send_text", measured)
+
+    await scenario.create_org_with_pod(name_prefix="Host MCP image")
+    minted = await scenario.owner_client.post(
+        "/me/runtime/agent-host-pairings",
+        json={"display_name": "isolated MCP image host"},
+    )
+    assert minted.is_success, minted.text
+    pairing = PairingCode.model_validate(minted.json())
+    base_url = backend_server["host_base_url"]
+    async with running_host(tmp_path, base_url, pairing.pairing_code, mode="mcp-image"):
+        async with httpx.AsyncClient(
+            base_url=base_url, headers=scenario.owner_client.headers, timeout=90
+        ) as client:
+            path = f"{await create_host_conversation(client, scenario)}/messages"
+            async with asyncio.timeout(90):
+                async with client.stream(
+                    "POST", path, json={"content": "Look at the image."}
+                ) as response:
+                    assert response.is_success, await response.aread()
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: ") and json.loads(
+                            line.removeprefix("data: ")
+                        ).get("type") in {"completed", "error", "stopped"}:
+                            break
+
+            async def answers() -> list[str]:
+                response = await client.get(path)
+                assert response.is_success, response.text
+                return [
+                    item.text or ""
+                    for item in SavedMessages.model_validate(response.json()).items
+                    if item.role == "assistant" and item.kind == "TEXT"
+                ]
+
+            expected = (
+                f"LEMMA_MCP_IMAGE:{len(image)}:{hashlib.sha256(image).hexdigest()}"
+            )
+            saved = await eventually(
+                label="the agent's report of the image it received",
+                probe=answers,
+                done=lambda texts: any("LEMMA_MCP_IMAGE" in text for text in texts),
+                timeout_seconds=30,
+            )
+            assert any(expected in text for text in saved), saved
+    assert 0 < largest[0] < WS_MAX_BYTES, largest[0]
 
 
 @pytest.mark.asyncio

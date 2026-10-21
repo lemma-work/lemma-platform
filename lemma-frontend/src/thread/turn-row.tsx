@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LockIcon, MemoryIcon } from "@/ui/icons";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LockIcon, MemoryIcon, TerminalIcon } from "@/ui/icons";
 import { memo, useState, type ReactNode } from "react";
 import { TRANSCRIPT_ROW_ATTRIBUTE } from "./use-transcript-scroll";
 import { Prose, StreamingProse } from "./markdown";
@@ -274,7 +274,7 @@ export const TurnRow = memo(function TurnRow({
                 <Human message={turn.human} bot={teammate.name} outsiders={outsiders} onRetry={onRetrySend} onEdit={onEditSend} />
             )}
 
-            {(notes.length > 0 || turn.items.length > 0 || merging) && (
+            {(notes.length > 0 || turn.items.length > 0 || merging || Boolean(turn.runtimeNotes?.length)) && (
                 <Reply
                     seed={seed}
                     teammate={teammate}
@@ -362,6 +362,17 @@ export const TurnRow = memo(function TurnRow({
                     {turn.noted && turn.noted.length > 0 && (
                         <NotedLine teammate={teammate.name} noted={turn.noted} onOpenFile={onOpenFile} />
                     )}
+
+                    {/* What the agent's runtime said about the run — a model it
+                        no longer offers, a session it restarted. The run went
+                        on, so this is a quiet line beside the reply rather than
+                        an error over it. */}
+                    {turn.runtimeNotes?.map((note) => (
+                        <p className="noted" role="note" key={note}>
+                            <TerminalIcon size={13} />
+                            <span>{note}</span>
+                        </p>
+                    ))}
                 </Reply>
             )}
         </div>

@@ -29,6 +29,96 @@ async fn connected(stub: &StubLink) -> Connected {
     .expect("the stand-in welcomes every hello")
 }
 
+/// A frame Lemma would not read is refused here, as that one request: sent,
+/// it would close the link with 1009 for every run on it.
+#[tokio::test]
+async fn a_frame_larger_than_lemma_reads_is_refused_before_it_is_sent() {
+    let stub = StubLink::start().await;
+    let link = connected(&stub).await.handle;
+    let mut payload = crate::protocol::JsonMap::new();
+    payload.insert(
+        "text".into(),
+        "x".repeat(protocol::MAX_MESSAGE_BYTES).into(),
+    );
+    let batch = crate::protocol::EventBatch {
+        events: vec![crate::protocol::Event {
+            run_id: Uuid::new_v4(),
+            lease_epoch: 1,
+            sequence: 1,
+            event_type: crate::protocol::EventType::AgentMessageChunk,
+            object_id: None,
+            payload,
+        }],
+    };
+    let refused = link.append_events(&batch).await.unwrap_err();
+    assert!(
+        matches!(&refused, LinkError::Rejected { code, retryable: false, .. } if code == connection::FRAME_TOO_LARGE),
+        "{refused}"
+    );
+    assert!(refused.is_request_rejected());
+    assert!(!link.is_closed());
+    assert!(
+        stub.state
+            .largest_frame
+            .load(std::sync::atomic::Ordering::SeqCst)
+            < 64 * 1024
+    );
+    // The link still carries what fits.
+    link.control(&protocol::ControlBody::default())
+        .await
+        .unwrap();
+}
+
+/// A tool result Lemma staged rather than sent -- one with large images -- is
+/// fetched and checked before the caller sees it; one that does not match
+/// what the answer named is refused, not handed over.
+#[tokio::test]
+async fn a_staged_tool_result_is_fetched_before_anyone_sees_it() {
+    use super::transfer::sha256_hex;
+
+    let stub = StubLink::start().await;
+    let link = connected(&stub).await.handle;
+    let image = "A".repeat(3 * protocol::MAX_MESSAGE_BYTES);
+    let result =
+        json!({ "content": [{ "type": "image", "mimeType": "image/png", "data": image }] });
+    let body = serde_json::to_vec(&result).unwrap();
+    stub.state
+        .staged
+        .lock()
+        .unwrap()
+        .insert("big".to_owned(), body.clone());
+    stub.state.mcp_answers.lock().unwrap().insert(
+        "tools/call".to_owned(),
+        json!({ protocol::STAGED_FIELD: { "id": "big", "size": body.len(), "sha256": sha256_hex(&body) } }),
+    );
+    let call = protocol::McpBody {
+        run_id: Uuid::new_v4(),
+        conversation_id: Uuid::new_v4(),
+        token: "token".into(),
+        method: "tools/call".into(),
+        params: json!({ "name": "view_image" }),
+        request_id: None,
+    };
+    assert_eq!(link.mcp(&call).await.unwrap(), result);
+
+    // Named with the wrong digest: refused, as that one request.
+    stub.state
+        .staged
+        .lock()
+        .unwrap()
+        .insert("liar".to_owned(), body.clone());
+    stub.state.mcp_answers.lock().unwrap().insert(
+        "tools/call".to_owned(),
+        json!({ protocol::STAGED_FIELD: { "id": "liar", "size": body.len(), "sha256": sha256_hex(b"x") } }),
+    );
+    let refused = link.mcp(&call).await.unwrap_err();
+    assert!(
+        matches!(&refused, LinkError::Rejected { code, retryable: false, .. } if code == connection::STAGED_UNAVAILABLE),
+        "{refused}"
+    );
+    assert!(!link.is_closed());
+}
+
 /// Pairing is the one exchange without a secret, because it is the exchange
 /// that issues one, and it leaves nothing open behind it.
 #[tokio::test]
@@ -235,6 +325,7 @@ async fn the_hello_carries_host_execution() {
             hello: HostHello::current("installation"),
             capacity: capacity(),
             host_execution: Some(status.clone()),
+            staged_bodies: true,
         },
         None,
     )
@@ -258,6 +349,8 @@ mod host_execution {
     use super::super::{Connected, connect_with};
     use super::capacity;
     use crate::host_exec::relay::{ExecRelay, InProcessLauncher, RelayPaths};
+    use crate::link::protocol::MAX_MESSAGE_BYTES;
+    use crate::link::transfer::{TransferClient, sha256_hex};
     use crate::protocol::HostHello;
 
     struct Setup {
@@ -276,6 +369,7 @@ mod host_execution {
         std::fs::create_dir_all(home.join("lemma")).unwrap();
         std::fs::create_dir_all(&tmp).unwrap();
         let launcher = Arc::new(InProcessLauncher::default());
+        let stub = StubLink::start().await;
         let relay = ExecRelay::new(
             launcher.clone(),
             RelayPaths {
@@ -288,9 +382,9 @@ mod host_execution {
                 target: uuid::Uuid::from_u128(1),
                 bundled_cli: Vec::new(),
             },
+            Some(TransferClient::new(&stub.url, "secret").unwrap()),
         );
         relay.set_enabled(enabled);
-        let stub = StubLink::start().await;
         let link = connect_with(
             &stub.url,
             "secret",
@@ -298,6 +392,7 @@ mod host_execution {
                 hello: HostHello::current("installation"),
                 capacity: capacity(),
                 host_execution: None,
+                staged_bodies: true,
             },
             Some(relay.clone()),
         )
@@ -427,6 +522,203 @@ mod host_execution {
             )
             .await;
         waiting.await.unwrap();
+    }
+
+    /// File data never rides the link: a write fetches its chunk from the
+    /// transfer the op names, a read delivers its chunk into one, and every
+    /// frame the host sends stays far inside what Lemma reads.
+    #[tokio::test]
+    async fn file_data_moves_over_http_and_never_on_the_link() {
+        let setup = setup(true).await;
+        let opened = setup.ok("workspace.open", json!({ "slug": "bulk" })).await;
+        let root = std::path::PathBuf::from(opened["root"].as_str().unwrap());
+        // A chunk whose base64 alone is past the message ceiling.
+        let body: Vec<u8> = (0..crate::host_exec::wire::OP_MAX_DATA_BYTES)
+            .map(|index| u8::try_from(index % 251).unwrap())
+            .collect();
+        let digest = sha256_hex(&body);
+        setup
+            .stub
+            .state
+            .staged
+            .lock()
+            .unwrap()
+            .insert("w1".to_owned(), body.clone());
+        let written = setup
+            .ok(
+                "file.write",
+                json!({
+                    "path": root.join("big.bin"),
+                    "upload_id": "u1",
+                    "offset": 0,
+                    "final": true,
+                    "expected_sha256": format!("sha256:{digest}"),
+                    "transfer": { "id": "w1", "size": body.len(), "sha256": digest },
+                }),
+            )
+            .await;
+        assert_eq!(written["size_bytes"], body.len());
+        assert_eq!(std::fs::read(root.join("big.bin")).unwrap(), body);
+
+        let read = setup
+            .ok(
+                "file.read",
+                json!({
+                    "path": root.join("big.bin"),
+                    "offset": 0,
+                    "length": body.len(),
+                    "transfer": { "id": "r1", "max_bytes": body.len() },
+                }),
+            )
+            .await;
+        assert!(read.get("data").is_none(), "{read}");
+        assert_eq!(read["size"], body.len());
+        assert_eq!(read["sha256"], digest);
+        assert_eq!(read["eof"], true);
+        assert_eq!(
+            setup.stub.state.delivered.lock().unwrap().get("r1"),
+            Some(&body)
+        );
+        let largest = setup.stub.state.largest_frame.load(Ordering::SeqCst);
+        assert!(largest < 64 * 1024, "a frame of {largest} bytes");
+        assert!(largest < MAX_MESSAGE_BYTES);
+        assert!(
+            setup
+                .stub
+                .state
+                .http_authorizations
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|authorization| authorization == "Bearer secret")
+        );
+    }
+
+    /// A slot that takes less than the read asked for bounds the read.
+    #[tokio::test]
+    async fn a_read_reads_no_more_than_its_transfer_takes() {
+        let setup = setup(true).await;
+        let opened = setup.ok("workspace.open", json!({ "slug": "slot" })).await;
+        let path = std::path::Path::new(opened["root"].as_str().unwrap()).join("f");
+        std::fs::write(&path, b"0123456789").unwrap();
+        let read = setup
+            .ok(
+                "file.read",
+                json!({
+                    "path": path,
+                    "offset": 2,
+                    "length": 1000,
+                    "transfer": { "id": "r2", "max_bytes": 4 },
+                }),
+            )
+            .await;
+        assert_eq!(read["size"], 4);
+        assert_eq!(read["eof"], false);
+        assert_eq!(
+            setup.stub.state.delivered.lock().unwrap().get("r2"),
+            Some(&b"2345".to_vec())
+        );
+    }
+
+    /// Bytes that are not what the op described are refused, and nothing is
+    /// written.
+    #[tokio::test]
+    async fn a_write_whose_bytes_do_not_match_its_digest_writes_nothing() {
+        let setup = setup(true).await;
+        let opened = setup.ok("workspace.open", json!({ "slug": "liar" })).await;
+        let root = std::path::PathBuf::from(opened["root"].as_str().unwrap());
+        setup
+            .stub
+            .state
+            .staged
+            .lock()
+            .unwrap()
+            .insert("w2".to_owned(), b"tampered".to_vec());
+        let kind = setup
+            .failure_kind(
+                "w",
+                "file.write",
+                json!({
+                    "path": root.join("f"),
+                    "upload_id": "u2",
+                    "offset": 0,
+                    "final": true,
+                    "transfer": { "id": "w2", "size": 8, "sha256": sha256_hex(b"original") },
+                }),
+            )
+            .await;
+        assert_eq!(kind, "digest_mismatch");
+        assert!(!root.join("f").exists());
+        // A transfer Lemma does not have is not an empty file either.
+        let kind = setup
+            .failure_kind(
+                "w",
+                "file.write",
+                json!({
+                    "path": root.join("f"),
+                    "upload_id": "u3",
+                    "offset": 0,
+                    "final": true,
+                    "transfer": { "id": "gone", "size": 1, "sha256": sha256_hex(b"x") },
+                }),
+            )
+            .await;
+        assert_eq!(kind, "invalid_request");
+        assert!(!root.join("f").exists());
+    }
+
+    /// Output is read by cursor, so a read that names `max_bytes` stops there
+    /// and the next one carries on: no answer outgrows the link.
+    #[tokio::test]
+    async fn process_output_is_read_in_pieces_no_larger_than_asked() {
+        let setup = setup(true).await;
+        setup
+            .ok("workspace.open", json!({ "slug": "chatty" }))
+            .await;
+        let started = setup
+            .ok(
+                "process.start",
+                json!({
+                    "shell_command": "head -c 600000 /dev/zero | tr '\\0' x",
+                    "output_limit_bytes": 4 * 1024 * 1024,
+                }),
+            )
+            .await;
+        let process_id = started["process_id"].clone();
+        let limit = crate::host_exec::wire::INLINE_DATA_BYTES;
+        let (mut after, mut total) = (0_u64, 0_usize);
+        for _ in 0..200 {
+            let read = setup
+                .ok(
+                    "process.read",
+                    json!({
+                        "process_id": process_id,
+                        "after_sequence": after,
+                        "wait_ms": 1000,
+                        "max_bytes": limit,
+                    }),
+                )
+                .await;
+            let bytes: usize = read["chunks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|chunk| {
+                    STANDARD
+                        .decode(chunk["data"].as_str().unwrap())
+                        .unwrap()
+                        .len()
+                })
+                .sum();
+            assert!(bytes <= limit, "a read of {bytes} bytes");
+            total += bytes;
+            after = read["next_sequence"].as_u64().unwrap() - 1;
+            if read["state"] == "exited" {
+                break;
+            }
+        }
+        assert_eq!(total, 600_000);
+        assert!(setup.stub.state.largest_frame.load(Ordering::SeqCst) < MAX_MESSAGE_BYTES);
     }
 
     /// Turned off, the host refuses to run anything, and says so in a way the

@@ -4,6 +4,7 @@ import sys
 from typing import Any
 
 import typer
+from rich.markup import escape
 
 from .state import console, fail
 
@@ -42,7 +43,7 @@ def select_from_items(
 def _select_by_number(items: list[dict[str, Any]], *, label: str) -> dict[str, Any]:
     console.print(f"[bold]Select {label}[/bold]")
     for index, item in enumerate(items, start=1):
-        console.print(f"{index:>2}. {item_label(item, str(index))}")
+        console.print(f"{index:>2}. {escape(item_label(item, str(index)))}")
     while True:
         selected = typer.prompt(f"{label.title()} number", type=int)
         if 1 <= selected <= len(items):

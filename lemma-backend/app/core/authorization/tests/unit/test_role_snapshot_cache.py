@@ -145,3 +145,26 @@ async def test_invalidate_without_user_id_clears_everything(monkeypatch):
 
     assert recorder.cleared == 1
     assert recorder.deleted_prefixes == []
+
+
+@pytest.mark.asyncio
+async def test_invalidate_drops_the_snapshots_before_it_moves_the_epoch(monkeypatch):
+    """A live hub that hears the epoch move rebuilds its readers at once; it
+    must rebuild them from the database, not from the snapshot still cached,
+    and then take itself to be current."""
+    order: list[str] = []
+    recorder = _RecordingCache()
+
+    async def clear_prefix() -> None:
+        order.append("snapshots dropped")
+
+    async def bump(_pod_id) -> None:
+        order.append("epoch moved")
+
+    recorder.clear_prefix = clear_prefix  # type: ignore[method-assign]
+    monkeypatch.setattr(cache_module, "_get_role_cache", lambda: recorder)
+    monkeypatch.setattr(cache_module, "bump_pod_authz_epoch", bump)
+
+    await cache_module.invalidate_role_snapshot_cache(pod_id=uuid4())
+
+    assert order == ["snapshots dropped", "epoch moved"]

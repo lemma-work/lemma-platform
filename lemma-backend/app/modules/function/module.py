@@ -21,11 +21,15 @@ def _routers():
     return [function, function_revision, function_runtime]
 
 
-def _event_routers():
-    # Importing this module registers the function Streaq task and reconciler.
-    from app.modules.function.events.handlers import router
+def _register_periodic_work() -> None:
+    # Run and revision retention.
+    import app.modules.function.events.handlers  # noqa: F401
 
-    return [router]
+
+def _register_work() -> None:
+    # ``function.run`` / ``function.cancel`` / ``function.deadline``. The API
+    # writes them (creating, starting and cancelling runs), the worker runs them.
+    import app.modules.function.events.run_work  # noqa: F401
 
 
 @asynccontextmanager
@@ -66,7 +70,8 @@ module = LemmaModule(
     name="function",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
+    register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
     api_lifespans=(_close_runtime_http_clients,),
     worker_lifespans=(_close_runtime_http_clients,),
 )

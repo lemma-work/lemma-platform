@@ -100,6 +100,81 @@ pub(crate) fn authentication_hint(harness: &str, error: &str) -> Option<String> 
     ))
 }
 
+/// The structured kinds adapters attach to a failure for "this account is out
+/// of quota for now". Matched on the kind an adapter reports, not on its prose,
+/// so one harness's wording is not what decides it.
+const USAGE_LIMIT_KINDS: &[&str] = &[
+    "rate_limit",
+    "rate_limited",
+    "usage_limit",
+    "quota_exceeded",
+];
+
+/// The `errorKind` an adapter attached to its failure, if it attached one.
+///
+/// An ACP error carries its structured `data` after the message, and that is
+/// all that reaches here: `Internal error: <message>: {"errorKind": "..."}`.
+/// Read from the first `{` that begins a JSON object running to the end.
+fn adapter_error_kind(error: &str) -> Option<String> {
+    error.match_indices('{').find_map(|(start, _)| {
+        let data: Value = serde_json::from_str(error[start..].trim_end()).ok()?;
+        data.get("errorKind")?.as_str().map(str::to_owned)
+    })
+}
+
+/// The error's message alone, without the structured data an ACP error
+/// carries after it (`<message>: {...}`).
+pub(crate) fn without_error_data(error: &str) -> &str {
+    error
+        .match_indices('{')
+        .find(|(start, _)| {
+            serde_json::from_str::<Value>(error[*start..].trim_end())
+                .is_ok_and(|data| data.is_object())
+        })
+        .map_or(error, |(start, _)| {
+            error[..start].trim_end().trim_end_matches(':').trim_end()
+        })
+}
+
+/// When the limit lifts, if the adapter said: the `resets ...` phrase in the
+/// message, never in the structured data after it. Bounded, because it is
+/// quoted back.
+fn usage_limit_resets(error: &str) -> Option<String> {
+    let message = without_error_data(error);
+    let after = &message[message.find("resets ")? + "resets ".len()..];
+    let phrase = after
+        .split(['{', '\n'])
+        .next()?
+        .trim()
+        .trim_end_matches(':')
+        .trim();
+    (!phrase.is_empty() && phrase.chars().count() <= 60).then(|| phrase.to_owned())
+}
+
+/// Say that the agent's own account is out of quota, rather than that it broke.
+///
+/// A coding agent that hits its usage or rate limit reports it as an internal
+/// error, which `adapter_failure_message` framed as a fault and answered with
+/// "check that it runs on its own in a terminal" -- advice that does nothing
+/// for a quota. The run is safe to try again once the limit lifts, and the
+/// person can also move the teammate to another runtime meanwhile.
+///
+/// Returns `None` unless the adapter reported one of `USAGE_LIMIT_KINDS`.
+pub(crate) fn usage_limit_message(harness: &str, error: &str) -> Option<String> {
+    let kind = adapter_error_kind(error)?;
+    if !USAGE_LIMIT_KINDS.contains(&kind.as_str()) {
+        return None;
+    }
+    let when = usage_limit_resets(error).map_or_else(
+        || "Try again once it resets".to_owned(),
+        |when| format!("It resets {when}; try again after that"),
+    );
+    Some(format!(
+        "{harness} has reached its usage limit on this computer. \
+         {when}, or switch this teammate to another runtime."
+    ))
+}
+
 /// Frame an adapter failure so it says which agent, and where to look.
 ///
 /// Adapters report their own internals and the Agent Host forwarded them
@@ -131,6 +206,30 @@ pub(crate) fn adapter_failure_message(harness: &str, error: &str) -> Option<Stri
     Some(format!(
         "{harness} encountered an error on this computer. \
          Check that it runs on its own in a terminal, then try again. \
+         Its own error was: {}",
+        error.trim()
+    ))
+}
+
+/// Say that an agent did not start in time, rather than that it is broken.
+///
+/// A start-up that ran out of time -- the host's own setup deadline, or a
+/// timeout the agent reported while opening its session -- is what a busy
+/// computer, or several conversations started at once, produce. The driver has
+/// already tried it a second time. Framing it as "encountered an error, check
+/// that it runs in a terminal" sent people to debug an agent that works,
+/// when sending the message again is what fixes it.
+///
+/// Only for a run that failed before its prompt went out; nothing was asked of
+/// the agent, so trying again cannot duplicate anything.
+pub(crate) fn start_timeout_message(harness: &str, error: &str) -> Option<String> {
+    if !crate::acp::is_transient_start_failure(error) {
+        return None;
+    }
+    Some(format!(
+        "{harness} did not start in time on this computer, even on a second try. \
+         This is usually because the computer is busy or several conversations \
+         started at once; send the message again in a moment. \
          Its own error was: {}",
         error.trim()
     ))

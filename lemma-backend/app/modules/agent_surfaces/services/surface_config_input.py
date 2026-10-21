@@ -31,7 +31,8 @@ from app.modules.agent_surfaces.domain.surface_representation import (
     surface_config_from_input,
 )
 from app.modules.apps.contracts import get_ready_pod_app_by_name
-from app.modules.pod.contracts.members import pod_member_id
+from app.core.authorization.permissions import Permissions
+from app.modules.pod.contracts.members import pod_member_holds
 
 
 def _resolve_channel_routes(
@@ -127,20 +128,21 @@ async def resolve_contact_policy(
 
     Turning contacts on with nobody named makes the person turning them on the
     one their conversations belong to -- the way bringing a bot into a group
-    makes that member answer for it. Whoever is named must be in the pod: a
-    conversation belongs to somebody, and questions passed on must reach
-    somebody who can act on them.
+    makes that member answer for it. Whoever is named must be an editor or
+    admin of the pod: a conversation belongs to somebody, questions passed on
+    must reach somebody who can act on them, and contacts' chats are not every
+    member's to read.
     """
     looked_after_by = requested.looked_after_by or (
         current.looked_after_by if current is not None else None
     )
     if requested.answer is not ContactAnswer.OFF and looked_after_by is None:
         looked_after_by = getattr(ctx, "user_id", None)
-    if looked_after_by is not None and (
-        await pod_member_id(uow, pod_id, looked_after_by) is None
+    if looked_after_by is not None and not await pod_member_holds(
+        uow, pod_id, looked_after_by, Permissions.CONTACT_READ
     ):
         raise AgentSurfaceValidationError(
-            "Contacts must be looked after by a member of this pod"
+            "Contacts must be looked after by an editor or admin of this pod"
         )
     return SurfaceContactPolicy(
         answer=requested.answer, looked_after_by=looked_after_by

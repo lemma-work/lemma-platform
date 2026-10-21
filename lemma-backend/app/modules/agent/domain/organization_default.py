@@ -19,6 +19,7 @@ from uuid import UUID
 
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
+    ORGANIZATION_DEFAULT_KEY,
     AgentRuntimeProfile,
     RuntimeProfileKind,
     RuntimeProfileScope,
@@ -26,7 +27,6 @@ from app.modules.agent.domain.runtime_profiles import (
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 
-ORGANIZATION_DEFAULT_KEY = "organization_default"
 
 # The user a listing is scoped to when only organization-wide profiles are
 # wanted: nobody's personal profile belongs to the nil id, so what comes back is
@@ -45,7 +45,7 @@ def can_be_organization_default(profile: AgentRuntimeProfile) -> bool:
 
 def is_marked_default(profile: AgentRuntimeProfile) -> bool:
     """Whether the mark is stored on ``profile``, eligible or not."""
-    return isinstance(profile.metadata.get(ORGANIZATION_DEFAULT_KEY), dict)
+    return profile.carries_organization_default_mark
 
 
 def organization_default_of(

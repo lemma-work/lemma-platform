@@ -6,16 +6,13 @@ return outcomes; the stepper interprets them and manages transitions.
 
 from dataclasses import dataclass
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.authorization.context import Context
+from app.core.infrastructure.work import WorkWriter
 from app.modules.workflow.domain.context import LoopScope, RunContextReader
 from app.modules.workflow.domain.errors import WorkflowDomainError
 from app.modules.workflow.domain.workflow import WorkflowEntity
-from app.modules.workflow.domain.ports import (
-    AgentPort,
-    DecisionPort,
-    FunctionPort,
-    SchedulePort,
-)
+from app.modules.workflow.domain.ports import AgentPort, FunctionPort
 from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
@@ -56,15 +53,13 @@ class RunStepper:
         *,
         agent: AgentPort,
         function: FunctionPort,
-        schedule: SchedulePort,
-        decision: DecisionPort,
+        work: WorkWriter,
         authz_ctx: Context | None = None,
         registry: dict[NodeType, NodeExecutor] | None = None,
     ):
         self._agent = agent
         self._function = function
-        self._schedule = schedule
-        self._decision = decision
+        self._work = work
         self._authz_ctx = authz_ctx
         self._registry = registry or EXECUTOR_REGISTRY
 
@@ -120,6 +115,7 @@ class RunStepper:
                 run.fail(exc.message, node_id=node.id)
                 break
             except Exception as exc:  # noqa: BLE001 — every executor error fails the run
+                raise_if_database_unavailable(exc)
                 run.fail(f"Node '{node.id}' execution failed: {exc}", node_id=node.id)
                 break
 
@@ -271,8 +267,7 @@ class RunStepper:
             context=RunContextReader(run.execution_context),
             agent=self._agent,
             function=self._function,
-            schedule=self._schedule,
-            decision=self._decision,
+            work=self._work,
             authz_ctx=self._authz_ctx,
         )
 

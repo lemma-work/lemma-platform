@@ -479,6 +479,33 @@ its input — set by the platform, never by the model. Its output goes to the ag
 answering the contact, so return only what that person may be told. See
 `people-outside.md`.
 
+To match the person against your own records (orders placed by email, projects kept
+under a phone number), also declare `contact`. The platform fills it with the
+handles something **proved** they hold — a WhatsApp or Telegram sender, an
+authenticated email sender, an email code they entered, your site's signed token —
+and never one the model was told or a member typed in:
+
+```python
+class ProvedContact(BaseModel):
+    id: str
+    emails: list[str] = []        # lower-cased
+    phones: list[str] = []        # E.164, "+14155550100"
+    telegram_ids: list[str] = []
+    host_ids: list[str] = []      # "host:{issuer}:{your user id}"
+    slack_ids: list[str] = []
+    teams_ids: list[str] = []
+
+class OrderStatusInput(BaseModel):
+    contact_id: str | None = None
+    contact: ProvedContact | None = None   # None for an anonymous form submission
+    order_number: str | None = None
+```
+
+Match on `contact.emails` / `contact.phones`, not on an address in another field:
+anybody can type somebody else's. A function that does not declare `contact` is not
+sent it. Every list may be empty — an unconfirmed web visitor has no proved handle —
+so say "I can't find that under your details" rather than widening the search.
+
 ### Exposing a function as an agent's tool
 
 Grants also flow the other way: grant an **agent** `function.execute` on a function

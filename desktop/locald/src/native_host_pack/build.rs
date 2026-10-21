@@ -384,8 +384,9 @@ pub(crate) fn build(
         ("ENABLE_SLACK_SOCKET_MODE", "true".to_owned()),
         // The desktop app has no public webhook, so inbound Resend email is
         // pulled by the worker's polling receiver instead. This also lets a
-        // Resend surface be provisioned against the localhost API URL, so
-        // message_user/notifications work once a key + inbound domain are set.
+        // Resend surface be provisioned against the localhost API URL, so the
+        // pod's email (an agent's `channel_post`, a member's push) works once
+        // a key + inbound domain are set.
         ("ENABLE_RESEND_POLLING_MODE", "true".to_owned()),
     ]);
     if bindings.secret_key_provider == "static" {
@@ -557,7 +558,7 @@ pub(crate) fn build(
         "services": [
             {
                 "id": "backend",
-                "command": argv(&bindings.python, &["-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", &backend_port.to_string(), "--ws", "websockets-sansio"]),
+                "command": argv(&bindings.python, &["-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", &backend_port.to_string(), "--ws", "websockets-sansio", "--ws-max-size", "1048576"]),
                 "cwd": path_text(&backend_dir)?,
                 "env": backend_env,
                 "dependencies": [],

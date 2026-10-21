@@ -1,22 +1,33 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Sequence
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.modules.connectors.infrastructure.repositories.catalog_rows import (
     aconvert_valid_rows,
 )
-from app.core.domain.message_bus import MessageBus
+from app.core.infrastructure.db.integrity import violated_constraint
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigStatus,
 )
+from app.modules.connectors.domain.errors import ConnectorConflictError
 from app.modules.connectors.domain.ports import SecretEncryptionPort
 from app.modules.connectors.infrastructure.models import AuthConfig
+
+#: One active install per name in an organization: the name is how a pod, an
+#: agent's toolset and the API ask for it.
+_NAME_TAKEN = "ix_auth_configs_unique_active_org_name"
+#: One default install per connector in an organization: what a bare
+#: connector id resolves to.
+_DEFAULT_TAKEN = "uq_auth_configs_default_per_connector"
 
 
 class AuthConfigRepository(
@@ -26,12 +37,9 @@ class AuthConfigRepository(
         self,
         uow: SqlAlchemyUnitOfWork,
         encryption: SecretEncryptionPort,
-        message_bus: MessageBus | None = None,
     ):
         super().__init__(uow, AuthConfig, AuthConfigEntity)
         self.encryption = encryption
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def _to_model(self, entity: AuthConfigEntity) -> AuthConfig:
         data = entity.model_dump(exclude_unset=True)
@@ -51,9 +59,12 @@ class AuthConfigRepository(
         return entity
 
     async def create(self, entity: AuthConfigEntity) -> AuthConfigEntity:
+        """The new install. Raises ``ConnectorConflictError`` for a name an
+        active install of the organization already has."""
         instance = await self._to_model(entity)
-        self.session.add(instance)
-        await self.session.flush()
+        async with self._name_must_be_free(entity.name):
+            self.session.add(instance)
+            await self.session.flush()
         return await self._to_entity(instance)
 
     async def update(self, entity: AuthConfigEntity) -> AuthConfigEntity:
@@ -79,8 +90,42 @@ class AuthConfigRepository(
         instance.is_default = entity.is_default
         instance.metadata_ = entity.metadata
         instance.updated_by_user_id = entity.updated_by_user_id
-        await self.session.flush()
+        # A rename onto a taken name, or reactivating an install whose name
+        # another has since taken, is refused the same way as a create.
+        async with self._name_must_be_free(entity.name):
+            await self.session.flush()
         return await self._to_entity(instance)
+
+    @asynccontextmanager
+    async def _name_must_be_free(self, name: str) -> AsyncIterator[None]:
+        """Write inside a savepoint; a clash on the install name -- or on
+        being the connector's default, which two first installs at once both
+        claim -- is a conflict.
+
+        Left to the unique index rather than looked up first: two requests
+        naming the same install at once both find the name free.
+        """
+        try:
+            async with self.session.begin_nested():
+                yield
+        except IntegrityError as error:
+            constraint = violated_constraint(error)
+            if constraint == _DEFAULT_TAKEN:
+                # Two first installs of one connector at once both decided to
+                # be its default; the other got there first. A conflict, not a
+                # 500: the caller can read the install that won.
+                raise ConnectorConflictError(
+                    "Another install of this connector became the "
+                    "organization's default at the same moment. Try again.",
+                    details={"name": name},
+                ) from None
+            if constraint != _NAME_TAKEN:
+                raise
+            raise ConnectorConflictError(
+                f"An active connector install is already called {name!r}. "
+                "Give this one a different name.",
+                details={"name": name},
+            ) from None
 
     async def get(self, id: UUID) -> AuthConfigEntity | None:
         stmt = select(AuthConfig).where(AuthConfig.id == id)
@@ -121,6 +166,27 @@ class AuthConfigRepository(
                 AuthConfig.status == AuthConfigStatus.ACTIVE.value,
             )
             .order_by(AuthConfig.is_default.desc(), AuthConfig.created_at.asc())
+        )
+        result = await self.session.execute(stmt)
+        instance = result.scalars().first()
+        return await self._to_entity(instance) if instance else None
+
+    async def get_active_by_org_app_and_source(
+        self, organization_id: UUID, connector_id: str, config_source: str
+    ) -> AuthConfigEntity | None:
+        """The org's active install of this connector from this source -- Lemma's
+        own app (``SYSTEM_DEFAULT``) rather than one the org brought. Ordered as
+        `get_active_by_org_and_app` is, so the answer is stable."""
+        stmt = (
+            select(AuthConfig)
+            .where(
+                AuthConfig.organization_id == organization_id,
+                AuthConfig.connector_id == connector_id,
+                AuthConfig.config_source == config_source,
+                AuthConfig.status == AuthConfigStatus.ACTIVE.value,
+            )
+            .order_by(AuthConfig.is_default.desc(), AuthConfig.created_at.asc())
+            .limit(1)
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()

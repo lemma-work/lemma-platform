@@ -47,7 +47,6 @@ import selectors
 import socket
 import socketserver
 import sys
-import threading
 from urllib.parse import urlsplit
 
 #: The loopback names a request may carry. `[::1]` is how a bracketed IPv6
@@ -492,11 +491,14 @@ def _read_head(sock: socket.socket) -> bytes:
 _Handler._read_head = staticmethod(_read_head)  # type: ignore[attr-defined]
 
 
-def serve(port: int, *, ready: threading.Event | None = None) -> None:
-    server = _Server(("127.0.0.1", port), _Handler)
-    if ready is not None:
-        ready.set()
-    server.serve_forever()
+def listen(port: int) -> socketserver.ThreadingTCPServer:
+    """The proxy, bound but not yet serving. Port 0 has the kernel pick one,
+    read back from ``server_address``."""
+    return _Server(("127.0.0.1", port), _Handler)
+
+
+def serve(port: int) -> None:
+    listen(port).serve_forever()
 
 
 def main() -> int:

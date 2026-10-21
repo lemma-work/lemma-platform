@@ -44,7 +44,14 @@ class AppsSettings(BaseSettings):
     app_release_keep_last: int = Field(default=10, ge=1)
     app_release_keep_days: int = Field(default=30, ge=0)
     app_release_max_keep: int = Field(default=20, ge=1)
-    app_release_retention_cron: str = Field(default="20 4 * * *")
+    app_release_retention_interval_seconds: int = Field(
+        default=86_400,
+        ge=60,
+        description=(
+            "How often the release sweep runs, as a periodic work item (no "
+            "wall-clock alignment). Env: ``APP_RELEASE_RETENTION_INTERVAL_SECONDS``."
+        ),
+    )
     app_release_retention_batch: int = Field(
         default=200,
         ge=1,

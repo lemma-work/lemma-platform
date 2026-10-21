@@ -38,6 +38,7 @@ from app.modules.agent.infrastructure.transport_errors import (
 from app.modules.usage.contracts import UsageLimitExceededError
 
 __all__ = [
+    "PROVIDER_HTTP_ERROR",
     "TRANSIENT_DATABASE_ERROR",
     "RunFailure",
     "classify_run_failure",
@@ -60,6 +61,11 @@ _SETTINGS = "Settings → Models"
 #: own database was momentarily contended. Nothing about the teammate, its model
 #: or the message is wrong, and the same turn sent again is expected to work.
 TRANSIENT_DATABASE_ERROR = "TRANSIENT_DATABASE_ERROR"
+
+#: The model provider answered with an HTTP error -- a rejected key, a model it
+#: does not serve, a base URL that is not its API. The status is the run's
+#: failure reason (``http_<status>``); the sentence says what to do about it.
+PROVIDER_HTTP_ERROR = "PROVIDER_HTTP_ERROR"
 
 _DATABASE_BUSY = (
     "Lemma could not run this turn because its database was briefly busy. "
@@ -125,6 +131,8 @@ def run_failure_reason(exc: BaseException) -> str | None:
             ),
             None,
         )
+    if isinstance(exc, ModelHTTPError):
+        return f"http_{exc.status_code}"
     return exc.reason if isinstance(exc, UsageLimitExceededError) else None
 
 
@@ -148,7 +156,7 @@ def classify_run_failure(exc: BaseException) -> RunFailure:
         # authored to be read by the person whose run just failed.
         return RunFailure(exc.code, exc.message)
     if isinstance(exc, ModelHTTPError):
-        return RunFailure(None, _http_error_message(exc))
+        return RunFailure(PROVIDER_HTTP_ERROR, _http_error_message(exc))
     if is_transient_database_error(exc):
         return RunFailure(TRANSIENT_DATABASE_ERROR, _DATABASE_BUSY)
     return RunFailure(None, _runtime_failure_message(exc))

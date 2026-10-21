@@ -22,8 +22,9 @@ from uuid import UUID
 
 from app.core.config import reveal_secret, settings
 from app.core.infrastructure.db.session_uow import commit_now
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent_surfaces.platforms.common import (
-    PLATFORM_TRANSPORT_ERRORS,
+    platform_transport_errors,
     public_https_api_url_available,
 )
 from app.modules.agent_surfaces.platforms.delivery import with_retry
@@ -47,6 +48,10 @@ from app.modules.agent_surfaces.domain.errors import (
 )
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_unique_telegram_account,
+)
+from app.modules.agent_surfaces.services.surface_problems import (
+    clear_problem,
+    note_problem,
 )
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy
@@ -190,6 +195,7 @@ class SurfaceTelegramWebhookMixin:
         completes clears it.
         """
         await commit_now(self.surface_repository)
+        refused: AgentSurfacePlatformError | None = None
         try:
             await self._register_telegram_webhook(
                 credentials=credentials,
@@ -197,11 +203,21 @@ class SurfaceTelegramWebhookMixin:
                 webhook_secret=reveal_secret(surface.webhook_secret) or "",
                 drop_pending_updates=drop_pending_updates,
             )
-        except AgentSurfacePlatformError:
+        except AgentSurfacePlatformError as exc:
+            refused = exc
+        # Why it does not work, for its readers (``surface_problems``).
+        async with connection_released(
+            getattr(self.surface_repository.uow, "session", None)
+        ):
+            if refused is None:
+                await clear_problem(surface.id)
+            else:
+                await note_problem(surface.id, refused.message)
+        if refused is not None:
             surface.mark_webhook_unregistered()
             await self.surface_repository.update(surface)
             await commit_now(self.surface_repository)
-            raise
+            raise refused
         if surface.status is AgentSurfaceStatus.ERROR:
             surface.activate()
             return await self.surface_repository.update(surface)
@@ -247,17 +263,19 @@ class SurfaceTelegramWebhookMixin:
                     "drop_pending_updates": drop_pending_updates,
                 },
             )
+        # No webhook URL to "set manually": a new surface Telegram refuses is
+        # deleted (the next try gets a new address), and a webhook set by hand
+        # lacks the secret Lemma checks deliveries against.
         except TelegramApiError as exc:
             raise AgentSurfacePlatformError(
                 "telegram",
-                "Could not configure Telegram webhook automatically. Set it "
-                f"manually to {webhook_url}. Telegram response: {exc.description}",
+                f"Telegram refused to set up this bot: {exc.description}. Check "
+                "the bot token (from @BotFather) and try again.",
             ) from exc
-        except PLATFORM_TRANSPORT_ERRORS as exc:
+        except platform_transport_errors() as exc:
             raise AgentSurfacePlatformError(
                 "telegram",
-                "Could not configure Telegram webhook automatically. Set it "
-                f"manually to {webhook_url}.",
+                "Could not reach Telegram to set up this bot. Try again in a moment.",
             ) from exc
         await self._confirm_telegram_webhook(client, webhook_url)
 
@@ -266,7 +284,7 @@ class SurfaceTelegramWebhookMixin:
     ) -> None:
         try:
             info = await self._telegram_webhook_call(client, "getWebhookInfo", {})
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.surface_service.telegram_webhook_unconfirmed.degraded",
                 exc_info=True,

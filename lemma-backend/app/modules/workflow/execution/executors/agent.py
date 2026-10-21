@@ -4,9 +4,7 @@ from app.modules.workflow.domain.nodes import AgentNode
 from app.modules.workflow.domain.wait import WaitRequest, WorkflowRunWaitType
 from app.modules.workflow.execution.outcome import NodeOutcome, Suspend
 from app.modules.workflow.execution.step_context import StepContext
-
-#: Where an agent step's own timeout rides on its wait, for the expiry sweep.
-WAIT_TIMEOUT_SECONDS_KEY = "timeout_seconds"
+from app.modules.workflow.execution.wait_ceiling import WAIT_TIMEOUT_SECONDS_KEY
 
 
 class AgentExecutor:

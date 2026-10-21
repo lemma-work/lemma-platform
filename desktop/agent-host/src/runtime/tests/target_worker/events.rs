@@ -372,3 +372,160 @@ fn event_delivery_backs_off_in_seconds_not_minutes() {
     // which is the budget this overran.
     assert!(silence_over(20, EVENT_RETRY_MAX) < Duration::from_secs(45));
 }
+
+/// Journal an event carrying `image` inline, as an agent's image block does.
+fn append_image(harness: &Harness, run_id: Uuid, image: &[u8]) {
+    use base64::Engine as _;
+    let mut payload = JsonMap::new();
+    payload.insert(
+        "content".into(),
+        serde_json::json!({
+            "type": "image",
+            "mimeType": "image/png",
+            "data": base64::engine::general_purpose::STANDARD.encode(image),
+        }),
+    );
+    harness
+        .journal
+        .append_event(
+            harness.target_id,
+            run_id,
+            1,
+            EventType::AgentMessageChunk,
+            None,
+            payload,
+        )
+        .unwrap();
+}
+
+fn png(index: u8, size: usize) -> Vec<u8> {
+    let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+    image.extend(std::iter::repeat_n(index, size));
+    image
+}
+
+/// Lemma reads no websocket message past 1 MiB. A run that produced a dozen
+/// large images and a long stream of output still reaches it whole: the
+/// images go up as blobs its events name, the batches are cut by bytes, and
+/// no `events` frame comes near the ceiling.
+#[tokio::test]
+async fn images_go_up_as_blobs_and_no_events_frame_nears_the_ceiling() {
+    use crate::link::protocol::{BLOB_FIELD, EVENT_BATCH_MAX_BYTES, MAX_MESSAGE_BYTES};
+
+    let harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    let images: Vec<Vec<u8>> = (0..12).map(|index| png(index, 700 * 1024)).collect();
+    for image in &images {
+        append_image(&harness, run_id, image);
+        // Output between the images: 256 events of it would be 4 MiB.
+        for _ in 0..40 {
+            let mut payload = JsonMap::new();
+            payload.insert("text".into(), "y".repeat(16 * 1024).into());
+            harness
+                .journal
+                .append_event(
+                    harness.target_id,
+                    run_id,
+                    1,
+                    EventType::AgentMessageChunk,
+                    None,
+                    payload,
+                )
+                .unwrap();
+        }
+    }
+    let total = u64::try_from(images.len() * 41).unwrap();
+
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    let delivery = tokio::spawn(deliver_events(
+        Arc::clone(&harness.worker.flusher),
+        harness.worker.events_ready.clone(),
+        harness.worker.link.clone(),
+        shutdown,
+    ));
+    harness.worker.events_ready.notify_one();
+    within(
+        Duration::from_secs(20),
+        "every event to reach Lemma",
+        || harness.accepted().get(&run_id) == Some(&total) && harness.pending(run_id).is_empty(),
+    )
+    .await;
+    delivery.abort();
+
+    let largest = harness
+        .stub
+        .largest_frame
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        largest <= EVENT_BATCH_MAX_BYTES + 1024,
+        "an events frame of {largest} bytes"
+    );
+    assert!(largest < MAX_MESSAGE_BYTES);
+
+    let blobs = harness.stub.blobs.lock().unwrap().clone();
+    assert_eq!(blobs.len(), images.len());
+    let sent: Vec<serde_json::Value> = harness
+        .stub
+        .accepted_batches
+        .lock()
+        .unwrap()
+        .iter()
+        .flat_map(|batch| batch["events"].as_array().unwrap().clone())
+        .filter(|event| event["payload"]["content"]["type"] == "image")
+        .collect();
+    assert_eq!(sent.len(), images.len());
+    for (event, image) in sent.iter().zip(&images) {
+        let content = &event["payload"]["content"];
+        assert!(content.get("data").is_none(), "{content}");
+        let named = content[BLOB_FIELD]["sha256"].as_str().unwrap();
+        assert_eq!(blobs.get(named), Some(image));
+        assert_eq!(content[BLOB_FIELD]["size"], image.len());
+    }
+    // Every upload was made as this host, with its own credential.
+    assert!(
+        harness
+            .stub
+            .http_authorizations
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|authorization| authorization == "Bearer test-secret")
+    );
+}
+
+/// A blob upload that fails for a moment holds its event back rather than
+/// sending it without the image -- and it goes once the upload does.
+#[tokio::test]
+async fn an_event_waits_for_its_image_to_upload() {
+    let harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    let image = png(7, 64 * 1024);
+    append_image(&harness, run_id, &image);
+    harness
+        .stub
+        .failing_blob_uploads
+        .store(2, std::sync::atomic::Ordering::SeqCst);
+
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    let delivery = tokio::spawn(deliver_events(
+        Arc::clone(&harness.worker.flusher),
+        harness.worker.events_ready.clone(),
+        harness.worker.link.clone(),
+        shutdown,
+    ));
+    harness.worker.events_ready.notify_one();
+    within(
+        Duration::from_secs(10),
+        "the event to reach Lemma once its image is up",
+        || harness.accepted().get(&run_id) == Some(&1),
+    )
+    .await;
+    delivery.abort();
+    assert_eq!(harness.stub.blobs.lock().unwrap().len(), 1);
+    let batches = harness.stub.accepted_batches.lock().unwrap().clone();
+    assert!(
+        batches[0]["events"][0]["payload"]["content"]
+            .get("data")
+            .is_none()
+    );
+}

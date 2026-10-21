@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 import aiohttp
+import httpx
 import pytest
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
@@ -32,6 +33,7 @@ from app.modules.agent_surfaces.platforms.teams.client import (
     classify_teams_error,
     teams_retry_after,
 )
+from app.modules.agent_surfaces.tests.fakes import platform_http
 
 #: Retries with no wait, so a test is not paced by a real rate limit.
 _IMMEDIATE = RetryPolicy(max_attempts=3, base_delay=0.0, max_delay=0.0)
@@ -113,13 +115,9 @@ def test_slack_retry_after_reads_the_header_slack_sends():
 
 
 def _teams_error(status: int, headers: dict[str, str] | None = None):
-    return aiohttp.ClientResponseError(
-        request_info=None,  # type: ignore[arg-type]
-        history=(),
-        status=status,
-        message="",
-        headers=headers,
-    )
+    request = httpx.Request("POST", "https://smba.trafficmanager.net/teams/")
+    response = httpx.Response(status, headers=headers, request=request)
+    return httpx.HTTPStatusError("", request=request, response=response)
 
 
 def test_classify_teams_error():
@@ -127,11 +125,11 @@ def test_classify_teams_error():
     assert classify_teams_error(_teams_error(502)) is DeliveryClassification.TRANSIENT
     assert classify_teams_error(_teams_error(403)) is DeliveryClassification.PERMANENT
     assert (
-        classify_teams_error(aiohttp.ConnectionTimeoutError())
+        classify_teams_error(httpx.ConnectTimeout("no route"))
         is DeliveryClassification.TRANSIENT
     )
     assert (
-        classify_teams_error(aiohttp.ServerDisconnectedError())
+        classify_teams_error(httpx.RemoteProtocolError("dropped"))
         is DeliveryClassification.PERMANENT
     )
     assert classify_teams_error(ValueError("x")) is DeliveryClassification.PERMANENT
@@ -193,37 +191,10 @@ async def test_slack_does_not_retry_a_permanent_failure(monkeypatch):
 async def test_teams_retries_a_rate_limited_reply(monkeypatch):
     from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
 
-    posts: list[str] = []
-
-    class _Response:
-        def __init__(self, status: int) -> None:
-            self.status = status
-
-        def raise_for_status(self) -> None:
-            if self.status >= 400:
-                raise _teams_error(self.status, {"Retry-After": "0"})
-
-        async def json(self) -> dict[str, Any]:
-            return {"id": "activity-1"}
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc_info) -> None:
-            return None
-
-    class _Session:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc_info) -> None:
-            return None
-
-        def post(self, url, **kwargs):
-            posts.append(url)
-            return _Response(429 if len(posts) == 1 else 200)
-
-    monkeypatch.setattr(aiohttp, "ClientSession", lambda **kwargs: _Session())
+    def bot_framework(request: httpx.Request) -> httpx.Response:
+        if len(http.requests) == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"id": "activity-1"})
 
     adapter = TeamsSurfaceAdapter()
     adapter._retry_policy = _IMMEDIATE
@@ -231,11 +202,12 @@ async def test_teams_retries_a_rate_limited_reply(monkeypatch):
         adapter, "_get_bot_token", lambda tenant_id: _resolved("bot-token")
     )
 
-    await adapter.send_message(
-        credentials={}, event=_teams_event(), message="the answer"
-    )
+    with platform_http(bot_framework) as http:
+        await adapter.send_message(
+            credentials={}, event=_teams_event(), message="the answer"
+        )
 
-    assert len(posts) == 2
+    assert len(http.requests) == 2
 
 
 async def _resolved(value: str) -> str:

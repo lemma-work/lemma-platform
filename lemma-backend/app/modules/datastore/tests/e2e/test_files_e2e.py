@@ -136,6 +136,45 @@ class TestDatastoreFilePaths:
         await editor_api.delete_file(editor_pod_file["path"])
 
     @pytest.mark.asyncio
+    async def test_uploading_a_name_the_folder_already_has_takes_the_next_number(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        """Two files with the same name is ordinary, not an error.
+
+        Every image pasted from a clipboard arrives called `image.png`, and a
+        file picked from disk is often one the folder already has. The upload
+        answers with the next free name, so the second copy is stored rather
+        than refused and is still findable by a name a person recognises.
+        """
+        folder = f"/me/uploads-{uuid4().hex[:8]}"
+
+        first = await pod_api.upload_file(
+            "image.png", b"first", directory_path=folder, content_type="image/png"
+        )
+        second = await pod_api.upload_file(
+            "image.png", b"second", directory_path=folder, content_type="image/png"
+        )
+        third = await pod_api.upload_file(
+            "image.png", b"third", directory_path=folder, content_type="image/png"
+        )
+
+        assert [first["name"], second["name"], third["name"]] == [
+            "image.png",
+            "image (1).png",
+            "image (2).png",
+        ]
+        assert [item["path"] for item in (first, second, third)] == [
+            f"{folder}/image.png",
+            f"{folder}/image (1).png",
+            f"{folder}/image (2).png",
+        ]
+        # The bytes went to the names the response claims, not to one file
+        # written three times.
+        assert await pod_api.download_file(second["path"]) == b"second"
+        assert await pod_api.download_file(third["path"]) == b"third"
+
+    @pytest.mark.asyncio
     async def test_skills_path_serves_native_skills_and_custom_pod_skills_read_only_for_native(
         self,
         pod_api: DatastoreApi,

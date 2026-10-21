@@ -49,6 +49,9 @@ class WebWidget(BaseModel):
     answer: WidgetAnswer
     looked_after_by: UUID | None
     created_at: datetime
+    #: The product whose users the widget's host tokens name. Fixed when the
+    #: widget is made: changing it would make every host contact a new one.
+    host_issuer: str = "default"
 
     def allows_origin(self, origin: str | None) -> bool:
         """Whether a browser on ``origin`` may read this widget's answers.
@@ -71,6 +74,18 @@ class WebChatRefused(DomainError):
 
     def __init__(self, message: str, *, status_code: int, code: str) -> None:
         super().__init__(message, code=code, status_code=status_code)
+
+
+class WidgetNameTaken(DomainError):
+    """The pod already has a widget by this name. Names tell a pod's widgets
+    apart on its contacts page, so one name is one widget."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(
+            f"This pod already has a widget called {name!r}",
+            code="widget_name_taken",
+            status_code=409,
+        )
 
 
 def refused(message: str, status_code: int, code: str) -> WebChatRefused:

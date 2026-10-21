@@ -14,6 +14,7 @@ pub(crate) mod stub;
 mod target;
 #[cfg(test)]
 mod tests;
+pub mod transfer;
 
 use tokio::sync::watch;
 use url::Url;

@@ -9,8 +9,64 @@ with different values.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.agent_host_options import agent_host_option_is_selectable
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.value_objects import JsonObject
+
+
+#: The key a model entry carries the options it offers under. Absent means the
+#: model offers what the harness publishes at the top level.
+LEMMA_OPTIONS_KEY = "lemma_options"
+
+
+def _category(option: dict[str, object]) -> str:
+    return str(option.get("category") or "").strip()
+
+
+def _entry_value(item: dict[str, object]) -> object:
+    return item["value"] if "value" in item else item.get("id")
+
+
+def options_for_model(
+    config_options: list[object], model_name: str | None
+) -> list[JsonObject]:
+    """The non-model options a harness offers when ``model_name`` is selected.
+
+    A harness's options depend on its model: Claude Code offers a ``max``
+    effort with one model and not another. The host publishes that per model,
+    as ``lemma_options`` on the model's entry; a model without the key, a model
+    the harness does not list, and no model at all (the harness's own default)
+    all get the top-level options, which describe the default model.
+
+    The model option itself is never in the result: a model is chosen through
+    the model name, not as a selection.
+    """
+    top_level = [
+        option
+        for option in config_options
+        if isinstance(option, dict) and _category(option) != "model"
+    ]
+    name = (model_name or "").strip()
+    if not name:
+        return top_level
+    for option in config_options:
+        if not isinstance(option, dict) or _category(option) != "model":
+            continue
+        entries = option.get("options")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or _entry_value(entry) != name:
+                continue
+            per_model = entry.get(LEMMA_OPTIONS_KEY)
+            if not isinstance(per_model, list):
+                return top_level
+            return [
+                nested
+                for nested in per_model
+                if isinstance(nested, dict) and _category(nested) != "model"
+            ]
+    return top_level
 
 
 def _agent_host_options_by_key(
@@ -30,26 +86,45 @@ def _agent_host_options_by_key(
     return options_by_key
 
 
+def _model_keys(config_options: list[object]) -> set[str]:
+    """Both names a selection could give the model option by."""
+    return {
+        key
+        for option in config_options
+        if isinstance(option, dict) and _category(option) == "model"
+        for key in (str(option.get("id") or "").strip(), _category(option))
+        if key
+    }
+
+
 def validate_agent_host_selections(
     *,
     config_options: list[object],
     selections: JsonObject,
+    model_name: str | None = None,
 ) -> JsonObject:
-    """Validate provider-owned selections without translating their values."""
-    options_by_key = _agent_host_options_by_key(config_options)
+    """Validate provider-owned selections without translating their values.
+
+    Against the options ``model_name`` offers (:func:`options_for_model`), so a
+    value only one model takes is accepted when that model is the one chosen.
+    ``None`` is the harness's own default model.
+    """
+    model_keys = _model_keys(config_options)
+    options_by_key = _agent_host_options_by_key(
+        list(options_for_model(config_options, model_name))
+    )
 
     normalized: JsonObject = {}
     for key, value in selections.items():
         normalized_key = str(key).strip()
+        if normalized_key in model_keys:
+            raise RuntimeProfileValidationError(
+                "Model must be configured through default_model_name"
+            )
         option = options_by_key.get(normalized_key)
         if option is None:
             raise RuntimeProfileValidationError(
                 f"Unknown Agent Host configuration selection: {key}"
-            )
-        option_category = str(option.get("category") or "").strip()
-        if option_category == "model":
-            raise RuntimeProfileValidationError(
-                "Model must be configured through default_model_name"
             )
         # Membership in what the host published is the whole check. The host
         # owns the permission policy: it removes every value that would turn
@@ -98,6 +173,7 @@ def carry_agent_host_selections(
     *,
     config_options: list[object],
     selections: JsonObject,
+    model_name: str | None = None,
 ) -> JsonObject:
     """Carry saved selections across a harness re-publish, dropping what moved.
 
@@ -109,20 +185,23 @@ def carry_agent_host_selections(
     chose to change.
 
     So an unknown key and a value that is no longer a member are *dropped*, and
-    the harness applies its own default for them.
+    the harness applies its own default for them. Judged, like the strict
+    sibling, against the options ``model_name`` offers.
 
     Nothing here refuses: the host published only the values it allows, and
     it refuses a disallowed one again at session setup.
     """
-    options_by_key = _agent_host_options_by_key(config_options)
+    model_keys = _model_keys(config_options)
+    options_by_key = _agent_host_options_by_key(
+        list(options_for_model(config_options, model_name))
+    )
     carried: JsonObject = {}
     for key, value in selections.items():
         normalized_key = str(key).strip()
+        if normalized_key in model_keys:
+            continue
         option = options_by_key.get(normalized_key)
         if option is None:
-            continue
-        option_category = str(option.get("category") or "").strip()
-        if option_category == "model":
             continue
         if not _option_accepts(option, value):
             continue
@@ -166,6 +245,10 @@ def _option_accepts(option: dict[str, object], value: object) -> bool:
     scalar, of the same type as the value the harness reports it holds when it
     reports one.
     """
+    # A type Lemma cannot offer takes nothing: the host does not publish one,
+    # and a stored option from before that check is not a choice either.
+    if not agent_host_option_is_selectable(option):
+        return False
     allowed_values = _agent_host_option_values(option.get("options"))
     if allowed_values:
         return value in allowed_values
@@ -184,6 +267,12 @@ def _option_accepts(option: dict[str, object], value: object) -> bool:
 
 
 def _agent_host_option_values(raw_options: object) -> list[object]:
+    """Every value an option offers, its groups' choices included.
+
+    ACP lets an agent group a select's choices (``{group, name, options}``).
+    Read as a choice, a group has no value -- so an option offering only
+    groups read as offering nothing, and "nothing" means any scalar is taken.
+    """
     if not isinstance(raw_options, list):
         return []
     values: list[object] = []
@@ -195,4 +284,6 @@ def _agent_host_option_values(raw_options: object) -> list[object]:
             values.append(item["value"])
         elif "id" in item:
             values.append(item["id"])
+        elif isinstance(item.get("options"), list):
+            values.extend(_agent_host_option_values(item["options"]))
     return values

@@ -68,8 +68,7 @@ async def fail_run_for_wait(
     # for an answer nobody will read -- the same reason `cancel_run` does this.
     # Only a form wait ever put one there.
     if wait.wait_type == WorkflowRunWaitType.HUMAN:
-        await engine.notification_adapter.cancel_for_run(run_id=run.id)
-    engine._collect_terminal_event(run)
-    await engine.uow.commit()
-    await engine._announce(run)
+        await engine.form_questions.run_ended(pod_id=run.pod_id, run_id=run.id)
+    await engine._record_transition(run)
+    await engine._settle(run)
     return run

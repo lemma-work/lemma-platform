@@ -750,9 +750,14 @@ pub(crate) enum SettingsDestination {
 ///
 /// The workspace only while it can answer: a local install that is up, not in
 /// an error, with the page on this installation's own origin. Everything else
-/// -- hosted mode, a stack that is starting or broken, the splash, a window
-/// moved to a shared origin -- opens Local settings, which is exactly the page
-/// that exists for those cases.
+/// -- a stack that is starting or broken, the splash, a window moved to a
+/// shared origin -- opens Local settings, which is exactly the page that
+/// exists for those cases.
+///
+/// A hosted workspace takes the sections that are not about this Mac, once
+/// its window is on the hosted origin and past sign-in. Those need no local
+/// privilege, and without this Local settings' "Open coding agents in Lemma"
+/// closed itself only to open itself again on the same page.
 pub(crate) fn settings_destination(
     mode: &str,
     ready: bool,
@@ -760,15 +765,23 @@ pub(crate) fn settings_destination(
     page: Option<&tauri::Url>,
     workspace: &str,
     dev_local: Option<&str>,
+    section: &str,
 ) -> SettingsDestination {
-    let healthy = mode == "local" && ready && !error;
-    match page {
-        Some(page)
-            if healthy && local_settings_origin_allowed(mode, page, workspace, dev_local) =>
-        {
-            SettingsDestination::Workspace
-        }
-        _ => SettingsDestination::Native,
+    let Some(page) = page else {
+        return SettingsDestination::Native;
+    };
+    let local = mode == "local"
+        && ready
+        && !error
+        && local_settings_origin_allowed(mode, page, workspace, dev_local);
+    let hosted = mode == "hosted"
+        && !section.starts_with("this-mac")
+        && tauri::Url::parse(workspace).is_ok_and(|hosted| hosted.origin() == page.origin())
+        && !page.path().starts_with("/auth");
+    if local || hosted {
+        SettingsDestination::Workspace
+    } else {
+        SettingsDestination::Native
     }
 }
 
@@ -796,6 +809,11 @@ pub(crate) fn open_settings(app: &AppHandle, section: &str, native_page: &str) {
     let page = main.as_ref().and_then(|webview| webview.url().ok());
     let dev_local =
         dev_override("LEMMA_DESKTOP_LOCAL_URL").and_then(|value| value.into_string().ok());
+    let workspace = if mode == "hosted" {
+        hosted_url()
+    } else {
+        workspace
+    };
     let destination = settings_destination(
         &mode,
         ready,
@@ -803,6 +821,7 @@ pub(crate) fn open_settings(app: &AppHandle, section: &str, native_page: &str) {
         page.as_ref(),
         &workspace,
         dev_local.as_deref(),
+        section,
     );
     if let (SettingsDestination::Workspace, Some(main)) = (destination, main) {
         restore_dock_presence(app);

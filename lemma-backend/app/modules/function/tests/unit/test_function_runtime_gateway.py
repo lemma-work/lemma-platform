@@ -22,7 +22,6 @@ from app.modules.function.domain.entities import (
     FunctionRunRuntimeContext,
     FunctionSessionPrincipal,
 )
-from app.modules.function.tests.fakes import InMemoryPodRunSlots
 
 
 class _UowState:
@@ -149,7 +148,6 @@ async def test_gateway_uses_standard_principal_and_releases_uow_before_storage()
         storage_factory=lambda _function_id: _Storage(),
         delegated_tokens_enabled=True,
         repository_factory=_Repository,
-        pod_runs=InMemoryPodRunSlots(),
     )
     assert (
         await gateway.definition_artifact(
@@ -221,7 +219,6 @@ async def test_gateway_rejects_artifact_whose_bytes_do_not_match_the_revision_ha
         storage_factory=lambda _function_id: _CorruptStorage(),
         delegated_tokens_enabled=True,
         repository_factory=_Repository,
-        pod_runs=InMemoryPodRunSlots(),
     )
 
     with pytest.raises(RuntimeArtifactCorrupt):
@@ -268,7 +265,6 @@ async def test_gateway_terminal_rejects_when_completion_is_not_accepted() -> Non
         storage_factory=lambda _function_id: None,
         delegated_tokens_enabled=True,
         repository_factory=_Repository,
-        pod_runs=InMemoryPodRunSlots(),
     )
     request = RuntimeTerminalRequest(
         status="completed",
@@ -343,7 +339,6 @@ async def test_gateway_finds_a_staged_artifact_when_no_generation_is_supplied() 
         storage_factory=lambda _function_id: storage,
         delegated_tokens_enabled=True,
         repository_factory=_Repository,
-        pod_runs=InMemoryPodRunSlots(),
     )
 
     assert (
@@ -393,7 +388,6 @@ async def test_gateway_reports_a_genuinely_absent_artifact_as_missing() -> None:
         storage_factory=lambda _function_id: _EmptyStorage(),
         delegated_tokens_enabled=True,
         repository_factory=_Repository,
-        pod_runs=InMemoryPodRunSlots(),
     )
 
     with pytest.raises(FileNotFoundError):

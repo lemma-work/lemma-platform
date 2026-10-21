@@ -17,13 +17,15 @@ the status before the response body starts, or (b) a genuine status remap.
 
 from __future__ import annotations
 
-import json
+import re
+
 from collections.abc import Mapping, Sequence
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.core.infrastructure.db.transient_errors import is_transient_database_error
 from app.core.domain.errors import DomainError
 from app.core.observability.telemetry import record_exception_on_current_span
 from app.core.redaction import redact_text, redact_value
@@ -33,6 +35,10 @@ from app.core.redaction import redact_text, redact_value
 #: which Starlette sends from its outermost layer. Without them the page that
 #: made the request cannot read the error at all.
 ERROR_CORS_HEADERS = "lemma_error_cors_headers"
+#: The request id the observer chose, for the same 500: it is built from the
+#: scope the server handed in, which never saw the header the observer adds.
+ERROR_REQUEST_ID = "lemma_error_request_id"
+REQUEST_ID_HEADER = "x-request-id"
 
 
 def _sanitize_validation_payload(value: object) -> object:
@@ -46,33 +52,123 @@ def _sanitize_validation_payload(value: object) -> object:
     return value
 
 
-#: How much of a refused value a validation error echoes back as ``input``.
-VALIDATION_INPUT_PREVIEW_CHARS = 200
+#: What each validation error keeps: where, which rule, and the rule's own
+#: words. Everything else pydantic attaches is dropped.
+_VALIDATION_ERROR_KEYS = ("loc", "type", "msg")
 
 
-def _input_preview(value: object) -> object:
-    """A refused value short enough to echo back, saying how long it was.
+def _without_echoed_input(errors: object) -> object:
+    """Each error, without the value it refused.
 
-    Each error echoes the value it refused, and for a value refused for its
-    length that is the whole of it -- an over-long message came back entire
-    -- while a missing field echoes the whole body. Short values pass through
-    as they were; a long one, or a long structure, becomes a cut-down string.
+    Pydantic attaches the refused value as ``input`` -- the whole body for a
+    missing field -- and a request is refused for being wrong, not for being
+    harmless: a malformed header map carries its credential, a schedule its
+    payload. A client fixing a request already has what it sent; what it
+    needs back is where and why. ``ctx`` is kept only for values that are the
+    rule's (a length limit, the expected values), never the input itself or
+    an exception, whose text can quote it. A validator's ``msg`` is kept only
+    when it quotes nothing the request sent.
     """
-    text = value if isinstance(value, str) else json.dumps(value, default=str)
-    if len(text) <= VALIDATION_INPUT_PREVIEW_CHARS:
-        return value
-    return f"{text[:VALIDATION_INPUT_PREVIEW_CHARS]}… ({len(text)} characters)"
-
-
-def _previewed_inputs(errors: object) -> object:
     if not isinstance(errors, list):
         return errors
-    return [
-        {**error, "input": _input_preview(error["input"])}
-        if isinstance(error, dict) and "input" in error
-        else error
-        for error in errors
-    ]
+    return [_described(error) if isinstance(error, dict) else error for error in errors]
+
+
+#: The ``ctx`` parameters that are the rule's, never the input's: limits,
+#: patterns and the values a field accepts. Anything else -- a validator's
+#: ``error``, a union's ``tag`` (the discriminator the request sent) -- is
+#: dropped, because its text can quote what was refused.
+_RULE_CONTEXT_KEYS = frozenset(
+    {
+        "max_length",
+        "min_length",
+        "actual_length",
+        "ge",
+        "le",
+        "gt",
+        "lt",
+        "multiple_of",
+        "max_digits",
+        "decimal_places",
+        "whole_digits",
+        "pattern",
+        "expected",
+        "expected_tags",
+        "discriminator",
+        "field_type",
+        "class_name",
+        "allowed_schemes",
+    }
+)
+
+#: Error types whose ``msg`` is a validator's own text, which may be built from
+#: the value it refused (``ValueError(f"Invalid value: {value}")``). The
+#: built-in types' messages are pydantic's templates over ``ctx``.
+_VALIDATOR_MESSAGE_FALLBACKS = {
+    "value_error": "Value error, the value is not valid",
+    "assertion_error": "Assertion failed, the value is not valid",
+}
+
+#: Shorter strings are kept: they quote nothing worth hiding, and a one-letter
+#: input would otherwise match, and blank, nearly every message.
+_MIN_QUOTED_LENGTH = 4
+
+#: An enum constant the request chose (``DATASTORE``, ``AGENT_HOST``) is the
+#: schema's own vocabulary, which rule messages name on purpose ("DATASTORE
+#: schedules must declare operations"); quoting it reveals nothing.
+_ENUM_CONSTANT = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+def _input_strings(value: object) -> list[str]:
+    """Every string value in a refused input; a mapping's keys are field
+    names, the schema's words rather than the request's."""
+    if isinstance(value, str):
+        if len(value) < _MIN_QUOTED_LENGTH or _ENUM_CONSTANT.fullmatch(value):
+            return []
+        return [value]
+    if isinstance(value, Mapping):
+        return [text for item in value.values() for text in _input_strings(item)]
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return [text for item in value for text in _input_strings(item)]
+    return []
+
+
+def _safe_message(error: dict[str, object]) -> object:
+    """The error's ``msg``, unless it is a validator's and quotes the input.
+
+    The platform's own validators name the rule ("table_name cannot be
+    empty"), and those words are what a client needs, so they are kept. A
+    message that contains any string the request sent -- or whose input was
+    not supplied to check against -- is replaced by its type's fixed wording.
+    """
+    message = error.get("msg")
+    fallback = _VALIDATOR_MESSAGE_FALLBACKS.get(str(error.get("type")))
+    if fallback is None or not isinstance(message, str):
+        return message
+    if "input" not in error:
+        return fallback
+    if any(text in message for text in _input_strings(error["input"])):
+        return fallback
+    return message
+
+
+def _described(error: dict[str, object]) -> dict[str, object]:
+    kept = {key: error[key] for key in _VALIDATION_ERROR_KEYS if key in error}
+    if "msg" in kept:
+        kept["msg"] = _safe_message(error)
+    context = error.get("ctx")
+    if isinstance(context, Mapping):
+        refused = error.get("input")
+        rule = {
+            str(key): value
+            for key, value in context.items()
+            if str(key) in _RULE_CONTEXT_KEYS
+            and isinstance(value, (int, float, str, bool))
+            and not (isinstance(value, str) and value == refused)
+        }
+        if rule:
+            kept["ctx"] = rule
+    return kept
 
 
 def _error_body(
@@ -85,9 +181,17 @@ def _error_body(
     return {
         "message": redact_text(message),
         "code": code,
-        "request_id": request.headers.get("x-request-id"),
+        "request_id": _request_id(request),
         "details": redact_value(details),
     }
+
+
+def _request_id(request: Request) -> str | None:
+    state = request.scope.get("state")
+    chosen = state.get(ERROR_REQUEST_ID) if isinstance(state, Mapping) else None
+    return request.headers.get(REQUEST_ID_HEADER) or (
+        chosen if isinstance(chosen, str) else None
+    )
 
 
 def _http_exception_code_and_message(exc: HTTPException) -> tuple[str, str]:
@@ -151,9 +255,54 @@ def _record_request_failure(
         state["lemma_exception"] = exception
 
 
-def _error_cors_headers(request: Request) -> dict[str, str] | None:
-    headers = request.scope.get("state", {}).get(ERROR_CORS_HEADERS)
-    return dict(headers) if isinstance(headers, Mapping) else None
+def _unhandled_error_headers(request: Request) -> dict[str, str]:
+    """What the 500 carries that the layers it was built outside would add.
+
+    The CORS headers, and the request id: the observer stamps every response
+    that passes through it, and this one does not.
+    """
+    cors = request.scope.get("state", {}).get(ERROR_CORS_HEADERS)
+    headers = dict(cors) if isinstance(cors, Mapping) else {}
+    request_id = _request_id(request)
+    if request_id is not None:
+        headers[REQUEST_ID_HEADER] = request_id
+    return headers
+
+
+#: Seconds a client is asked to wait before retrying a request the database
+#: could not serve.
+_DATABASE_RETRY_AFTER_SECONDS = 2
+
+
+def _database_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    """503, retryable: the database could not take the request, nothing failed.
+
+    A refused connection, a full server, an empty pool or a deadlock says
+    nothing about the request; a 500 told clients and monitors it had broken,
+    and a datastore mapper called a deadlock a 400 validation error.
+    """
+    record_exception_on_current_span(
+        exc,
+        attributes={"app.database_unavailable": True, "http.response.status_code": 503},
+        mark_span_as_error=True,
+    )
+    _record_request_failure(
+        request,
+        code="DATABASE_UNAVAILABLE",
+        error_type=type(exc).__name__,
+        exception=exc,
+    )
+    headers = _unhandled_error_headers(request)
+    headers["Retry-After"] = str(_DATABASE_RETRY_AFTER_SECONDS)
+    return JSONResponse(
+        status_code=503,
+        content=_error_body(
+            request,
+            "The service is briefly unavailable. Try again in a moment.",
+            "DATABASE_UNAVAILABLE",
+        ),
+        headers=headers,
+    )
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -183,7 +332,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError):
-        errors = _previewed_inputs(_sanitize_validation_payload(exc.errors()))
+        errors = _without_echoed_input(_sanitize_validation_payload(exc.errors()))
         record_exception_on_current_span(
             exc,
             attributes={
@@ -230,6 +379,8 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_exception(request: Request, exc: Exception):
+        if is_transient_database_error(exc):
+            return _database_unavailable(request, exc)
         record_exception_on_current_span(
             exc,
             attributes={
@@ -247,5 +398,5 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=500,
             content=_error_body(request, "Internal server error", "INTERNAL_ERROR"),
-            headers=_error_cors_headers(request),
+            headers=_unhandled_error_headers(request),
         )

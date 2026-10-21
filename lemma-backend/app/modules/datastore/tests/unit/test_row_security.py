@@ -24,6 +24,7 @@ from app.modules.datastore.services.contact_owned_tables import (
     refuse_conflicts,
     resolve_contact_columns,
 )
+from app.modules.datastore.services.table_context import TableContext
 
 pytestmark = pytest.mark.unit
 
@@ -82,6 +83,38 @@ def test_a_workload_carrying_a_contact_reads_as_that_contact():
     """A contact's function run has grants, and still only that contact's rows."""
     workload = _member(None, contact_id=CONTACT)
     assert RowPrincipal.of(workload) == RowPrincipal.contact(CONTACT)
+
+
+def _table(**flags) -> TableContext:
+    return TableContext(
+        pod_id=POD,
+        table_id=uuid4(),
+        table_name="orders",
+        schema_name="pod_unit",
+        columns=[],
+        primary_key_column="id",
+        enable_rls=flags.pop("per_user", False),
+        **flags,
+    )
+
+
+def test_a_record_call_names_who_the_tables_policy_reads():
+    """Every table with a policy gets a principal; one without costs nothing."""
+    user = uuid4()
+    assert _table().row_principal(user, is_pod_admin=True) is None
+    assert _table(per_user=True).row_principal(
+        user, is_pod_admin=True
+    ) == RowPrincipal.for_user(user, is_pod_admin=True)
+    member = _table(contact_owned=True).row_principal(user)
+    assert member == RowPrincipal.for_user(user)
+    assert member.audience is RowAudience.MEMBER
+    for_contact = _table(contact_owned=True, for_contact=CONTACT)
+    assert for_contact.row_principal(user) == RowPrincipal.contact(CONTACT)
+
+
+def test_a_record_call_for_nobody_on_a_contact_owned_table_reads_as_no_one():
+    principal = _table(contact_owned=True).row_principal(None)
+    assert principal is not None and principal.audience is RowAudience.OUTSIDER
 
 
 def test_a_contact_owned_table_is_never_per_user_or_public():

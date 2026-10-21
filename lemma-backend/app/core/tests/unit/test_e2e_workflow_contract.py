@@ -251,12 +251,15 @@ def test_coverage_is_combined_inside_the_e2e_run() -> None:
 
     assert not (_REPO_ROOT / ".github/workflows/backend-coverage.yml").exists()
     assert "backend-unit" in jobs
-    assert {"backend-unit", "backend-e2e"} <= set(jobs["coverage"]["needs"])
-    # The required check has to see the floor, or it is advisory again.
-    assert {"backend-unit", "coverage"} <= set(jobs["e2e-passed"]["needs"])
+    # The required check combines coverage itself, so it has to see every
+    # producer -- or the floor is advisory again.
+    assert {"backend-unit", "backend-e2e", "backend-e2e-sandbox"} <= set(
+        jobs["e2e-passed"]["needs"]
+    )
+    assert "coverage" not in jobs
 
-    # Every producer and the coverage job check out the same commit.
-    for name in ("backend-unit", "backend-e2e", "coverage"):
+    # Every producer and the job that combines them check out the same commit.
+    for name in ("backend-unit", "backend-e2e", "backend-e2e-sandbox", "e2e-passed"):
         checkout = next(
             step
             for step in jobs[name]["steps"]

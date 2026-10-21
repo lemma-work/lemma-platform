@@ -15,6 +15,7 @@ import {
     type Pages,
 } from "./library-cache";
 import { readingProblem, withItemStatus } from "./file-status";
+import { createOrReplace } from "./replace-on-conflict";
 import { readDropped, type DroppedTree } from "./drop-entries";
 import { forgetMade, rememberMade, renamedMade } from "@/data/made";
 
@@ -45,6 +46,16 @@ export function useLibraryWrites(podId: string, directory: string) {
         return { id: path, name, kind, path, updated: new Date().toISOString(), detail, status };
     }
 
+    /** Upload ``file`` into ``at``, or replace the file already there under
+     *  that name: a second upload of a name is a new version of it. */
+    function uploadOrReplace(file: File, at: string) {
+        const files = lemma(podId).files;
+        return createOrReplace(
+            () => files.upload(file, { name: file.name, directoryPath: at, searchEnabled: true }),
+            () => files.update(pathIn(at, file.name), { file }),
+        );
+    }
+
     /** One file, into the folder it belongs in. Its own failure is reported
      *  and the rest carry on: a folder of thirty files should not stop at the
      *  fourth, and the fourth is still the one worth naming. */
@@ -59,11 +70,7 @@ export function useLibraryWrites(podId: string, directory: string) {
                 rememberMade(podId, at, item);
                 if (here) patch((pages) => withItem(pages, item));
             } else {
-                const written = await lemma(podId).files.upload(file, {
-                    name: file.name,
-                    directoryPath: at,
-                    searchEnabled: true,
-                });
+                const written = await uploadOrReplace(file, at);
                 if (here) patch((pages) => withItem(pages, rowFor(written.name ?? file.name, written.path, "file", describeSize(file.size), written.status)));
             }
         } catch (failure) {

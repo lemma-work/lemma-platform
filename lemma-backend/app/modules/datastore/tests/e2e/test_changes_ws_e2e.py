@@ -1,8 +1,10 @@
-"""E2E tests for the datastore changes websocket.
+"""E2E tests for the previous change socket, now a shim on the pod hub.
 
 Drives ``/pods/{pod_id}/datastore/changes`` over a raw ASGI websocket
-(``ApplicationCommunicator``) and asserts the live record-change stream, table
-filtering, RLS per-user row scoping, and auth rejection.
+(``ApplicationCommunicator``) and asserts what a client built against the
+previous SDK relies on: the record-change frames, table filtering, RLS per-user
+row scoping, resume by ``stream_id``, and auth rejection. The pod live socket
+that replaced it is covered by ``test_live_ws_e2e.py``.
 """
 
 from __future__ import annotations
@@ -15,9 +17,9 @@ import pytest
 import pytest_asyncio
 from asgiref.testing import ApplicationCommunicator
 
-from app.modules.datastore.tests.e2e.harness import DatastoreApi
+from app.modules.datastore.tests.e2e.harness import DatastoreApi, signup_user
 
-pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("datastore_outbox_dispatcher")]
+pytestmark = [pytest.mark.e2e]
 
 
 def _ws_communicator(
@@ -480,4 +482,125 @@ async def test_changes_ws_on_a_pod_without_access_closes_forbidden(
     closed = await communicator.receive_output(timeout=5)
     assert closed["type"] == "websocket.close", closed
     assert closed["code"] in (4403, 4404), closed
+    await communicator.wait(timeout=3)
+
+
+async def _expect_refused(communicator: ApplicationCommunicator) -> int:
+    """Accepted, then closed with nothing in between: no ``ready``, no row."""
+    await communicator.send_input({"type": "websocket.connect"})
+    accepted = await communicator.receive_output(timeout=5)
+    assert accepted["type"] == "websocket.accept", accepted
+    closed = await communicator.receive_output(timeout=5)
+    assert closed["type"] == "websocket.close", closed
+    return closed["code"]
+
+
+async def test_changes_ws_rejects_an_invalid_token(
+    notes_pod: DatastoreApi,
+    test_app,
+):
+    communicator = _ws_communicator(
+        test_app, notes_pod.pod_id, token="not-a-session-token"
+    )
+    assert await _expect_refused(communicator) == 4401
+    await communicator.wait(timeout=3)
+
+
+async def test_changes_ws_non_member_is_refused_and_hears_no_change(
+    notes_pod: DatastoreApi,
+    async_client,
+    test_app,
+):
+    """A signed-in user outside a real pod gets no ``ready`` and no row."""
+    outsider = await signup_user(async_client, "changes-outsider")
+    communicator = _ws_communicator(test_app, notes_pod.pod_id, outsider["token"])
+    assert await _expect_refused(communicator) in (4403, 4404)
+    await notes_pod.create_record("notes", {"body": "members only"})
+    await _assert_no_frame(communicator, timeout=2)
+    await communicator.wait(timeout=3)
+
+
+async def _restricted_vault(pod: DatastoreApi) -> None:
+    await pod.create_table(
+        {
+            "name": "vault",
+            "enable_rls": False,
+            "visibility": "RESTRICTED",
+            "columns": [{"name": "body", "type": "TEXT", "required": False}],
+        }
+    )
+
+
+async def test_changes_ws_restricted_table_is_refused_and_never_streamed(
+    notes_pod: DatastoreApi,
+    member_users,
+    test_app,
+):
+    """A member with no grant on a RESTRICTED table hears none of its rows."""
+    await _restricted_vault(notes_pod)
+    token = member_users["viewer"]["token"]
+    filtered = _ws_communicator(test_app, notes_pod.pod_id, token, table="vault")
+    assert await _expect_refused(filtered) in (4403, 4404)
+    await filtered.wait(timeout=3)
+
+    # Every table the viewer can read: the restricted one is not among them.
+    unfiltered = _ws_communicator(test_app, notes_pod.pod_id, token)
+    await unfiltered.send_input({"type": "websocket.connect"})
+    await _expect_accept_and_ready(unfiltered)
+    await notes_pod.create_record("vault", {"body": "restricted secret"})
+    visible = await notes_pod.create_record("notes", {"body": "open row"})
+    frame = await _recv_json(unfiltered)
+    assert (frame["table_name"], frame["record_id"]) == ("notes", visible["id"])
+    await _assert_no_frame(unfiltered, timeout=2)
+    await unfiltered.send_input({"type": "websocket.disconnect", "code": 1000})
+    await unfiltered.wait(timeout=3)
+
+
+async def test_changes_ws_table_read_without_record_read_streams_no_rows(
+    notes_pod: DatastoreApi,
+    member_users,
+    authenticated_client,
+    async_client,
+    test_app,
+):
+    """Seeing a table's schema is not reading its rows.
+
+    The record API refuses a role holding ``datastore.table.read`` alone on a
+    RESTRICTED table; the shim must not hand it those rows either.
+    """
+    await _restricted_vault(notes_pod)
+    granted = await authenticated_client.put(
+        f"/pods/{notes_pod.pod_id}/roles/POD_VIEWER/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": "vault",
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ]
+        },
+    )
+    assert granted.status_code == 200, granted.text
+    viewer = member_users["viewer"]
+    rows = await DatastoreApi(async_client, notes_pod.pod_id, user=viewer).request(
+        "GET", f"/pods/{notes_pod.pod_id}/datastore/tables/vault/records"
+    )
+    assert rows.status_code == 403, rows.text
+
+    communicator = _ws_communicator(
+        test_app, notes_pod.pod_id, viewer["token"], table="vault"
+    )
+    await communicator.send_input({"type": "websocket.connect"})
+    accepted = await communicator.receive_output(timeout=5)
+    assert accepted["type"] == "websocket.accept", accepted
+    first = await communicator.receive_output(timeout=5)
+    if first["type"] == "websocket.close":
+        assert first["code"] in (4403, 4404), first
+        await communicator.wait(timeout=3)
+        return
+    # Accepted with a ready: a write to the table must still deliver nothing.
+    await notes_pod.create_record("vault", {"body": "restricted secret"})
+    await _assert_no_frame(communicator, timeout=3)
+    await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
     await communicator.wait(timeout=3)

@@ -21,7 +21,9 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
     AgentSurfaceStatus,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceOnboardingReadyEvent
+from app.modules.agent_surfaces.services.onboarding_handoff import (
+    hand_off_when_ready,
+)
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
     VerifiedSurfaceIdentity,
@@ -230,7 +232,7 @@ async def _provision_and_bind(
         pending.step = OnboardingStep.READY
         if pending.ready_at is None:
             pending.ready_at = datetime.now(timezone.utc)
-            uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])
+            await hand_off_when_ready(uow, pending.id)
         if workspace.entry == "invitation":
             return OnboardingOutcome(
                 invited_pod_name=await pod_name(uow.session, workspace.pod_id)
@@ -482,5 +484,5 @@ async def attach_chosen_workspace(
         pending.offered_pods = None
         if pending.ready_at is None:
             pending.ready_at = datetime.now(timezone.utc)
-            uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])
+            await hand_off_when_ready(uow, pending.id)
     return None

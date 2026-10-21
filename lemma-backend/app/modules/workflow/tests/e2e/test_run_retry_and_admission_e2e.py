@@ -1,5 +1,8 @@
-"""Retrying a failed run where it failed, queueing past a run limit, and a
-reconciliation sweep that reaches every stale wait.
+"""Retrying a failed run where it failed, and queueing past a run limit.
+
+A parked run's admission happens in the transaction that frees its place
+(``test_workflow_work_e2e.py`` races two finishes for it), so there is no lost
+admission left for a sweep to find.
 
 Each drives the real engine against Postgres. Agent and function completions
 are driven through the workflow's own event handlers, as the other workflow
@@ -7,30 +10,15 @@ e2e tests do, so no model or worker is needed; only creating a function needs
 the sandbox, for schema extraction.
 """
 
-from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4, uuid7
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import update
+from sqlalchemy import select
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.function.domain.entities import (
-    FunctionRunStatus,
-    FunctionStatus,
-    FunctionType,
-)
-from app.modules.function.infrastructure.models import FunctionModel, FunctionRunModel
-from app.modules.workflow.api.dependencies import build_workflow_engine
-from app.modules.workflow.infrastructure.models import (
-    WorkflowRunModel,
-    WorkflowRunWaitModel,
-)
-from app.modules.workflow.services.run_resume_service import (
-    RECONCILE_BATCH,
-    RunResumeService,
-)
+from app.modules.pod.infrastructure.models.pod_models import PodMember
+
 from app.modules.workflow.tests.e2e.test_flow_execution_e2e import (
     _complete_agent_conversation,
     _create_agent,
@@ -90,6 +78,7 @@ async def _agent_then_function_workflow(client: AsyncClient, pod_id: str) -> str
     return workflow["name"]
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_retry_resumes_at_the_failed_function_without_rerunning_the_agent(
     authenticated_client: AsyncClient,
@@ -137,6 +126,7 @@ async def test_retry_resumes_at_the_failed_function_without_rerunning_the_agent(
     await _retry(client, pod_id, run["id"], 409)
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_a_run_that_failed_at_its_agent_is_not_retried(
     authenticated_client: AsyncClient,
@@ -158,28 +148,33 @@ async def test_a_run_that_failed_at_its_agent_is_not_retried(
     assert (await _get_run(client, pod_id, run["id"]))["status"] == "FAILED"
 
 
+_OK = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+
+
 async def _form_workflow(
-    client: AsyncClient, pod_id: str, *, limit: int | None
+    client: AsyncClient,
+    pod_id: str,
+    *,
+    limit: int | None,
+    assignee: str | None = None,
 ) -> dict:
+    intake: dict = {"input_schema": _OK}
+    if assignee is not None:
+        intake["assignee_pod_member_id"] = assignee
     workflow = await _create_workflow(
         client,
         pod_id,
         name=f"limited-{uuid4().hex[:6]}",
         start={"type": "MANUAL"},
         nodes=[
-            {
-                "id": "approve",
-                "type": "FORM",
-                "config": {
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {"ok": {"type": "boolean"}},
-                    }
-                },
-            },
+            {"id": "intake", "type": "FORM", "config": intake},
+            {"id": "approve", "type": "FORM", "config": {"input_schema": _OK}},
             {"id": "end", "type": "END"},
         ],
-        edges=[{"id": "e1", "source": "approve", "target": "end"}],
+        edges=[
+            {"id": "e0", "source": "intake", "target": "approve"},
+            {"id": "e1", "source": "approve", "target": "end"},
+        ],
     )
     if limit is None:
         return workflow
@@ -203,6 +198,10 @@ async def test_a_run_past_the_limit_waits_its_turn_instead_of_failing(
 
     first = await _create_run(client, pod_id, workflow_name)
     assert first["status"] == "WAITING"
+    # Past its entry form the run has started, and holds the one place.
+    await _submit_form(
+        client, pod_id, first["id"], node_id="intake", inputs={"ok": True}
+    )
     second = await _create_run(client, pod_id, workflow_name)
     assert second["status"] == "RUNNING"
     assert second["active_wait"]["wait_type"] == "QUEUED"
@@ -215,127 +214,74 @@ async def test_a_run_past_the_limit_waits_its_turn_instead_of_failing(
     admitted = await _get_run(client, pod_id, second["id"])
     assert admitted["status"] == "WAITING"
     assert admitted["active_wait"]["wait_type"] == "HUMAN"
-    assert admitted["active_wait"]["node_id"] == "approve"
-
-
-async def _seed_in_progress_function_waits(
-    *, pod_id: UUID, flow_id: UUID, user_id: UUID, count: int, created_at: datetime
-) -> None:
-    """Stale waits the sweep can do nothing about: their function is running."""
-    async with async_session_maker() as session:
-        function_id = uuid7()
-        session.add(
-            FunctionModel(
-                id=function_id,
-                pod_id=pod_id,
-                user_id=user_id,
-                name=f"slow-{function_id.hex}",
-                input_schema={},
-                output_schema={},
-                type=FunctionType.JOB,
-                status=FunctionStatus.READY,
-                visibility="POD",
-                revision_hash=f"sha256:{'4' * 64}",
-            )
-        )
-        function_run_id = uuid7()
-        session.add(
-            FunctionRunModel(
-                id=function_run_id,
-                function_id=function_id,
-                revision_hash=f"sha256:{'4' * 64}",
-                user_id=user_id,
-                input_data={},
-                status=FunctionRunStatus.RUNNING,
-                job_id=f"function-run:{function_run_id}",
-                started_at=datetime.now(timezone.utc),
-                deadline_at=datetime.now(timezone.utc) + timedelta(hours=1),
-            )
-        )
-        for _ in range(count):
-            run_id = uuid7()
-            session.add(
-                WorkflowRunModel(
-                    id=run_id,
-                    flow_id=flow_id,
-                    pod_id=pod_id,
-                    user_id=user_id,
-                    status="RUNNING",
-                    current_node_id="approve",
-                    # The run columns are naive timestamps, unlike the wait's.
-                    started_at=created_at.replace(tzinfo=None),
-                )
-            )
-            session.add(
-                WorkflowRunWaitModel(
-                    id=uuid7(),
-                    run_id=run_id,
-                    flow_id=flow_id,
-                    pod_id=pod_id,
-                    node_id="approve",
-                    wait_type="FUNCTION",
-                    status="ACTIVE",
-                    external_ref=str(function_run_id),
-                    payload={},
-                    created_at=created_at,
-                )
-            )
-        await session.commit()
+    assert admitted["active_wait"]["node_id"] == "intake"
 
 
 @pytest.mark.asyncio
-async def test_reconcile_sweep_reaches_a_stale_wait_behind_a_full_page(
+async def test_an_unsubmitted_entry_form_holds_no_place(
     authenticated_client: AsyncClient,
     fixed_test_org,
-    fixed_test_user,
 ):
-    """More un-actionable stale waits than one page must not hide a newer one.
-
-    The sweep used to read the oldest page and stop, so waits it could do
-    nothing about -- here, ones whose function is still running -- held the
-    head of the list forever. Behind them sits a queued run whose admission
-    was lost: its workflow has room, and only the sweep can let it in.
-    """
+    """Opening "Run now" and walking away must not wedge a limited workflow:
+    a run still on its entry form has run nothing."""
     client = authenticated_client
-    pod_id = await _create_pod(client, fixed_test_org["id"], "Workflow Sweep")
+    pod_id = await _create_pod(client, fixed_test_org["id"], "Workflow Forms")
     workflow_name = (await _form_workflow(client, pod_id, limit=1))["name"]
-    # The head of the list belongs to another workflow, so it does not use up
-    # the limited one's place.
-    unlimited = await _form_workflow(client, pod_id, limit=None)
-    first = await _create_run(client, pod_id, workflow_name)
-    parked = await _create_run(client, pod_id, workflow_name)
-    assert parked["active_wait"]["wait_type"] == "QUEUED"
-    now = datetime.now(timezone.utc)
+
+    abandoned = await _create_run(client, pod_id, workflow_name)
+    later = await _create_run(client, pod_id, workflow_name)
+    for run in (abandoned, later):
+        assert run["status"] == "WAITING", run
+        assert run["active_wait"]["wait_type"] == "HUMAN", run["active_wait"]
+        assert run["active_wait"]["node_id"] == "intake"
+
+
+@pytest.mark.asyncio
+async def test_a_first_step_assigned_to_a_member_holds_its_place(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+):
+    """Only the starter's own entry form is exempt: an approval assigned to a
+    member is work the run waits on, so the next run past the limit queues."""
+    client = authenticated_client
+    pod_id = await _create_pod(client, fixed_test_org["id"], "Workflow Approval")
     async with async_session_maker() as session:
-        # The first run ends behind the engine's back, so nothing admits the
-        # parked one: the lost-admission case the sweep exists for.
-        await session.execute(
-            update(WorkflowRunModel)
-            .where(WorkflowRunModel.id == UUID(first["id"]))
-            .values(status="CANCELLED")
+        member_id = (
+            await session.execute(
+                select(PodMember.id).where(PodMember.pod_id == UUID(pod_id)).limit(1)
+            )
+        ).scalar_one()
+    workflow_name = (
+        await _form_workflow(client, pod_id, limit=1, assignee=str(member_id))
+    )["name"]
+
+    first = await _create_run(client, pod_id, workflow_name)
+    second = await _create_run(client, pod_id, workflow_name)
+    assert first["active_wait"]["wait_type"] == "HUMAN", first["active_wait"]
+    assert second["status"] == "RUNNING", second
+    assert second["active_wait"]["wait_type"] == "QUEUED", second["active_wait"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_starts_of_a_limited_workflow_do_not_deadlock(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+):
+    """Each start inserts its run (KEY SHARE on the workflow row through the
+    foreign key) and then locks the row to count. FOR UPDATE there deadlocked
+    concurrent starts against each other's KEY SHARE: 11 of 12 failed."""
+    import asyncio
+
+    client = authenticated_client
+    pod_id = await _create_pod(client, fixed_test_org["id"], "Workflow Burst")
+    workflow_name = (await _form_workflow(client, pod_id, limit=2))["name"]
+
+    responses = await asyncio.gather(
+        *(
+            client.post(f"/pods/{pod_id}/workflows/{workflow_name}/runs")
+            for _ in range(8)
         )
-        await session.execute(
-            update(WorkflowRunWaitModel)
-            .where(WorkflowRunWaitModel.run_id == UUID(first["id"]))
-            .values(status="CANCELLED")
-        )
-        await session.execute(
-            update(WorkflowRunWaitModel)
-            .where(WorkflowRunWaitModel.run_id == UUID(parked["id"]))
-            .values(created_at=now - timedelta(hours=1))
-        )
-        await session.commit()
-    await _seed_in_progress_function_waits(
-        pod_id=UUID(pod_id),
-        flow_id=UUID(unlimited["id"]),
-        user_id=UUID(fixed_test_user["id"]),
-        count=RECONCILE_BATCH + 1,
-        created_at=now - timedelta(hours=2),
     )
-
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        await RunResumeService(build_workflow_engine(uow)).reconcile_stale_waits()
-
-    admitted = await _get_run(client, pod_id, parked["id"])
-    assert admitted["status"] == "WAITING"
-    assert admitted["active_wait"]["wait_type"] == "HUMAN"
+    assert [r.status_code for r in responses].count(201) == 8, [
+        (r.status_code, r.text[:200]) for r in responses if r.status_code != 201
+    ]

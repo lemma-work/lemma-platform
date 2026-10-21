@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.conversation_access import (
@@ -26,7 +25,7 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.modules.agent.domain.private_notes import privacy_of, run_is_private
 from app.modules.agent.domain.entities import Conversation, Message
-from app.modules.agent.domain.events import AgentRunStartedEvent
+from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.pausing_tools import (
     PARKED_IN_RUN_KEY,
     PAUSING_TOOL_NAMES as _PAUSING_TOOL_NAMES_DOMAIN,
@@ -48,6 +47,7 @@ from app.modules.agent.services.realtime import (
     publish_conversation_event,
 )
 from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.services.runtime_owned_uow import RuntimeOwnedUnitOfWork
 from app.modules.agent.services.usage_preflight import assert_usage_preflight_allowed
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import UsageService
@@ -110,17 +110,32 @@ class PauseResume:
                 tool_result=tool_result,
             ),
         )
+        # A live UI frame, sent once the return has committed: after the
+        # request's commit, or -- inside a work item -- after the runtime's.
+        self._publish_after_commit(
+            conversation.id,
+            [message_payload(paused_run_id, message_to_payload(saved_return))],
+        )
         await self.uow.commit()
-        # The commit above already returned the connection, so this publish
-        # holds nothing -- but only a reader could tell, and the gate is
-        # lexical. Saying it in the structure makes it checkable, and makes a
-        # future edit that moves the publish above the commit fail loudly.
-        async with connection_released(getattr(self.uow, "session", None)):
-            await publish_conversation_event(
-                conversation.id,
-                message_payload(paused_run_id, message_to_payload(saved_return)),
-            )
         return True
+
+    def _publish_after_commit(
+        self, conversation_id: UUID, frames: list[dict[str, object]]
+    ) -> None:
+        """Send live UI frames once this transaction commits, never inside it.
+
+        Registered before the commit that carries them: inside a work item the
+        commit is the runtime's (``RuntimeOwnedUnitOfWork``), and a Redis round
+        trip inside a FAST handler's transaction is the one thing it may not do.
+        """
+        if not frames:
+            return
+
+        async def _publish() -> None:
+            for frame in frames:
+                await publish_conversation_event(conversation_id, frame)
+
+        self.uow.after_commit(_publish)
 
     async def resume_would_duplicate_a_live_turn(
         self,
@@ -200,7 +215,7 @@ class PauseResume:
         if status == ConversationStatus.STOPPED:
             await self.uow.commit()
             return
-        started = await self._start_resume_run(
+        await self._start_resume_run(
             conversation=conversation,
             paused_run_id=paused_run_id,
             resumed_tool_call_id=resumed_tool_call_id,
@@ -208,16 +223,8 @@ class PauseResume:
             pod_id=pod_id,
             agent_name=agent_name,
             source=source,
+            publish_claimed=True,
         )
-        if started is None:
-            return
-        _resume_run_id, claimed = started
-        async with connection_released(getattr(self.uow, "session", None)):
-            for message in claimed:
-                await publish_conversation_event(
-                    conversation.id,
-                    message_payload(message.agent_run_id, message_to_payload(message)),
-                )
 
     async def resume_if_already_answered(
         self,
@@ -290,6 +297,7 @@ class PauseResume:
         pod_id: UUID,
         agent_name: str | None,
         source: str,
+        publish_claimed: bool = False,
     ) -> ResumeStarted | None:
         """Create the resume run and claim what was said while it was paused.
 
@@ -306,18 +314,22 @@ class PauseResume:
         selected_agent_runtime = await turn_runtime(self.uow, conversation, agent)
         try:
             # Resuming is a run like any other: skipping this made answering a
-            # question a way past an exhausted limit.
-            await assert_usage_preflight_allowed(
-                self.usage_service,
-                organization_id=conversation.organization_id,
-                user_id=user_id,
-                agent_runtime=selected_agent_runtime,
-            )
+            # question a way past an exhausted limit. Inside a work item the
+            # check is the turn's own reservation instead: a usage lookup has
+            # no place in a FAST handler's transaction, and a turn refused
+            # there fails with the same limit message.
+            if not isinstance(self.uow, RuntimeOwnedUnitOfWork):
+                await assert_usage_preflight_allowed(
+                    self.usage_service,
+                    organization_id=conversation.organization_id,
+                    user_id=user_id,
+                    agent_runtime=selected_agent_runtime,
+                )
         except UsageLimitExceededError as refused:
-            await self.uow.commit()
-            await self._report_refused_resume(
+            self._report_refused_resume(
                 conversation, paused_run_id=paused_run_id, refused=refused
             )
+            await self.uow.commit()
             return None
         repository = self.conversation_repository
         paused_run = await repository.get_agent_run(paused_run_id)
@@ -346,21 +358,27 @@ class PauseResume:
         claimed = await repository.claim_queued_user_messages(
             paused_run_id, into_run_id=resume_run.id, notes=notes
         )
-        self.uow.collect_events(
-            [
-                AgentRunStartedEvent(
-                    conversation_id=conversation.id,
-                    agent_run_id=resume_run.id,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    agent_name=agent_name,
-                )
-            ]
+        await stage_agent_turn(
+            self.uow,
+            turn_for(
+                conversation,
+                run_id=resume_run.id,
+                user_id=user_id,
+                agent_name=agent_name,
+            ),
         )
+        if publish_claimed:
+            self._publish_after_commit(
+                conversation.id,
+                [
+                    message_payload(message.agent_run_id, message_to_payload(message))
+                    for message in claimed
+                ],
+            )
         await self.uow.commit()
         return resume_run.id, claimed
 
-    async def _report_refused_resume(
+    def _report_refused_resume(
         self,
         conversation: Conversation,
         *,
@@ -372,13 +390,14 @@ class PauseResume:
             conversation_id=str(conversation.id),
             agent_run_id=str(paused_run_id),
         )
-        async with connection_released(getattr(self.uow, "session", None)):
-            await publish_conversation_event(
-                conversation.id,
+        self._publish_after_commit(
+            conversation.id,
+            [
                 error_payload(
                     paused_run_id,
                     refused.message,
                     code=refused.code,
                     reason=refused.reason,
-                ),
-            )
+                )
+            ],
+        )

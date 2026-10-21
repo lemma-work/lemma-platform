@@ -1,4 +1,4 @@
-"""What one reader may do with a pod's groups.
+"""What one reader may do with a pod's group sources.
 
 Reading a group takes what reading its bot takes. Changing one -- switching its
 people outside the pod on or off, or taking it over -- is narrower: the member
@@ -20,7 +20,10 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     may_perform_surface_agent_action,
 )
-from app.modules.agent_surfaces.services.space_groups import GroupSummary, SpaceGroups
+from app.modules.agent_surfaces.services.source_settings import (
+    SourceSettings,
+    SourceState,
+)
 
 
 class GroupAccess:
@@ -48,7 +51,7 @@ class GroupAccess:
             self._admin = bool(await self.ctx.can(Permissions.POD_MEMBER_MANAGE))
         return self._admin
 
-    async def manages(self, summary: GroupSummary) -> bool:
+    async def manages(self, summary: SourceState) -> bool:
         """Whether the reader may switch this group's outsiders or take it over."""
         if not await self.configures(summary.group.surface_id):
             return False
@@ -70,6 +73,6 @@ class GroupAccess:
 
     async def _agent_of(self, surface_id: UUID) -> UUID | None:
         if surface_id not in self._agents:
-            surface = await SpaceGroups(self.uow).surface(surface_id)
+            surface = await SourceSettings(self.uow).surface(surface_id)
             self._agents[surface_id] = surface.agent_id if surface else None
         return self._agents[surface_id]

@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import is_slack_api_error
 
 from app.core.config import reveal_secret
 from app.modules.agent_surfaces.domain.credentials import (
     CredentialsLike,
     SlackCredentials,
 )
-from slack_sdk.web.async_client import AsyncWebClient
 
 from app.modules.agent_surfaces.platforms.common import (
     UnsafeApiBaseError,
@@ -21,6 +20,9 @@ from app.modules.agent_surfaces.platforms.delivery import (
     DeliveryClassification,
     classify_transport_failure,
 )
+
+if TYPE_CHECKING:
+    from slack_sdk.web.async_client import AsyncWebClient
 
 
 def slack_access_token(credentials: CredentialsLike) -> str | None:
@@ -86,6 +88,8 @@ async def build_slack_client(credentials: CredentialsLike) -> AsyncWebClient:
     Teams — goes through `assert_safe_api_base` for exactly this; Slack was
     the one that did not, because this constructor used to be synchronous.
     """
+    from slack_sdk.web.async_client import AsyncWebClient
+
     kwargs: dict[str, Any] = {}
     token = slack_access_token(credentials)
     if token:
@@ -139,10 +143,10 @@ def classify_slack_error(exc: Exception) -> DeliveryClassification:
     Same shape as ``classify_telegram_error`` and ``classify_whatsapp_error``,
     so all four platforms are retried by one policy. Slack reports a rate limit
     as ``SlackApiError`` with HTTP 429 and a ``Retry-After`` header, and
-    ``SlackApiError`` is already a member of ``PLATFORM_TRANSPORT_ERRORS`` --
+    ``SlackApiError`` is already a member of ``platform_transport_errors()`` --
     so without this the answer was recorded as reaching nobody and dropped.
     """
-    if isinstance(exc, SlackApiError):
+    if is_slack_api_error(exc):
         status = getattr(exc.response, "status_code", None)
         if status == 429 or (isinstance(status, int) and status >= 500):
             return DeliveryClassification.TRANSIENT
@@ -153,7 +157,7 @@ def classify_slack_error(exc: Exception) -> DeliveryClassification:
 
 def slack_retry_after(exc: Exception) -> float | None:
     """Seconds Slack asked us to wait, from the ``Retry-After`` header."""
-    if not isinstance(exc, SlackApiError):
+    if not is_slack_api_error(exc):
         return None
     headers = getattr(exc.response, "headers", None) or {}
     raw = headers.get("Retry-After") or headers.get("retry-after")

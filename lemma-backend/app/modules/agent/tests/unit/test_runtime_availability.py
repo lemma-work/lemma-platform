@@ -38,6 +38,7 @@ from app.modules.agent.services.runtime_availability import (
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
+from app.modules.agent.services.runtime_resolution import RuntimeHolder
 
 pytestmark = pytest.mark.unit
 
@@ -140,6 +141,48 @@ async def test_a_model_the_catalog_no_longer_lists_is_refused() -> None:
 
     assert refused.code == "model_unavailable"
     assert refused.status_code == 422
+    # A turn: the pin was accepted when saved, so the model went away since.
+    assert "Vendor no longer offers retired" in refused.message
+    assert "this conversation" in refused.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("holder", list(RuntimeHolder))
+async def test_a_save_naming_a_model_does_not_claim_it_was_ever_offered(
+    holder: RuntimeHolder,
+) -> None:
+    """A save can name a model that never existed; "no longer" would be false,
+    and the thing being saved is named as what it is."""
+    org = uuid4()
+    profile = _profile(org)
+    service = AgentRuntimeProfileService(_Profiles(profile))  # type: ignore[arg-type]  # TST-03: the repository reads the check makes
+
+    with pytest.raises(RuntimeUnavailableError) as refused:
+        await check_runtime_selection(
+            AgentRuntimeConfig(profile_id=profile.id, model_name="imaginary"),
+            profiles=service,
+            organization_id=org,
+            user_id=uuid4(),
+            saving_for=holder,
+        )
+
+    message = refused.value.message
+    assert refused.value.code == "model_unavailable"
+    assert "Vendor does not offer a model named imaginary" in message
+    assert "no longer" not in message
+    assert f"for this {holder.value}" in message
+    other = next(h for h in RuntimeHolder if h is not holder)
+    assert other.value not in message
+
+
+def test_a_concurrent_provider_edit_is_not_called_a_model() -> None:
+    from app.modules.agent.domain.errors import RuntimeProfileConflictError
+
+    conflict = RuntimeProfileConflictError()
+
+    assert conflict.code == "RUNTIME_PROFILE_CONFLICT"
+    assert "provider settings" in conflict.message
+    assert "model" not in conflict.message.lower()
 
 
 @pytest.mark.asyncio

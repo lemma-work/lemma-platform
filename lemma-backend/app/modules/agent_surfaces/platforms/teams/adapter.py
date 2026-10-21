@@ -25,6 +25,13 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.models import (
     SurfaceSenderProfile,
 )
+from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts, PlacePrivacy
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
+from app.modules.agent_surfaces.platforms.teams.line_changes import teams_line_changes
+from app.modules.agent_surfaces.platforms.teams.group_updates import (
+    teams_group_updates,
+)
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.adapter_egress import (
     TeamsSurfaceEgress,
@@ -182,6 +189,51 @@ class TeamsSurfaceAdapter(TeamsSurfaceEgress):
         logger.debug(
             "agent_surfaces.adapter.teams_inbound_event_enrichment_could.diagnostic"
         )
+        return None
+
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]:
+        return teams_group_updates(payload)
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        return teams_line_changes(payload, self._parser)
+
+    async def read_place_privacy(
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
+    ) -> PlaceFacts | None:
+        """A group chat is its members'; a team channel is what Graph says its
+        ``membershipType`` is. None when Graph cannot be asked."""
+        del credentials
+        if str(event.metadata.get("channel_type") or "").lower() == "groupchat":
+            return PlaceFacts(privacy=PlacePrivacy.PRIVATE)
+        target = reply_target_as(event, TeamsReplyTarget)
+        if not event.tenant_id or not target.team_id or not target.channel_id:
+            return None
+        token = await self._get_graph_token(event.tenant_id)
+        if not token:
+            return None
+        try:
+            graph_team_id = await client.resolve_graph_team_id(
+                raw_team_id=str(target.team_id),
+                team_aad_group_id=target.team_aad_group_id,
+                service_url=target.service_url,
+            )
+            if not graph_team_id:
+                return None
+            channel = await client.get_json(
+                f"{client.GRAPH_BASE}/teams/{quote(graph_team_id)}"
+                f"/channels/{quote(str(target.channel_id))}?$select=membershipType",
+                token,
+            )
+        except aiohttp.ClientError, TimeoutError:
+            logger.info("agent_surfaces.teams.place_privacy_unknown.observed")
+            return None
+        membership = str((channel or {}).get("membershipType") or "").lower()
+        if membership == "standard":
+            return PlaceFacts(privacy=PlacePrivacy.PUBLIC)
+        if membership in ("private", "shared"):
+            return PlaceFacts(privacy=PlacePrivacy.PRIVATE)
         return None
 
     def _text_with_attachments(

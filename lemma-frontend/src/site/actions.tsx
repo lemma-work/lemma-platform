@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/session/session";
 import { hasApiUrl } from "@/session/client";
 import { source as data } from "@/data";
+import { afterNewOrganization, newOrganizationLink } from "@/auth/redirects";
 import type { ActionProps } from "./action-host";
 export function Actions(props: ActionProps) {
     const session = useSession();
@@ -107,8 +108,10 @@ function Remix({ source }: ActionProps) {
     if (!orgs.data?.length)
         return (
             <p>
-                <a href="/organizations/new">Create an organization</a>, then
-                return here to continue.
+                <a href={newOrganizationLink(window.location.pathname + window.location.search)}>
+                    Create an organization
+                </a>
+                , then continue here.
             </p>
         );
     return (
@@ -189,7 +192,9 @@ function CreateOrganization() {
         setBusy(true);
         try {
             const org = await data.createOrg({ name: name.trim() });
-            window.location.assign("/t?org=" + encodeURIComponent(org.id));
+            window.location.assign(
+                afterNewOrganization(org.id, window.location.search),
+            );
         } catch (e) {
             setError(
                 e instanceof Error

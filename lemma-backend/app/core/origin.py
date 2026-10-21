@@ -6,10 +6,9 @@ through the web UI and through surfaces, agents usually work through the SDK —
 but people use the SDK too, and agents post to surfaces. Collapsing the two
 into one field makes "how much of this pod's work is human?" unanswerable.
 
-The platform already used the word *origin* for this in two narrower places —
-``Conversation.origin_type`` (a loose string) and ``NotificationOriginKind``
-(an enum covering notifications only). This is the canonical spine both should
-converge on. It is deliberately *not* called "surface": a surface is a specific
+The platform already used the word *origin* for this in a narrower place —
+``Conversation.origin_type``, a loose string. This is the canonical spine it
+should converge on. It is deliberately *not* called "surface": a surface is a specific
 product noun — a chat platform where an agent answers pod members — and it is
 one origin among many.
 

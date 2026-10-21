@@ -1,9 +1,12 @@
 """Long-polling Telegram for one bot, when no webhook can be registered.
 
-Telegram allows a single consumer per bot token, so this leases the bot, polls
-getUpdates in a loop, and gives up only after a grace period of 409s -- long
-enough for a handover between two workers, short enough that a bot genuinely
-owned elsewhere is not held forever.
+Telegram allows a single consumer per bot token. The bot's ``surface.receiver``
+work item is the lease (one worker holds it; another takes over when its lease
+lapses), this polls getUpdates in a loop, and it gives up only after a grace
+period of 409s -- long enough for a handover between two workers, short enough
+that a bot genuinely owned elsewhere is not held forever. The offset lives in
+``surface_receiver_state`` and moves in the transaction that stores the
+updates it passed.
 """
 
 from __future__ import annotations
@@ -29,11 +32,11 @@ from app.modules.agent_surfaces.platforms.telegram.update_batching import (
     next_telegram_offset as _next_telegram_offset,
 )
 from app.modules.agent_surfaces.services.native_receiver_base import (
-    _publish_native_receiver_event,
     NativeReceiverCandidate,
     NativeReceiverConflict,
     NativeReceiverCredentialsRejected,
     ReceiverFailureStreak,
+    ReceiverInbox,
 )
 
 logger = get_logger(__name__)
@@ -56,8 +59,11 @@ def _poll_params(offset: int | None) -> dict[str, Any]:
 
 
 class TelegramPollingReceiverRunner:
-    def __init__(self, candidate: NativeReceiverCandidate) -> None:
+    def __init__(
+        self, candidate: NativeReceiverCandidate, inbox: ReceiverInbox | None = None
+    ) -> None:
         self._candidate = candidate
+        self._inbox = inbox or ReceiverInbox(candidate)
         telegram = TelegramCredentials.of(candidate.credentials)
         # Revealed for the life of the poll loop, which addresses every call
         # to the bot by it.
@@ -94,7 +100,10 @@ class TelegramPollingReceiverRunner:
             # Every candidate, the shared system bot included: its key is a
             # fingerprint of its own token like any other, and without a stored
             # offset a restart re-reads whatever Telegram still holds.
-            offset = await _load_telegram_offset(self._candidate.key)
+            stored = await self._inbox.load_cursor(
+                legacy=lambda: _load_legacy_telegram_offset(self._candidate.key)
+            )
+            offset = int(stored) if stored else None
 
             while True:
                 try:
@@ -156,21 +165,16 @@ class TelegramPollingReceiverRunner:
             "agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed",
             update_id=update_id,
         )
-        await _publish_native_receiver_event(
+        # The update and the offset past it commit together: a crash can
+        # neither skip the update nor -- the row is unique on its id -- store
+        # it twice.
+        next_offset = update_id + 1 if isinstance(update_id, int) else None
+        await self._inbox.accept(
             source="telegram",
             payload=update,
-            receiver_key=self._candidate.key,
-            surface_ids=self._candidate.surface_ids,
+            cursor=str(next_offset) if next_offset is not None else None,
         )
-        if isinstance(update_id, int):
-            offset = update_id + 1
-            # After the publish, not before. Stored first, a crash between the
-            # two meant the restart resumed past an update that had never been
-            # published, and nothing ever replayed it. Stored last, the same
-            # crash replays it and the durable inbox -- keyed on the update id
-            # -- treats the second as a duplicate.
-            await _store_telegram_offset(self._candidate.key, offset)
-        return offset
+        return next_offset if next_offset is not None else offset
 
     async def _recover(
         self, exc: Exception, conflict_deadline: float | None
@@ -239,28 +243,17 @@ def _telegram_offset_key(key: str) -> str:
     return f"agent_surfaces:telegram_offset:{key}"
 
 
-async def _load_telegram_offset(key: str) -> int | None:
+async def _load_legacy_telegram_offset(key: str) -> str | None:
+    """The offset Redis held before receivers kept it in Postgres: read once."""
     redis = get_redis(url=settings.redis_url)
     try:
         raw = await redis.get(_telegram_offset_key(key))
-        return int(raw) if raw else None
     except Exception:
-        # Warning: an offset that cannot be read makes polling resume from
-        # whatever Telegram still holds, which is how a restart re-delivers or
-        # skips updates -- and at debug nobody could see that it had happened.
         logger.warning(
             "agent_surfaces.event_receiver_service.could_not_load_telegram_polling.degraded",
             exc_info=True,
         )
         return None
-
-
-async def _store_telegram_offset(key: str, offset: int) -> None:
-    redis = get_redis(url=settings.redis_url)
-    try:
-        await redis.set(_telegram_offset_key(key), str(offset))
-    except Exception:
-        logger.warning(
-            "agent_surfaces.event_receiver_service.could_not_store_telegram_polling.degraded",
-            exc_info=True,
-        )
+    if raw is None:
+        return None
+    return raw.decode() if isinstance(raw, bytes) else str(raw)

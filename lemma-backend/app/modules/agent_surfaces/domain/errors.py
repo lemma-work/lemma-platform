@@ -133,10 +133,14 @@ class AgentSurfaceAlreadyExistsError(AgentSurfaceError):
 
     def __init__(self, name: str):
         super().__init__(
-            message=f"Surface '{name}' already exists in this pod",
+            message=(
+                f"Surface '{name}' already exists in this pod. Update it by that "
+                f"name (PATCH /surfaces/{name}) rather than creating it again."
+            ),
             code="AGENT_SURFACE_ALREADY_EXISTS",
             status_code=409,
         )
+        self.details = {"existing_surface": {"name": name}}
 
 
 class AgentSurfaceAgentPlatformConflictError(AgentSurfaceError):
@@ -159,9 +163,10 @@ class AgentSurfaceAgentPlatformConflictError(AgentSurfaceError):
         # needs to know is the name to use. See `DEV-SURF-003`.
         advice = (
             f"Every agent is given a mailbox when it is created, named "
-            f"'{surface_name}'. Use that name to refer to it -- in a pod bundle, "
-            "name the surface '" + surface_name + "' -- or connect email without "
-            "a name to be handed the address it already has."
+            f"'{surface_name}'. Change that surface rather than creating another "
+            f"(PATCH /surfaces/{surface_name}; in a pod bundle, name the surface "
+            f"'{surface_name}'), or connect email without a name to be handed the "
+            "address it already has."
             if platform.upper() == "RESEND"
             else (
                 "An agent reaches a platform in one place: one Slack app, one "
@@ -249,6 +254,106 @@ class OutsideAnswerNeedsApproval(AgentSurfaceError):
         self.details = {"notification_id": str(notification_id)}
 
 
+class SlackAppCreationForbiddenError(AgentSurfaceError):
+    """Only someone who may add the org's connector installs may make Slack apps."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message=(
+                "Only an organization owner or editor can let Lemma create "
+                "Slack apps, or create one."
+            ),
+            code="SLACK_APP_CREATION_FORBIDDEN",
+            status_code=403,
+        )
+
+
+class SlackAppCreationNotSetUpError(AgentSurfaceError):
+    """No configuration token is saved for that Slack workspace."""
+
+    def __init__(self, team_id: str) -> None:
+        super().__init__(
+            message=(
+                "Lemma cannot create Slack apps in that workspace yet. Save a "
+                "configuration token for it first."
+            ),
+            code="SLACK_APP_CREATION_NOT_SET_UP",
+            status_code=409,
+        )
+        self.details = {"team_id": team_id}
+
+
+class SlackConfigurationTokenRefusedError(AgentSurfaceError):
+    """Slack would not rotate the refresh token a person just pasted."""
+
+    def __init__(self, slack_error: str) -> None:
+        super().__init__(
+            message=(
+                f"Slack did not accept that refresh token ({slack_error}). "
+                "Generate a new configuration token on api.slack.com/apps and "
+                "paste its refresh token."
+            ),
+            code="SLACK_CONFIGURATION_TOKEN_REFUSED",
+            status_code=422,
+        )
+        self.details = {"slack_error": slack_error}
+
+
+class SlackAppCreationTokenExpiredError(AgentSurfaceError):
+    """The saved configuration token can no longer be used: Slack refused its
+    refresh token, or Lemma can no longer decrypt it. Either way, only a new
+    paste brings it back."""
+
+    def __init__(self, team_id: str, *, unreadable: bool = False) -> None:
+        cause = (
+            "Lemma can no longer read the configuration token saved"
+            if unreadable
+            else "Slack no longer accepts the configuration token saved"
+        )
+        super().__init__(
+            message=(
+                f"{cause} for that workspace. Someone who may manage the "
+                "organization's connectors needs to generate a new one on "
+                "api.slack.com/apps and paste its refresh token."
+            ),
+            code="SLACK_APP_CREATION_TOKEN_EXPIRED",
+            status_code=409,
+        )
+        self.details = {"team_id": team_id}
+
+
+class SlackAppCreationBusyError(AgentSurfaceError):
+    """Another request holds what this one needs; retrying shortly succeeds."""
+
+    def __init__(self, team_id: str, *, creating: bool = False) -> None:
+        super().__init__(
+            message=(
+                "That app is already being created. Try again in a moment."
+                if creating
+                else "Lemma is refreshing its Slack token for that workspace. "
+                "Try again in a moment."
+            ),
+            code="SLACK_APP_CREATION_BUSY",
+            status_code=409,
+        )
+        self.details = {"team_id": team_id, "retryable": True}
+
+
+class SlackRateLimitedError(AgentSurfaceError):
+    """Slack asked Lemma to slow down; the request may be retried after a wait."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__(
+            message=(
+                "Slack is limiting how fast apps can be made in that workspace. "
+                f"Try again in {retry_after_seconds} seconds."
+            ),
+            code="SLACK_RATE_LIMITED",
+            status_code=429,
+        )
+        self.details = {"retry_after_seconds": retry_after_seconds}
+
+
 class TelegramManagerNotConfiguredError(AgentSurfaceError):
     def __init__(self):
         super().__init__(
@@ -292,3 +397,27 @@ class SurfaceWebhookAuthenticationError(DomainError):
         super().__init__(
             detail, code="SURFACE_WEBHOOK_AUTH_FAILED", status_code=status_code
         )
+
+
+class SlackSignInError(AgentSurfaceError):
+    """Sign in with Slack could not prove who this person is in the workspace.
+
+    ``reason`` is a fixed token the web page turns into words, so nothing a
+    caller sent is ever echoed back.
+    """
+
+    REASONS = frozenset(
+        {
+            "expired",
+            "session_changed",
+            "other_slack_user",
+            "not_in_organization",
+            "not_installed",
+            "unavailable",
+            "cancelled",
+        }
+    )
+
+    def __init__(self, reason: str, message: str) -> None:
+        self.reason = reason if reason in self.REASONS else "unavailable"
+        super().__init__(message=message, code="SLACK_SIGN_IN_REFUSED", status_code=422)

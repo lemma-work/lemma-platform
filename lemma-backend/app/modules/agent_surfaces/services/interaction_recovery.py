@@ -68,7 +68,7 @@ async def recover_from_failed_interaction(
     """
     if attempt.applied or attempt.delivery is None:
         return
-    _link, surface, _adapter, _credentials = attempt.delivery
+    _thread, surface, _adapter, _credentials = attempt.delivery
 
     async def hand_the_replay_claim_back() -> None:
         if attempt.claimed:

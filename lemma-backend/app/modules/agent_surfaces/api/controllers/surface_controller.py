@@ -46,6 +46,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.contracts.provisioning import surface_response
 from app.modules.agent_surfaces.contracts.provisioning import warned_surface_response
+from app.modules.agent_surfaces.services.surface_problems import surface_problem
 from app.modules.agent_surfaces.services.contact_keepers import contacts_warnings
 from app.modules.agent_surfaces.services.surface_config_input import (
     merge_surface_config,
@@ -200,6 +201,7 @@ async def list_surfaces(
             reach=reach,
             connection=connections.get(surface.id),
             contacts_warning=warnings.get(surface.id),
+            problem=await surface_problem(surface),
         )
         for surface, resolved_agent_name, reach in visible
     ]
@@ -271,6 +273,9 @@ async def create_surface(
         credential_mode=request.credential_mode,
         account_id=request.account_id,
         ctx=ctx,
+        # Sent or not, which the resolved config cannot tell: "off" is also
+        # what an omitted policy resolves to.
+        contacts_chosen="contacts" in request.config.model_fields_set,
     )
     if request.platform is SurfacePlatform.TELEGRAM:
         await service.sync_telegram_mini_app(surface)
@@ -467,9 +472,9 @@ async def send_surface_message(
 ) -> SurfaceSendResponse:
     """Proactively send a message to a pod member on this surface.
 
-    Powers notifications from functions/workflows. Reuses the member's existing
-    thread (bots can't cold-DM), and a 404 carries the reason it could not be
-    reached, in the vocabulary the notification API uses."""
+    For functions and workflows that message a member on one platform. Reuses
+    the member's existing thread (bots can't cold-DM), and a 404 carries the
+    reason they could not be reached."""
     surface = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
     await require_surface_agent_action(
         ctx=ctx,
@@ -499,15 +504,20 @@ async def get_surface_setup(
     surface_name: str,
     user: CurrentUser,
     ctx: PodContextDep,
+    connection_resolver: SurfaceConnectionResolverDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> SurfaceSetupResponse:
     """Live setup state for an existing surface: static platform checklist plus
     webhook URL and admin-consent status. Readable with ``AGENT_READ``; the org's
     own shared secrets in it are not. For the pre-creation checklist (before any
     surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``."""
-    del user
     setup = await surface_setup_for_reader(
-        service=service, ctx=ctx, pod_id=pod_id, surface_name=surface_name
+        service=service,
+        ctx=ctx,
+        connection_resolver=connection_resolver,
+        pod_id=pod_id,
+        surface_name=surface_name,
+        viewer_user_id=user.id,
     )
     return SurfaceSetupResponse.model_validate(setup)
 

@@ -34,6 +34,12 @@ from app.modules.agent.domain.value_objects import HarnessKind, JsonObject
 #: conversations, runs, pod config), so this one is spelled once, here.
 SYSTEM_LEMMA_PROFILE_ID = "system:lemma"
 
+#: The metadata key an owner's "every teammate runs on this" mark is kept
+#: under (`organization_default`).
+ORGANIZATION_DEFAULT_KEY = "organization_default"
+#: The metadata key an Agent Host profile records its coding agent under.
+HARNESS_KEY = "harness_key"
+
 
 class RuntimeProfileScope(str, Enum):
     SYSTEM = "SYSTEM"
@@ -370,6 +376,19 @@ class AgentRuntimeProfile(BaseModel):
     def has_credentials(self) -> bool:
         return bool(self.credentials)
 
+    @property
+    def harness_key(self) -> str | None:
+        """Which coding agent an Agent Host profile was made from (``codex``,
+        ``claude-code``), as its harness published it; None for a provider."""
+        key = self.metadata.get(HARNESS_KEY)
+        return key if isinstance(key, str) and key else None
+
+    @property
+    def carries_organization_default_mark(self) -> bool:
+        """Whether the organization's default mark is stored on this profile,
+        eligible or not (`organization_default.can_be_organization_default`)."""
+        return isinstance(self.metadata.get(ORGANIZATION_DEFAULT_KEY), dict)
+
     def derived_harness_kind(self) -> HarnessKind:
         if self.protocol in MODEL_PROVIDER_PROTOCOLS:
             return HarnessKind.LEMMA
@@ -395,7 +414,17 @@ class AgentRuntimeProfile(BaseModel):
         return checked_profile(**{**self.model_dump(), **overrides})
 
     def public_dict(self) -> dict[str, Any]:
-        data = self.model_dump(mode="json", exclude={"credentials", "version"})
+        """The profile as the API shows it.
+
+        ``metadata`` is internal bookkeeping (where a profile came from, whether
+        its catalog was discovered) and is not published; the two facts a
+        client reads out of it are fields of their own.
+        """
+        data = self.model_dump(
+            mode="json", exclude={"credentials", "version", "metadata"}
+        )
+        data["harness_key"] = self.harness_key
+        data["organization_default"] = self.carries_organization_default_mark
         if self.scope is RuntimeProfileScope.SYSTEM:
             data["config"] = {}
             for model in data.get("model_catalog", []):

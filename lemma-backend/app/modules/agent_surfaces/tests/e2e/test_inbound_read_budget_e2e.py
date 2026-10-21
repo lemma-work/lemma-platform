@@ -37,10 +37,10 @@ def _no_typing_keepalive(monkeypatch):
     """Measure the message, not the clock.
 
     While a run is in progress the observer re-sends Telegram's typing indicator
-    every four seconds, and each re-send reads the conversation's link and its
+    every four seconds, and each re-send reads where the conversation's reply goes and its
     surface. How many fire depends on how long the run took, not on anything
     the message asked: a loaded CI worker crossed four seconds now and then and
-    read `links 8 vs 7, surfaces 5 vs 4`, which looked like a read growing with
+    read `links 8 vs 7, surfaces 5 vs 4` (as it was then), which looked like a read growing with
     the conversation and was a keep-alive. The opening indicator, sent once per
     run, is still counted.
     """
@@ -51,32 +51,43 @@ def _no_typing_keepalive(monkeypatch):
     )
 
 
-#: The tables this module owns, and the most statements one message may issue
-#: against each. Two budgets because the two messages do different work: the
-#: first creates the link, the external-user row and the conversation; the
-#: second finds them.
+#: The tables these messages touch that inbound owns or writes, and the most
+#: statements one message may issue against each. Two budgets because the two
+#: messages do different work: the first makes the person's place, their
+#: external-user row and the conversation; the second finds them.
 #:
-#: A chat's first message is also where "is this somebody's earlier private chat
-#: under another delivery address" is asked, and it is asked once by selection
-#: (which surface) and once by the binder (adopt its link), which is why links
-#: carry two more than a later message and surfaces one more -- the binder reads
-#: the pod's own surfaces to bound its search. A later message finds its exact
-#: key first and asks neither.
+#: ``channel_sources`` is most of it, and each read has a reason: selection
+#: asks which surface the person's chat is on; the binder finds the place and
+#: notes what it heard there; the heard line marks when they last wrote; and
+#: the answer's way out asks where the conversation's reply goes -- once to
+#: post the answer as a line at that place, once for the typing indicator,
+#: once for the place its delivery names, and once more for the send itself.
+#: That the place a line was heard at or goes to feeds its channel is the
+#: database's to check (the lines' composite foreign keys), not a read. A read
+#: keyed by the conversation and joined to its lines counts here, against the
+#: table the statement names first.
 #:
-#: Every run also asks the links once whether its conversation is the one that
-#: answers people outside the pod (``outsider_audience``). Deliberately asked of
-#: the link and never skipped: the conversation's own mark is metadata a client
-#: can rewrite, and a run that wrongly believed it was a member's would hand a
-#: stranger that member's authority.
+#: The first message also makes the place: its insert, and the read that
+#: returns it with the account's surface.
+#:
+#: ``channel_messages`` is the two lines -- what they said, and what was said
+#: back -- and the line they last said, which is where the answer goes; a
+#: line is looked for by its key twice, before and under the channel's lock,
+#: so two deliveries of one message make one line -- a heard line by its
+#: platform message id, the answer by its run (a redelivered finish is the
+#: same line); and the answer's delivery reads the line it sends. (The
+#: questions waiting on the member are ``channel_questions`` now.)
 _FIRST_MESSAGE = {
     "agent_surfaces": 7,
-    "agent_surface_conversation_links": 9,
+    "channel_sources": 12,
+    "channel_messages": 8,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }
 _LATER_MESSAGE = {
     "agent_surfaces": 5,
-    "agent_surface_conversation_links": 7,
+    "channel_sources": 10,
+    "channel_messages": 8,
     "agent_surface_external_users": 4,
     "surface_verified_identities": 2,
 }
@@ -192,3 +203,47 @@ async def test_the_budget_does_not_grow_with_the_conversation(
         if late[table] > early[table]
     }
     assert not grew, f"a read grew with the conversation: {grew}"
+
+
+def _first(statements: list[str], pattern: str) -> int:
+    found = re.compile(pattern)
+    for n, statement in enumerate(statements):
+        if found.search(" ".join(statement.split())):
+            return n
+    raise AssertionError(f"no statement matched {pattern!r}")
+
+
+async def test_the_heard_line_holds_its_channel_only_from_its_append(
+    db_session,
+    authenticated_client,
+    test_pod,
+    fixed_test_user,
+    fixed_test_org,
+    message_store,
+    monkeypatch,
+    fake_telegram,
+):
+    """The line takes its channel's row lock -- which every other writer of
+    the channel waits on -- after the turn it starts is written, not before:
+    the lock is held from the line's append to the commit."""
+    stage = await stage_surface(
+        SurfacePlatform.TELEGRAM,
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
+        fake=fake_telegram,
+    )
+    await stage.say("hello")
+
+    with counted_queries() as later:
+        await stage.say("and again")
+    locked = _first(later, r"FROM channels\b.* FOR UPDATE")
+    turn = _first(later, r"^INSERT INTO agent_runs\b")
+    assert turn < locked, (
+        "the channel was locked before the turn was written: "
+        f"lock at statement {locked}, turn at {turn}"
+    )

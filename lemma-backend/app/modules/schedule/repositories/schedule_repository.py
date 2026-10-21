@@ -1,13 +1,12 @@
 """Schedule repository implementation."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, List, Optional
 from uuid import UUID
 
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -22,7 +21,6 @@ from app.modules.schedule.domain.interfaces import (
 )
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
-    ScheduleFireStatus,
     ScheduleType,
 )
 from app.modules.schedule.domain.value_objects import (
@@ -30,7 +28,16 @@ from app.modules.schedule.domain.value_objects import (
     parse_datastore_operation,
 )
 from app.modules.schedule.infrastructure.models.schedule import Schedule
+from app.modules.schedule.repositories.last_fire import with_last_fire
 from app.modules.schedule.repositories.schedule_filters import list_filters
+from app.modules.schedule.repositories.change_subscription import (
+    sync_trigger_subscription,
+)
+from app.modules.schedule.repositories.time_arming import (
+    arm_time_fire,
+    cursor_for,
+    recompute_cursor,
+)
 from app.core.log.log import get_logger
 from app.modules.schedule.repositories.schedule_config_sql import (
     datastore_operations_array,
@@ -44,42 +51,15 @@ logger = get_logger(__name__)
 _CONFIG_MATCH_LIMIT = 50
 
 
-def cursor_for(entity_or_config, *, is_active: bool, schedule_type) -> datetime | None:
-    """The poller's cursor for a schedule row, or ``None`` if it is not armed.
-
-    Arming a schedule is writing this column -- there is no scheduler to tell.
-    It belongs with the row rather than behind a service because it is derived
-    state, and computing it in the same transaction is what stops a schedule
-    existing-but-unarmed for a poll interval.
-
-    ``None`` covers everything that must not be claimed: inactive rows,
-    non-TIME schedules (driven by their own triggers), unusable expressions, and
-    one-shots whose moment has passed. The poller's backfill retires those, in
-    one place rather than two.
-    """
-    from app.modules.schedule.services.due_schedule_claimer import next_cursor_for
-
-    if not is_active or schedule_type != ScheduleType.TIME:
-        return None
-    now = datetime.now(timezone.utc)
-    cursor = next_cursor_for(entity_or_config, after=now)
-    if cursor is None or cursor <= now:
-        return None
-    return cursor
-
-
 class ScheduleRepository(ScheduleRepositoryInterface):
     """Schedule repository implementation."""
 
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     async def create(self, entity: ScheduleEntity) -> ScheduleEntity:
         """Create a new schedule."""
@@ -109,6 +89,14 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         )
         self.session.add(schedule)
         await self.session.flush()
+        await sync_trigger_subscription(self.uow, schedule.id, schedule)
+        if schedule.next_fire_at is not None:
+            await arm_time_fire(
+                self.session,
+                schedule_id=schedule.id,
+                pod_id=schedule.pod_id,
+                fire_at=schedule.next_fire_at,
+            )
         created = await self.get(schedule.id)
         assert created is not None
         # `ScheduleCreated` has existed since the module was written and nothing
@@ -152,7 +140,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             )
             result = await self.session.execute(stmt)
             schedule = result.scalar_one_or_none()
-            return schedule.to_entity() if schedule else None
+            return await self._shown(schedule.to_entity()) if schedule else None
         actions = allowed_actions_expr(
             ctx=ctx,
             resource_type=ResourceType.SCHEDULE,
@@ -168,7 +156,13 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         )
         result = await self.session.execute(stmt)
         row = result.one_or_none()
-        return self._to_entity_with_allowed_actions(row[0], row[1]) if row else None
+        if row is None:
+            return None
+        return await self._shown(self._to_entity_with_allowed_actions(row[0], row[1]))
+
+    async def _shown(self, entity: ScheduleEntity) -> ScheduleEntity:
+        await with_last_fire(self.session, [entity])
+        return entity
 
     async def get_for_update(self, schedule_id: UUID) -> ScheduleEntity | None:
         """Lock a schedule while applying a target outcome and breaker update."""
@@ -177,14 +171,24 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         )
         return model.to_entity() if model is not None else None
 
-    async def deactivate_if_active(self, schedule_id: UUID) -> bool:
+    async def deactivate_if_active(
+        self, schedule_id: UUID, *, reason: str = "consecutive_failures"
+    ) -> bool:
         """Deactivate once; callers hold the schedule row lock."""
-        changed = await self.session.scalar(
-            update(Schedule)
-            .where(Schedule.id == schedule_id, Schedule.is_active.is_(True))
-            .values(is_active=False)
-            .returning(Schedule.id)
-        )
+        return await self.pause(schedule_id, reason=reason)
+
+    async def pause(self, schedule_id: UUID, *, reason: str) -> bool:
+        """The platform turns a schedule off, saying why. False if it already was."""
+        changed = (
+            await self.session.execute(
+                update(Schedule)
+                .where(Schedule.id == schedule_id, Schedule.is_active.is_(True))
+                .values(is_active=False, paused_reason=reason)
+                .returning(Schedule.pod_id, Schedule.schedule_type)
+            )
+        ).one_or_none()
+        if changed is not None:
+            await sync_trigger_subscription(self.uow, schedule_id, changed)
         return changed is not None
 
     async def lock_breaker_candidates(self, threshold: int) -> list[ScheduleEntity]:
@@ -220,7 +224,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             )
             result = await self.session.execute(stmt)
             schedule = result.scalar_one_or_none()
-            return schedule.to_entity() if schedule else None
+            return await self._shown(schedule.to_entity()) if schedule else None
 
         actions = allowed_actions_expr(
             ctx=ctx,
@@ -242,7 +246,9 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         )
         result = await self.session.execute(stmt)
         row = result.one_or_none()
-        return self._to_entity_with_allowed_actions(row[0], row[1]) if row else None
+        if row is None:
+            return None
+        return await self._shown(self._to_entity_with_allowed_actions(row[0], row[1]))
 
     async def update(self, schedule_id: UUID, **kwargs) -> Optional[ScheduleEntity]:
         """Update a schedule."""
@@ -257,14 +263,9 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         # touches the row, and a reactivated schedule never becomes claimable at
         # all -- the two bugs the old "tell the scheduler after you save" dance
         # was there to prevent, now handled by the write itself.
-        if "config" in update_data or "is_active" in update_data:
-            existing_row = await self.session.get(Schedule, schedule_id)
-            if existing_row is not None:
-                update_data["next_fire_at"] = cursor_for(
-                    update_data.get("config", existing_row.config),
-                    is_active=update_data.get("is_active", existing_row.is_active),
-                    schedule_type=existing_row.schedule_type,
-                )
+        armed_row = await recompute_cursor(self.session, schedule_id, update_data)
+        if update_data.get("is_active") is True:
+            update_data["paused_reason"] = None
 
         if (
             "visibility" in update_data
@@ -292,14 +293,31 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         result = await self.session.execute(stmt)
         schedule = result.scalar_one_or_none()
         await self.session.flush()
-        return await self.get(schedule.id) if schedule else None
+        if schedule is None:
+            return None
+        await sync_trigger_subscription(self.uow, schedule.id, schedule, update_data)
+        next_fire_at = update_data.get("next_fire_at")
+        if armed_row is not None and isinstance(next_fire_at, datetime):
+            await arm_time_fire(
+                self.session,
+                schedule_id=schedule.id,
+                pod_id=schedule.pod_id,
+                fire_at=next_fire_at,
+            )
+        return await self.get(schedule.id)
 
     async def delete(self, schedule_id: UUID) -> bool:
         """Delete a schedule."""
-        stmt = delete(Schedule).where(Schedule.id == schedule_id)
-        result = await self.session.execute(stmt)
+        stmt = (
+            delete(Schedule)
+            .where(Schedule.id == schedule_id)
+            .returning(Schedule.pod_id, Schedule.schedule_type)
+        )
+        deleted = (await self.session.execute(stmt)).one_or_none()
         await self.session.flush()
-        return result.rowcount > 0
+        if deleted is not None:
+            await sync_trigger_subscription(self.uow, schedule_id, deleted)
+        return deleted is not None
 
     async def list(
         self,
@@ -360,11 +378,14 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             rows = rows[:limit]
 
         if ctx is not None:
-            return [
+            entities = [
                 self._to_entity_with_allowed_actions(schedule, allowed_actions)
                 for schedule, allowed_actions in rows
-            ], next_cursor
-        return [row[0].to_entity() for row in rows], next_cursor
+            ]
+        else:
+            entities = [row[0].to_entity() for row in rows]
+        await with_last_fire(self.session, entities)
+        return entities, next_cursor
 
     async def deactivate_all_by_pod(self, pod_id: UUID) -> int:
         """Disarm every schedule in a pod in one statement.
@@ -538,30 +559,6 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             if operation_value in config.operations:
                 matched.append(entity)
         return matched
-
-    async def record_fire(
-        self,
-        schedule_id: UUID,
-        *,
-        status: ScheduleFireStatus,
-        fired_at: datetime | None = None,
-        run_id: str | None = None,
-        error: str | None = None,
-    ) -> None:
-        """Record the outcome of a fire attempt for debuggability.
-
-        Best-effort telemetry: failures here must never break event handling.
-        """
-        values: dict[str, Any] = {
-            "last_fired_at": fired_at or datetime.now(timezone.utc),
-            "last_fire_status": status,
-            "last_error": error[:2000] if error else None,
-        }
-        if run_id is not None:
-            values["last_run_id"] = run_id
-        stmt = update(Schedule).where(Schedule.id == schedule_id).values(**values)
-        await self.session.execute(stmt)
-        await self.session.flush()
 
     async def increment_consecutive_failures(self, schedule_id: UUID) -> int:
         """Atomically increment the durable circuit-breaker counter."""

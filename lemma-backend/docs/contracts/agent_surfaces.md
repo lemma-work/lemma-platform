@@ -10,12 +10,7 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
-| `agent.group.get` | GET | `/pods/{pod_id}/groups/{group_id}` | Get Group |
-| `agent.group.link` | POST | `/pods/{pod_id}/groups/links` | Group Link |
-| `agent.group.list` | GET | `/pods/{pod_id}/groups` | List Groups |
-| `agent.group.start` | POST | `/pods/{pod_id}/groups` | Start Group |
-| `agent.group.timeline` | GET | `/pods/{pod_id}/groups/{group_id}/timeline` | Group Timeline |
-| `agent.group.update` | PATCH | `/pods/{pod_id}/groups/{group_id}` | Update Group |
+| `agent.notice.send` | POST | `/pods/{pod_id}/members/{member}/notices` | Send Notice |
 | `agent.surface.available` | GET | `/pods/{pod_id}/available-surfaces` | List Available Surfaces |
 | `agent.surface.channels` | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | List Surface Channels |
 | `agent.surface.create` | POST | `/pods/{pod_id}/surfaces` | Create Surface |
@@ -27,7 +22,16 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.surface.set_my_default` | PUT | `/surfaces/me/default` | Set My Default Surface |
 | `agent.surface.setup` | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | Get Surface Setup |
 | `agent.surface.setup_guide` | GET | `/pods/{pod_id}/surface-setup/{platform}` | Get Surface Setup Guide |
+| `agent.surface.slack_app.create` | POST | `/pods/{pod_id}/surface-setup/slack/apps` | Create Slack App |
+| `agent.surface.slack_app_creation.forget` | DELETE | `/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}` | Forget Slack Configuration Token |
+| `agent.surface.slack_app_creation.list` | GET | `/pods/{pod_id}/surface-setup/slack/app-creation` | List Slack App Workspaces |
+| `agent.surface.slack_app_creation.save` | PUT | `/pods/{pod_id}/surface-setup/slack/app-creation` | Save Slack Configuration Token |
+| `agent.surface.slack_install.availability` | GET | `/surface-setup/slack/install` | Slack Install Availability |
+| `agent.surface.slack_install.start` | POST | `/surface-setup/slack/install` | Start Slack Install Flow |
+| `agent.surface.slack_manager.bind` | PUT | `/pods/{pod_id}/surface-setup/slack/manager` | Bind Slack Manager |
+| `agent.surface.slack_manager.list` | GET | `/pods/{pod_id}/surface-setup/slack/manager` | List Slack Managed Workspaces |
 | `agent.surface.slack_manifest` | GET | `/surface-setup/slack/manifest` | Get Slack App Manifest |
+| `agent.surface.slack_person.sign_in` | POST | `/surface-setup/slack/people/sign-in` | Start Slack Sign In |
 | `agent.surface.teams_admin_consent_callback` | GET | `/surfaces/teams/admin-consent/callback` | Teams Admin Consent Callback |
 | `agent.surface.telegram_managed.get` | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | Get Telegram Managed Bot Setup |
 | `agent.surface.telegram_managed.start` | POST | `/pods/{pod_id}/telegram-bot-setups` | Start Telegram Managed Bot Setup |
@@ -37,13 +41,11 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.web_widget.list` | GET | `/pods/{pod_id}/web-widgets` | List Widgets |
 | `agent.web_widget.reissue` | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | Reissue Widget |
 | `agent.web_widget.update` | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | Update Widget |
-| `notification.acknowledge` | POST | `/pods/{pod_id}/notifications/{notification_id}/acknowledge` | Acknowledge A Notification |
-| `notification.list` | GET | `/pods/{pod_id}/notifications` | List My Notifications |
-| `notification.mark_all_read` | POST | `/pods/{pod_id}/notifications/read-all` | Mark All My Notifications Read |
-| `notification.mark_read` | POST | `/pods/{pod_id}/notifications/{notification_id}/read` | Mark Notification Read |
-| `notification.respond` | POST | `/pods/{pod_id}/notifications/{notification_id}/respond` | Respond To A Notification |
-| `notification.send` | POST | `/pods/{pod_id}/notifications` | Notify A Pod Member |
-| `notification.unread_count` | GET | `/pods/{pod_id}/notifications/unread-count` | Count My Unread Notifications |
+| `channel.source.get` | GET | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | Get Source |
+| `channel.source.update` | PATCH | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | Update Source |
+| `channel.telegram_link.create` | POST | `/pods/{pod_id}/channels/telegram-links` | Telegram Link |
+| `channel.whatsapp_group.start` | POST | `/pods/{pod_id}/channels/whatsapp-groups` | Start Whatsapp Group |
+| `contact.outreach.send` | POST | `/pods/{pod_id}/contacts/{contact_id}/outreach` | Send Outreach |
 | `public.web.challenge.read` | GET | `/public/web/{public_key}/challenge` | Web Challenge |
 | `public.web.code.send` | POST | `/public/web/{public_key}/code` | Web Send Code |
 | `public.web.code.verify` | POST | `/public/web/{public_key}/code/verify` | Web Verify Code |

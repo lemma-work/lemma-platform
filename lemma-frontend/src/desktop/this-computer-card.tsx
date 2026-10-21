@@ -61,7 +61,7 @@ async function checkForUpdates(): Promise<void> {
         openSettings("this-mac-updates");
         return;
     }
-    await invoke("open_control_center", { page: "overview" });
+    await invoke("open_control_center", { page: "updates" });
 }
 
 /** Make this computer look for its agents now and republish them, then read

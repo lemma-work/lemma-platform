@@ -54,8 +54,8 @@ async def load_agent_grant_summary(
 HostExecutionMode = Literal["native", "sandbox"]
 
 
-def notification_toolset() -> AbstractToolset[ConversationContext]:
-    """The tools that answer an open notification or a workflow's form.
+def question_toolset() -> AbstractToolset[ConversationContext]:
+    """The tool that answers a question waiting on the person.
 
     Wrapped the way the capability wraps them: the transitions they call
     refuse by raising -- answering something already answered, or a form
@@ -63,9 +63,9 @@ def notification_toolset() -> AbstractToolset[ConversationContext]:
     not end its run.
     """
     from app.modules.agent.tools.graceful_toolset import GracefulToolset
-    from app.modules.agent.tools.messaging.respond import respond_toolset
+    from app.modules.agent.tools.messaging.answer import answer_toolset
 
-    return cast(AbstractToolset[ConversationContext], GracefulToolset(respond_toolset))
+    return cast(AbstractToolset[ConversationContext], GracefulToolset(answer_toolset))
 
 
 def _for_host_execution(
@@ -96,16 +96,21 @@ class RunToolAssembler:
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
         host_execution: HostExecutionMode | None = None,
-        include_notification_tools: bool = False,
+        include_question_tools: bool = False,
         harness_kind: HarnessKind | None = None,
+        surface_platform: str | None = None,
     ) -> list[AbstractToolset[ConversationContext]]:
         """Every tool this (agent, conversation) can reach.
 
-        ``include_notification_tools`` adds ``respond_to_notification`` and
-        ``submit_workflow_form`` for a run whose harness reaches tools only
-        through this list -- an Agent Host run over MCP. The in-process harness
-        gets them from its open-notifications capability instead, so it leaves
-        this off rather than see them twice. ``harness_kind`` decides it for
+        ``surface_platform`` is the platform the run talks over, from its
+        context (``surface_context_for_run``): a run asked in Lemma has none,
+        and gets no platform's tools, whichever platform its conversation was
+        last heard on.
+
+        ``include_question_tools`` adds ``answer_question`` for a run whose
+        harness reaches tools only through this list -- an Agent Host run over
+        MCP. The in-process harness gets it from its open-questions capability
+        instead, so it leaves this off rather than see it twice. ``harness_kind`` decides it for
         the runner: any harness but the in-process one is served over MCP.
 
         ``host_execution`` is set on a run whose commands execute on the
@@ -137,19 +142,20 @@ class RunToolAssembler:
                 include_final_answer=include_final_answer,
                 vision_mode=vision_mode,
                 grants=grants,
+                surface_platform=surface_platform,
             )
             if host_execution is not None:
                 toolsets = _for_host_execution(toolsets, host_execution)
             if harness_kind is not None and harness_kind != HarnessKind.LEMMA:
-                include_notification_tools = True
-            # Answering somebody's notification is the owner's to do, in their
+                include_question_tools = True
+            # Answering what was asked of somebody is theirs to do, in their
             # own thread; a stranger's turn must not be able to do it for them.
             if (
-                include_notification_tools
+                include_question_tools
                 and conversation is not None
                 and not Audience.of(conversation).answers_outsiders
             ):
-                toolsets = [*toolsets, notification_toolset()]
+                toolsets = [*toolsets, question_toolset()]
             span.set_attribute("lemma.toolsets", len(toolsets))
             return toolsets
 
@@ -192,6 +198,7 @@ class RunToolAssembler:
         include_final_answer: bool,
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
+        surface_platform: str | None = None,
     ) -> list[AbstractToolset[ConversationContext]]:
         if grants is None and agent is not None and callable(self.uow_factory):
             grants = await load_agent_grant_summary(self.uow_factory, agent=agent)
@@ -234,7 +241,9 @@ class RunToolAssembler:
                 )
             )
         if not for_outsider:
-            toolsets.extend(await self._surface_toolsets(conversation))
+            toolsets.extend(
+                await self._surface_toolsets(conversation, surface_platform)
+            )
         toolsets.extend(self._outside_toolsets(conversation, audience))
         toolsets.extend(
             self._final_answer_toolsets(
@@ -253,23 +262,26 @@ class RunToolAssembler:
         self, conversation: Conversation | None, audience: Audience
     ) -> list[AbstractToolset[ConversationContext]]:
         """What a run answering somebody outside the pod adds: a contact's own
-        rows and functions, and filling the form on a web visitor's page."""
+        rows and functions, and filling the form on a web visitor's page.
+
+        A contact's own rows only where they alone read the answer -- their
+        private chat, email thread or web page. In a group everybody in it
+        would read what the agent quoted from them.
+        """
         if not callable(self.uow_factory):
             return []
         toolsets: list[AbstractToolset[ConversationContext]] = []
-        if audience.is_contact:
+        if audience.is_contact and not _in_a_group(conversation):
             toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
         if audience.answers_outsiders and _on_a_web_page(conversation):
             toolsets.append(build_form_toolset(uow_factory=self.uow_factory))
         return toolsets
 
     async def _surface_toolsets(
-        self, conversation: Conversation | None
+        self, conversation: Conversation | None, surface_platform: str | None
     ) -> list[AbstractToolset[ConversationContext]]:
-        """The tools the conversation's chat platform adds, if it lives on one."""
-        if conversation is None or not (conversation.metadata or {}).get(
-            "surface_platform"
-        ):
+        """The tools the run's chat platform adds, if it talks over one."""
+        if conversation is None or not surface_platform:
             return []
         from app.modules.agent_surfaces.contracts.egress import (
             build_surface_toolsets,
@@ -303,6 +315,12 @@ def _add_view_image(
 
     if view_image_toolset not in toolsets:
         toolsets.append(view_image_toolset)
+
+
+def _in_a_group(conversation: Conversation | None) -> bool:
+    """Whether the conversation lives in a chat several people read."""
+    metadata = (conversation.metadata if conversation is not None else None) or {}
+    return metadata.get("conversation_kind") == "CHANNEL"
 
 
 def _on_a_web_page(conversation: Conversation | None) -> bool:

@@ -1,37 +1,38 @@
-"""A notification and its answer, followed all the way round.
+"""A message to a member and their answer, followed all the way round.
 
-The requirement is one sentence: the reply to a notification lands in the same
-conversation the notification was written into, and the agent that asked is woken
-in *its* conversation when the answer is recorded. Nothing in between -- the DM
-reset, a second notification, an agent change, the history trim -- may break it.
+The requirement is one sentence: the reply to a message lands in the same
+conversation the message was written into. Nothing in between -- a quiet day,
+a second message, an agent change, the history trim -- may break it.
 
-Each of those was fixed in the place it lives and tested there, which is exactly
+The message is a line in the member's own channel; its push carries it to
+their chat app, into their one conversation with the sending agent there,
+which is also where whatever they write back lands. Waking the agent that
+asked, once its questions are answered, is ``agent``'s and tested there.
+
+Each step was fixed in the place it lives and tested there, which is exactly
 how the journey between them came to have a hole no test could see. So these
-follow the whole path with real objects (`NotificationService`,
-`NotificationEgress`, `ConversationBinder`, `SurfaceRouter`, the history
-assembly and the settled-event handler) over in-memory stand-ins for the two
-things that are databases: the link and notification repositories, and the
-conversation operations `agent` publishes.
+follow the whole path with real objects (`MemberPushes`,
+`NotificationEgress`, `ConversationBinder`, `SurfaceRouter` and the history
+assembly) over in-memory stand-ins for the things that are databases: the
+channel seats and the conversation operations `agent` publishes.
 
-The stand-ins implement the *behaviour* the real ones have -- a link is a row
-with a compare-and-set repoint, a conversation has messages in one sequence --
+The stand-ins implement the *behaviour* the real ones have -- a place is keyed
+by who it is, a conversation opened in a channel is found there again --
 rather than returning canned answers, because a canned answer certifies only
-that the caller asked. The SQL behind them is covered against a real database in
-`tests/e2e/test_notification_reply_journey_e2e.py`.
+that the caller asked.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse
 
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.entities import (
     AgentRun,
     Message,
@@ -39,7 +40,9 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
-from app.modules.agent.events.notification_settled import on_notification_settled
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
+from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
@@ -47,46 +50,41 @@ from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
 )
-from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.events import NotificationSettledEvent
+from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, PartDelivery
 from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
-    NotificationStatus,
-)
 from app.modules.agent_surfaces.services.cold_email_thread import (
     build_cold_email_thread,
 )
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
-from app.modules.agent_surfaces.services.notification_service import (
-    NotificationService,
-)
+from app.modules.agent_surfaces.services.member_pushes import MemberPushes, Push
+from app.modules.agent_surfaces.services.notification_delivery import Delivered
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     _telegram_event,
     build_doubles,
     conversation_operations,  # noqa: F401  (autouse fixture)
 )
-
-
-async def _no_outside_origin(_conversation_id):
-    """No conversation here answers people outside the pod."""
-    return
-
+from app.modules.channels.contracts import (
+    Channel,
+    ChannelKind,
+    ChannelMessage,
+    Principal,
+    Sender,
+    Source,
+    SourceKind,
+    Visibility,
+)
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
 pytestmark = pytest.mark.asyncio
 
-_RESET_HOURS = 24
 _CHAT = "777"
 
 
@@ -102,6 +100,9 @@ class AgentSide:
 
     def __init__(self, *, pod_id: UUID) -> None:
         self.pod_id = pod_id
+        #: Where a conversation opened in a channel is found again, as the
+        #: conversation's own ``channel_id`` makes it in the database.
+        self.seats = InMemoryChannelSeats()
         # name -> id; the pod's own assistant is named by the pod, as it is stored.
         self.agents: dict[str, UUID] = {}
         self.conversations: dict[UUID, SimpleNamespace] = {}
@@ -124,6 +125,7 @@ class AgentSide:
             agent_id=self.agent_id_for(agent_name),
             title=title,
             updated_at=_now(),
+            audience=Audience.member(),
         )
         self.conversations[conversation.id] = conversation
         self.messages[conversation.id] = []
@@ -165,9 +167,28 @@ class AgentSide:
         return self.conversations.get(conversation_id)
 
     async def open_surface_conversation(
-        self, uow, *, pod_id, agent_name, user_id, title, metadata=None, **_
+        self,
+        uow,
+        *,
+        pod_id,
+        agent_name,
+        user_id,
+        title,
+        metadata=None,
+        channel_id=None,
+        contact_id=None,
+        **_,
     ):
-        return self.open(agent_name=agent_name, user_id=user_id, title=title)
+        conversation = self.open(agent_name=agent_name, user_id=user_id, title=title)
+        if channel_id is not None:
+            self.seats.seat(
+                conversation.id,
+                channel_id=channel_id,
+                pod_id=pod_id,
+                agent_id=conversation.agent_id,
+                person=contact_id or user_id,
+            )
+        return conversation
 
     async def append_notification_message(
         self, uow, *, conversation_id, message, notification_id
@@ -225,196 +246,6 @@ class AgentSide:
 # --------------------------------------------------------------- the surface side
 
 
-class InMemoryNotifications:
-    def __init__(self) -> None:
-        self.rows: dict[UUID, NotificationEntity] = {}
-
-    async def create(self, notification):
-        self.rows[notification.id] = notification.model_copy(deep=True)
-        return notification
-
-    async def get(self, notification_id):
-        row = self.rows.get(notification_id)
-        return row.model_copy(deep=True) if row else None
-
-    async def update(self, notification):
-        self.rows[notification.id] = notification.model_copy(deep=True)
-        return notification
-
-    async def list_open_for_conversation(self, conversation_id):
-        return [
-            row
-            for row in self.rows.values()
-            if row.delivery_conversation_id == conversation_id
-            and row.status is NotificationStatus.OPEN
-            and row.expects_response
-        ]
-
-    async def count_open_from_origin_conversation(self, conversation_id):
-        return sum(
-            1
-            for row in self.rows.values()
-            if row.origin_kind is NotificationOriginKind.AGENT_RUN
-            and row.origin_conversation_id == conversation_id
-            and row.status is NotificationStatus.OPEN
-            and row.expects_response
-        )
-
-    async def list_past_due(self, *, limit=100, now=None):
-        moment = now or _now()
-        return [
-            row.model_copy(deep=True)
-            for row in self.rows.values()
-            if row.status is NotificationStatus.OPEN
-            and row.expires_at is not None
-            and row.expires_at <= moment
-        ][:limit]
-
-
-class InMemoryLinks:
-    """Conversation links with the semantics the SQL repository is tested for."""
-
-    def __init__(self, notifications: InMemoryNotifications) -> None:
-        self.rows: dict[UUID, AgentSurfaceConversationLink] = {}
-        self.notifications = notifications
-
-    @staticmethod
-    def _key(link) -> tuple:
-        return (
-            link.surface_id,
-            link.platform,
-            link.external_channel_id,
-            link.external_thread_id,
-            link.external_user_id,
-        )
-
-    def add(self, link):
-        self.rows[link.id] = link
-        return link.model_copy(deep=True)
-
-    def only(self) -> AgentSurfaceConversationLink:
-        [link] = self.rows.values()
-        return link
-
-    async def get_by_external_thread(
-        self,
-        *,
-        surface_id,
-        platform,
-        external_channel_id,
-        external_thread_id,
-        external_user_id,
-    ):
-        wanted = (
-            surface_id,
-            platform,
-            external_channel_id,
-            external_thread_id,
-            external_user_id,
-        )
-        found = next((r for r in self.rows.values() if self._key(r) == wanted), None)
-        return found.model_copy(deep=True) if found else None
-
-    async def get_latest_by_surface_and_external_user(
-        self, *, surface_id, external_user_id
-    ):
-        candidates = [
-            r
-            for r in self.rows.values()
-            if r.surface_id == surface_id and r.external_user_id == external_user_id
-        ]
-        latest = max(candidates, key=lambda r: r.inbound_activity_at, default=None)
-        return latest.model_copy(deep=True) if latest else None
-
-    async def get_by_conversation_id(self, conversation_id):
-        found = next(
-            (r for r in self.rows.values() if r.conversation_id == conversation_id),
-            None,
-        )
-        return found.model_copy(deep=True) if found else None
-
-    async def lock_thread(self, **_):
-        return None
-
-    async def create(self, link, *, locked=False):
-        existing = await self.get_by_external_thread(
-            surface_id=link.surface_id,
-            platform=link.platform,
-            external_channel_id=link.external_channel_id,
-            external_thread_id=link.external_thread_id,
-            external_user_id=link.external_user_id,
-        )
-        if existing is not None:
-            return existing
-        self.rows[link.id] = link.model_copy(deep=True)
-        return link
-
-    async def update_last_event(self, *, link_id, last_event, last_message_id):
-        row = self.rows[link_id]
-        row.last_event, row.last_message_id = last_event, last_message_id
-        row.last_inbound_at = _now()
-        return row.model_copy(deep=True)
-
-    async def update_conversation(
-        self,
-        *,
-        link_id,
-        expected_conversation_id,
-        conversation_id,
-        last_event,
-        last_message_id,
-        routed_agent_id=None,
-        conversation_kind=None,
-        route_key=None,
-    ):
-        row = self.rows[link_id]
-        if row.conversation_id != expected_conversation_id:
-            return None
-        row.conversation_id = conversation_id
-        row.last_event, row.last_message_id = last_event, last_message_id
-        row.routed_agent_id = routed_agent_id
-        row.route_key = route_key
-        if conversation_kind is not None:
-            row.conversation_kind = conversation_kind
-        row.last_inbound_at = _now()
-        return row.model_copy(deep=True)
-
-    async def repoint_conversation_for_outbound(
-        self,
-        *,
-        link_id,
-        conversation_id,
-        expected_conversation_id,
-        routed_agent_id=None,
-    ):
-        row = self.rows[link_id]
-        if row.conversation_id != expected_conversation_id:
-            return None
-        row.conversation_id = conversation_id
-        if routed_agent_id is not None:
-            row.routed_agent_id = routed_agent_id
-        return row.model_copy(deep=True)
-
-    async def conversation_holds_notification(
-        self, conversation_id, *, delivered_since=None
-    ):
-        for row in self.notifications.rows.values():
-            if (
-                row.delivery_conversation_id != conversation_id
-                or row.delivery_status is not NotificationDeliveryStatus.DELIVERED
-            ):
-                continue
-            if row.status is NotificationStatus.OPEN and row.expects_response:
-                return True
-            if (
-                delivered_since is not None
-                and row.delivered_at is not None
-                and row.delivered_at >= delivered_since
-            ):
-                return True
-        return False
-
-
 class RecordingEgress:
     """The platform: what was sent, into which conversation."""
 
@@ -427,11 +258,13 @@ class RecordingEgress:
     async def agent_name_for_surface(self, surface):
         return self.agent_side.name_for(surface.agent_id)
 
-    async def send_agent_message_for_conversation(
-        self, *, conversation_id, message, metadata=None
+    async def deliver_message(
+        self, *, conversation_id, message, metadata=None, at=None
     ):
         self.sent.append((conversation_id, message))
-        return True
+        return DeliveryReceipt(
+            parts={"text": PartDelivery.NATIVE}, external_message_id="chat-1"
+        )
 
     async def open_cold_email_thread(
         self, *, surface, recipient_email, subject, message, thread_seed_id, metadata
@@ -450,36 +283,36 @@ class RecordingEgress:
         return self.thread
 
 
+@dataclass(frozen=True, slots=True)
+class Asked:
+    """A line in the member's own channel, and where its push took it."""
+
+    line: ChannelMessage
+    delivered: Delivered
+
+
 class World:
-    """One pod, one surface and the two people either side of a notification."""
+    """One pod, one surface and the two people either side of a message."""
 
     def __init__(self, monkeypatch, *, surface: AgentSurfaceEntity, agent_side):
         self.surface = surface
         self.agent_side = agent_side
         self.asker_user_id = uuid4()
         self.recipient_user_id = uuid4()
-        self.notifications = InMemoryNotifications()
-        self.links = InMemoryLinks(self.notifications)
+        self.seats = agent_side.seats
         self.egress = RecordingEgress(agent_side)
-        self.events: list = []
-        self.uow = SimpleNamespace(
-            commit=AsyncMock(),
-            collect_events=MagicMock(side_effect=self.events.extend),
-        )
+        self.uow = SimpleNamespace(commit=AsyncMock())
         self.email = "asha@example.com"
         identities = (
             []
             if surface.surface_type.is_email
             else [SimpleNamespace(external_user_id=_CHAT, tenant_id=None)]
         )
-        self.service = NotificationService(
-            outside_origin_reader=_no_outside_origin,
+        self.pushes = MemberPushes(
             uow=self.uow,
-            notification_repository=self.notifications,
             surface_repository=SimpleNamespace(
                 list_by_pod=AsyncMock(return_value=([surface], None))
             ),
-            conversation_link_repository=self.links,
             external_user_repository=SimpleNamespace(
                 list_by_resolved_users=AsyncMock(return_value=identities)
             ),
@@ -489,17 +322,18 @@ class World:
                 get_user_display_name=AsyncMock(return_value="Priya"),
                 get_user_email=AsyncMock(return_value=self.email),
             ),
+            seats=self.seats,
         )
         doubles = build_doubles(adapter=AsyncMock(), surfaces=[surface])
         self.binder = ConversationBinder(
             uow=doubles.uow,
             surface_repository=doubles.surface_repository,
-            conversation_link_repository=self.links,
+            seats=self.seats,
         )
         self.router = SurfaceRouter(
             uow=doubles.uow,
             surface_repository=doubles.surface_repository,
-            conversation_link_repository=self.links,
+            seats=self.seats,
             pod_membership_port=SimpleNamespace(),
             identity_service=SimpleNamespace(),
             credential_resolver=SimpleNamespace(),
@@ -521,55 +355,87 @@ class World:
             ),
         )
         # Asserted through, not around: the wake goes to whichever conversation
-        # the handler names.
+        # the work item names.
         self.asker_conversation = agent_side.open(
             agent_name=None, user_id=self.asker_user_id, title="Plan the offsite"
         )
 
     # -- the journey's steps ---------------------------------------------------
 
-    def had_chatted(self, *, hours_ago: float, conversation=None):
-        """The person's ordinary chat, last written to `hours_ago` hours back."""
+    def had_chatted(self, *, hours_ago: float, agent_id: UUID | None = None):
+        """The person's ordinary chat with ``agent_id`` -- the surface's, unless
+        it has changed since -- last written to `hours_ago` hours back."""
         moment = _now() - timedelta(hours=hours_ago)
-        conversation = conversation or self.agent_side.open(
-            agent_name=self.agent_side.name_for(self.surface.agent_id),
+        agent_id = agent_id or self.surface.agent_id
+        conversation = self.agent_side.open(
+            agent_name=self.agent_side.name_for(agent_id),
             user_id=self.recipient_user_id,
             title="Earlier chat",
         )
+        conversation.agent_id = agent_id
         conversation.updated_at = moment
-        return self.links.add(
-            AgentSurfaceConversationLink(
+        pod_id = self.surface.pod_id
+        channel_id = self.seats.channels.setdefault(
+            ("DIRECT", pod_id, self.recipient_user_id), uuid4()
+        )
+        self.seats.add(
+            Source(
+                id=uuid4(),
+                channel_id=channel_id,
+                pod_id=pod_id,
+                account_id=uuid4(),
                 surface_id=self.surface.id,
-                conversation_id=conversation.id,
                 platform=self.surface.surface_type.value,
-                external_channel_id=_CHAT,
-                external_thread_id=_CHAT,
+                kind=SourceKind.PERSON,
                 external_user_id=_CHAT,
-                routed_agent_id=self.surface.agent_id,
-                conversation_kind="DM",
-                route_key="dm",
                 last_inbound_at=moment,
+                updated_at=moment,
             )
         )
-
-    async def ask(
-        self, *, expects_response=True, title="Offsite dates"
-    ) -> NotificationEntity:
-        """The asking agent messages the person."""
-        return await self.service.notify(
-            pod_id=self.surface.pod_id,
-            recipient_user_id=self.recipient_user_id,
-            title=title,
-            body=f"{title}: does the 14th work for you?",
-            origin_kind=NotificationOriginKind.AGENT_RUN,
-            origin_id=uuid4(),
-            origin_conversation_id=self.asker_conversation.id,
-            actor_user_id=self.asker_user_id,
-            actor_agent_id=self.surface.agent_id,
-            agent_name=self.agent_side.name_for(self.surface.agent_id),
-            background_instruction="Record whether they can make the 14th.",
-            expects_response=expects_response,
+        self.seats.seat(
+            conversation.id,
+            channel_id=channel_id,
+            pod_id=pod_id,
+            agent_id=agent_id,
+            person=self.recipient_user_id,
         )
+        return conversation
+
+    def place(self) -> Source:
+        [place] = self.seats.sources.values()
+        return place
+
+    async def ask(self, *, title="Offsite dates") -> Asked:
+        """The asking agent messages the person, as `channel_post` does: a line
+        in their own channel, and its push."""
+        pod_id, recipient = self.surface.pod_id, self.recipient_user_id
+        now = _now()
+        channel = Channel(
+            id=await self.seats.direct_channel(pod_id=pod_id, user_id=recipient),
+            pod_id=pod_id,
+            kind=ChannelKind.DIRECT,
+            visibility=Visibility.PRIVATE,
+            member_user_id=recipient,
+            created_at=now,
+            last_line_at=now,
+        )
+        line = ChannelMessage(
+            id=uuid4(),
+            channel_id=channel.id,
+            pod_id=pod_id,
+            seq=1,
+            sender=Sender.agent(
+                self.surface.agent_id or pod_id,
+                on_behalf_of=Principal.member(self.asker_user_id),
+                display_name=self.agent_side.name_for(self.surface.agent_id),
+            ),
+            text=f"{title}: does the 14th work for you?",
+            created_at=now,
+        )
+        delivered = await self.pushes.push(
+            Push(channel=channel, line=line, recipient_user_id=recipient, member=None)
+        )
+        return Asked(line=line, delivered=delivered)
 
     async def reply(self, text="yes"):
         """The person answers on their chat app; ingress binds it to a conversation."""
@@ -587,7 +453,7 @@ class World:
                 update={"message_text": text}
             )
         route = await self.router.resolve_route(surface=self.surface, parsed=event)
-        link, created_title = await self.binder.bind_conversation(
+        bound = await self.binder.bind_conversation(
             surface=self.surface,
             parsed=event,
             resolved_user=ResolvedSurfaceUser(
@@ -596,46 +462,7 @@ class World:
             ),
             route=route,
         )
-        return link, created_title
-
-    async def settle(self) -> list[UUID]:
-        """Everything the settled events start, as the stream handler runs them."""
-        woken: list[UUID] = []
-
-        def factory(uow):
-            async def deliver(*, conversation_id, pod_id):
-                self.agent_side.start_run(conversation_id, "everyone has replied")
-                woken.append(conversation_id)
-                return True
-
-            return deliver
-
-        class _Uow:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *exc):
-                return False
-
-            async def commit(self):
-                return None
-
-        class _Inbox:
-            async def process(self, _key, _event, work):
-                await work()
-
-        for event in [
-            e for e in self.events if isinstance(e, NotificationSettledEvent)
-        ]:
-            await on_notification_settled(
-                event.model_dump(mode="json"),
-                fs_logger=SimpleNamespace(),
-                uow_factory=_Uow,
-                inbox=_Inbox(),
-                deliver_replies=factory,
-            )
-        self.events.clear()
-        return woken
+        return bound, bound.created_title
 
 
 def _telegram_surface(agent_id: UUID) -> AgentSurfaceEntity:
@@ -651,14 +478,6 @@ def _telegram_surface(agent_id: UUID) -> AgentSurfaceEntity:
     )
 
 
-@pytest.fixture(autouse=True)
-def _reset_window():
-    original = surface_settings.surface_dm_conversation_reset_after_hours
-    surface_settings.surface_dm_conversation_reset_after_hours = _RESET_HOURS
-    yield
-    surface_settings.surface_dm_conversation_reset_after_hours = original
-
-
 @pytest.fixture
 def world(monkeypatch) -> World:
     agent_id = uuid4()
@@ -671,31 +490,27 @@ def world(monkeypatch) -> World:
 # --------------------------------------------------------------------- the journey
 
 
-async def test_a_reply_after_a_quiet_day_reaches_the_notification_and_wakes_the_asker(
-    world,
-):
+async def test_a_reply_after_a_quiet_day_reaches_the_message(world):
     """The whole path, with the person silent for over a day before it starts.
 
-    They last wrote 30 hours ago -- past the 24 hour DM reset -- the agent asks
-    them something, and they answer a few minutes later. The reset is about
-    yesterday's context leaking into today; it was never meant to fire on the
-    answer to a question asked minutes ago.
+    They last wrote 30 hours ago, the agent asks them something, and they
+    answer a few minutes later: the answer lands with the question.
     """
     ordinary_chat = world.had_chatted(hours_ago=30)
 
-    # (A) the asker messages the person: a conversation of their own is opened
-    # for it, and the link moves there without pretending they wrote.
-    notification = await world.ask()
+    # (A) the asker messages the person: a line in their channel, pushed into
+    # their one conversation with the agent, however long it has been quiet,
+    # without pretending they wrote.
+    asked = await world.ask()
 
-    assert notification.delivery_status is NotificationDeliveryStatus.DELIVERED
-    delivered_into = notification.delivery_conversation_id
-    assert delivered_into not in (
-        ordinary_chat.conversation_id,
-        world.asker_conversation.id,
-    ), "a notification is the recipient's conversation, never the asker's"
-    link = world.links.only()
-    assert link.conversation_id == delivered_into
-    assert link.inbound_activity_at < _now() - timedelta(hours=29), (
+    assert asked.line.channel_id == world.place().channel_id
+    assert asked.delivered.platform == "TELEGRAM"
+    delivered_into = asked.delivered.conversation_id
+    assert delivered_into == ordinary_chat.id
+    assert delivered_into != world.asker_conversation.id, (
+        "a message is the recipient's conversation, never the asker's"
+    )
+    assert world.place().last_inbound_at < _now() - timedelta(hours=29), (
         "an outbound message must not count as the person having written"
     )
 
@@ -706,7 +521,7 @@ async def test_a_reply_after_a_quiet_day_reaches_the_notification_and_wakes_the_
         "the reply was cut into a new conversation, away from the question it answers"
     )
     assert created_title is None
-    assert len(world.agent_side.conversations) == 3  # earlier chat, asker, notification
+    assert len(world.agent_side.conversations) == 2  # their chat, and the asker's
 
     # (C) the agent handling the reply can see what was asked ...
     run = world.agent_side.start_run(delivered_into, "yes, the 14th works")
@@ -717,160 +532,53 @@ async def test_a_reply_after_a_quiet_day_reaches_the_notification_and_wakes_the_
     assert "does the 14th work" in history[-1].parts[0].content
     assert not any(isinstance(message, ModelRequest) for message in history)
 
-    # ... and is told which request the reply answers, and how to record it.
-    [open_request] = await world.notifications.list_open_for_conversation(
-        bound.conversation_id
-    )
-    assert open_request.id == notification.id
-    assert open_request.background_instruction
 
-    # It records the answer; the asker is woken *in its own conversation*.
-    await world.service.respond(
-        pod_id=notification.pod_id,
-        notification_id=notification.id,
-        responder_user_id=notification.recipient_user_id,
-        summary="They can make the 14th.",
-    )
-
-    woken = await world.settle()
-
-    assert woken == [world.asker_conversation.id]
-    assert [c for c, _ in world.agent_side.turns if c == world.asker_conversation.id]
-    assert len(world.agent_side.conversations) == 3, "the wake opened a conversation"
-
-
-async def test_a_chat_with_nothing_owed_still_resets_after_a_quiet_day(world):
-    """The control: the reset is kept for a genuinely idle chat."""
-    ordinary_chat = world.had_chatted(hours_ago=30)
-
-    bound, created_title = await world.reply("hello again")
-
-    assert bound.conversation_id != ordinary_chat.conversation_id
-    assert created_title is not None
-
-
-async def test_an_outbound_alone_does_not_keep_an_ordinary_chat_alive(world):
-    """A message *about* nothing to answer does not defeat the reset forever.
-
-    An FYI that nobody has to answer holds the conversation only for the reset
-    window; sent a day and a half ago it is history, like any other message.
-    """
-    world.had_chatted(hours_ago=60)
-    notification = await world.ask(expects_response=False)
-    row = world.notifications.rows[notification.id]
-    row.delivered_at = _now() - timedelta(hours=40)
-
-    bound, _ = await world.reply("hello again")
-
-    assert bound.conversation_id != notification.delivery_conversation_id
-
-
-async def test_a_report_is_still_read_against_when_it_was_delivered_recently(world):
-    """ "Yes" to a reminder, a day after the person last spoke, is an answer."""
-    world.had_chatted(hours_ago=30)
-    notification = await world.ask(expects_response=False, title="Report ready")
-    world.notifications.rows[notification.id].delivered_at = _now() - timedelta(
-        hours=20
-    )
-
-    bound, created_title = await world.reply("thanks, send me the numbers")
-
-    assert bound.conversation_id == notification.delivery_conversation_id
-    assert created_title is None
-
-
-async def test_an_unanswered_question_holds_its_conversation_until_it_expires(world):
+async def test_a_reply_days_later_still_reaches_the_question(world):
     """The agent can only record an answer where the question was delivered."""
     world.had_chatted(hours_ago=90)
-    notification = await world.ask()
-    world.notifications.rows[notification.id].delivered_at = _now() - timedelta(
-        hours=70
-    )
+    asked = await world.ask()
 
     bound, _ = await world.reply("sorry, only just saw this: yes")
 
-    assert bound.conversation_id == notification.delivery_conversation_id
-
-    # Once it has expired nothing is owed, and the reset applies as before.
-    world.notifications.rows[notification.id].status = NotificationStatus.EXPIRED
-    world.links.only().last_inbound_at = _now() - timedelta(hours=90)
-
-    later, _ = await world.reply("hello")
-
-    assert later.conversation_id != notification.delivery_conversation_id
+    assert bound.conversation_id == asked.delivered.conversation_id
 
 
-async def test_a_second_notification_joins_the_conversation_of_an_unanswered_first(
-    world,
-):
-    """One link points at one conversation, so two questions need one conversation.
+async def test_a_second_message_joins_the_conversation_of_an_unanswered_first(world):
+    """Two questions, one conversation: the person's reply sees both.
 
-    Sent a couple of hours apart -- outside the 30 minutes a conversation counts
-    as "the thread we are in" -- the second used to open a new conversation and
-    move the link, so the person's reply to either landed where the other one's
-    request was invisible and the first could never be recorded.
+    Sent hours apart, the second used to open a conversation of its own, so the
+    reply to either landed where the other one's question was invisible and the
+    first could never be recorded.
     """
     world.had_chatted(hours_ago=1)
     first = await world.ask(title="Offsite dates")
-    world.agent_side.conversations[first.delivery_conversation_id].updated_at = (
+    world.agent_side.conversations[first.delivered.conversation_id].updated_at = (
         _now() - timedelta(hours=2)
     )
 
     second = await world.ask(title="Offsite venue")
 
-    assert second.delivery_conversation_id == first.delivery_conversation_id
+    assert second.delivered.conversation_id == first.delivered.conversation_id
     bound, _ = await world.reply("the 14th, and the loft")
-    open_requests = await world.notifications.list_open_for_conversation(
-        bound.conversation_id
-    )
-    assert {n.id for n in open_requests} == {first.id, second.id}
+    assert bound.conversation_id == first.delivered.conversation_id
 
 
-async def test_a_second_notification_opens_its_own_conversation_once_the_first_is_answered(
-    world,
-):
-    world.had_chatted(hours_ago=1)
-    first = await world.ask(title="Offsite dates")
-    await world.service.respond(
-        pod_id=first.pod_id,
-        notification_id=first.id,
-        responder_user_id=first.recipient_user_id,
-        summary="The 14th.",
-    )
-    world.agent_side.conversations[first.delivery_conversation_id].updated_at = (
-        _now() - timedelta(hours=2)
-    )
+async def test_a_surface_whose_agent_changed_gets_the_reply_with_the_message(world):
+    """The message is the surface's *current* agent's, and so is the reply.
 
-    second = await world.ask(title="Offsite venue")
-
-    assert second.delivery_conversation_id != first.delivery_conversation_id
-    bound, _ = await world.reply("the loft")
-    assert bound.conversation_id == second.delivery_conversation_id
-
-
-async def test_a_surface_whose_agent_changed_still_gets_the_reply_in_the_notification(
-    world,
-):
-    """The link names the agent its conversation was opened under.
-
-    The notification is opened under the surface's *current* agent. Left naming
-    the previous one, the reply -- routed to the current agent -- reads as "the
-    agent changed" and is cut into a fresh conversation.
+    The person's chat with the agent the surface used to answer as is not where
+    either goes: that is another agent's conversation.
     """
-    world.had_chatted(hours_ago=1)
-    world.links.only().routed_agent_id = uuid4()  # the agent it used to be
-    world.agent_side.conversations[world.links.only().conversation_id].updated_at = (
-        _now() - timedelta(hours=2)
-    )
+    earlier = world.had_chatted(hours_ago=1, agent_id=uuid4())
 
-    notification = await world.ask()
-    bound, created_title = await world.reply("yes")
+    asked = await world.ask()
+    bound, _ = await world.reply("yes")
 
-    assert bound.conversation_id == notification.delivery_conversation_id
-    assert created_title is None
+    assert asked.delivered.conversation_id != earlier.id
+    assert bound.conversation_id == asked.delivered.conversation_id
 
 
-async def test_a_notification_older_than_the_carried_history_stays_out(world):
+async def test_a_message_older_than_the_carried_history_stays_out(world):
     """The lower bound survives for a conversation that really was cut."""
     agent_side = world.agent_side
     conversation = agent_side.open(
@@ -901,93 +609,15 @@ async def test_a_notification_older_than_the_carried_history_stays_out(world):
     assert "an ancient report" not in text
 
 
-# ------------------------------------------------------------------ the asker's side
-
-
-async def test_the_asker_is_woken_only_when_the_last_ask_is_settled(world):
-    world.had_chatted(hours_ago=1)
-    first = await world.ask(title="Offsite dates")
-    second = await world.ask(title="Offsite venue")
-
-    await world.service.respond(
-        pod_id=first.pod_id,
-        notification_id=first.id,
-        responder_user_id=first.recipient_user_id,
-        summary="The 14th.",
-    )
-    assert await world.settle() == [], "woken with a question still outstanding"
-
-    await world.service.respond(
-        pod_id=second.pod_id,
-        notification_id=second.id,
-        responder_user_id=second.recipient_user_id,
-        summary="The loft.",
-    )
-    assert await world.settle() == [world.asker_conversation.id]
-
-
-async def test_an_fyi_the_asker_sent_does_not_keep_it_asleep(world):
-    """Nothing is owed for an FYI, so it cannot be what the asker waits on."""
-    world.had_chatted(hours_ago=1)
-    question = await world.ask(title="Offsite dates")
-    await world.ask(expects_response=False, title="Heads up")
-
-    await world.service.respond(
-        pod_id=question.pod_id,
-        notification_id=question.id,
-        responder_user_id=question.recipient_user_id,
-        summary="The 14th.",
-    )
-
-    assert await world.settle() == [world.asker_conversation.id]
-
-
-async def test_an_ask_nobody_answers_wakes_the_asker_when_it_expires(world):
-    """Expiry is as settled as an answer, and has to say so.
-
-    The count treats EXPIRED as no longer outstanding, but only recording an
-    answer announced it -- so a question nobody ever answered left the asking
-    conversation waiting for good.
-    """
-    world.had_chatted(hours_ago=1)
-    answered = await world.ask(title="Offsite dates")
-    ignored = await world.ask(title="Offsite venue")
-    await world.service.respond(
-        pod_id=answered.pod_id,
-        notification_id=answered.id,
-        responder_user_id=answered.recipient_user_id,
-        summary="The 14th.",
-    )
-    assert await world.settle() == []
-    world.notifications.rows[ignored.id].expires_at = _now() - timedelta(minutes=1)
-
-    assert await world.service.expire_past_due() == 1
-
-    assert await world.settle() == [world.asker_conversation.id]
-
-
-async def test_an_fyi_that_expires_wakes_nobody(world):
-    world.had_chatted(hours_ago=1)
-    fyi = await world.ask(expects_response=False, title="Heads up")
-    world.notifications.rows[fyi.id].expires_at = _now() - timedelta(minutes=1)
-
-    assert await world.service.expire_past_due() == 1
-
-    assert await world.settle() == []
-
-
 # ------------------------------------------------------------------------- email
 
 
-async def test_an_email_reply_to_another_agents_mailbox_stays_in_the_notification(
+async def test_an_email_reply_to_an_agents_mailbox_stays_with_the_message(
     monkeypatch,
 ):
-    """A cold-open email records which agent it was sent as.
-
-    A link that names nobody reads, at reply time, as the pod's own assistant --
-    so for any other agent's mailbox the first reply looked like the agent had
-    changed and opened a new conversation.
-    """
+    """A cold-open email is a place in the person's channel, and the
+    conversation it was sent from is that agent's -- so the reply, routed to
+    the same agent, continues it."""
     agent_id = uuid4()
     surface = AgentSurfaceEntity(
         id=uuid4(),
@@ -1004,11 +634,12 @@ async def test_an_email_reply_to_another_agents_mailbox_stays_in_the_notificatio
     world = World(monkeypatch, surface=surface, agent_side=agent_side)
     world.egress.cold_open = True
 
-    notification = await world.ask()
+    asked = await world.ask()
 
-    assert notification.delivery_status is NotificationDeliveryStatus.DELIVERED
-    assert world.links.only().routed_agent_id == agent_id
+    assert asked.delivered.platform == "RESEND"
+    assert world.place().kind is SourceKind.PERSON
+    assert world.place().channel_id == asked.line.channel_id
     bound, created_title = await world.reply("yes")
 
-    assert bound.conversation_id == notification.delivery_conversation_id
+    assert bound.conversation_id == asked.delivered.conversation_id
     assert created_title is None

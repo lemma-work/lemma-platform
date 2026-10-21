@@ -76,12 +76,14 @@ class PodConversations(BoundResource):
         type: ConversationType | str | None = None,
         status: ConversationStatus | str | None = None,
         search: str | None = None,
+        in_channel: bool | None = None,
         limit: int = 20,
     ) -> ConversationListResponse:
         # Root conversations only by default; pass parent_id to fetch a
         # conversation's children (sub-agents or conversations pinned under a
         # PROJECT). `type` filters by CHAT / TASK / PROJECT and composes with
         # parent_id. `search` keeps titles containing it, case-insensitively.
+        # `in_channel=False` keeps the conversations of no channel.
         return self._call(
             agent_conversation_list,
             self._pod_uuid(),
@@ -90,6 +92,7 @@ class PodConversations(BoundResource):
             type_=type if type is not None else UNSET,
             status=status if status is not None else UNSET,
             search=search if search is not None else UNSET,
+            in_channel=in_channel if in_channel is not None else UNSET,
             limit=limit,
         )
 
@@ -153,13 +156,22 @@ class PodConversations(BoundResource):
         )
 
     def messages(
-        self, conversation_id: str, *, limit: int = 100
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 100,
+        after_sequence: int | None = None,
+        page_token: str | None = None,
     ) -> MessageListResponse:
+        """The newest ``limit`` messages, oldest first; ``after_sequence``
+        keeps only later ones, and ``page_token`` reads the page before."""
         return self._call(
             agent_conversation_message_list,
             self._pod_uuid(),
             as_uuid(conversation_id),
             limit=limit,
+            after_sequence=UNSET if after_sequence is None else after_sequence,
+            page_token=UNSET if page_token is None else page_token,
         )
 
     def send(
@@ -232,28 +244,43 @@ class PodConversations(BoundResource):
         *,
         metadata: Metadata | None = None,
         client_message_id: str | None = None,
+        read_timeout: float | None = None,
     ) -> httpx.Response:
         """Send a message and return the live SSE response for the run.
 
         The caller iterates the frames and calls ``close()``. Not retried on a
         gateway error: a replay would start a second run.
+
+        ``read_timeout`` bounds the wait between two reads. The server sends a
+        keepalive through a quiet run, so a stream that goes longer than that
+        with nothing at all is a dead connection, not a slow agent. ``None``
+        waits for ever.
         """
         return self._stream(
             agent_conversation_message_send,
             self._pod_uuid(),
             as_uuid(conversation_id),
+            read_timeout=read_timeout,
             body=SendMessageRequest.from_dict(
                 _message_body(content, metadata, client_message_id)
             ),
         )
 
     def stream(
-        self, conversation_id: str, *, agent_run_id: str | None = None
+        self,
+        conversation_id: str,
+        *,
+        agent_run_id: str | None = None,
+        read_timeout: float | None = None,
     ) -> httpx.Response:
+        """Attach to a conversation's run. A run that has already ended
+        replays its terminal event and closes; ``read_timeout`` is as for
+        ``send_stream``."""
         return self._stream(
             agent_conversation_stream,
             self._pod_uuid(),
             as_uuid(conversation_id),
+            read_timeout=read_timeout,
             agent_run_id=as_uuid(agent_run_id) if agent_run_id else UNSET,
         )
 

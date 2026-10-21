@@ -23,12 +23,16 @@ breakpoint at the end of whatever precedes it -- the stable prefix. The
 message-level breakpoint ``PromptCachingCapability`` asks for lands on the last
 block, which on later requests is this part and so never matches again; this
 one is what the next request, and the next run, read from cache.
+
+A ``ProcessHistory`` capability, so where it puts the part is where the run's
+history has it: since pydantic-ai 2.55 only ``ProcessHistory`` writes a hook's
+result back into the run's history, and a plain ``before_model_request`` hook
+held only while something registered after it wrote the whole list back.
 """
 
 from __future__ import annotations
 
-from pydantic_ai import RunContext
-from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.capabilities import ProcessHistory
 from pydantic_ai.messages import (
     CachePoint,
     ModelMessage,
@@ -40,11 +44,9 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from app.modules.agent.infrastructure.pydantic_ai_compat import ModelRequestContext
 
-
-class RunContextCapability(AbstractCapability[object]):
-    """Keep the run's context part next to the newest turn, and out of history."""
+class RunContextCapability(ProcessHistory[object]):
+    """Keep the run's context part next to the newest turn, and in one place."""
 
     def __init__(
         self,
@@ -53,29 +55,25 @@ class RunContextCapability(AbstractCapability[object]):
         mark_cache_boundary: bool = False,
         id: str | None = "run_context",
     ) -> None:
+        super().__init__(processor=self._place)
         self._text = text
         self._mark_cache_boundary = mark_cache_boundary
         self._id = id
         self._placed = False
 
-    def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
+    def get_serialization_name(self) -> str | None:  # type: ignore[override]  # pragma: no cover - metadata
         return self._id
 
-    async def before_model_request(
-        self,
-        ctx: RunContext[object],
-        request_context: ModelRequestContext,
-    ) -> ModelRequestContext:
-        messages = self._without_part(request_context.messages)
+    async def _place(self, history: list[ModelMessage]) -> list[ModelMessage]:
+        messages = self._without_part(history)
         before_user_turn = (
             not self._placed and bool(messages) and _is_user_request(messages[-1])
         )
         head = messages[:-1] if before_user_turn else messages
         part = UserPromptPart(content=self._content(head))
         tail = [messages[-1]] if before_user_turn else []
-        request_context.messages = [*head, ModelRequest(parts=[part]), *tail]
         self._placed = True
-        return request_context
+        return [*head, ModelRequest(parts=[part]), *tail]
 
     def _content(self, preceding: list[ModelMessage]) -> str | list[UserContent]:
         # A CachePoint attaches to the block before it, so it needs one: never

@@ -9,9 +9,10 @@ with bounded exponential backoff, honouring a server's ``Retry-After``.
 What it cannot wait out inline it reports instead: a caller that wraps its
 sends in :func:`track_sends` learns that the platform asked for more time than
 an inline retry should spend (or that every attempt hit a transient failure),
-and how long it asked for. The final answer's sender uses that to hand the
-reply to a durable, deferred retry (``services/owed_reply``) rather than lose
-it.
+and how long it asked for. A sender with a durable retry -- a channel
+delivery, the destination pump's ``surface_deliveries`` -- uses that to try
+again later rather than lose the message, and never repeats one that partly
+arrived.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TypeVar
 
@@ -99,6 +100,25 @@ class SendOutcome:
     #: Part of a multi-part message reached the person before a later part
     #: failed. Sending the whole message again would repeat that part.
     partial: bool = False
+    #: A platform was called at all (``note_tried``). A send that ended with
+    #: nothing tried found nowhere to send, or nothing left to send.
+    tried: bool = False
+    #: The platform last called, as ``note_tried`` named it.
+    platform: str | None = None
+    #: A call ended in a way that does not say whether the platform took it
+    #: (a read timeout, a dropped connection after the request went out).
+    ambiguous: bool = False
+    #: The HTTP status of the last failure the platform answered with, as a
+    #: delivery's try records it (``channel_delivery_attempts``).
+    provider_status: str | None = None
+    #: The block this one is inside: what is noted here is noted there too.
+    parent: SendOutcome | None = field(default=None, repr=False, compare=False)
+
+    def _chain(self) -> Iterator[SendOutcome]:
+        outcome: SendOutcome | None = self
+        while outcome is not None:
+            yield outcome
+            outcome = outcome.parent
 
 
 _outcome: ContextVar[SendOutcome | None] = ContextVar(
@@ -108,8 +128,9 @@ _outcome: ContextVar[SendOutcome | None] = ContextVar(
 
 @contextmanager
 def track_sends() -> Iterator[SendOutcome]:
-    """Record what the sends inside this block ran into."""
-    outcome = SendOutcome()
+    """Record what the sends inside this block ran into. Nested blocks each
+    see their own sends, and an outer block sees every send inside it."""
+    outcome = SendOutcome(parent=_outcome.get())
     token = _outcome.set(outcome)
     try:
         yield outcome
@@ -117,20 +138,66 @@ def track_sends() -> Iterator[SendOutcome]:
         _outcome.reset(token)
 
 
+def _tracked() -> Iterator[SendOutcome]:
+    outcome = _outcome.get()
+    return outcome._chain() if outcome is not None else iter(())
+
+
 def note_partial_delivery() -> None:
     """Say that part of a multi-part message was delivered before a failure."""
-    outcome = _outcome.get()
-    if outcome is not None:
+    for outcome in _tracked():
         outcome.partial = True
 
 
+def note_tried(platform: str | None = None) -> None:
+    """Say that a platform is about to be called with the message."""
+    for outcome in _tracked():
+        outcome.tried = True
+        if platform is not None:
+            outcome.platform = platform
+
+
+def may_have_arrived(exc: BaseException) -> bool:
+    """Whether a send that failed with ``exc`` may still have reached the
+    platform: it failed in transport after the request left, rather than
+    before (``_NEVER_SENT``) or with the platform's own answer."""
+    if isinstance(exc, _NEVER_SENT):
+        return False
+    if isinstance(exc, httpx.HTTPStatusError | aiohttp.ClientResponseError):
+        return False
+    return isinstance(
+        exc, httpx.TransportError | aiohttp.ClientError | TimeoutError | OSError
+    )
+
+
 def _note_gave_up(retry_after: float | None) -> None:
-    outcome = _outcome.get()
-    if outcome is None:
+    for outcome in _tracked():
+        outcome.gave_up_transient = True
+        if retry_after is not None and retry_after > (outcome.retry_after or 0.0):
+            outcome.retry_after = retry_after
+
+
+def _note_status(exc: BaseException) -> None:
+    status: int | None = None
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+    elif isinstance(exc, aiohttp.ClientResponseError):
+        status = exc.status
+    elif isinstance(code := getattr(exc, "status_code", None), int):
+        # A platform client's own error (``WhatsAppApiError``,
+        # ``TelegramApiError``), carrying the HTTP status it was answered with.
+        status = code
+    if status is None:
         return
-    outcome.gave_up_transient = True
-    if retry_after is not None and retry_after > (outcome.retry_after or 0.0):
-        outcome.retry_after = retry_after
+    for outcome in _tracked():
+        outcome.provider_status = str(status)
+
+
+def _note_ended(exc: BaseException) -> None:
+    if not may_have_arrived(exc):
+        return
+    for outcome in _tracked():
+        outcome.ambiguous = True
 
 
 async def with_retry(
@@ -156,12 +223,15 @@ async def with_retry(
         try:
             return await send()
         except Exception as exc:  # noqa: BLE001 - re-raised after classification
+            _note_status(exc)
             if classify(exc) is DeliveryClassification.PERMANENT:
+                _note_ended(exc)
                 raise
             wait = retry_after(exc) if retry_after is not None else None
             too_long = wait is not None and wait > policy.max_retry_after
             if too_long or attempt >= policy.max_attempts:
                 _note_gave_up(wait)
+                _note_ended(exc)
                 raise
             delay = policy.backoff(attempt, retry_after=wait)
             if on_retry is not None:

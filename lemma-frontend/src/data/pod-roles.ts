@@ -23,6 +23,18 @@ export const MANAGE_MEMBERS = "pod.member.manage";
  *  which is why this is asked of the server rather than read off a role. */
 export const DELETE_POD = "pod.delete";
 
+/** The actions that let somebody see a pod's contacts and their chats:
+ *  reading them, or writing to them, which implies it. Editors and admins
+ *  hold both; a member who only uses the pod holds neither. */
+export const SEE_CONTACTS = ["contact.read", "contact.message"] as const;
+
+/** The actions over a pod's channels, weakest first; each implies the ones
+ *  before it. Viewers read, users write and keep the groups they make,
+ *  editors and admins manage any group. Who holds which is the server's
+ *  (`podPermissions.me`); a channel's own `me.can_manage` already answers
+ *  for that channel. */
+export const CHANNEL_ACTIONS = { read: "channel.read", write: "channel.write", manage: "channel.manage" } as const;
+
 /** A member's roles, said as the roster says them. A custom role this build
  *  does not know is still a role, so it is shown tidied rather than dropped. */
 export function readPodRoles(roles: readonly string[] | null | undefined): { role: string; can: string } {

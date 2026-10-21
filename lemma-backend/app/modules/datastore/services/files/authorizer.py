@@ -10,9 +10,19 @@ from app.core.authorization.context import (
     normalize_resource_visibility,
 )
 from app.core.log.log import get_logger
+from app.core.authorization.authz_epoch import pod_authz_epoch
+from app.modules.datastore.services.files.search_scope_cache import (
+    cached_partition,
+    caller_key,
+    store_partition,
+)
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
-from app.modules.datastore.domain.search_scope import SearchFileScope
+from app.modules.datastore.domain.search_scope import (
+    SearchablePartition,
+    SearchFileScope,
+    SearchScopeTimedOut,
+)
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
 from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.services.files.path_resolver import PathResolver
@@ -240,41 +250,36 @@ class FileAuthorizer:
 
         Chunks live in the pod's own database, which holds no authorization
         data and no join back to the file table, so the answer can only travel
-        as an array of ids. This used to build that array unconditionally, from
-        a read of *every* file row in the pod -- so the cost of one search
-        scaled with the size of the pod rather than with the size of its
-        answer, on every search, for every caller.
+        as an array of ids. Which array is decided by measuring both: the pod's
+        searchable files are split into the ones this caller may read and the
+        ones they may not, and the shorter goes down -- the readable set as an
+        exact filter, the hidden set as an exclusion. For most callers one of
+        the two is short; an ordinary member's hidden set is a few other
+        people's personal and restricted files.
 
-        The array is still the right thing to send when it is short, and it is
-        short for most callers: it is worth one bounded probe to find out. The
-        probe asks for one id more than may be sent, which is the whole
-        question -- a short answer is the complete readable set and goes down
-        as an exact filter; a full one only says "more than the ceiling", and
-        search falls back to authorizing what comes back.
+        Only when both are over the ceiling does the search run unnarrowed and
+        authorize what comes back, and the searcher widens to
+        `readable_file_scope` if that comes up short. The ceiling decides how
+        much travels between the databases; it never decides whether an answer
+        is right.
 
-        The ceiling decides which strategy is *tried first*. It does not decide
-        whether the answer is right, and an earlier version of this argued that
-        it did -- that post-filtering is safe above the ceiling because a
-        caller who can read that many files reads most of the pod. That does
-        not follow: post-filtering loses recall in proportion to the readable
-        *fraction*, and a caller with six thousand readable files in a pod of
-        ten million is over the ceiling with a fraction near zero. Their
-        candidate pool is then all files they may not read, and the search
-        answers nothing while readable matches exist.
-
-        So the fallback is not the last word. `readable_file_scope` below is,
-        and the searcher reaches for it when post-filtering comes up short.
+        The split runs under its own statement timeout. A permission query that
+        cannot finish in time is not a reason to fail a search: it degrades to
+        post-filtering, which is bounded by the candidate pool.
         """
         ceiling = datastore_settings.datastore_search_readable_id_pushdown_limit
-        readable = await self.file_repository.visible_file_ids(
-            pod_id=pod_id,
-            ctx=ctx,
-            walk_ancestors=not _is_workload(ctx),
-            limit=ceiling + 1,
+        # One past the ceiling is enough to know a side is over it.
+        partition = await self._searchable_partition(
+            pod_id=pod_id, ctx=ctx, limit=ceiling + 1
         )
-        if len(readable) > ceiling:
+        if partition is None:
             return SearchFileScope.post_filtered()
-        return SearchFileScope.only(readable)
+        if len(partition.readable) <= len(partition.hidden):
+            if len(partition.readable) <= ceiling:
+                return SearchFileScope.only(partition.readable)
+        elif len(partition.hidden) <= ceiling:
+            return SearchFileScope.all_but(partition.hidden)
+        return SearchFileScope.post_filtered()
 
     async def readable_file_scope(
         self,
@@ -282,26 +287,91 @@ class FileAuthorizer:
         pod_id: UUID,
         ctx: Context,
     ) -> SearchFileScope:
-        """The caller's complete readable set, however large it is.
+        """The caller's complete readable searchable set, however large it is.
 
-        The unbounded read this whole change exists to stop being the *default*
-        -- kept, because it is the only thing that is exactly right when a
-        caller may read a small fraction of a large pod, and that caller
-        otherwise gets an empty answer to a query with readable matches in it.
-
-        Reached only when the bounded probe went over the ceiling *and*
+        Kept because it is the only thing that is exactly right when a caller
+        may read a small fraction of a large pod, and that caller otherwise
+        gets an empty answer to a query with readable matches in it. Reached
+        only when both sides of the split were over the ceiling *and*
         post-filtering a saturated candidate pool still came up short, which is
         both rare and self-announcing: the searcher logs the pod when it
-        happens. Making the ceiling larger is what stops it happening; making
-        it smaller never makes an answer wrong, only slower.
+        happens.
+
+        Under the same timeout as the split. If it runs out, the scope stays
+        unnarrowed and the searcher keeps the page it already has.
         """
-        return SearchFileScope.only(
-            await self.file_repository.visible_file_ids(
+        partition = await self._searchable_partition(
+            pod_id=pod_id, ctx=ctx, limit=None, readable_only=True
+        )
+        if partition is None:
+            return SearchFileScope.post_filtered()
+        return SearchFileScope.only(partition.readable)
+
+    async def _searchable_partition(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        limit: int | None,
+        readable_only: bool = False,
+    ) -> SearchablePartition | None:
+        """The split, from Redis while the pod's permissions have not moved."""
+        walk = not _is_workload(ctx)
+        epoch = (
+            await pod_authz_epoch(pod_id)
+            if datastore_settings.datastore_search_scope_cache_ttl_seconds > 0
+            else None
+        )
+        shape = {"limit": limit, "readable_only": readable_only}
+        if epoch is None:
+            return await self._compute_partition(
+                pod_id=pod_id, ctx=ctx, walk=walk, **shape
+            )
+        # The read's shape is part of the key: a split cut off at the ceiling
+        # must never stand in for the complete readable set, or the reverse.
+        key = (
+            f"{caller_key(ctx, walk_ancestors=walk)}:"
+            f"{limit if limit is not None else 'all'}:{int(readable_only)}"
+        )
+        cached = await cached_partition(pod_id, epoch, key)
+        if cached is not None:
+            return cached
+        partition = await self._compute_partition(
+            pod_id=pod_id, ctx=ctx, walk=walk, **shape
+        )
+        if partition is not None:
+            await store_partition(pod_id, epoch, key, partition)
+        return partition
+
+    async def _compute_partition(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        walk: bool,
+        limit: int | None,
+        readable_only: bool,
+    ) -> SearchablePartition | None:
+        timeout_ms = datastore_settings.datastore_search_scope_timeout_ms
+        try:
+            return await self.file_repository.searchable_partition(
                 pod_id=pod_id,
                 ctx=ctx,
-                walk_ancestors=not _is_workload(ctx),
+                walk_ancestors=walk,
+                timeout_ms=timeout_ms,
+                limit=limit,
+                readable_only=readable_only,
             )
-        )
+        except SearchScopeTimedOut:
+            actor_type = getattr(ctx, "actor_type", None)
+            logger.warning(
+                "datastore.search.scope_timed_out.degraded",
+                pod_id=str(pod_id),
+                actor_type=getattr(actor_type, "value", actor_type),
+                timeout_ms=timeout_ms,
+                exc_info=True,
+            )
+            return None
 
     async def readable_among(
         self,

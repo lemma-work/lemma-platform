@@ -438,22 +438,29 @@ def _grant_exists_for_action(
         # ancestor folder (granted path is a prefix), or the pod-wide grant
         # (grant keyed on the pod id). ``granted`` is the folder the grant
         # points at; its path is read live so renames/moves stay consistent.
+        #
+        # Two EXISTS, not one with an OR inside. Written as one, ``granted``
+        # sits in the FROM of both branches but only the second constrains it,
+        # so the planner cannot use ``granted.id = resource_id`` as a join key:
+        # every (row, grant) pair scanned the whole file table -- every pod's
+        # files -- before it could answer false. Split, the second EXISTS
+        # reaches ``granted`` through its primary key.
         granted = aliased(DatastoreFile)
-        return exists().where(
+        pod_wide = exists().where(
             *base_conditions,
+            ResourcePermissionGrantModel.resource_id == pod_id_col,
+        )
+        on_self_or_ancestor = exists().where(
+            *base_conditions,
+            granted.id == ResourcePermissionGrantModel.resource_id,
+            granted.pod_id == pod_id_col,
             or_(
-                ResourcePermissionGrantModel.resource_id == pod_id_col,
-                and_(
-                    granted.id == ResourcePermissionGrantModel.resource_id,
-                    granted.pod_id == pod_id_col,
-                    or_(
-                        resource_path_col == granted.path,
-                        func.left(resource_path_col, func.length(granted.path) + 1)
-                        == granted.path.concat("/"),
-                    ),
-                ),
+                resource_path_col == granted.path,
+                func.left(resource_path_col, func.length(granted.path) + 1)
+                == granted.path.concat("/"),
             ),
         )
+        return or_(pod_wide, on_self_or_ancestor)
 
     return exists().where(
         *base_conditions,

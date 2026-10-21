@@ -6,7 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEve
 import { EmailPassword, ThirdParty } from "./supertokens";
 import { authFailure, isExistingAccount, sayProblem, type Attempt } from "./errors";
 import { DEFAULT_LANDING, PORTAL_PATH, siteOrigin } from "./config";
-import { authLink, rememberDestination, pendingDestination, destinationFrom, asksForDestination } from "./redirects";
+import { authLink, rememberDestination, pendingDestination, destinationFrom, asksForDestination, installsTemplate, addsToSlack } from "./redirects";
 import { accountAccess, completeAuth, completionDestination } from "./completion";
 import { forgetReturns, noteReturn, wouldLoop } from "./return-loop";
 import { captureSignInLoop } from "@/site/analytics/client";
@@ -404,6 +404,8 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
 
     const attempt: Attempt = signingIn ? "sign-in" : "sign-up";
     const other = authLink(mode === "in" ? PORTAL_PATH + "/signup" : PORTAL_PATH);
+    const arriving = pendingDestination(window.location.search);
+    const installing = installsTemplate(arriving, siteOrigin()) || addsToSlack(arriving, siteOrigin());
 
     useEffect(() => {
         let live = true;
@@ -474,7 +476,7 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
 
     return (
         <Screen
-            title={signingIn ? "Welcome back" : "Make an account"}
+            title={signingIn ? (installing ? "Sign in or create your account" : "Welcome back") : "Make an account"}
             /* The left half already says what is through the door, so the
                right half does not say it again — it asks. Sign-up keeps a line
                because it is the one screen where somebody does not yet know

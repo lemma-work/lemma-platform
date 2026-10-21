@@ -132,12 +132,6 @@ pub(crate) fn handle_menu_action(app: &AppHandle, id: &str) {
         "control" => {
             open_settings(&app, "this-mac", "overview");
         }
-        "control-ai" => {
-            open_settings(&app, "models", "overview");
-        }
-        "control-sharing" => {
-            open_settings(&app, "this-mac-sharing", "overview");
-        }
         "diagnostics" => {
             let _ = show_control_center_page(&app, Some("diagnostics"));
         }

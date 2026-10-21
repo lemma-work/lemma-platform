@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreDataType,
@@ -284,3 +286,50 @@ class TestEveryParsedErrorAcceptsDetails:
     def test_each_class_still_accepts_a_message_alone(self):
         for error_cls in self._parsed_error_classes():
             assert error_cls("something failed").details is None, error_cls.__name__
+
+
+def test_the_database_being_unavailable_is_not_mapped_to_a_datastore_error() -> None:
+    """A refused connection matched none of the parser's markers and came back
+    as a 400 echoing the driver; it is raised as it is (a 503, or an uncharged
+    retry for a work item)."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.modules.datastore.infrastructure.record_errors import (
+        raise_record_read_error,
+        raise_record_write_error,
+    )
+    from app.modules.datastore.infrastructure.sql_identifiers import (
+        map_datastore_db_error,
+    )
+
+    class _Starting(Exception):
+        sqlstate = "57P03"
+
+    down = OperationalError(
+        "SELECT 1", {}, _Starting("the database system is starting up")
+    )
+    with pytest.raises(OperationalError):
+        raise_record_write_error(down, operation="create record")
+    with pytest.raises(OperationalError):
+        raise_record_read_error(down, operation="list records")
+    with pytest.raises(OperationalError):
+        map_datastore_db_error(operation="create table", exc=down, table_name="t")
+
+
+def test_a_deadlock_is_not_the_callers_validation_error() -> None:
+    """Seen in e2e under load: ``deadlock detected`` came back as a 400
+    ``DATASTORE_VALIDATION_ERROR``. Retrying the request succeeds."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.modules.datastore.infrastructure.record_errors import (
+        raise_record_read_error,
+    )
+
+    class _Deadlock(Exception):
+        sqlstate = "40P01"
+
+    with pytest.raises(OperationalError):
+        raise_record_read_error(
+            OperationalError("SELECT", {}, _Deadlock("deadlock detected")),
+            operation="list records",
+        )

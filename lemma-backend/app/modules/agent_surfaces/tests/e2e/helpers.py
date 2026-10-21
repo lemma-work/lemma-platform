@@ -361,7 +361,10 @@ async def _ensure_connector_account(
     email: str | None = None,
     provider: AuthProvider = AuthProvider.LEMMA,
     config_source: str = "SYSTEM_DEFAULT",
+    organization_id: str | None = None,
 ) -> Account:
+    """The user's account for a connector, in ``organization_id`` -- by default
+    the first organisation they belong to."""
     if connector_id == "slack":
         credentials = dict(credentials)
         raw_response = dict(credentials.get("raw_response") or {})
@@ -373,12 +376,14 @@ async def _ensure_connector_account(
         if provider == AuthProvider.COMPOSIO
         else ConnectorKind.HTTP.value
     )
-    organization_id = await db_session.scalar(
-        select(OrganizationMember.organization_id)
-        .where(OrganizationMember.user_id == UUID(user_id))
-        .limit(1)
-    )
+    if organization_id is None:
+        organization_id = await db_session.scalar(
+            select(OrganizationMember.organization_id)
+            .where(OrganizationMember.user_id == UUID(user_id))
+            .limit(1)
+        )
     assert organization_id is not None
+    organization_id = UUID(str(organization_id))
     auth_config = await db_session.scalar(
         select(AuthConfig).where(
             AuthConfig.organization_id == organization_id,

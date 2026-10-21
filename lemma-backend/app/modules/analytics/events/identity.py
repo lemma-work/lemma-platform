@@ -2,27 +2,17 @@
 
 from __future__ import annotations
 
-from faststream import Depends, Logger
-
+from app.core.analytics.domain_events import projection
 from app.core.analytics import AnalyticsActor, emit
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
 from app.modules.analytics.events.wiring import (
     actor_or_system,
     origin_of,
     provide_uow_factory,
-    router,
 )
 from app.modules.analytics.services.buckets import COUNT_EDGES, bucket
 from app.modules.identity.contracts.organizations import organization_member_count
 from app.modules.identity.domain.events import (
-    IDENTITY_EVENTS_STREAM,
     OrganizationCreatedEvent,
     OrganizationMemberAddedEvent,
     UserSignedUpEvent,
@@ -33,18 +23,16 @@ WIRED = frozenset(
 )
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    IDENTITY_EVENTS_STREAM,
-    group="analytics-identity",
-    consumer="analytics-identity-consumer",
+@projection(
+    UserSignedUpEvent.get_event_type(),
+    OrganizationCreatedEvent.get_event_type(),
+    OrganizationMemberAddedEvent.get_event_type(),
 )
 async def on_identity_event(
     event: dict[str, object],
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    uow_factory: UnitOfWorkFactory | None = None,
 ) -> None:
+    uow_factory = uow_factory or provide_uow_factory()
     event_type = event.get("event_type")
     if event_type not in {
         UserSignedUpEvent.get_event_type(),
@@ -88,4 +76,4 @@ async def on_identity_event(
                 properties={"member_count_bucket": bucket(member_count, COUNT_EDGES)},
             )
 
-    await inbox.process("analytics.identity", event, record)
+    await record()

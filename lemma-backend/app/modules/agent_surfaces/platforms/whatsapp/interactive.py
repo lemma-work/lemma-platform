@@ -12,12 +12,16 @@ from typing import Any
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.envelope import PartDelivery
+from app.modules.agent_surfaces.domain.reply_targets import (
+    WhatsAppReplyTarget,
+    reply_target_as,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
@@ -41,7 +45,9 @@ logger = get_logger(__name__)
 
 def recipient_of(event: ParsedInboundSurfaceEvent) -> WhatsAppRecipient | None:
     """Who a reply to this event goes to: its group, else the person."""
-    return whatsapp_recipient(event.reply_target, fallback_wa_id=event.sender_phone)
+    return whatsapp_recipient(
+        reply_target_as(event, WhatsAppReplyTarget), fallback_wa_id=event.sender_phone
+    )
 
 
 class WhatsAppInteractiveRenders:
@@ -58,7 +64,7 @@ class WhatsAppInteractiveRenders:
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
         raise NotImplementedError
 
     async def _render_choices(
@@ -103,7 +109,7 @@ class WhatsAppInteractiveRenders:
                     to=sender_wa_id,
                     interactive=interactive,
                 )
-            except PLATFORM_TRANSPORT_ERRORS:
+            except platform_transport_errors():
                 if not index:
                     # Nothing went out: the caller's fallback sends every
                     # question as text, and none of them is a duplicate.

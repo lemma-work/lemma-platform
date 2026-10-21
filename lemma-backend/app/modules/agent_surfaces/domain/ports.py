@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Sequence
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -11,7 +11,11 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.identity.contracts import UserPreferences
+
+if TYPE_CHECKING:
+    from app.modules.channels.contracts import Source
 
 
 class SurfaceAccountInfo(BaseModel):
@@ -149,6 +153,7 @@ class SurfaceInstallationRepositoryPort(Protocol):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        also_paused: bool = False,
         limit: int | None = None,
     ) -> list[AgentSurfaceEntity]: ...
 
@@ -248,13 +253,14 @@ class SurfaceNotificationEgressPort(Protocol):
         self, surface: AgentSurfaceEntity
     ) -> str | None: ...
 
-    async def send_agent_message_for_conversation(
+    async def deliver_message(
         self,
         *,
         conversation_id: UUID,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> bool: ...
+        at: Source | None = None,
+    ) -> DeliveryReceipt | None: ...
 
     async def open_cold_email_thread(
         self,

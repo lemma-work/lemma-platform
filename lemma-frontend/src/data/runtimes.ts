@@ -5,7 +5,7 @@
  *  profiles*: same list, same id, same shape, same slot in a conversation.
  *  There is no `HarnessKind` per coding tool — Codex, Claude Code, Cursor and
  *  OpenCode all arrive as `HARNESS`, and which one it is comes from
- *  `metadata.harness_key`. So the ledger is one list, and a computer is a
+ *  `harness_key`. So the ledger is one list, and a computer is a
  *  heading inside it rather than a second list beside it.
  *
  *  Pure, and tested, for the reason `accounts.ts` is: every field here is a
@@ -53,6 +53,10 @@ export interface Runtime {
      *  Read so the desktop app can tell a model server on this computer is
      *  already in the list before suggesting it again. */
     baseUrl?: string;
+    /** A coding agent's options as its computer publishes them right now.
+     *  Only a profile read on its own carries these — the list endpoint has
+     *  no harness on it — so absent means "not read", not "offers none". */
+    options?: AgentOptionSets;
 }
 
 /** One coding agent as a computer reports it, before anyone has added it. */
@@ -66,8 +70,12 @@ export interface LocalAgent {
     /** The model it runs when nobody pins one: the harness's own
      *  `current_value`. Empty when it did not say. */
     defaultModel: string;
-    /** Everything else it lets a person choose, model aside. */
+    /** Everything else it lets a person choose, model aside, when nobody
+     *  pins a model. */
     options: AgentOption[];
+    /** What it lets a person choose once a given model is pinned, for the
+     *  models whose choices differ — see `AgentOptionSets`. */
+    optionsByModel: Record<string, AgentOption[]>;
     /** READY means this computer would take a run right now. */
     ready: boolean;
     /** The computer's own word for the state — `AUTH_REQUIRED` and so on —
@@ -99,6 +107,19 @@ export interface AgentOption {
     choices: { value: string; label: string }[];
 }
 
+/** Every option set an agent publishes: the one for its own model, and one
+ *  per model whose choices differ from it.
+ *
+ *  Kept per model because the choices really do move with the model —
+ *  Claude Code offers an effort on one model and none on another — and a form
+ *  drawing the top-level set beside a pinned model offers values the backend
+ *  will refuse at the next run. The host says so with `lemma_options` on a
+ *  model's entry; a model without one takes the top-level set. */
+export interface AgentOptionSets {
+    options: AgentOption[];
+    byModel: Record<string, AgentOption[]>;
+}
+
 /** A paired computer, and the agents it found on itself. */
 export interface Computer {
     id: string;
@@ -119,6 +140,10 @@ export interface Computer {
 export interface Choice {
     runtimeId: string;
     model: string;
+    /** A coding agent's option values — effort first among them — for this
+     *  choice alone. Absent or empty is "as the runtime has them", which the
+     *  backend resolves narrowest-first at dispatch. */
+    selections?: Record<string, string>;
 }
 
 /** What testing a saved provider found. `message` is always the backend's
@@ -339,8 +364,11 @@ export function readRuntime(raw: unknown): Runtime | null {
         availability_status?: string | null;
         default_model_name?: string | null;
         model_catalog?: unknown[];
-        metadata?: Record<string, unknown> | null;
+        harness_key?: string | null;
         config?: Record<string, unknown> | null;
+        /* Only on the detail endpoint: the live harness the profile is bound
+           to, which is where its current options are. */
+        harness?: { display_name?: unknown; config_options?: unknown } | null;
     };
     const id = asString(entry.id);
     if (!id) return null;
@@ -349,13 +377,22 @@ export function readRuntime(raw: unknown): Runtime | null {
     const models = (entry.model_catalog ?? []).map(readModel).filter((model): model is RuntimeModel => model !== null);
     const defaultModel = asString(entry.default_model_name);
 
-    /* A saved profile keeps the harness it was made from in its metadata, so
-       a row can wear the right logo without re-reading the computer. */
-    const harness = asString(entry.metadata?.["harness_key"]);
+    /* A saved profile keeps the harness it was made from, so a row can wear
+       the right logo without re-reading the computer. */
+    const harness = asString(entry.harness_key);
+
+    const detail = entry.harness && typeof entry.harness === "object" ? entry.harness : null;
 
     return {
         id,
-        name: asString(entry.name) || id,
+        /* A profile is named when it is made, so this is a fallback for one
+           that somehow was not: the agent's known name, then what its
+           computer calls it, and the raw key only when nothing says more. */
+        name: asString(entry.name)
+            || agentLabel(harness)
+            || asString(detail?.display_name)
+            || harness
+            || id,
         kind: entry.kind === "HARNESS" ? "agent" : "key",
         harness,
         harnessId,
@@ -370,6 +407,7 @@ export function readRuntime(raw: unknown): Runtime | null {
         archived: entry.status === "DISABLED",
         trouble: runtimeTrouble(harnessId, asString(entry.availability_status)),
         baseUrl: asString(entry.config?.["base_url"]),
+        ...(detail ? { options: agentOptionSets(detail.config_options) } : {}),
     };
 }
 
@@ -420,45 +458,89 @@ const OPTION_KIND: Record<string, AgentOption["kind"]> = {
 };
 const KIND_ORDER: AgentOption["kind"][] = ["effort", "mode", "other"];
 
-/** Every option an agent publishes besides its model, as choices a person can
- *  make. Keyed the way `validate_agent_host_selections` reads a selection —
- *  id first, then category — and an option that enumerates no values is left
- *  out rather than drawn as a text box nothing would accept. */
-export function agentOptions(configOptions: unknown): AgentOption[] {
-    const options = Array.isArray(configOptions) ? configOptions : [];
-    const read: AgentOption[] = [];
-    for (const raw of options) {
-        const option = (raw ?? {}) as {
-            id?: unknown;
-            name?: unknown;
-            category?: unknown;
-            description?: unknown;
-            current_value?: unknown;
-            options?: unknown;
-            metadata?: { policy?: unknown } | null;
-        };
-        const category = asString(option.category);
-        if (category === "model") continue;
-        const key = asString(option.id) || category;
-        if (!key) continue;
-        const choices: AgentOption["choices"] = [];
-        for (const rawItem of Array.isArray(option.options) ? option.options : []) {
-            const item = (rawItem ?? {}) as { value?: unknown; id?: unknown; name?: unknown };
-            const value = asString(item.value) || asString(item.id);
-            if (value) choices.push({ value, label: asString(item.name) || value });
-        }
-        if (!choices.length) continue;
-        const current = asString(option.current_value);
-        read.push({
-            key,
-            kind: OPTION_KIND[category] ?? (option.metadata?.policy === true ? "mode" : "other"),
-            label: asString(option.name) || sentence(key),
-            description: asString(option.description),
-            current: choices.some((choice) => choice.value === current) ? current : "",
-            choices,
-        });
+/** One option as a person chooses it, or null when it enumerates nothing —
+ *  a text box nothing would accept is worse than no control. Keyed the way
+ *  `validate_agent_host_selections` reads a selection: id first, then
+ *  category. */
+function readOption(raw: unknown): AgentOption | null {
+    const option = (raw ?? {}) as {
+        id?: unknown;
+        name?: unknown;
+        category?: unknown;
+        description?: unknown;
+        current_value?: unknown;
+        options?: unknown;
+        metadata?: { policy?: unknown } | null;
+    };
+    const category = asString(option.category);
+    if (category === "model") return null;
+    const key = asString(option.id) || category;
+    if (!key) return null;
+    const choices: AgentOption["choices"] = [];
+    for (const rawItem of Array.isArray(option.options) ? option.options : []) {
+        const item = (rawItem ?? {}) as { value?: unknown; id?: unknown; name?: unknown };
+        const value = asString(item.value) || asString(item.id);
+        if (value) choices.push({ value, label: asString(item.name) || value });
     }
-    return read.sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
+    if (!choices.length) return null;
+    const current = asString(option.current_value);
+    return {
+        key,
+        kind: OPTION_KIND[category] ?? (option.metadata?.policy === true ? "mode" : "other"),
+        label: asString(option.name) || sentence(key),
+        description: asString(option.description),
+        current: choices.some((choice) => choice.value === current) ? current : "",
+        choices,
+    };
+}
+
+function readOptions(raw: unknown): AgentOption[] {
+    return (Array.isArray(raw) ? raw : [])
+        .map(readOption)
+        .filter((option): option is AgentOption => option !== null)
+        .sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
+}
+
+/** Every option set an agent publishes, read once. A model entry's
+ *  `lemma_options` is that model's whole set, not a patch on the top-level
+ *  one — a model that takes no effort says so by leaving effort out. */
+export function agentOptionSets(configOptions: unknown): AgentOptionSets {
+    const options = Array.isArray(configOptions) ? configOptions : [];
+    const byModel: Record<string, AgentOption[]> = {};
+    for (const raw of options) {
+        const option = (raw ?? {}) as { category?: unknown; options?: unknown };
+        if (option.category !== "model" || !Array.isArray(option.options)) continue;
+        for (const rawItem of option.options) {
+            const item = (rawItem ?? {}) as { value?: unknown; id?: unknown; lemma_options?: unknown };
+            const value = asString(item.value) || asString(item.id);
+            if (value && Array.isArray(item.lemma_options)) byModel[value] = readOptions(item.lemma_options);
+        }
+    }
+    return { options: readOptions(options), byModel };
+}
+
+/** Every option an agent publishes besides its model, as choices a person can
+ *  make — for `model` when one is named and it publishes its own set, else
+ *  the agent's top-level set. */
+export function agentOptions(configOptions: unknown, model = ""): AgentOption[] {
+    return optionsFor(agentOptionSets(configOptions), model);
+}
+
+/** The options on offer with `model` pinned. Empty is "the agent's own
+ *  model", which is what the top-level set describes. */
+export function optionsFor(sets: AgentOptionSets, model: string): AgentOption[] {
+    return (model && sets.byModel[model]) || sets.options;
+}
+
+/** Selections cut down to what `options` still offers. A value the model
+ *  does not publish would be refused on save, with no control left on the
+ *  page to clear it — so a model change takes those with it. */
+export function offeredSelections(options: AgentOption[], selections: Record<string, string>): Record<string, string> {
+    return Object.fromEntries(
+        Object.entries(selections).filter(([key, value]) =>
+            Boolean(value) && options.some((option) => option.key === key && option.choices.some((choice) => choice.value === value)),
+        ),
+    );
 }
 
 export function readLocalAgent(raw: unknown): LocalAgent | null {
@@ -474,6 +556,7 @@ export function readLocalAgent(raw: unknown): LocalAgent | null {
     if (!id) return null;
     const harness = asString(entry.harness_key);
     const health = agentHealth(asString(entry.health));
+    const sets = agentOptionSets(entry.config_options);
     return {
         id,
         harness,
@@ -484,7 +567,8 @@ export function readLocalAgent(raw: unknown): LocalAgent | null {
         version: asString(entry.upstream_version),
         models: agentModels(entry.config_options),
         defaultModel: agentDefaultModel(entry.config_options),
-        options: agentOptions(entry.config_options),
+        options: sets.options,
+        optionsByModel: sets.byModel,
         ready: health.ready,
         health: asString(entry.health),
         state: health.state,
@@ -608,10 +692,13 @@ export function agentSettingsChanges(
 }
 
 export function readChoice(raw: unknown): Choice | null {
-    const entry = (raw ?? {}) as { profile_id?: string; model_name?: string | null };
+    const entry = (raw ?? {}) as { profile_id?: string; model_name?: string | null; config_selections?: unknown };
     const runtimeId = asString(entry.profile_id);
     if (!runtimeId) return null;
-    return { runtimeId, model: asString(entry.model_name) };
+    const selections = readSelections(entry.config_selections);
+    return Object.keys(selections).length
+        ? { runtimeId, model: asString(entry.model_name), selections }
+        : { runtimeId, model: asString(entry.model_name) };
 }
 
 export function sameChoice(a: Choice | null, b: Choice | null): boolean {

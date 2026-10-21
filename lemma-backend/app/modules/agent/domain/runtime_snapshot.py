@@ -43,6 +43,9 @@ class RuntimeSnapshot(BaseModel):
     model_metadata: JsonObject = Field(default_factory=dict)
     model_capabilities: list[str] = Field(default_factory=list)
     config: JsonObject = Field(default_factory=dict, repr=False)
+    #: An Agent Host run's own selections, by option id, laid over the
+    #: profile's ``config.config_selections`` (``agent_host_run_config``).
+    selection_overrides: dict[str, str] = Field(default_factory=dict)
 
     @property
     def is_model_provider(self) -> bool:

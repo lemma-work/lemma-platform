@@ -159,16 +159,48 @@ an answer is matched by `re` against the requester's own ids only.
 `workspace` is the sandbox's logical id. The host maps it to its root folder
 (§5) and refuses an op for a workspace it has not been told to `open`.
 
-Binary data travels base64-encoded in `data` fields. No single frame carries
-more than `OP_MAX_DATA_BYTES` (1 MiB before encoding), so large files move in
-ranged chunks and no stream frames are needed.
+**File data never rides the link.** The API reads no websocket message past
+1 MiB (`WS_MAX_BYTES`) and closes the socket with 1009 on one, so a file chunk
+crosses HTTP as a *transfer* the op names
+([agent-host.md](agent-host.md#bulk-bytes)):
+
+- `file.write` names a chunk Lemma staged, `transfer: {id, size, sha256}`. The
+  host fetches it (`GET /agent-host/transfers/{id}`), checks its size and
+  SHA-256, and writes it.
+- `file.read` names an empty slot, `transfer: {id, max_bytes}`. The host reads
+  at most `max_bytes`, delivers the chunk (`PUT /agent-host/transfers/{id}`,
+  its SHA-256 in `x-lemma-sha256`), and answers `size` and `sha256` instead of
+  `data`. Lemma takes the bytes only if they match that answer.
+
+A read chunk is at most `OP_MAX_DATA_BYTES` (1 MiB) and a write chunk half
+that (`WRITE_CHUNK_BYTES`, so it still fits a frame inline for a host without
+transfers), so large files still move as ranged reads and chunked writes. The relay -- outside the sandbox -- does
+the HTTP half, and the exec-server still reads and writes base64 `data` on its
+stdio; confined, it has no network. What still travels inline is held to
+`INLINE_DATA_BYTES` (256 KiB before base64): `process.read` output (Lemma
+asks with `max_bytes`), `process.input`, `secret.deliver` and `initial_input`.
+A larger secret or initial input is refused before anything is sent. An op
+answer that would still not fit in a frame is answered `too_large` instead.
+
+A host released before transfers reports no `transfers` in `host_execution`.
+Its link session does the host's half for it: a write's chunk is put inline as
+`data`, and a read asks for at most `INLINE_DATA_BYTES` and its inline answer
+is delivered into the slot. That host ignores `process.read`'s `max_bytes`
+and answers with whatever its process kept since the last read, one JSON
+object per chunk with its data base64'd. Its ring is bounded in raw bytes
+only, so its `process.start` is sent `output_limit_bytes` of at most
+`OLD_HOST_OUTPUT_LIMIT_BYTES` (about 14 KiB, `old_host_params`): small enough
+that even a process flushing one byte per chunk answers inside the ceiling. A
+command that prints more than that between two reads keeps its newest output
+and reports the rest as truncated (`truncated_before_sequence`); the command's
+output then says where something was dropped (`process_output`).
 
 | `method` | `params` | `result` |
 |---|---|---|
 | `workspace.open` | `conversation_id` (uuid \| null), `root_hint` (host folder \| null), `slug` \| null, `date` (`yyyy-mm-dd`) \| null, `grants` `[path]` (≤ 8), `lemma_cli` (folder \| absent; §6) | `root` (host absolute path), `home`, `platform` |
 | `workspace.close` | — | `{}` |
 | `process.start` | `operation_id`, `shell_command` \| `argv`, `cwd`, `environment` `[{name,value}]`, `tty` `{rows,cols}` \| null, `output_limit_bytes`, `initial_input` (b64) \| null | `process_id` |
-| `process.read` | `process_id`, `after_sequence`, `wait_ms` (≤ 30 000) | `chunks` `[{sequence, stream: stdout\|stderr\|pty, data}]`, `next_sequence`, `truncated_before_sequence`, `state` (`running`\|`exited`\|`killed`), `exit_code` |
+| `process.read` | `process_id`, `after_sequence`, `wait_ms` (≤ 30 000), `max_bytes` (≤ 1 MiB; Lemma sends 256 KiB) | `chunks` `[{sequence, stream: stdout\|stderr\|pty, data}]`, `next_sequence`, `truncated_before_sequence`, `state` (`running`\|`exited`\|`killed`), `exit_code` |
 | `process.input` | `process_id`, `data` | `{}` |
 | `process.resize` | `process_id`, `rows`, `cols` | `{}` |
 | `process.terminate` | `process_id`, `grace_ms` (default 2000) | `{}` |
@@ -176,8 +208,8 @@ ranged chunks and no stream frames are needed.
 | `file.stat` | `path` | a `FileStat`: `path`, `kind` (`file`\|`directory`\|`symlink`), `size_bytes`, `modified_at` (RFC 3339), `mode` (permission bits as an integer), `sha256` (`sha256:<hex>`, files ≤ 32 MiB, else null) |
 | `file.list` | `path` | `entries` `[FileStat]`, sorted by path, `sha256` always null |
 | `file.mkdir` | `path` | `{}` |
-| `file.read` | `path`, `offset`, `length` (≤ 1 MiB, default 1 MiB) | `data`, `eof` |
-| `file.write` | `path`, `upload_id` (`[A-Za-z0-9_-]{1,64}`), `offset`, `data`, `final`, `expected_sha256` (optional, on `final`; `sha256:<hex>` or bare hex) | `{}`, or the written `FileStat` on `final` |
+| `file.read` | `path`, `offset`, `length` (≤ 1 MiB, default 1 MiB), `transfer` `{id, max_bytes}` | `eof`, `size`, `sha256` (the bytes go to the transfer) |
+| `file.write` | `path`, `upload_id` (`[A-Za-z0-9_-]{1,64}`), `offset`, `transfer` `{id, size, sha256}`, `final`, `expected_sha256` (optional, on `final`; `sha256:<hex>` or bare hex) | `{}`, or the written `FileStat` on `final` |
 | `file.move` | `source`, `destination` | `{}` |
 | `file.delete` | `path`, `recursive` | `existed` |
 | `secret.deliver` | `path`, `data` | `{}` (written 0600, parent 0700) |
@@ -205,8 +237,8 @@ Process output is kept in a ring per process, bounded by
 that are exclusive in `after_sequence`, as in `sandbox_runtime`.
 `next_sequence` is the sequence the next chunk will get, and
 `truncated_before_sequence` the first one still held once anything was
-dropped. One read carries at most `OP_MAX_DATA_BYTES` of output (at least one
-chunk); when it stops short, `next_sequence` is the first chunk it left out
+dropped. One read carries at most `max_bytes` of output (`OP_MAX_DATA_BYTES`
+when absent; at least one chunk); when it stops short, `next_sequence` is the first chunk it left out
 and the process still reads as `running`, so a reader carries on.
 `process.read` waits up to `wait_ms` for new output, and returns at once for
 a process that has exited. A process reads as exited only once its reader has
@@ -337,7 +369,9 @@ sandbox.
   whether to take it (`seatbelt::lemma_cli_root`): a folder holding
   `bin/lemma`, not the home folder or anything containing it, and not inside
   any path denied above except the host packs' own
-  (`Library/Application Support/Lemma/runtime`) -- so a pairing secret or the
+  (`Library/Application Support/Lemma/runtime`) and the CLIs the Agent Host
+  downloads for itself (`Library/Application Support/Lemma/agent-host/cli`,
+  see [Agent Host](agent-host.md)) -- so a pairing secret or the
   app's vault is never made readable by naming it. A folder it takes is
   `LEMMA_CLI`, readable and not writable (nothing a command writes may be run
   later by another conversation's `lemma`), and its `bin/` goes first on the
@@ -455,6 +489,7 @@ processes (§8).
 | Rust, macOS only (`tests/seatbelt.rs`) | under the real profile, with a test-made `HOME`: a host pack's `bin/lemma` runs with `LEMMA_CLI` set and not without it, stays unwritable, and the pairing secrets beside the pack stay unreadable; through the relay, the `lemma` a command finds is the one `workspace.open` named; `cat ~/.ssh/x` denied, including through a symbolic link, `touch ~/x` denied; the app's WebKit and HTTPStorages data, `~/.git-credentials`, `~/.codex/auth.json`, shell history and `~/.lemma` unreadable, `~/.config/gh` readable; writes in the root, `CACHE` (through the package managers' environment variables) and both temporary folders allowed; `~/.npm/_npx`, `~/Library/pnpm`, `~/Library/Caches`, `~/.cache`, `~/.cargo/registry` and `/private/tmp` denied; in an existing repository `.git/hooks`, `.git/config` and `.git` itself kept, `.claude`, `.mcp.json`, `.envrc` and `.vscode` kept, while commit and branch work; `git init` of a fresh root works; a Unix-domain socket connect refused while names still resolve; grants; `curl` to loopback; and the real exec-server binary under `sandbox-exec`, driven through the relay |
 | Link tests (`src/link/tests.rs`) | `op` → relay → exec-server → `op_ok` across a real WebSocket, disabled host, no handler, unopened workspace, exec-server restart, a crashed exec-server's commands killed by the relay, root-hint admissibility, a folder under `~/lemma` given only to the workspace that owns it, a conversation re-opening in the folder it remembers (and a folder the owner binds later winning), a waiting read not blocking other ops |
 | Backend unit | provider maps every op and every failure kind; selection truth table (paired user, user with no host, another user's own host, steered, inbound, host offline, toggle off, cloud); tool filtering for Agent Host runs |
+| Bulk bytes (`src/link/tests.rs`, `transfer.rs`, `runtime/event_payloads.rs`; backend `test_agent_host_transfers.py`, `test_agent_host_transfers_e2e.py`) | a 1 MiB chunk written and read through transfers with no frame near the ceiling, digest and size refusals, `max_bytes` bounding output reads; event batches bounded by bytes, images uploaded as blobs and named, oversized events cut; the routes' refusals (no or unknown secret, another host, used, expired, too large, wrong digest, a run the host does not hold); a host without `transfers` served inline by its link session |
 | Backend e2e | the real `lemma-agent-host` binary on the link runs `exec_command` for the paired user's run on the host; `lemma me get` in a host command runs the CLI the backend named -- built by the host pack's own step -- and answers as the paired user, with the run's `LEMMA_CONVERSATION_ID`; and a run of a user with no host lands in the VM; after the binary restarts, the next command re-opens the workspace in the same folder with nothing about the folder stored by Lemma. Over the link: a `control` without `host_execution` keeps the stored report; a host sandbox follows the conversation's latest host run |
 
 ## 9. The backend half

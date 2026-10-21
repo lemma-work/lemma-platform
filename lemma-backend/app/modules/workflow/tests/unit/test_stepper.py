@@ -61,17 +61,14 @@ class StubFunctionPort:
         return {"status": "RUNNING"}
 
 
-class StubSchedulePort:
-    async def schedule_workflow_wake(self, run_id, scheduled_at, pod_id, user_id):
-        return run_id
+class RecordingWork:
+    """The work writer a stepper hands executors: records what they ask for."""
 
-
-class StubDecisionPort:
     def __init__(self):
-        self.asked: list[str] = []
+        self.added: list[tuple[str, object]] = []
 
-    def ask_once_committed(self, external_ref: str) -> None:
-        self.asked.append(external_ref)
+    async def add(self, kind, ns, payload, **_options):
+        self.added.append((kind, payload))
 
 
 def _flow(nodes, edges) -> WorkflowEntity:
@@ -95,14 +92,11 @@ def _run(flow: WorkflowEntity) -> WorkflowRunEntity:
     )
 
 
-def _stepper(
-    function_results=None, agent=None, function=None, decision=None
-) -> RunStepper:
+def _stepper(function_results=None, agent=None, function=None, work=None) -> RunStepper:
     return RunStepper(
         agent=agent or StubAgentPort(),
         function=function or StubFunctionPort(function_results),
-        schedule=StubSchedulePort(),
-        decision=decision or StubDecisionPort(),
+        work=work or RecordingWork(),  # type: ignore[arg-type]
     )
 
 
@@ -519,13 +513,17 @@ async def test_wait_until_suspends_with_time_wait():
     ]
     flow = _flow(nodes, [_edge(1, "cooldown", "end")])
     run = _run(flow)
-    result = await _stepper().advance(run, flow)
+    work = RecordingWork()
+    result = await _stepper(work=work).advance(run, flow)
 
     assert run.status == WorkflowRunStatus.RUNNING
     assert run.step_history[-1].status == StepStatus.RUNNING
     assert result.wait.wait_type == WorkflowRunWaitType.TIME
-    assert result.wait.external_ref == str(run.id)
     assert result.wait.scheduled_at is not None
+    # The timer is a resume item for this wait's own token, due when it is.
+    ((kind, payload),) = work.added
+    assert kind == "workflow.resume"
+    assert payload.external_ref == result.wait.external_ref
 
 
 async def test_missing_required_input_fails_run_with_path_in_error():
@@ -588,3 +586,27 @@ class RecordingFunctionPort(StubFunctionPort):
 
     async def cancel_run(self, function_run_id):
         self.cancelled.append(str(function_run_id))
+
+
+async def test_the_database_being_unavailable_does_not_fail_the_run():
+    """Lemma's database refusing a connection is not the node failing: the
+    error reaches the work item, which retries the step uncharged."""
+    from sqlalchemy.exc import OperationalError
+
+    class _TooMany(Exception):
+        sqlstate = "53300"
+
+    class UnreachableFunctionPort(StubFunctionPort):
+        async def execute_function(self, *args, **kwargs):
+            raise OperationalError("INSERT", {}, _TooMany("too many clients"))
+
+    nodes = [
+        FunctionNode(id="save", config=FunctionNodeConfig(function_name="fn")),
+        EndNode(id="end"),
+    ]
+    flow = _flow(nodes, [_edge(1, "save", "end")])
+    run = _run(flow)
+    with pytest.raises(OperationalError):
+        await _stepper(function=UnreachableFunctionPort()).advance(run, flow)
+
+    assert run.status != WorkflowRunStatus.FAILED

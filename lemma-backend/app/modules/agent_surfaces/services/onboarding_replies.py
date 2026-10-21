@@ -118,7 +118,7 @@ async def say_privately(
 
 #: What "done" sounds like. Both completion paths used to say nothing at all:
 #: the only sign of success was the replayed request coming back answered, and
-#: `replay_onboarding` has several raises that dead-letter after their retries
+#: the replay (`prepare_onboarding_replay`) has several raises that go dead
 #: -- so a failure there left somebody who had just proved their email with no
 #: acknowledgement and no answer, and nothing to tell that apart from being
 #: ignored. The confirmation is cheap and it is sent before the replay, so the

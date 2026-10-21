@@ -320,9 +320,12 @@ def _unmetered_model_from_runtime_profile(
         )
 
     if protocol == RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE:
-        from pydantic_ai.models.anthropic import AnthropicModel
         from pydantic_ai.providers.anthropic import AnthropicProvider
         from anthropic import AsyncAnthropic
+
+        from app.modules.agent.services.anthropic_thinking import (
+            AdaptiveThinkingAnthropicModel,
+        )
 
         base_url = config.get("base_url")
         resolved_base_url = base_url if isinstance(base_url, str) and base_url else None
@@ -339,7 +342,7 @@ def _unmetered_model_from_runtime_profile(
                 ),
             )
         )
-        return AnthropicModel(
+        return AdaptiveThinkingAnthropicModel(
             model_name_value,
             provider=provider,
             settings=ModelSettings(max_tokens=ANTHROPIC_DEFAULT_MAX_TOKENS),

@@ -99,6 +99,9 @@ export interface PinnedRuntime {
     profile: string;
     model: string;
     settings: Record<string, unknown>;
+    /** A coding agent's option values for this agent alone — effort, mode —
+     *  keyed as the agent published them. Empty is "as the runtime has them". */
+    selections: Record<string, string>;
 }
 
 /** `GenerationSettings.reasoning_effort`, as the API spells it. */
@@ -106,6 +109,13 @@ export const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high"] as
 
 function text(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
+}
+
+/** The string-valued entries of an object: a selection is one of the values
+ *  an agent published, and those are strings. */
+function stringValues(value: unknown): Record<string, string> {
+    const entries = Object.entries(object(value) ?? {});
+    return Object.fromEntries(entries.filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1] !== ""));
 }
 
 function list(value: unknown): unknown[] {
@@ -227,7 +237,12 @@ export function readAgentDetail(raw: unknown): AgentDetail {
         description: text(item.description),
         instruction: typeof item.instruction === "string" ? item.instruction : "",
         runtime: profile
-            ? { profile, model: text(runtime?.model_name), settings: object(runtime?.settings) ?? {} }
+            ? {
+                profile,
+                model: text(runtime?.model_name),
+                settings: object(runtime?.settings) ?? {},
+                selections: stringValues(runtime?.config_selections),
+            }
             : null,
         input: readSchema(item.input_schema),
         output: readSchema(item.output_schema),
@@ -287,6 +302,8 @@ export interface AgentDraft {
     reasoningEffort: string;
     /** Digits as typed; empty is unset. */
     maxOutputTokens: string;
+    /** A coding agent's option values; see `PinnedRuntime.selections`. */
+    selections: Record<string, string>;
     /** Carried, not edited: the settings live on it, so saving them writes it. */
     runtime: PinnedRuntime | null;
 }
@@ -303,6 +320,7 @@ export function draftOfAgent(detail: AgentDetail | null | undefined): AgentDraft
         instruction: detail?.instruction ?? "",
         reasoningEffort: typeof effort === "string" ? effort : "",
         maxOutputTokens: typeof cap === "number" ? String(cap) : "",
+        selections: { ...(detail?.runtime?.selections ?? {}) },
         runtime: detail?.runtime ?? null,
     };
 }
@@ -311,23 +329,33 @@ export interface AgentRuntimePatch {
     profile_id: string;
     model_name?: string;
     settings: Record<string, unknown> | null;
+    config_selections?: Record<string, string>;
 }
 
-/** The pinned runtime with the two edited settings written into it.
+/** The pinned runtime with the edited settings written into it.
  *
  *  Whole, because `agent_runtime` is replaced rather than merged on PATCH:
- *  the profile, the model and every other setting go back as they were. */
+ *  the profile, the model, every other setting and the agent's selections go
+ *  back as they were — leaving the selections out would clear them. */
 function runtimeWithSettings(runtime: PinnedRuntime, draft: AgentDraft): AgentRuntimePatch {
     const settings: Record<string, unknown> = { ...runtime.settings };
     delete settings.reasoning_effort;
     delete settings.max_output_tokens;
     if (draft.reasoningEffort) settings.reasoning_effort = draft.reasoningEffort;
     if (draft.maxOutputTokens.trim()) settings.max_output_tokens = Number(draft.maxOutputTokens.trim());
+    const selections = Object.fromEntries(Object.entries(draft.selections).filter(([, value]) => Boolean(value)));
     return {
         profile_id: runtime.profile,
         ...(runtime.model ? { model_name: runtime.model } : {}),
         settings: Object.keys(settings).length ? settings : null,
+        ...(Object.keys(selections).length ? { config_selections: selections } : {}),
     };
+}
+
+function sameSelections(a: Record<string, string>, b: Record<string, string>): boolean {
+    const live = (selections: Record<string, string>) => Object.entries(selections).filter(([, value]) => Boolean(value));
+    const left = live(a);
+    return left.length === live(b).length && left.every(([key, value]) => b[key] === value);
 }
 
 /** Only what changed. `description` is nullable on the API and `instruction`
@@ -348,7 +376,8 @@ export function agentChanges(before: AgentDraft, after: AgentDraft): {
     }
     const generation =
         after.reasoningEffort !== before.reasoningEffort ||
-        after.maxOutputTokens.trim() !== before.maxOutputTokens.trim();
+        after.maxOutputTokens.trim() !== before.maxOutputTokens.trim() ||
+        !sameSelections(before.selections, after.selections);
     if (generation && after.runtime) {
         patch.agent_runtime = runtimeWithSettings(after.runtime, after);
     }

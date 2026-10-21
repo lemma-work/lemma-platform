@@ -64,22 +64,44 @@ pub(crate) fn probe_version_within(
         .ok_or(VersionUnknown::Failed)
 }
 
+/// The version an agent printed, as Lemma records it: its first line, at most
+/// 128 characters.
+///
+/// The text is the agent's own, and nothing bounds it. Lemma stores it in a
+/// 128-character field and refused a harness report carrying a longer one --
+/// the whole report, every harness on the computer, over one agent that
+/// started printing a banner with its version.
+pub(crate) fn version_label(text: &str) -> String {
+    const LIMIT: usize = 128;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    line.chars().take(LIMIT).collect()
+}
+
 pub(crate) fn version_is_at_least(installed: &str, minimum: &str) -> bool {
     fn find_version(value: &str) -> Option<[u64; 3]> {
         value.split_whitespace().find_map(|token| {
             let token = token.trim_start_matches(|character: char| !character.is_ascii_digit());
-            let token = token
-                .split_once('-')
-                .map_or(token, |(version, _)| version)
-                .trim_end_matches(|character: char| {
-                    !character.is_ascii_digit() && character != '.'
-                });
+            // The version is the run of digits and dots; whatever follows it
+            // -- `-beta.3`, `+build.7`, `-a3815c0`, `)` -- is a suffix.
+            let end = token
+                .find(|character: char| !character.is_ascii_digit() && character != '.')
+                .unwrap_or(token.len());
+            let token = &token[..end];
+            // A missing patch is a zero: `2.4` is `2.4.0`, and an agent that
+            // starts printing two parts has not become older than its floor.
+            // One part alone is not read as a version -- `build 7` is not v7.
             let mut parts = token.split('.');
-            Some([
-                parts.next()?.parse().ok()?,
-                parts.next()?.parse().ok()?,
-                parts.next()?.parse().ok()?,
-            ])
+            let major = parts.next()?.parse().ok()?;
+            let minor = parts.next()?.parse().ok()?;
+            let patch = match parts.next() {
+                None | Some("") => 0,
+                Some(patch) => patch.parse().ok()?,
+            };
+            Some([major, minor, patch])
         })
     }
 

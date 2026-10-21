@@ -4,9 +4,9 @@ from uuid import UUID
 from collections.abc import Sequence
 from typing import List, Optional
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import load_only
+from sqlalchemy.orm import aliased, load_only
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.workflow.domain.ports import WorkflowRunRepository
@@ -63,14 +63,8 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
             "step_history": [s.model_dump(mode="json") for s in entity.step_history],
             "error": entity.error,
             "failed_node_id": entity.failed_node_id,
-            "started_at": (
-                entity.started_at.replace(tzinfo=None) if entity.started_at else None
-            ),
-            "completed_at": (
-                entity.completed_at.replace(tzinfo=None)
-                if entity.completed_at
-                else None
-            ),
+            "started_at": entity.started_at,
+            "completed_at": entity.completed_at,
         }
 
     async def create(self, run: WorkflowRunEntity) -> WorkflowRunEntity:
@@ -105,9 +99,13 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
             update(WorkflowRunModel)
             .where(WorkflowRunModel.id == run.id)
             .values(**self._to_dict(run))
+            # The row as written, in the same round trip: every advance ends in
+            # this update, and a second SELECT for it was one statement per step.
+            .returning(WorkflowRunModel)
+            .execution_options(populate_existing=True)
         )
-        await self.session.execute(stmt)
-        return await self.get(run.id)
+        model = (await self.session.execute(stmt)).scalar_one_or_none()
+        return self._to_entity(model) if model else None
 
     async def list_by_flow(
         self,
@@ -282,11 +280,36 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
     async def count_admitted(
         self, flow_id: UUID, *, excluding: UUID | None = None
     ) -> int:
-        """Runs of a workflow in progress, not counting any still queued to start."""
-        queued = select(WorkflowRunWaitModel.run_id).where(
+        """Runs of a workflow in progress, not counting any still queued to
+        start, nor any still on its entry form: nothing has run yet, and an
+        abandoned "Run now" form would otherwise hold a place until it expired
+        -- two of them wedged a workflow capped at two. Only the starter's own
+        form: one assigned to a member is work the run is waiting on, and
+        holds its place like any other step."""
+        # Its own alias: the outer count reads runs too, and an unaliased inner
+        # reference would correlate to that row instead of the wait's run.
+        entry = aliased(WorkflowRunModel)
+        on_entry_form = (
+            select(entry.id)
+            .where(
+                entry.id == WorkflowRunWaitModel.run_id,
+                # The only step so far is the form being waited on.
+                func.jsonb_array_length(entry.step_history) == 1,
+                entry.step_history[0]["node_id"].astext == WorkflowRunWaitModel.node_id,
+            )
+            .exists()
+        )
+        not_started = select(WorkflowRunWaitModel.run_id).where(
             WorkflowRunWaitModel.flow_id == flow_id,
-            WorkflowRunWaitModel.wait_type == WorkflowRunWaitType.QUEUED.value,
             WorkflowRunWaitModel.status == WorkflowRunWaitStatus.ACTIVE.value,
+            or_(
+                WorkflowRunWaitModel.wait_type == WorkflowRunWaitType.QUEUED.value,
+                and_(
+                    WorkflowRunWaitModel.wait_type == WorkflowRunWaitType.HUMAN.value,
+                    WorkflowRunWaitModel.assigned_pod_member_id.is_(None),
+                    on_entry_form,
+                ),
+            ),
         )
         stmt = (
             select(func.count())
@@ -296,7 +319,7 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
                 WorkflowRunModel.status.in_(
                     [WorkflowRunStatus.RUNNING.value, WorkflowRunStatus.WAITING.value]
                 ),
-                WorkflowRunModel.id.not_in(queued),
+                WorkflowRunModel.id.not_in(not_started),
             )
         )
         if excluding is not None:

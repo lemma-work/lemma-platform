@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import get_secret_cipher
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+from app.modules.agent_surfaces.tests.e2e.background_reads import background_read
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_surface,
@@ -299,8 +300,11 @@ async def test_telegram_native_polling_reaches_outbox_worker_and_provider(
     from app.core.config import settings as app_settings
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-    from app.modules.agent_surfaces.services.event_receiver_service import (
-        SurfaceEventReceiverService,
+    from app.modules.agent_surfaces.services.native_receiver_candidates import (
+        load_receiver_candidates,
+    )
+    from app.modules.agent_surfaces.services.telegram_polling_runner import (
+        TelegramPollingReceiverRunner,
     )
 
     monkeypatch.setattr(app_settings, "api_url", "http://localhost:8711")
@@ -344,12 +348,15 @@ async def test_telegram_native_polling_reaches_outbox_worker_and_provider(
         bot_token="e2e-native-polling-token",
     )
 
-    receiver = SurfaceEventReceiverService(
-        uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-        scan_interval_seconds=0.05,
-        redis_url=test_redis_url,
-    )
-    receiver_task = asyncio.create_task(receiver.run())
+    # What the bot's `surface.receiver` item runs: the candidate the
+    # deployment wants for this credential, polled by its runner.
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        candidates = await load_receiver_candidates(uow)
+    # The custom bot's own candidate (the deployment's shared bot is one too).
+    [candidate] = [
+        c for c in candidates if c.platform.value == "TELEGRAM" and c.surface_ids
+    ]
+    receiver_task = asyncio.create_task(TelegramPollingReceiverRunner(candidate).run())
     try:
         messages = await wait_for_messages(
             message_store,
@@ -362,8 +369,8 @@ async def test_telegram_native_polling_reaches_outbox_worker_and_provider(
         polls = message_store.get_all("TELEGRAM_GET_UPDATES")
         assert polls and any(item["count"] == 1 for item in polls)
     finally:
-        await receiver.stop()
-        await asyncio.wait_for(receiver_task, timeout=10)
+        receiver_task.cancel()
+        await asyncio.gather(receiver_task, return_exceptions=True)
 
     conversation = await _conversation_by_external_thread(
         authenticated_client,
@@ -573,7 +580,8 @@ async def test_slack_channel_attachment_and_history_are_persisted_via_worker(
     inbound = next(item for item in persisted if item["role"] == "user")
     metadata = inbound.get("metadata") or {}
     assert metadata["ingested_files"]
-    assert [item["text"] for item in metadata["channel_context"]] == [
+    shown = await background_read(metadata)
+    assert [line.text for line in shown.lines] == [
         "Thread root context",
         "Thread follow-up context",
     ]
@@ -592,8 +600,10 @@ async def test_slack_native_socket_receiver_acknowledges_and_replies_via_worker(
     _ = worker
     from app.core.config import settings as app_settings
     from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-    from app.modules.agent_surfaces.services.event_receiver_service import (
+    from app.modules.agent_surfaces.services.native_receiver_base import (
         NativeReceiverCandidate,
+    )
+    from app.modules.agent_surfaces.services.slack_socket_runner import (
         SlackSocketReceiverRunner,
     )
     from slack_sdk.socket_mode import aiohttp as socket_mode_module
@@ -1148,9 +1158,8 @@ async def test_teams_channel_mention_ingests_attachment_and_channel_context(
     inbound = next(item for item in persisted if item["role"] == "user")
     metadata = inbound.get("metadata") or {}
     assert metadata["ingested_files"]
-    assert metadata["channel_context"][0]["author"] == (
-        "Earlier Participant (other participant)"
-    )
+    shown = await background_read(metadata)
+    assert shown.lines[0].author == "Earlier Participant (other participant)"
 
 
 # Platform variation, not a distinct journey: same ingress -> conversation

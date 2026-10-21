@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import event, text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from app.core.infrastructure.db.connect_errors import translate_connect_errors
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.core.observability.connection_scope import attach_connection_scope_monitor
@@ -42,6 +43,12 @@ def json_serial(obj):
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
+#: Every time this code writes is UTC. Pinned per connection so that a naive
+#: value cast to ``timestamp with time zone`` is read as UTC whatever the
+#: server's or role's default zone is, rather than as that zone.
+SESSION_ZONE = {"timezone": "UTC"}
+
+
 def _build_connect_args() -> dict:
     """Build asyncpg connect_args with server-side session settings.
 
@@ -52,7 +59,7 @@ def _build_connect_args() -> dict:
     ``AsyncAdapt_asyncpg_connection`` that has no sync ``execute()`` method.
     """
     connect_args: dict = {}
-    server_settings: dict[str, str] = {}
+    server_settings: dict[str, str] = dict(SESSION_ZONE)
     idle_ms = int(settings.db_idle_in_transaction_timeout_seconds * 1000)
     if idle_ms > 0:
         server_settings["idle_in_transaction_session_timeout"] = str(idle_ms)
@@ -116,7 +123,7 @@ def get_engine():
     global engine
     if engine is None:
         engine_kwargs = {}
-        connect_args = {}
+        connect_args: dict[str, object] = {"server_settings": dict(SESSION_ZONE)}
         if settings.environment == "testing" and not settings.db_pool_in_testing:
             engine_kwargs["poolclass"] = NullPool
         else:
@@ -155,9 +162,53 @@ def get_engine():
         # monitor works under NullPool too (checkout/checkin still fire), which
         # is what lets the ordinary test suite catch a held connection without
         # needing a real pool.
+        translate_connect_errors(engine)
         attach_connection_scope_monitor(engine)
         watch_compiled_cache("primary", engine)
     return engine
+
+
+def create_dedicated_engine(url: str, *, pool_size: int, logging_name: str):
+    """A pooled engine of its own on the main database, for a component whose
+    connections must not compete with the rest of the process.
+
+    The work runtime bounds every connection it takes and sizes this pool to
+    that bound, which is a guarantee only while nothing else draws from the
+    same pool. Same serializer, server-side timeouts and instrumentation as the
+    primary engine, and the same pooling rule: never overflowing, and unpooled
+    under test unless DB_POOL_IN_TESTING asks for a pool.
+    """
+    pooling: dict[str, object] = {
+        "pool_size": pool_size,
+        "max_overflow": 0,
+        "pool_timeout": settings.db_pool_timeout_seconds,
+        "pool_recycle": settings.db_pool_recycle_seconds,
+        "pool_use_lifo": True,
+    }
+    if settings.environment == "testing" and not settings.db_pool_in_testing:
+        # As the primary engine does under test: parallel e2e workers each run
+        # a worker process, and idle pooled connections from every one of them
+        # add up past the test server's connection limit. The runtime's own
+        # semaphores still bound how many it opens at once.
+        pooling = {"poolclass": NullPool}
+    dedicated = create_async_engine(
+        url,
+        json_serializer=lambda obj: json.dumps(obj, default=json_serial),
+        pool_pre_ping=True,
+        connect_args=_build_connect_args(),
+        pool_logging_name=logging_name,
+        # SQLAlchemy's default, stated: the work runtime's own statements are a
+        # fixed set, and handler queries are the same shapes the primary sees.
+        query_cache_size=500,
+        **pooling,
+    )
+    if "pool_size" in pooling:
+        pool = dedicated.sync_engine.pool
+        event.listen(pool, "checkout", _pool_utilization_listener(pool))
+    translate_connect_errors(dedicated)
+    attach_connection_scope_monitor(dedicated)
+    watch_compiled_cache(logging_name, dedicated)
+    return dedicated
 
 
 def get_session_maker():

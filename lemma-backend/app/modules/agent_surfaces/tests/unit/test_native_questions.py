@@ -29,6 +29,7 @@ from app.modules.agent_surfaces.platforms.telegram.choice_cards import (
     OTHER_CALLBACK_VALUE,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfaceAdapter
+from app.modules.agent_surfaces.tests.fakes import answer_json, platform_http
 
 
 def _plan() -> SurfaceQuestionRenderPlan:
@@ -414,23 +415,8 @@ def _whatsapp_event() -> ParsedInboundSurfaceEvent:
 @pytest.mark.asyncio
 async def test_whatsapp_send_questions_uses_buttons_for_few_options():
     adapter = WhatsAppSurfaceAdapter()
-    captured = {}
 
-    async def _fake_post(self, url, json, headers):  # noqa: ANN001
-        captured["payload"] = json
-
-        class _Resp:
-            status_code = 200
-
-            def json(self):
-                return {"messages": [{"id": "wamid.1"}]}
-
-            def raise_for_status(self):
-                return None
-
-        return _Resp()
-
-    with patch("httpx.AsyncClient.post", new=_fake_post):
+    with platform_http(answer_json({"messages": [{"id": "wamid.1"}]})) as http:
         ok = await adapter._render_choices(
             credentials={"access_token": "t", "phone_number_id": "pn1"},
             event=_whatsapp_event(),
@@ -438,7 +424,7 @@ async def test_whatsapp_send_questions_uses_buttons_for_few_options():
         )
 
     assert ok is True
-    interactive = captured["payload"]["interactive"]
+    interactive = http.json_of(http.requests[-1])["interactive"]
     assert interactive["type"] == "button"
     buttons = interactive["action"]["buttons"]
     assert [b["reply"]["title"] for b in buttons] == ["US", "CA"]

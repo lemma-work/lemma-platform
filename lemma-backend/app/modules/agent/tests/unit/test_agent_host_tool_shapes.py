@@ -399,3 +399,77 @@ class TestUsage:
 
         assert not any(e.type is AgentEventType.USAGE for e in out)
         assert [e.data["status"] for e in out] == ["session_update"]
+
+
+def _notice(data: dict[str, object]) -> dict[str, object]:
+    """The notice's own keys, without the envelope metadata every event has."""
+    return {
+        key: data[key]
+        for key in ("status", "notice", "detail", "option")
+        if key in data
+    }
+
+
+class TestConfigUpdateNotices:
+    """A host's ``config_update`` reaches the client as one flat notice.
+
+    The SDK reads ``detail`` as the sentence to show and the kind from
+    ``notice``; the whole host payload under ``detail`` used to read as no
+    notice at all.
+    """
+
+    def test_a_refused_selection_is_a_flat_notice_with_its_sentence(self) -> None:
+        out = _normalizer().normalize(
+            _event(
+                1,
+                AgentHostEventType.CONFIG_UPDATE,
+                {
+                    "status": "selection_unavailable",
+                    "option": "effort",
+                    "requested_value": "max",
+                    "detail": "The profile asks for effort = max, but no.",
+                },
+            )
+        )
+
+        assert [_notice(event.data) for event in out] == [
+            {
+                "status": "config_update",
+                "notice": "selection_unavailable",
+                "detail": "The profile asks for effort = max, but no.",
+                "option": "effort",
+            }
+        ]
+
+    def test_a_model_notice_names_its_kind_and_no_option(self) -> None:
+        (event,) = _normalizer().normalize(
+            _event(
+                1,
+                AgentHostEventType.CONFIG_UPDATE,
+                {
+                    "status": "model_unavailable",
+                    "requested_model": "opus",
+                    "detail": "This agent no longer offers opus.",
+                },
+            )
+        )
+
+        assert event.type is AgentEventType.STATUS
+        assert event.data["notice"] == "model_unavailable"
+        assert event.data["detail"] == "This agent no longer offers opus."
+        assert "option" not in event.data
+
+    def test_a_plain_option_change_has_an_empty_detail_not_an_object(self) -> None:
+        (event,) = _normalizer().normalize(
+            _event(
+                1,
+                AgentHostEventType.CONFIG_UPDATE,
+                {"kind": "config_options", "config_options": [{"id": "effort"}]},
+            )
+        )
+
+        assert _notice(event.data) == {
+            "status": "config_update",
+            "notice": "config_options",
+            "detail": "",
+        }

@@ -30,10 +30,21 @@ _BREAKER_SCAN_LIMIT = BREAKER_STREAK_SCAN_LIMIT
 FILTER_UNAVAILABLE = "ScheduleFilterUnavailable"
 #: ... and when the deployment has no decision provider to ask at all.
 FILTER_NOT_CONFIGURED = "ScheduleFilterNotConfigured"
-#: Filter failures that belong to the deployment rather than to any schedule:
-#: the breaker passes over them. A spent budget, an event too large to judge
-#: and an invalid filter are the pod's or the schedule's, and are counted.
-DEPLOYMENT_FILTER_FAILURES = (FILTER_UNAVAILABLE, FILTER_NOT_CONFIGURED)
+#: ... and when its question was interrupted (a crash, a lost lease, the
+#: database unreachable) every time it was asked.
+FILTER_INTERRUPTED = "ScheduleFilterInterrupted"
+#: A fire the release found waiting from before its live window and did not
+#: start (migration 0055): the upgrade's doing, not the schedule's.
+NOT_STARTED_BEFORE_UPGRADE = "ScheduleNotStartedBeforeUpgrade"
+#: Failures that belong to the deployment rather than to any schedule: the
+#: breaker passes over them. A spent budget, an event too large to judge and an
+#: invalid filter are the pod's or the schedule's, and are counted.
+DEPLOYMENT_FAILURES = (
+    FILTER_UNAVAILABLE,
+    FILTER_NOT_CONFIGURED,
+    FILTER_INTERRUPTED,
+    NOT_STARTED_BEFORE_UPGRADE,
+)
 
 
 class ScheduleRunRepository:
@@ -402,7 +413,8 @@ class ScheduleRunRepository:
         none, is the deployment's failure, not the schedule's: no owner can fix
         it, and counting it would deactivate every filtered schedule at once.
         The operator hears of it instead, from
-        ``schedule.filter.dead_lettered.degraded``.
+        ``schedule.filter.dead_lettered.degraded``. So is a fire the upgrade found
+        waiting too long to start, and failed rather than replayed.
         """
         rows = (
             await self.session.execute(
@@ -413,7 +425,7 @@ class ScheduleRunRepository:
                     ScheduleRun.status != ScheduleRunStatus.FILTERED.value,
                     or_(
                         ScheduleRun.error_type.is_(None),
-                        ScheduleRun.error_type.not_in(DEPLOYMENT_FILTER_FAILURES),
+                        ScheduleRun.error_type.not_in(DEPLOYMENT_FAILURES),
                     ),
                 )
                 .order_by(ScheduleRun.completed_at.desc(), ScheduleRun.id.desc())
@@ -472,7 +484,7 @@ class ScheduleRunRepository:
             schedule_id=schedule_id,
             user_id=source.user_id or fallback_user_id,
             source_event_id=f"redrive:{source.id}",
-            status=ScheduleRunStatus.RECEIVED.value,
+            status=ScheduleRunStatus.PROCESSING.value,
             attempts=0,
             target_kind=source.target_kind,
             target_run_id=str(uuid7()),
@@ -521,10 +533,13 @@ class ScheduleRunRepository:
 def _as_utc(value: datetime | None) -> datetime | None:
     """A target's finish time, aware.
 
-    A workflow run keeps its times in a column without a zone, so the time on
-    its terminal event is naive -- UTC wall time. Left naive, comparing it with
-    the recorded one raised, and storing it let the database read it in the
-    server's local zone.
+    Workflow run times are stored with their zone now (migration 0052), so a
+    terminal event published since carries an aware ``completed_at``. Events
+    published before it carried a naive one -- UTC wall time -- and those
+    outlive the deploy: a stream entry still pending in the consumer group, an
+    older replica publishing during the rollout. Left naive, comparing one
+    with the recorded time raised, and storing it let the database read it in
+    the server's local zone. So a naive time is still read as UTC here.
     """
     if value is None or value.tzinfo is not None:
         return value

@@ -10,17 +10,24 @@ def _routers():
     return [workflow, workflow_run]
 
 
-def _event_routers():
-    # handlers.py also defines 4 streaq tasks/crons that register on import.
-    from app.modules.workflow.events.handlers import router
+def _register_work() -> None:
+    # Resume, expire and start (FAST), decide and notify (JOB), and the
+    # `FunctionRunFinished` subscription. Every process: the API advances runs
+    # and so writes these, and emits the facts the subscription fans out.
+    import app.modules.workflow.events.run_work  # noqa: F401
+    import app.modules.workflow.events.step_jobs  # noqa: F401
 
-    return [router]
+    # An AGENT step resumes from the agent's `AgentRunFinished`, written in the
+    # transaction that finished the run (API on a stop, worker otherwise).
+    import app.modules.workflow.events.agent_resume_work  # noqa: F401
+
+    # Every process: what answering a form on its line in a channel does
+    # (``answers_for("wf")``) -- the API takes the answer.
+    import app.modules.workflow.infrastructure.form_questions  # noqa: F401
 
 
-def _register_streaq() -> None:
-    # The job that asks a decision step's question; `handlers.py`, imported by
-    # `_event_routers`, carries the module's other tasks.
-    import app.modules.workflow.events.decision_task  # noqa: F401
+def _register_periodic_work() -> None:
+    import app.modules.workflow.events.periodic_work  # noqa: F401
 
 
 def _resource_names():
@@ -48,11 +55,6 @@ module = LemmaModule(
     name="workflow",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
-    register_streaq=_register_streaq,
-    stream_groups=(
-        ("function_run_events", "workflow-function-events"),
-        ("agent_events", "workflow-agent-events"),
-        ("schedule_events", "workflow-schedule-events"),
-    ),
+    register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
 )

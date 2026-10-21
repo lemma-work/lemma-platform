@@ -2,9 +2,9 @@
 
 Deliberately shape-identical to :mod:`app.modules.workflow.domain.wait` — same
 statuses, same ``external_ref`` discipline, same "the wait row is the source of
-truth, never the context" rule. The reconciliation sweep for lost timers is the
-same sweep, so the two staying alike is worth more than either being
-individually tidier.
+truth, never the context" rule. Both are driven by work items written with the
+row, so the two staying alike is worth more than either being individually
+tidier.
 
 A conversation wait is *not* a schedule. A schedule is a standing rule someone
 configured; this is one suspended execution that will resolve exactly once.
@@ -23,18 +23,18 @@ from app.core.domain.aggregate import AggregateRoot
 class AgentWaitType(str, Enum):
     """What the conversation is waiting on.
 
-    Every member is armed with a ``scheduled_at`` and swept, whatever else
-    resolves it: the timer is what guarantees the agent comes back at all, and a
+    Every member is armed with a work item due at ``scheduled_at``, whatever
+    else resolves it: the timer is what guarantees the agent comes back at all, and a
     condition only resolves the wait sooner. For TIME the timer *is* the
     condition; for the others it is the deadline.
 
     How each is answered differs, and that is the only interesting difference:
-    SUBAGENT is pushed (the child's ``AgentRunCompletedEvent`` already flows on
-    the agent event stream), while PROCESS is pulled, because nothing anywhere
+    SUBAGENT is pushed (the child's finished run resolves it), while PROCESS
+    is pulled, because nothing anywhere
     publishes a process exit -- the E2B watcher records it into Redis and tells
     nobody, and docker/lemma_local keep it inside the sandbox. A pulled wait
-    re-arms its own ``scheduled_at`` between checks, so the poll costs a Redis
-    read on a worker rather than a model round trip on the agent's turn.
+    re-arms its own item between checks, so the poll costs a Redis read on a
+    worker rather than a model round trip on the agent's turn.
 
     Waking on a record change was scoped out deliberately: reacting to a row
     changing is what a DATASTORE trigger is for, and a second path to the same
@@ -59,9 +59,9 @@ class AgentWaitStatus(str, Enum):
     ACTIVE = "ACTIVE"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
-    # Terminal, and the only one nobody asked for: the wake kept raising. Without
-    # it a wait whose wake can never succeed stays ACTIVE and past-due forever,
-    # and the sweep retries it every five minutes for the life of the deployment.
+    # Terminal, and the only one nobody asked for: the wake kept raising until
+    # its work item went dead. Without it a wait whose wake can never succeed
+    # stays ACTIVE and past-due forever.
     FAILED = "FAILED"
 
 
@@ -69,16 +69,16 @@ class AgentWaitWakeReason(str, Enum):
     """Why the agent woke. Handed back to the model in the tool return.
 
     ANSWERED is deliberately a *reason*, not a second :class:`AgentWaitType`.
-    The wait is still a timer — armed with a ``scheduled_at``, swept by the same
-    reconciliation — and the timer stays the guarantee that the agent comes back
-    at all. An answer landing only resolves that timer sooner. Modelling it as a
-    wait type would mean a wait that resolves on two unrelated conditions, and
-    every sweep and claim path would have to learn about the second one.
+    The wait is still a timer — armed with a work item due at ``scheduled_at``
+    — and the timer stays the guarantee that the agent comes back at all. An
+    answer landing only resolves that timer sooner. Modelling it as a wait type
+    would mean a wait that resolves on two unrelated conditions, and every
+    timer path would have to learn about the second one.
     """
 
     TIMER = "TIMER"
     CANCELLED = "CANCELLED"
-    # Everything this conversation asked a person with `message_user` has been
+    # Everything this conversation asked a person with `channel_post` has been
     # answered. Unlike TIMER this *does* say something happened.
     ANSWERED = "ANSWERED"
     # The thing being waited on reached a terminal state. Says only that it
@@ -159,7 +159,7 @@ class WaitSpec(BaseModel):
     woke_because: Annotated[
         AgentWaitWakeReason | None, _lenient(AgentWaitWakeReason)
     ] = None
-    #: The error that made the sweep give up on waking it.
+    #: Why its work item gave up on waking it.
     abandoned_because: str | None = None
 
     def to_json(self) -> dict[str, Any]:
@@ -179,9 +179,6 @@ class AgentConversationWaitEntity(AggregateRoot):
 
     external_ref: str | None = None
     scheduled_at: datetime | None = None
-    # Sweep bookkeeping. Incremented in its own transaction *before* each retry,
-    # so it survives the rollback of the attempt it is counting.
-    wake_attempts: int = 0
 
     # The wait request verbatim, plus whatever the resolution recorded. Stored
     # as JSON; read it through ``wait_spec``.
@@ -197,19 +194,15 @@ class AgentConversationWaitEntity(AggregateRoot):
     ) -> None:
         """Push a polled wait's next check out, without waking the agent.
 
-        ``wake_attempts`` is reset because it counts *failed wakes*, and a
-        re-arm is a successful check that found the target still running. A
-        PROCESS wait checks every few seconds for up to an hour, so a counter
-        that only ever climbed would cross ``MAX_WAKE_ATTEMPTS`` on three
-        unrelated transient errors spread across that hour and abandon a wait
-        whose target was perfectly healthy.
+        Each check is its own work item, so its failures are counted against
+        that item alone: a healthy wait polled for an hour does not accumulate
+        unrelated transient errors into an abandonment.
 
         ``unreadable_since`` is carried for as long as the target keeps not
         answering and cleared the first time it does, so only an unbroken run
         of failed reads can wake the agent with TARGET_UNREADABLE.
         """
         self.scheduled_at = next_at
-        self.wake_attempts = 0
         spec = self.wait_spec
         self.spec = spec.model_copy(
             update={
@@ -233,7 +226,7 @@ class AgentConversationWaitEntity(AggregateRoot):
         )
 
     def abandon(self, error: str) -> bool:
-        """Give up after too many failed wakes. The conversation stays WAITING.
+        """Give up after its work item ran out of attempts. Stays WAITING.
 
         Deliberately not a wake: we could not synthesize a tool return, so there
         is nothing truthful to hand the model. The row records why, and the error

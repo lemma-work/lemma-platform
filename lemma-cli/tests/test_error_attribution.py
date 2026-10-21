@@ -158,7 +158,6 @@ def test_the_error_boundary_prints_the_status_once():
         (401, "lemma auth login"),
         (403, "permission"),
         (404, "lemma config show"),
-        (409, "already exists"),
         (429, "Wait"),
     ],
 )
@@ -181,6 +180,43 @@ def test_both_error_paths_name_a_next_step(status, hint):
 
     assert hint in buffer.getvalue()
     assert hint in humanize_error(exc)
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("AGENT_ALREADY_EXISTS", "Agent exists"),
+        ("POD_CONFLICT", "Pod with name 'x' already exists in this organization"),
+        ("ORGANIZATION_NAME_CONFLICT", "Taken"),
+    ],
+)
+def test_a_duplicate_409_says_pick_another_name(code, message):
+    from lemma_cli.cli_core.state import humanize_error
+    from lemma_sdk.errors import api_error
+
+    assert "already exists" in humanize_error(api_error(409, message, code=code))
+
+
+def test_a_409_that_is_not_a_duplicate_shows_the_servers_words_only():
+    """Answering a closed question is a 409 too. "Something with that name
+    already exists" sent the user looking for a name; the server's message
+    already said what was wrong."""
+    import contextlib
+    import io
+
+    from lemma_cli.cli_core.errors import report_cli_error
+    from lemma_cli.cli_core.state import humanize_error
+    from lemma_sdk.errors import api_error
+
+    exc = api_error(409, "This question is not waiting any more", code="HTTP_409")
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stderr(buffer):
+        report_cli_error(exc)
+
+    for printed in (buffer.getvalue(), humanize_error(exc)):
+        assert "This question is not waiting any more" in printed
+        assert "name" not in printed
 
 
 def test_a_delete_that_needs_approval_says_so_not_that_a_role_is_missing():

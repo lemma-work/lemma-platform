@@ -12,4 +12,6 @@ mod run_environment_tests;
 mod scoped_mcp_approval_tests;
 mod session;
 mod setup_deadline_tests;
+mod start_gate_tests;
 mod steering_tests;
+mod tolerance_tests;

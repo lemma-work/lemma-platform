@@ -100,7 +100,7 @@ SESSION_OPENERS = re.compile(
         # block was invisible to every rule -- 20+ production sites, including
         # ones that hold an open write transaction across an HTTP download.
         | SessionUnitOfWorkFactory
-        # `async with ctx.uow() as uow:` is the standard form in streaq tasks,
+        # `async with ctx.uow() as uow:` is the standard form in worker lifespans,
         # so omitting it left the entire worker surface unchecked. Deliberately
         # NOT bare `uow`: `async with uow:` re-enters a unit of work that is
         # already open, and `SqlAlchemyUnitOfWork.__aenter__` returns `self`, so
@@ -694,7 +694,8 @@ def _released_spans(
     Several places commit on purpose before a slow call, and say so:
     `create_auth_config` -- "Nothing is written yet, so this only hands the
     pooled connection back -- which is the point" -- plus `update_install`,
-    `notification_service.deliver` and `skill_loader._download_text_file`.
+    `notification_dispatch.send_on_first_channel` and
+    `skill_loader._download_text_file`.
     Without reading statement order every one of those looks like a hold, and so
     does every caller of them, two frames up.
 
@@ -1061,7 +1062,7 @@ class SessionScopeChecker(ast.NodeVisitor):
         the pool, and several places here do exactly that on purpose before a
         slow call. `create_auth_config` and `update_install` both commit with a
         comment saying the network work must not be waited on holding one, and
-        `notification_service` commits immediately before it sends. Read without
+        `notification_dispatch` commits immediately before it sends. Read without
         statement order those are indistinguishable from a hold, and reporting
         them would mean either baselining correct code or "fixing" it into
         something worse.

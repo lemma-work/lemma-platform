@@ -2,7 +2,7 @@
 
 Six operations, replacing `app/composition/agent_surface_runtime.py`. That file
 existed because `agent` importing `agent_surfaces` would have closed a loop; the
-loop is cut (see `contracts/notifications.py`), so this is an ordinary contract
+loop is cut, so this is an ordinary contract
 and can say what it takes and returns. Every signature on the shim was `object`
 or `list[object]` -- not because the types were unknown, but because naming them
 in the composition root would have put a third module's paths into `agent`'s
@@ -138,7 +138,7 @@ async def report_approved_action_failed(
     from sqlalchemy.exc import SQLAlchemyError
 
     from app.modules.agent_surfaces.composition import build_surface_egress
-    from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+    from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 
     try:
         async with uow_factory() as uow:
@@ -146,13 +146,41 @@ async def report_approved_action_failed(
                 conversation_id=conversation_id,
                 message=APPROVED_ACTION_FAILED_NOTICE,
             )
-    except (SQLAlchemyError, RedisError, *PLATFORM_TRANSPORT_ERRORS):
+    except (SQLAlchemyError, RedisError, *platform_transport_errors()):
         logger.warning(
             "agent_surfaces.egress.approval_failure_notice_failed.degraded",
             conversation_id=str(conversation_id),
             exc_info=True,
         )
         return False
+
+
+async def retire_cards_answered_in_lemma(
+    *,
+    conversation_id: UUID,
+    tool_call_id: str,
+    uow_factory: UnitOfWorkFactory | None = None,
+) -> None:
+    """Take the buttons off the platform cards of a pause answered in Lemma.
+
+    For the web app's decision endpoint, once the decision has committed: a
+    tap and a typed reply retire their own cards, and an answer given in the
+    web app reaches neither path. The cards then read "Answered." Nothing for
+    a conversation that is not on a platform. Never raises.
+    """
+    from app.core.infrastructure.db.session import get_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent_surfaces.composition import build_surface_egress
+    from app.modules.agent_surfaces.services.card_retirement import (
+        retire_cards_answered_in_lemma as retire,
+    )
+
+    await retire(
+        uow_factory=uow_factory or SessionUnitOfWorkFactory(get_session_maker()),
+        egress_factory=build_surface_egress,
+        conversation_id=conversation_id,
+        tool_call_ids=[tool_call_id],
+    )
 
 
 def build_progress_observer(
@@ -191,4 +219,5 @@ __all__ = [
     "hold_display_for_one_reply",
     "parse_surface_event_metadata",
     "report_approved_action_failed",
+    "retire_cards_answered_in_lemma",
 ]

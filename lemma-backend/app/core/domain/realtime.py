@@ -23,6 +23,16 @@ class RealtimeChannel(Protocol):
         """Publish a transient message to all current subscribers."""
         ...
 
+    async def subscriber_count(self, channel: str) -> int:
+        """How many subscriptions ``channel`` has across every process, now.
+
+        For a publisher whose message costs more to build than to send: with
+        nobody listening it can skip the work. A subscriber that arrives just
+        after a zero is not owed the message -- realtime carries no delivery
+        guarantee, and its readers poll or snapshot on connect.
+        """
+        ...
+
     def subscribe(
         self, channels: Sequence[str]
     ) -> AbstractAsyncContextManager[AsyncIterator[str | bytes]]:

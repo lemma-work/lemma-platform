@@ -11,6 +11,11 @@ from harness.steps.datastore import column
 
 pytestmark = [journey("Agents and conversations"), capability("Define an agent")]
 
+# The pod tools that read a table's rows. A table grant implies both, and the
+# model picks whichever suits the question. Listing the tables (`pod_tables`)
+# is not reading them, so it does not count.
+TABLE_READS = frozenset({"pod_get_records", "pod_query"})
+
 
 @pytest.fixture
 async def pod(world):
@@ -229,24 +234,37 @@ async def test_a_data_grant_brings_its_own_tools(pod):
         with_agent=agent["name"],
         saying=(f"Read the {table['name']} table and tell me what rows are in it."),
     )
-    await alice.waits_for_the_run_to_settle(conversation=conversation, in_pod=the_pod)
+    settled = await alice.waits_for_the_run_to_settle(
+        conversation=conversation, in_pod=the_pod
+    )
 
-    # The call and its return are two messages; only the return carries the
-    # result, which is the half that says whether the tool actually ran.
     messages = await alice.messages_in(conversation, in_pod=the_pod)
-    returned = next(
-        (
-            message["tool_result"]
-            for message in messages
-            if message.get("tool_name") == "pod_get_records"
-            and isinstance(message.get("tool_result"), dict)
-        ),
-        None,
+    # A run that died says nothing about which tools the agent had. Report it
+    # as the failure it is, not as missing tools.
+    replied = any(message.get("role") == "assistant" for message in messages)
+    run_status = str(settled.get("last_run_status") or "").upper()
+    assert replied and run_status != "FAILED", (
+        f"the run failed before the agent could answer "
+        f"(status {settled.get('last_run_status')!r}): "
+        f"{settled.get('last_run_error')!r} "
+        f"[{settled.get('last_run_error_code')!r}]"
     )
-    assert returned is not None, (
-        f"the agent never got the pod tools its grant implies: {messages}"
+
+    # Any of the table reads proves the grant brought the tools with it — the
+    # model chooses which one to reach for. The call and its return are two
+    # messages; only the return carries the result, which is the half that
+    # says whether the tool actually ran.
+    returns = [
+        message["tool_result"]
+        for message in messages
+        if message.get("tool_name") in TABLE_READS
+        and isinstance(message.get("tool_result"), dict)
+    ]
+    assert returns, (
+        f"the agent never used the pod tools its grant implies: "
+        f"{[message.get('tool_name') for message in messages]}"
     )
-    assert returned.get("success") is True, returned
+    assert any(returned.get("success") is True for returned in returns), returns
 
 
 @scenario("An agent that declares nothing can still plan its work")

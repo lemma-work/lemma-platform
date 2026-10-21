@@ -760,12 +760,9 @@ def _instrument_libraries() -> None:
     # the stable conventions, so the process was describing the same calls under
     # two names and two schemas.
     #
-    # ``http``, not ``http/dup``. ``dup`` was the migration
-    # step: it emitted both vocabularies so the dashboards could move at their
-    # own pace. They have — every inbound-latency panel reads
-    # ``http.server.request.duration`` now — so the superseded
-    # ``http.server.duration`` (26 series, still being paid for) can stop. The
-    # old series going stale silently is the failure this avoids.
+    # ``http``, not ``http/dup``: ``dup`` was the migration step, emitting both
+    # vocabularies until every inbound-latency panel read the stable
+    # ``http.server.request.duration``, which they now do.
     #
     # ``setdefault`` so a deployment can pin either behaviour itself.
     os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "http")
@@ -773,10 +770,13 @@ def _instrument_libraries() -> None:
     from opentelemetry.instrumentation.aiohttp_client import (
         AioHttpClientInstrumentor,
     )
-    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+    from opentelemetry.instrumentation import httpx as otel_httpx
 
     AioHttpClientInstrumentor().instrument()
-    HTTPXClientInstrumentor().instrument()
+    otel_httpx.HTTPXClientInstrumentor().instrument()
+    # httpx2 is its own package, which the httpx instrumentation does not
+    # reach; the model provider SDKs are built on it.
+    otel_httpx.HTTPX2ClientInstrumentor().instrument()
     _libraries_instrumented = True
 
 

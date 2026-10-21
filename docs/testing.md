@@ -47,8 +47,8 @@ tests use `httpx.ASGITransport`, which hands a request straight to the
 application object. That is fast, and it means those tests **never run the
 application's lifespan** — the fixture's own docstring says so. Everything in
 `app.py::lifespan` and every module's `api_lifespans` — the thread pool, the
-connection-scope monitor, analytics, SuperTokens, the job queue, the message bus
-— is dark to them. A green module-e2e run does not imply a bootable system.
+connection-scope monitor, analytics, SuperTokens, the realtime channels — is
+dark to them. A green module-e2e run does not imply a bootable system.
 Scenarios boot one.
 
 The same goes for the wire itself: body-size limits that deliberately do not
@@ -68,7 +68,7 @@ way a scenario says, do not edit the scenario.
 
 | Lane | Command | Runs |
 |---|---|---|
-| Backend unit | `make test-backend-unit` | Every push that touches the backend, via `e2e.yml`. **Required**, through `Backend E2E passed`. |
+| Backend unit | `make test-backend-unit` | Every push that touches the backend, via `e2e.yml`. **Required**, through `Backend E2E passed`. Runs on four xdist workers (`UNIT_WORKERS`; `0` is serial), so a unit test may not share mutable state with another process: the one suite that needs Postgres gets a database per worker. |
 | Backend e2e | `make test-e2e-fast` | Every push that touches the backend, via `e2e.yml`. **Required**, as one aggregated check. |
 | Backend + Agent Host | `make desktop-agent-host-e2e` | Backend, frontend, TypeScript SDK or desktop changes, in Desktop contracts CI. **Required.** Builds the Rust host and checks real HTTP streaming and disconnect recovery with a scripted provider, host execution under Seatbelt (macOS only), and chaos: the backend killed, the host killed and the link dropped mid-answer, each run still ending once with every event delivered once. |
 | Chat + Agent Host | `make desktop-agent-host-browser-e2e` | Same required job. Real web chat, streaming, Stop, concurrent approvals, tool approval/denial, provider failure, disconnect, and transcript reload driven by JSON ACP fixtures; no provider account. |
@@ -356,6 +356,58 @@ null` so the weaker check knows to stand aside.
 product is wrong, the finding goes in [`issues.md`](../issues.md) with a `DEV-`
 id, the promise moves to `gap`, and the scenario is marked
 `xfail(strict=True)` so the build turns red the moment somebody fixes it.
+
+---
+
+### Driving the work runtime in-process
+
+A module e2e test that claims and runs work items itself (`run_until_idle`,
+`make_due`, `dispatcher_for`) shares its database with the session's real
+worker subprocess whenever another module in the same pytest process started
+one, and the worker would take the item first. Mark such a module
+`pytestmark = [..., pytest.mark.drives_work]`: the root `conftest.py` then stops
+every registered session worker between transactions for each of its tests and
+resumes it afterwards (`app/modules/test_support/e2e/worker_hold.py`). A test
+that needs the real worker takes `worker` instead and must not carry the
+marker. `test_drives_work_contract.py` fails any in-process driver left
+unmarked, because the race only shows when a shard happens to co-locate the two.
+
+A test that asserts a domain event was committed takes the `committed_events`
+fixture (`app/modules/test_support/e2e/committed_events.py`): committed events
+go only to the in-process after-commit sink, so there is no table to read them
+from. It sees what this process committed — an in-process request, not the
+worker subprocess.
+
+## Iterating on module e2e tests locally
+
+A module e2e run starts Postgres, Redis and SuperTokens before its first test,
+and removes them after its last. When you are rerunning one test or one module
+while you work, keep them running between runs instead:
+
+```bash
+cd lemma-backend
+LEMMA_E2E_REUSE=1 uv run pytest app/core/tests/e2e/test_work_claim_e2e.py
+make e2e-reuse-down   # stop and remove them when you are done
+```
+
+What stays and what does not:
+
+- **The containers stay**, named per checkout, so two worktrees never share
+  them. They are labelled so the end-of-session sweep leaves them alone.
+- **The databases do not.** Each session gets new ones: the app database is
+  cloned from a schema template (rebuilt whenever the models change), the
+  datastore database is created empty, and the session's Redis index is
+  flushed. Tests see what a cold run gives them. The previous session's
+  databases are dropped in the background.
+- **One session at a time per checkout.** A second session started while one
+  is running in the same checkout notices, and runs cold on its own
+  containers rather than recreating the first one's databases.
+- **SuperTokens keeps its users** between sessions. Tests sign up with unique
+  addresses, so nothing depends on it starting empty.
+
+CI never sets `LEMMA_E2E_REUSE`, so what gates a merge is unchanged. To see
+what it saves on your machine, time one test with and without it — `pytest
+--durations=5` splits setup from the test body.
 
 ---
 

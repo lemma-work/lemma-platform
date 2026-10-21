@@ -235,28 +235,27 @@ class VisitorSessionRepository:
         )
         return list(result.scalars())
 
-    async def contact_for_conversation(
-        self, conversation_id: UUID
-    ) -> tuple[bool, UUID | None]:
-        """Whether a session leads to this conversation, and the contact it names."""
-        row = (
-            await self.session.execute(
-                select(VisitorSessionModel.contact_id)
-                .where(VisitorSessionModel.conversation_id == conversation_id)
-                .limit(1)
-            )
-        ).first()
-        return (False, None) if row is None else (True, row.contact_id)
+    async def repoint_contact(self, *, merged_id: UUID, survivor_id: UUID) -> None:
+        """Sessions that named a contact now merged name the one it became."""
+        await self.session.execute(
+            update(VisitorSessionModel)
+            .where(VisitorSessionModel.contact_id == merged_id)
+            .values(contact_id=survivor_id)
+        )
 
-    async def leads_to(self, conversation_id: UUID) -> bool:
-        return bool(
-            await self.session.scalar(
-                select(
-                    select(VisitorSessionModel.id)
-                    .where(VisitorSessionModel.conversation_id == conversation_id)
-                    .exists()
-                )
+    async def name_contact(self, session_id: UUID, *, contact_id: UUID) -> None:
+        """The session's browser is this contact, without vouching for anything.
+
+        Unlike ``identify`` the strength and secret stay: an anonymous visitor
+        who wrote something is a contact the pod can name, and still anonymous.
+        """
+        await self.session.execute(
+            update(VisitorSessionModel)
+            .where(
+                VisitorSessionModel.id == session_id,
+                VisitorSessionModel.contact_id.is_(None),
             )
+            .values(contact_id=contact_id)
         )
 
     async def latest_for_contact(

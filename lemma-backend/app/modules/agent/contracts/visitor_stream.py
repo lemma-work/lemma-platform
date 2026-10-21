@@ -6,7 +6,10 @@ visitor on a web page may see none of that. This is the same rule
 ``visible_messages`` applies to history, applied to the live frames: the answer's
 text as it is written, a "typing" signal while the run works on anything else,
 the finished message, fields the agent filled on the visitor's form, and
-"done".
+"done" -- after an "error" frame when the run failed, which says only that a
+person will answer them, never the run's own reason (a provider's words can
+quote the request). The contact's channel has asked for that person
+(``services.contact_run_failures``).
 
 Every frame is translated rather than filtered, so a field added to the
 member's frames later reaches no visitor by accident.
@@ -30,7 +33,12 @@ from app.modules.agent.infrastructure.models.conversation import AgentRunModel
 from app.modules.agent.services.realtime import conversation_channel
 from app.modules.agent.tools.form_tools import FILL_FORM_TOOL
 
-__all__ = ["VisitorFrame", "visitor_frame", "visitor_frames"]
+__all__ = [
+    "COULD_NOT_ANSWER_VISITOR",
+    "VisitorFrame",
+    "visitor_frame",
+    "visitor_frames",
+]
 
 #: One frame as the visitor's page receives it.
 type VisitorFrame = dict[str, object]
@@ -38,8 +46,15 @@ type VisitorFrame = dict[str, object]
 TYPING: VisitorFrame = {"type": "typing"}
 DONE: VisitorFrame = {"type": "done"}
 RESET: VisitorFrame = {"type": "reset"}
+#: What a visitor reads when the run answering them failed.
+COULD_NOT_ANSWER_VISITOR = (
+    "Sorry, I couldn't answer that just now. Someone from the team will get "
+    "back to you here."
+)
+ERROR: VisitorFrame = {"type": "error", "text": COULD_NOT_ANSWER_VISITOR}
 
-_TERMINAL = frozenset({"completed", "error", "stopped"})
+_TERMINAL = frozenset({"completed", "stopped"})
+_FAILED = "error"
 #: Token lanes that are the run working rather than answering.
 _WORKING_TOKENS = frozenset({"thinking", "tool"})
 _STREAM_RESET = "stream_reset"
@@ -61,6 +76,8 @@ def visitor_frame(payload: Mapping[str, object]) -> VisitorFrame | None:
     if kind == "message":
         data = payload.get("data")
         return _message_frame(data) if isinstance(data, Mapping) else None
+    if kind == _FAILED:
+        return ERROR
     if kind in _TERMINAL:
         return DONE
     return None
@@ -174,6 +191,9 @@ async def visitor_frames(
                 frame = await _translate(raw, is_private)
                 if frame is not None:
                     yield frame
+                if frame is ERROR:
+                    # Still the end: a page that knows no "error" stops on it.
+                    yield DONE
         finally:
             if pending is not None:
                 pending.cancel()

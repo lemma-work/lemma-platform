@@ -26,7 +26,7 @@ from lemma_cli.cli_core.commands import (
     system,
     workflows,
 )
-from lemma_cli.cli_core.chat import iter_sse_events
+from lemma_cli.cli_core.sse import iter_sse_events
 from lemma_cli.cli_app.pod_bundle import (
     _normalize_function_payload,
     _sanitize_function_payload_for_import,
@@ -272,7 +272,12 @@ def test_pods_list_marks_selected_pod(monkeypatch):
         return fn(
             fake_client,
             SimpleNamespace(
-                config={"defaults": {"org_id": "org-1", "pod_id": "pod-2"}}
+                config={
+                    "defaults": {
+                        "org_id": "99999999-9999-9999-9999-999999999999",
+                        "pod_id": "pod-2",
+                    }
+                }
             ),
         )
 
@@ -281,7 +286,7 @@ def test_pods_list_marks_selected_pod(monkeypatch):
     result = runner.invoke(app, ["pods", "list", "--limit", "5"])
 
     assert result.exit_code == 0, result.stdout
-    assert captured == {"org_id": "org-1", "limit": 5}
+    assert captured == {"org_id": "99999999-9999-9999-9999-999999999999", "limit": 5}
     assert "Sales" in result.stdout
     assert "yes" in result.stdout
 
@@ -3125,10 +3130,11 @@ def test_records_import_uses_bulk_create_csv(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
     class FakeRecords:
-        def bulk_create(self, pod_id, table, records):
+        def bulk_create(self, pod_id, table, records, intent=None):
             captured["pod_id"] = pod_id
             captured["table"] = table
             captured["records"] = records
+            captured["intent"] = intent
             return len(records)
 
     _patch_run(monkeypatch, data, SimpleNamespace(records=FakeRecords()))
@@ -3146,6 +3152,7 @@ def test_records_import_uses_bulk_create_csv(monkeypatch, tmp_path):
         {"title": "A", "status": "open"},
         {"title": "B", "status": "done"},
     ]
+    assert captured["intent"] == "import", "an import is marked as one for triggers"
     assert "Imported 2 record(s)" in result.stdout
 
 
@@ -3153,7 +3160,7 @@ def test_records_import_jsonl_and_limit(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
     class FakeRecords:
-        def bulk_create(self, pod_id, table, records):
+        def bulk_create(self, pod_id, table, records, intent=None):
             captured["records"] = records
             return len(records)
 

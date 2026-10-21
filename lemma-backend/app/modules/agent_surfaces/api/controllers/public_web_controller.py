@@ -18,7 +18,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field, JsonValue
 
@@ -26,6 +26,7 @@ from app.core.api.dependencies import get_uow_factory
 from app.core.api.schemas import ErrorResponse
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts.visitor_stream import visitor_frames
+from app.modules.agent_surfaces.api import kept_chats
 from app.modules.agent_surfaces.api.public_dependencies import (
     OptionalVisitorDep,
     PublicVisitorDep,
@@ -34,7 +35,7 @@ from app.modules.agent_surfaces.api.public_dependencies import (
     web_chat,
 )
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.web_widgets import refused
+from app.modules.agent_surfaces.domain.web_widgets import WebChatRefused, refused
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
 from app.modules.agent_surfaces.services.web_chat import MAX_MESSAGE_CHARS, WebChat
 from app.modules.agent_surfaces.services.web_visitors import (
@@ -97,6 +98,10 @@ class HistoryMessage(BaseModel):
     text: str
     sequence: int
     client_nonce: str | None = None
+    from_person: bool = Field(
+        default=False,
+        description="A person on the team wrote it, not the bot.",
+    )
 
 
 class HistoryResponse(BaseModel):
@@ -192,19 +197,44 @@ async def web_challenge(
 )
 async def web_start_session(
     body: SessionRequest,
+    request: Request,
+    response: Response,
     widget: PublicWidgetDep,
     address: VisitorAddressDep,
     visitors: WebVisitors = Depends(_visitors),
     chat: WebChat = Depends(web_chat),
 ) -> SessionResponse:
-    """Start a session, or come back to one: either way, a new access token."""
-    started = await visitors.start_visitor_session(
-        widget,
-        secret=body.secret,
-        host_token=body.host_token,
-        altcha=body.altcha,
-        address=address,
+    """Start a session, or come back to one: either way, a new access token.
+
+    On a page Lemma hosts, a visitor nobody signed in comes back to their chat
+    from its cookie when the page has no secret to send.
+    """
+    on_pages = kept_chats.keeps_chats(request)
+    keeps = on_pages and body.host_token is None
+    kept = (
+        kept_chats.kept_secret(request, widget) if keeps and not body.secret else None
     )
+    secret = body.secret or kept
+    try:
+        started = await visitors.start_visitor_session(
+            widget,
+            secret=secret,
+            host_token=body.host_token,
+            altcha=body.altcha,
+            address=address,
+        )
+    except WebChatRefused as ended:
+        if kept is None or ended.code != "no_session":
+            raise
+        # The chat the cookie kept has ended: start a new one, as if none was.
+        started = await visitors.start_visitor_session(
+            widget, secret=None, host_token=None, altcha=body.altcha, address=address
+        )
+    if keeps and started.secret:
+        kept_chats.keep(response, widget, started.secret)
+    elif on_pages and body.host_token is not None:
+        # Somebody signed in: their chat must not outlive that on this machine.
+        kept_chats.forget(response, widget)
     return _session_response(started, title=await chat.widget_title(widget))
 
 
@@ -298,6 +328,7 @@ async def web_read_history(
                 text=m.text,
                 sequence=m.sequence,
                 client_nonce=m.client_nonce,
+                from_person=m.from_person,
             )
             for m in messages
         ]

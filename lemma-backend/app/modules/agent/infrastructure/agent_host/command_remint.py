@@ -167,17 +167,19 @@ async def remint_for_current_revision(
     assert harness is not None  # noqa: S101 - narrowed by `_refusal_for`
 
     config_options = list(harness.config_options or [])
-    carried = carry_agent_host_selections(
-        config_options=config_options,
-        selections=dict(payload.get("config_selections") or {}),
-    )
-
     previous_revision = str(payload.get("profile_revision") or "")
     previous_selections = dict(payload.get("config_selections") or {})
     previous_model = payload.get("model_name")
     carried_model = carry_agent_host_model(
         config_options=config_options,
         model_name=previous_model if isinstance(previous_model, str) else None,
+    )
+    # The model first: what survives depends on the options of the model the
+    # run will actually use, which is the harness default when its pin moved.
+    carried = carry_agent_host_selections(
+        config_options=config_options,
+        selections=previous_selections,
+        model_name=carried_model,
     )
     payload["profile_revision"] = harness.config_revision
     payload["config_selections"] = carried

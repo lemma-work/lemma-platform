@@ -125,6 +125,9 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         from app.modules.agent.infrastructure.repositories import (
             ConversationRepository,
         )
+        from app.modules.agent.services.channel_background import (
+            with_channel_background,
+        )
 
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
             # Only the run's own kind: a private note never steers an answer
@@ -132,6 +135,17 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
             claimed = await ConversationRepository(uow).claim_queued_user_messages(
                 self._agent_run_id, as_run=True
             )
-            if claimed:
-                await uow.commit()
-            return claimed
+            if not claimed:
+                return claimed
+            await uow.commit()
+            # The channel around each, read as history reads it. The claim is
+            # committed: a failed read costs the background, never the words.
+            try:
+                return await with_channel_background(uow, claimed)
+            except SQLAlchemyError:
+                logger.warning(
+                    "agent.pending_user_messages.background_failed.degraded",
+                    agent_run_id=self._agent_run_id,
+                    exc_info=True,
+                )
+                return claimed

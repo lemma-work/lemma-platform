@@ -120,6 +120,10 @@ class DeliveryReceipt(BaseModel):
     """What became of each part, keyed by the envelope field it came from."""
 
     parts: dict[str, PartDelivery] = Field(default_factory=dict)
+    #: The platform's id for the message that carried the text (the first, when
+    #: a long one went as several; the email, on a one-reply surface), when it
+    #: named one: what its later status report, or a reply in its thread, names.
+    external_message_id: str | None = None
 
     @property
     def delivered(self) -> bool:

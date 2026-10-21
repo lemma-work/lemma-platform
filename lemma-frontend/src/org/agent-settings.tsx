@@ -4,7 +4,10 @@ import {
     source,
     agentDefaultLabel,
     agentSettingsChanges,
+    offeredSelections,
+    optionsFor,
     saidAbout,
+    type AgentOption,
     type AgentSettings,
     type Computer,
     type LocalAgent,
@@ -18,7 +21,12 @@ import { Modal } from "@/shell/modal";
  *  four agents Lemma drives name the same idea four ways. What is fixed is
  *  the empty answer. For the model it is "Agent default" — dispatch sends no
  *  model, and the agent runs whatever it is set to on that computer — and for
- *  an option it is "As on <computer>". Both are real choices, not blanks. */
+ *  an option it is "As on <computer>". Both are real choices, not blanks.
+ *
+ *  The options follow the model, because the agent's do: a model can offer an
+ *  effort another lacks. Changing the model drops whatever the new one does
+ *  not offer, rather than leaving a value on the form no control shows and the
+ *  backend would refuse. */
 export function AgentSettingsFields({
     agent,
     computer,
@@ -30,8 +38,11 @@ export function AgentSettingsFields({
     settings: AgentSettings;
     onChange: (next: AgentSettings) => void;
 }) {
+    const options = optionsOf(agent, settings.model);
     const choose = (key: string, value: string) =>
         onChange({ ...settings, selections: { ...settings.selections, [key]: value } });
+    const pick = (model: string) =>
+        onChange({ model, selections: offeredSelections(optionsOf(agent, model), settings.selections) });
 
     return (
         <>
@@ -41,7 +52,7 @@ export function AgentSettingsFields({
                     <select
                         id="agent-model"
                         value={settings.model}
-                        onChange={(event) => onChange({ ...settings, model: event.target.value })}
+                        onChange={(event) => pick(event.target.value)}
                     >
                         <option value="">{agentDefaultLabel(agent.defaultModel)}</option>
                         {agent.models.map((one) => (
@@ -50,7 +61,7 @@ export function AgentSettingsFields({
                     </select>
                 </div>
             )}
-            {agent.options.map((option) => {
+            {options.map((option) => {
                 const now = option.choices.find((choice) => choice.value === option.current)?.label;
                 return (
                     <div className="field" key={option.key}>
@@ -73,14 +84,9 @@ export function AgentSettingsFields({
     );
 }
 
-/** Keep only selections the agent still offers. A value it stopped
- *  publishing would be refused on save, with no control left to clear it. */
-function offered(agent: LocalAgent, selections: Record<string, string>): Record<string, string> {
-    return Object.fromEntries(
-        Object.entries(selections).filter(([key, value]) =>
-            agent.options.some((option) => option.key === key && option.choices.some((choice) => choice.value === value)),
-        ),
-    );
+/** What the agent offers beside `model` — empty for its own default. */
+function optionsOf(agent: LocalAgent, model: string): AgentOption[] {
+    return optionsFor({ options: agent.options, byModel: agent.optionsByModel }, model);
 }
 
 /** Change what an added agent runs with. Offered only while its computer is
@@ -100,10 +106,11 @@ export function EditAgentSettings({
     onClose: () => void;
     onSaved: () => void;
 }) {
-    const initial: AgentSettings = {
-        model: agent.models.some((one) => one.name === runtime.defaultModel) ? runtime.defaultModel : "",
-        selections: offered(agent, runtime.selections),
-    };
+    /* Only selections the agent still offers, for the model it still offers.
+       A value it stopped publishing would be refused on save, with no
+       control left to clear it. */
+    const model = agent.models.some((one) => one.name === runtime.defaultModel) ? runtime.defaultModel : "";
+    const initial: AgentSettings = { model, selections: offeredSelections(optionsOf(agent, model), runtime.selections) };
     const [settings, setSettings] = useState(initial);
     /* Compared with what is stored rather than with the cleaned-up form, so a
        selection the agent dropped is cleared by saving. */
@@ -118,7 +125,7 @@ export function EditAgentSettings({
     return (
         <Modal title={runtime.name} subtitle={"on " + computer.name} narrow onClose={onClose}>
             <AgentSettingsFields agent={agent} computer={computer} settings={settings} onChange={setSettings} />
-            {agent.models.length === 0 && agent.options.length === 0 && (
+            {agent.models.length === 0 && optionsOf(agent, settings.model).length === 0 && (
                 <p className="empty-row">This agent publishes nothing to choose.</p>
             )}
             {save.isError && <p className="reachrow__error" role="alert">{saidAbout(save.error, "That could not be saved.")}</p>}

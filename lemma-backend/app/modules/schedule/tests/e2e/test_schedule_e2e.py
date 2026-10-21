@@ -1,4 +1,3 @@
-import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,7 +10,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.connectors.contracts.webhook_sources import default_webhook_sources
-from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (
     ConnectorTrigger,
@@ -20,15 +18,27 @@ from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.test_support.e2e.schedule_binding import bind_schedule_to_account
-from app.modules.test_support.e2e.waiters import eventually, wait_for_status
+from app.modules.datastore.config import datastore_settings
+from app.modules.test_support.e2e.waiters import (
+    eventually,
+    wait_for_status,
+    wait_for_work_to_settle,
+)
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
     auth_headers,
     invite_org_member,
     signup_user,
 )
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 SCHEDULE_E2E_TIMEOUT_SECONDS = 90
 
@@ -859,16 +869,14 @@ async def test_cron_schedule_fires_workflow(
     )
     assert schedule["config"]["cron"] == "* * * * *"
 
-    # This used to wait for the real next minute boundary, which cost up to 60
-    # seconds of doing nothing and made it the third-slowest test in the whole
-    # e2e suite. What is under test is that the poller claims a due cron row and
-    # fires its workflow -- not that wall-clock advances. So make the occurrence
-    # due now: claim_due_schedules selects on `next_fire_at <= now()`, and the
-    # poller ticks every DEFAULT_POLL_INTERVAL_SECONDS.
-    row = await db_session.get(Schedule, UUID(schedule["id"]))
-    assert row is not None, "the schedule API returned an id with no row behind it"
-    row.next_fire_at = datetime.now(timezone.utc) - timedelta(seconds=1)
-    await db_session.commit()
+    # What is under test is that the worker fires the occurrence the schedule
+    # armed and starts its workflow -- not that wall-clock advances. So the
+    # armed ``schedule.fire`` item is pulled to now; the worker's runtime
+    # claims it within its poll.
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.work.testing import make_due
+
+    assert await make_due(async_session_maker, kind="schedule.fire") == 1
 
     run = await _wait_for_workflow_run(
         authenticated_client,
@@ -938,19 +946,16 @@ async def test_wait_until_resumes_from_a_timer_that_carries_no_owner(
     This used to be about legacy APScheduler job rows: jobs written by an older
     build deserialized with kwargs carrying no ``user_id``, and the test proved
     those still woke their run. The job store is gone, and the case it guarded
-    is now the *only* case -- `claim_due_workflow_waits` builds its payload from
-    the wait row's typed columns (`run_id`, `external_ref`, `scheduled_at`) and
-    passes `user_id=None` for every timer it claims, because a timer is not a
-    thing a user is doing.
+    is now the *only* case -- the timer is a `workflow.resume` work item whose
+    payload is the wait's `wait_type` and `external_ref` and nothing about a
+    user, because a timer is not a thing a user is doing.
 
     So the ownership has to come from the run row on the resume path, for every
-    workflow wait rather than for old ones. This drives it end to end: the wait
-    row is aged into the past, and the real poller inside the worker claims,
-    dispatches, and resumes it.
+    workflow wait rather than for old ones. This drives it end to end through
+    the worker's runtime.
     """
-    from sqlalchemy import update
-
-    from app.modules.workflow.infrastructure.models import WorkflowRunWaitModel
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.work.testing import make_due
 
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     workflow = await _create_workflow(
@@ -978,14 +983,11 @@ async def test_wait_until_resumes_from_a_timer_that_carries_no_owner(
     assert waiting["active_wait"]["wait_type"] == "TIME"
     wait_ref = waiting["active_wait"]["external_ref"]
 
-    # Make it due. The poller's claim query is the thing under test from here:
-    # nothing else knows this wait exists.
-    await db_session.execute(
-        update(WorkflowRunWaitModel)
-        .where(WorkflowRunWaitModel.external_ref == wait_ref)
-        .values(scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1))
-    )
-    await db_session.commit()
+    # Make it due. The wait's timer is a ``workflow.resume`` item due at the
+    # wait's moment; pulled to now, the worker's runtime claims it, and nothing
+    # on it names a user.
+    assert wait_ref
+    assert await make_due(async_session_maker, kind="workflow.resume") >= 1
 
     completed = await _wait_for_run_status(
         authenticated_client,
@@ -1473,21 +1475,9 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         assert persisted is not None
         assert persisted.is_active is False
         assert persisted.consecutive_failures == 5
-
-        events = (
-            await session.scalars(
-                select(DomainEventOutbox).where(
-                    DomainEventOutbox.event_type == "schedule.deactivated"
-                )
-            )
-        ).all()
-        matching_events = [
-            event
-            for event in events
-            if event.payload.get("schedule_id") == schedule["id"]
-        ]
-        assert len(matching_events) == 1
-        assert matching_events[0].payload["user_id"] == schedule["user_id"]
+        # Deactivated by its own owner's failures: the schedule's owner, not
+        # the row owners, is who the paused notice goes to (below).
+        assert str(persisted.user_id) == schedule["user_id"]
 
     async def _matching_emails() -> list[dict]:
         matches = []
@@ -1542,7 +1532,11 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         },
     )
     assert sixth.status_code == 201, sixth.text
-    await asyncio.sleep(2)
+    await wait_for_work_to_settle(
+        label="the sixth row's change",
+        database_url=e2e_settings.database_url,
+        datastore_database_url=datastore_settings.datastore_database_url,
+    )
 
     schedule_runs = await authenticated_client.get(
         f"/pods/{pod_id}/schedules/{schedule['id']}/runs"

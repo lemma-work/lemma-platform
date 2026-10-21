@@ -90,7 +90,7 @@ class AgentContext(BaseModel):
     attached_document: str | None = None
     # What this person still owes somebody an answer to, rendered; None when
     # nothing is open. Its tools are offered only when it is set.
-    open_notifications: str | None = None
+    open_questions: str | None = None
     # Everything that changes from one run of the conversation to the next,
     # rendered once per run (`domain/run_context_prompt`). Sent next to the
     # current turn and never stored, so the system prompt and the replayed
@@ -110,7 +110,7 @@ class AgentContext(BaseModel):
     # On a run answering outsiders: the member who looks after the conversation
     # started it, typing in Lemma (`domain/private_notes.keeper_started`). Still
     # a stranger's run in what it may reach, but nobody outside is asking, so
-    # `message_user` -- which only reaches that member -- has nothing to do.
+    # `channel_post` -- which only reaches that member -- has nothing to do.
     keeper_asking: bool = False
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

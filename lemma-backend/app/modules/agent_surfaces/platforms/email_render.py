@@ -30,7 +30,15 @@ def render_email_content(
     *,
     content: str,
     content_type: EmailReplyContentType,
+    full_width: bool = False,
 ) -> tuple[str, str | None]:
+    """The plain-text part and the HTML part, from one piece of content.
+
+    ``full_width`` only reaches the wrapper this module builds: markdown and the
+    no-parser fallback are capped to a readable column by default, and a caller
+    that wants the window asks for it here. An ``html`` body is passed through
+    as the agent wrote it, so it is already whatever width it says.
+    """
     normalized_content = str(content or "").strip()
     if content_type == "text":
         return normalized_content, None
@@ -42,9 +50,11 @@ def render_email_content(
             .replace("<", "&lt;")
             .replace(">", "&gt;")
         )
-        return normalized_content, email_body_wrapper(f"<pre>{escaped}</pre>")
+        return normalized_content, email_body_wrapper(
+            f"<pre>{escaped}</pre>", full_width=full_width
+        )
     return normalized_content, email_body_wrapper(
-        _markdown_to_email_html(normalized_content)
+        _markdown_to_email_html(normalized_content), full_width=full_width
     )
 
 

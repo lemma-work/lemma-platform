@@ -126,8 +126,8 @@ def _lookup(number: WhatsAppNumberEntity | None):
 class _Publish:
     """The route's one outbound edge, recorded.
 
-    ``events`` is what reached the stream, in order, so "published exactly this"
-    and "published nothing" are both ordinary assertions about a value.
+    ``events`` is what was accepted, in order, so "accepted exactly this" and
+    "accepted nothing" are both ordinary assertions about a value.
     """
 
     def __init__(self) -> None:
@@ -248,7 +248,7 @@ async def test_a_delivery_is_verified_with_the_secret_the_path_selected(monkeypa
         _request(_message_for(_POOLED_NUMBER_ID)),
         security,
         pooled_number=_lookup(_pooled()),
-        publish=publish,
+        accept=publish,
     )
 
     assert result == {"message": "Webhook received"}
@@ -258,7 +258,7 @@ async def test_a_delivery_is_verified_with_the_secret_the_path_selected(monkeypa
     # is what holds it. Asserting it through the route would only re-test the
     # fake this test hands in.
     (event,) = publish.events
-    assert event.source == "whatsapp"
+    assert event.request.source == "whatsapp"
     # A WhatsApp body carries no id `webhook_source_event_id` recognises -- the
     # `wamid` is buried under entry/changes/value/messages -- so it falls to the
     # content hash, exactly as it does on the shared endpoint. What matters here
@@ -285,7 +285,7 @@ async def test_a_body_naming_another_number_is_refused(monkeypatch):
             _request(_message_for("a-co-tenanted-number")),
             security,
             pooled_number=_lookup(_pooled()),
-            publish=publish,
+            accept=publish,
         )
 
     assert raised.value.status_code == 400
@@ -323,7 +323,7 @@ async def test_a_body_naming_this_number_and_another_is_refused(monkeypatch):
             _request(body),
             security,
             pooled_number=_lookup(_pooled()),
-            publish=publish,
+            accept=publish,
         )
 
     assert raised.value.status_code == 400
@@ -374,7 +374,7 @@ async def test_a_body_that_names_no_number_is_still_delivered(monkeypatch):
         _request(body),
         security,
         pooled_number=_lookup(_pooled()),
-        publish=publish,
+        accept=publish,
     )
 
     assert result == {"message": "Webhook received"}
@@ -393,7 +393,7 @@ async def test_a_delivery_falls_back_to_the_settings_app_secret(monkeypatch):
         _request(_message_for(_POOLED_NUMBER_ID)),
         security,
         pooled_number=_lookup(None),
-        publish=publish,
+        accept=publish,
     )
 
     assert result == {"message": "Webhook received"}
@@ -498,7 +498,7 @@ async def test_a_body_naming_another_number_is_logged(monkeypatch, caplog):
             _request(_message_for("a-co-tenanted-number")),
             security,
             pooled_number=_lookup(_pooled()),
-            publish=_Publish(),
+            accept=_Publish(),
         )
 
     assert "whatsapp_number_mismatch" in caplog.text

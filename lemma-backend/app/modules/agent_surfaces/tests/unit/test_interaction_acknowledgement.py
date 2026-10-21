@@ -10,9 +10,16 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 from app.modules.agent_surfaces.domain.entities import ParsedSurfaceInteraction
+from app.modules.agent_surfaces.tests.fakes import (
+    PlatformHandler,
+    PlatformHttp,
+    answer_json,
+    platform_http,
+)
 from app.modules.agent_surfaces.platforms.slack.message_blocks import (
     slack_acknowledgement_body,
 )
@@ -53,26 +60,20 @@ def test_an_unsettled_note_is_ephemeral_and_leaves_the_card_alone() -> None:
     assert body["text"] == "Reply with your own answer."
 
 
-async def _slack_ack(payload: dict[str, Any], **kwargs: Any) -> list[Any]:
+def _bot_framework(*, put_status: int = 200) -> PlatformHandler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(put_status, json={})
+        return httpx.Response(200, json={"id": "new-activity"})
+
+    return handler
+
+
+async def _slack_ack(payload: dict[str, Any], **kwargs: Any) -> list[httpx.Request]:
     from app.modules.agent_surfaces.platforms.slack.service import SlackPlatformService
 
-    posted: list[Any] = []
-
-    class _Client:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_):
-            return False
-
-        async def post(self, url, json):  # noqa: A002 - httpx keyword
-            posted.append((url, json))
-
     service = SlackPlatformService(credentials={"access_token": "xoxb-test"})
-    with patch(
-        "app.modules.agent_surfaces.platforms.slack.service.httpx.AsyncClient",
-        lambda **_: _Client(),
-    ):
+    with platform_http(answer_json({"ok": True})) as http:
         await service.acknowledge_interaction(
             ParsedSurfaceInteraction(platform="SLACK", raw_payload=payload),
             text="Done",
@@ -80,54 +81,19 @@ async def _slack_ack(payload: dict[str, Any], **kwargs: Any) -> list[Any]:
             clear_actions=True,
             **kwargs,
         )
-    return posted
+    return http.requests
 
 
 async def test_slack_posts_the_acknowledgement_to_the_response_url() -> None:
     posted = await _slack_ack({"response_url": "https://hooks.slack/r/1", **_CARD})
     assert len(posted) == 1
-    url, body = posted[0]
-    assert url == "https://hooks.slack/r/1"
-    assert body["replace_original"] is True
+    assert str(posted[0].url) == "https://hooks.slack/r/1"
+    assert PlatformHttp.json_of(posted[0])["replace_original"] is True
 
 
 async def test_slack_without_a_response_url_sends_nothing_rather_than_raising() -> None:
     """The decision is already recorded; a failed acknowledgement must not undo it."""
     assert await _slack_ack({"message": _CARD}) == []
-
-
-# --- Teams: editing the activity the card was in --------------------------
-
-
-class _Response:
-    def __init__(self, status: int) -> None:
-        self.status = status
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        return False
-
-
-class _Session:
-    def __init__(self, put_status: int = 200) -> None:
-        self.put_status = put_status
-        self.calls: list[tuple[str, str]] = []
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        return False
-
-    def put(self, url, headers=None, json=None):
-        self.calls.append(("PUT", url))
-        return _Response(self.put_status)
-
-    def post(self, url, headers=None, json=None):
-        self.calls.append(("POST", url))
-        return _Response(200)
 
 
 def _teams_interaction(*, reply_to_id: str | None) -> ParsedSurfaceInteraction:
@@ -142,7 +108,9 @@ def _teams_interaction(*, reply_to_id: str | None) -> ParsedSurfaceInteraction:
     )
 
 
-async def _teams_ack(session: _Session, interaction, **kwargs: Any) -> None:
+async def _teams_ack(
+    interaction: ParsedSurfaceInteraction, *, put_status: int = 200, **kwargs: Any
+) -> list[tuple[str, str]]:
     from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
 
     adapter = TeamsSurfaceAdapter()
@@ -150,24 +118,20 @@ async def _teams_ack(session: _Session, interaction, **kwargs: Any) -> None:
         patch.object(
             TeamsSurfaceAdapter, "_get_bot_token", new=AsyncMock(return_value="token")
         ),
-        patch(
-            "app.modules.agent_surfaces.platforms.teams.adapter_egress"
-            ".new_aiohttp_session",
-            lambda *a, **k: session,
-        ),
+        platform_http(_bot_framework(put_status=put_status)) as http,
     ):
         await adapter.acknowledge_interaction(
             credentials={}, interaction=interaction, text="Approved", **kwargs
         )
+    return [(request.method, str(request.url)) for request in http.requests]
 
 
 async def test_teams_edits_the_card_activity_so_the_buttons_retire() -> None:
     """An Adaptive Card's actions stay tappable forever unless the activity is replaced."""
-    session = _Session()
-    await _teams_ack(
-        session, _teams_interaction(reply_to_id="act-7"), clear_actions=True
+    calls = await _teams_ack(
+        _teams_interaction(reply_to_id="act-7"), clear_actions=True
     )
-    assert session.calls == [
+    assert calls == [
         (
             "PUT",
             "https://smba.trafficmanager.net/emea/v3/conversations/19%3Aconv/activities/act-7",
@@ -176,19 +140,17 @@ async def test_teams_edits_the_card_activity_so_the_buttons_retire() -> None:
 
 
 async def test_teams_posts_a_new_message_when_the_card_cannot_be_edited() -> None:
-    session = _Session(put_status=403)
-    await _teams_ack(
-        session, _teams_interaction(reply_to_id="act-7"), clear_actions=True
+    calls = await _teams_ack(
+        _teams_interaction(reply_to_id="act-7"), put_status=403, clear_actions=True
     )
-    assert [method for method, _ in session.calls] == ["PUT", "POST"]
+    assert [method for method, _ in calls] == ["PUT", "POST"]
 
 
 async def test_teams_posts_rather_than_edits_when_the_decision_is_still_open() -> None:
-    session = _Session()
-    await _teams_ack(
-        session, _teams_interaction(reply_to_id="act-7"), clear_actions=False
+    calls = await _teams_ack(
+        _teams_interaction(reply_to_id="act-7"), clear_actions=False
     )
-    assert [method for method, _ in session.calls] == ["POST"]
+    assert [method for method, _ in calls] == ["POST"]
 
 
 # --- WhatsApp: a new message, and only when it says something -------------

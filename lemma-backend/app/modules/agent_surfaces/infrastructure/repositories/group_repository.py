@@ -1,124 +1,130 @@
-"""Reading and writing the groups a pod's bots are in, and their log.
+"""The groups a pod's bots are in, read and written as channels' shared places.
 
-Every read is bounded. A group is found by its key (surface, chat) or listed a
-page at a time for its surface's settings, and the log is only ever read as
-"the last N lines", newest first -- which is what the index serves and all that
-a run's background context can use.
+A group is a shared place of a GROUP channel (``app.modules.channels``): the
+place's row is the group, with its settings, and the place's id is the group's.
+This keeps the group's own vocabulary -- a surface finds a group by its chat,
+adopts one it was added to, waits on one it asked a platform to create -- and
+says each in the channels' terms. Every read is bounded.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent_surfaces.domain.groups import (
-    GROUP_LOG_RETENTION,
-    GroupLine,
-    SurfaceGroup,
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
+from app.modules.agent_surfaces.domain.external_accounts import account_of
+from app.modules.agent_surfaces.domain.groups import SurfaceGroup
+from app.modules.channels.contracts import (
+    GroupHome,
+    Place,
+    Principal,
+    SourceKind,
+    channel_by_id,
+    join,
+    source_by_id,
+    source_for,
 )
-from app.modules.agent_surfaces.infrastructure.group_models import (
-    AgentSurfaceGroupMessageModel,
-    AgentSurfaceGroupModel,
+from app.modules.channels.contracts.places import (
+    change_place,
+    confirm_group,
+    find_place,
+    forget_chat,
+    forget_pending_group,
+    left_place,
+    open_pending_group,
+    place_became_private,
+    place_resumed,
+    place_stopped,
+    owned_place,
+    places_hearing,
+    shared_places_of_pod,
+    shared_places_of_surfaces,
+    surfaces_hearing,
 )
-from app.modules.agent_surfaces.infrastructure.models import AgentSurfaceExternalUser
 
 #: The settings page's ceiling. A bot in more groups than this has outgrown a
 #: list, and the read has to stop somewhere.
 _MAX_GROUPS_PAGE = 200
 
-#: How many pods' bots one chat is looked up for. A WhatsApp group has one; a
-#: Telegram group could hold a few pods' surfaces on the shared bot.
-_MAX_SURFACES_PER_CHAT = 20
 
-#: Longest line kept. The log is background for a model, not an archive, and one
-#: pasted document should not crowd out everything said around it.
-MAX_LINE_CHARS = 2000
+def _place(
+    surface: AgentSurfaceEntity,
+    *,
+    chat: str | None,
+    title: str | None,
+    is_private: bool = True,
+) -> Place:
+    return Place(
+        surface_id=surface.id,
+        platform=surface.surface_type.value,
+        account=account_of(surface),
+        kind=SourceKind.CHAT,
+        external_channel_id=chat,
+        external_user_id=None,
+        title=title,
+        is_private=is_private,
+    )
 
 
 class SurfaceGroupRepository:
     def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+        self.uow = SqlAlchemyUnitOfWork(session)
 
     async def get(
         self, *, surface_id: UUID, external_channel_id: str
     ) -> SurfaceGroup | None:
-        stmt = select(AgentSurfaceGroupModel).where(
-            AgentSurfaceGroupModel.surface_id == surface_id,
-            AgentSurfaceGroupModel.external_channel_id == external_channel_id,
+        """The group this surface is in on this chat, if it knows it."""
+        found = await places_hearing(
+            self.uow,
+            external_channel_id=external_channel_id,
+            surface_ids=[surface_id],
         )
-        # `first()` on a unique key: at most one row can match.
-        model = (await self.session.execute(stmt)).scalars().first()
-        return model.to_entity() if model else None
+        return SurfaceGroup.of(found[0]) if found else None
 
     async def get_by_id(self, group_id: UUID) -> SurfaceGroup | None:
-        model = await self.session.get(AgentSurfaceGroupModel, group_id)
-        return model.to_entity() if model else None
+        source = await source_by_id(self.uow, group_id)
+        if source is None or source.kind is not SourceKind.CHAT:
+            return None
+        return SurfaceGroup.of(source) if source.surface_id else None
 
     async def list_for_channel(
         self, *, external_channel_id: str, surface_ids: Sequence[UUID]
     ) -> list[SurfaceGroup]:
-        """This chat's rows among these surfaces -- at most one per surface."""
+        """This chat's groups among these surfaces -- at most one per surface."""
         if not surface_ids:
             return []
-        stmt = (
-            select(AgentSurfaceGroupModel)
-            .where(
-                AgentSurfaceGroupModel.external_channel_id == external_channel_id,
-                AgentSurfaceGroupModel.surface_id.in_(list(surface_ids)),
-            )
-            .limit(len(surface_ids))
+        found = await places_hearing(
+            self.uow,
+            external_channel_id=external_channel_id,
+            surface_ids=surface_ids,
         )
-        models = (await self.session.execute(stmt)).scalars().all()
-        return [model.to_entity() for model in models]
+        return [SurfaceGroup.of(source) for source in found]
 
     async def list_for_pod(self, pod_id: UUID) -> list[SurfaceGroup]:
         """Every group the pod's bots are in, most recently changed first."""
-        stmt = (
-            select(AgentSurfaceGroupModel)
-            .where(AgentSurfaceGroupModel.pod_id == pod_id)
-            .order_by(AgentSurfaceGroupModel.updated_at.desc())
-            .limit(_MAX_GROUPS_PAGE)
-        )
-        models = (await self.session.execute(stmt)).scalars().all()
-        return [model.to_entity() for model in models]
-
-    async def latest_line_at(self, group_ids: Sequence[UUID]) -> dict[UUID, datetime]:
-        """When each of these groups last had something said in it."""
-        if not group_ids:
-            return {}
-        stmt = (
-            select(
-                AgentSurfaceGroupMessageModel.group_id,
-                func.max(AgentSurfaceGroupMessageModel.created_at),
-            )
-            .where(AgentSurfaceGroupMessageModel.group_id.in_(list(group_ids)))
-            .group_by(AgentSurfaceGroupMessageModel.group_id)
-            .limit(len(group_ids))
-        )
-        rows = (await self.session.execute(stmt)).all()
-        return {group_id: at for group_id, at in rows if at is not None}
+        found = await shared_places_of_pod(self.uow, pod_id, limit=_MAX_GROUPS_PAGE)
+        return [SurfaceGroup.of(source) for source in found]
 
     async def ensure(
         self,
         *,
         pod_id: UUID,
-        surface_id: UUID,
-        platform: str,
+        surface: AgentSurfaceEntity,
         external_channel_id: str,
         title: str | None = None,
+        is_private: bool = True,
     ) -> SurfaceGroup:
-        """The group's row, created on first sight."""
+        """The group's place, made -- with its channel -- on first sight."""
         group, _ = await self.ensure_noting_creation(
             pod_id=pod_id,
-            surface_id=surface_id,
-            platform=platform,
+            surface=surface,
             external_channel_id=external_channel_id,
             title=title,
+            is_private=is_private,
         )
         return group
 
@@ -126,279 +132,173 @@ class SurfaceGroupRepository:
         self,
         *,
         pod_id: UUID,
-        surface_id: UUID,
-        platform: str,
+        surface: AgentSurfaceEntity,
         external_channel_id: str,
         title: str | None = None,
+        is_private: bool = True,
     ) -> tuple[SurfaceGroup, bool]:
-        """The group's row, and whether this call is what created it.
-
-        ``ON CONFLICT DO NOTHING`` then a read, rather than read-then-insert:
-        two first messages in a new group arrive together often enough, and the
-        unique index is the only thing both of them can agree on -- which is
-        also what makes "created" true for exactly one of them.
-        """
-        inserted = await self.session.execute(
-            insert(AgentSurfaceGroupModel)
-            .values(
-                pod_id=pod_id,
-                surface_id=surface_id,
-                platform=platform,
-                external_channel_id=external_channel_id,
-                title=title,
-            )
-            .on_conflict_do_nothing(
-                index_elements=["surface_id", "external_channel_id"]
-            )
-            .returning(AgentSurfaceGroupModel.id)
+        """The group's place, and whether it was made now. A title the platform
+        names it by now replaces the one it was known by. ``is_private``: the
+        platform keeps it to its members, so its channel is private in Lemma."""
+        place = _place(
+            surface, chat=external_channel_id, title=title, is_private=is_private
         )
-        created = inserted.scalars().first() is not None
-        group = await self.get(
-            surface_id=surface_id, external_channel_id=external_channel_id
+        known = await find_place(self.uow, pod_id=pod_id, place=place)
+        if known is not None:
+            if title and known.title != title:
+                await change_place(self.uow, known.id, {"title": title})
+                known = known.model_copy(update={"title": title})
+            return SurfaceGroup.of(known), False
+        source = await source_for(
+            self.uow, pod_id=pod_id, place=place, home=GroupHome(title=title)
         )
-        if group is None:  # pragma: no cover - the insert above made it
-            raise LookupError("The group row vanished after it was ensured")
-        if title and group.title != title:
-            await self._update(group.id, title=title)
-            group = group.model_copy(update={"title": title})
-        return group, created
+        return SurfaceGroup.of(source), True
 
     async def surface_ids_for_channel(
         self, *, platform: str, external_channel_id: str
     ) -> list[UUID]:
-        """The surfaces that know this chat, asked by the chat alone.
-
-        Bounded by the pods one chat can plausibly hold a bot for; a WhatsApp
-        group has exactly one, the pod that created it.
-        """
-        stmt = (
-            select(AgentSurfaceGroupModel.surface_id)
-            .where(
-                AgentSurfaceGroupModel.platform == platform,
-                AgentSurfaceGroupModel.external_channel_id == external_channel_id,
-            )
-            .limit(_MAX_SURFACES_PER_CHAT)
+        """The surfaces whose bots are in this chat, in any pod: routing only."""
+        return await surfaces_hearing(
+            self.uow, platform=platform, external_channel_id=external_channel_id
         )
-        return list((await self.session.execute(stmt)).scalars().all())
 
     async def create_pending(
         self,
         *,
         pod_id: UUID,
-        surface_id: UUID,
-        platform: str,
+        surface: AgentSurfaceEntity,
         title: str,
         owner_user_id: UUID,
         request_id: str,
         answers_outsiders: bool = True,
     ) -> SurfaceGroup:
-        """A group the bot has asked the platform to create, not yet confirmed."""
-        model = AgentSurfaceGroupModel(
+        source = await open_pending_group(
+            self.uow,
             pod_id=pod_id,
-            surface_id=surface_id,
-            platform=platform,
-            external_channel_id=None,
+            place=_place(surface, chat=None, title=title),
             title=title,
             owner_user_id=owner_user_id,
-            answers_outsiders=answers_outsiders,
             request_id=request_id,
+            answers_outsiders=answers_outsiders,
         )
-        self.session.add(model)
-        await self.session.flush()
-        return model.to_entity()
+        return SurfaceGroup.of(source)
 
     async def find_owned(
         self, *, surface_id: UUID, owner_user_id: UUID, title: str
     ) -> SurfaceGroup | None:
         """The group this member already has by this name here, if any."""
-        stmt = (
-            select(AgentSurfaceGroupModel)
-            .where(
-                AgentSurfaceGroupModel.surface_id == surface_id,
-                AgentSurfaceGroupModel.owner_user_id == owner_user_id,
-                AgentSurfaceGroupModel.title == title,
-            )
-            .order_by(AgentSurfaceGroupModel.created_at.desc())
-            .limit(1)
+        source = await owned_place(
+            self.uow, surface_id=surface_id, owner_user_id=owner_user_id, title=title
         )
-        model = (await self.session.execute(stmt)).scalars().first()
-        return model.to_entity() if model else None
+        return SurfaceGroup.of(source) if source else None
 
     async def confirm_created(
         self,
         *,
+        platform: str,
         request_id: str,
         external_channel_id: str,
         title: str | None,
         invite_link: str | None,
+        surface_ids: Sequence[UUID] | None = None,
     ) -> SurfaceGroup | None:
-        """Record the platform's confirmation; None when no request matches.
-
-        A replayed confirmation finds the row already confirmed and writes the
-        same values again, which is what makes replaying it harmless.
-        """
-        stmt = select(AgentSurfaceGroupModel).where(
-            AgentSurfaceGroupModel.request_id == request_id
+        """The group the platform made. On the surfaces named, or -- since a
+        platform's request ids are its own -- wherever it was asked for."""
+        source = await confirm_group(
+            self.uow,
+            surface_ids=surface_ids,
+            platform=None if surface_ids is not None else platform,
+            request_id=request_id,
+            external_channel_id=external_channel_id,
+            title=title,
+            invite_link=invite_link,
         )
-        model = (await self.session.execute(stmt)).scalars().first()
-        if model is None:
-            return None
-        model.external_channel_id = external_channel_id
-        if title:
-            model.title = title
-        if invite_link:
-            model.invite_link = invite_link
-        await self.session.flush()
-        return model.to_entity()
+        return SurfaceGroup.of(source) if source else None
 
     async def set_invite_link(self, group_id: UUID, invite_link: str) -> None:
-        await self._update(group_id, invite_link=invite_link)
+        await change_place(self.uow, group_id, {"invite_link": invite_link})
 
-    async def forget_request(self, request_id: str) -> None:
+    async def forget_request(
+        self,
+        *,
+        platform: str,
+        request_id: str,
+        surface_ids: Sequence[UUID] | None = None,
+    ) -> None:
         """Drop a creation the platform refused: there is no group to keep."""
-        await self.session.execute(
-            delete(AgentSurfaceGroupModel).where(
-                AgentSurfaceGroupModel.request_id == request_id,
-                AgentSurfaceGroupModel.external_channel_id.is_(None),
-            )
+        await forget_pending_group(
+            self.uow,
+            request_id=request_id,
+            surface_ids=surface_ids,
+            platform=None if surface_ids is not None else platform,
         )
 
-    async def forget_channel(self, *, platform: str, external_channel_id: str) -> None:
-        """A group the platform deleted, with its log: nobody can speak there."""
-        await self.session.execute(
-            delete(AgentSurfaceGroupModel).where(
-                AgentSurfaceGroupModel.platform == platform,
-                AgentSurfaceGroupModel.external_channel_id == external_channel_id,
-            )
+    async def forget_channel(
+        self,
+        *,
+        platform: str,
+        external_channel_id: str,
+        surface_ids: Sequence[UUID] | None = None,
+    ) -> None:
+        """A group the platform deleted: nobody can speak there.
+
+        Its channel stays, with everything said in it.
+        """
+        await forget_chat(
+            self.uow,
+            external_channel_id=external_channel_id,
+            surface_ids=surface_ids,
+            platform=None if surface_ids is not None else platform,
         )
 
     async def set_owner(self, group_id: UUID, owner_user_id: UUID | None) -> None:
-        await self._update(group_id, owner_user_id=owner_user_id)
+        """The member who answers for the group -- who is in its channel too,
+        so they can read what they answer for."""
+        await change_place(self.uow, group_id, {"owner_user_id": owner_user_id})
+        if owner_user_id is None:
+            return
+        source = await source_by_id(self.uow, group_id)
+        channel = await channel_by_id(self.uow, source.channel_id) if source else None
+        if channel is not None:
+            await join(
+                self.uow, channel=channel, principal=Principal.member(owner_user_id)
+            )
 
     async def set_answers_outsiders(
         self, group_id: UUID, *, answers_outsiders: bool
     ) -> None:
-        await self._update(group_id, answers_outsiders=answers_outsiders)
+        await change_place(self.uow, group_id, {"answers_outsiders": answers_outsiders})
 
     async def set_shared_externally(self, group_id: UUID, *, shared: bool) -> None:
-        await self._update(group_id, shared_externally=shared)
+        await change_place(self.uow, group_id, {"shared_externally": shared})
 
-    async def _update(self, group_id: UUID, **values: object) -> None:
-        await self.session.execute(
-            update(AgentSurfaceGroupModel)
-            .where(AgentSurfaceGroupModel.id == group_id)
-            .values(**values)
-        )
+    async def became_private(self, group_id: UUID) -> bool:
+        """The platform now keeps the group to its members; so does Lemma."""
+        return await place_became_private(self.uow, group_id)
 
-    async def append_line(
-        self,
-        *,
-        group_id: UUID,
-        body: str,
-        external_message_id: str | None = None,
-        author_external_id: str | None = None,
-        author_name: str | None = None,
-        from_agent: bool = False,
-        answered_name: str | None = None,
-        answered_from_public: bool = False,
-        answered_user_id: UUID | None = None,
-    ) -> None:
-        """Add one line; a message already logged is left as it was.
+    async def member_left(self, group_id: UUID, principal: Principal) -> bool:
+        """Somebody the platform says left the group is out of its channel."""
+        return await left_place(self.uow, group_id, principal)
 
-        Lines past the log's retention go as each new one arrives: one indexed
-        range per group, which finds nothing almost every time.
-        """
-        text = body.strip()
-        if not text:
-            return
-        await self.session.execute(
-            delete(AgentSurfaceGroupMessageModel).where(
-                AgentSurfaceGroupMessageModel.group_id == group_id,
-                AgentSurfaceGroupMessageModel.created_at
-                < datetime.now(timezone.utc) - GROUP_LOG_RETENTION,
-            )
-        )
-        await self.session.execute(
-            insert(AgentSurfaceGroupMessageModel)
-            .values(
-                group_id=group_id,
-                body=text[:MAX_LINE_CHARS],
-                external_message_id=external_message_id,
-                author_external_id=author_external_id,
-                author_name=author_name,
-                from_agent=from_agent,
-                answered_name=(answered_name or "")[:255] or None,
-                answered_from_public=answered_from_public,
-                answered_user_id=answered_user_id,
-            )
-            .on_conflict_do_nothing(
-                index_elements=["group_id", "external_message_id"],
-                index_where=AgentSurfaceGroupMessageModel.external_message_id.is_not(
-                    None
-                ),
-            )
-        )
+    async def bot_removed(self, group_id: UUID) -> bool:
+        """The bot was taken out of the group: its channel is archived."""
+        return await place_stopped(self.uow, group_id)
 
-    async def recent_lines(self, *, group: SurfaceGroup, limit: int) -> list[GroupLine]:
-        """The last ``limit`` lines, oldest first, with who each author proved to be.
+    async def bots_removed_everywhere(self, surface_ids: Sequence[UUID]) -> int:
+        """These surfaces' bots taken out of every group at once -- their app
+        removed from the workspace, which sends no leave per channel. Each
+        group is archived as `bot_removed` archives one; returns how many were
+        not already."""
+        archived = 0
+        after: UUID | None = None
+        while page := await shared_places_of_surfaces(
+            self.uow, surface_ids, after=after, limit=_MAX_GROUPS_PAGE
+        ):
+            for source in page:
+                archived += await self.bot_removed(source.id)
+            after = page[-1].id
+        return archived
 
-        The author's Lemma user comes from ``agent_surface_external_users`` --
-        the same proof routing uses -- read at the moment the lines are read, so
-        a stranger who has since signed up and verified reads as who they are
-        now. One more bounded read rather than a join: a join would repeat a
-        line for every tenant an id appears under.
-        """
-        stmt = (
-            select(AgentSurfaceGroupMessageModel)
-            .where(AgentSurfaceGroupMessageModel.group_id == group.id)
-            .order_by(AgentSurfaceGroupMessageModel.created_at.desc())
-            .limit(limit)
-        )
-        models = list((await self.session.execute(stmt)).scalars().all())
-        models.reverse()
-        authors = {
-            model.author_external_id
-            for model in models
-            if model.author_external_id and not model.from_agent
-        }
-        proven = await self._proven_users(platform=group.platform, ids=authors)
-        return [
-            GroupLine(
-                author_external_id=model.author_external_id,
-                author_name=model.author_name,
-                author_user_id=(
-                    proven.get(model.author_external_id)
-                    if model.author_external_id
-                    else None
-                ),
-                from_agent=model.from_agent,
-                text=model.body,
-                created_at=model.created_at,
-                answered_name=model.answered_name,
-                answered_from_public=model.answered_from_public,
-                answered_user_id=model.answered_user_id,
-            )
-            for model in models
-        ]
-
-    async def _proven_users(self, *, platform: str, ids: set[str]) -> dict[str, UUID]:
-        if not ids:
-            return {}
-        stmt = (
-            select(
-                AgentSurfaceExternalUser.external_user_id,
-                AgentSurfaceExternalUser.resolved_user_id,
-            )
-            .where(
-                AgentSurfaceExternalUser.platform == platform,
-                AgentSurfaceExternalUser.external_user_id.in_(sorted(ids)),
-                AgentSurfaceExternalUser.resolved_user_id.is_not(None),
-            )
-            .limit(len(ids) * 4)
-        )
-        rows = (await self.session.execute(stmt)).all()
-        return {
-            external_id: user_id
-            for external_id, user_id in rows
-            if external_id and user_id is not None
-        }
+    async def bot_returned(self, group_id: UUID) -> bool:
+        """The bot is back in the group: its channel is brought back."""
+        return await place_resumed(self.uow, group_id)

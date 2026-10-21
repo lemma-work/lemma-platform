@@ -7,7 +7,7 @@ import {
     contactName,
     contactSubline,
     everyPage,
-    followUpRefusal,
+    outreachProblem,
     handleText,
     readContact,
     readOrigins,
@@ -41,6 +41,25 @@ test("a host id is never shown; a phone number is", () => {
     assert.equal(vouchedBy({ kind: "EMAIL", value: "x", strength: "CODE" }), "Confirmed with a code");
 });
 
+test("a website visitor nobody vouched for reads as one, never as a session id", () => {
+    const visitor = readContact({
+        id: "c2",
+        display_name: null,
+        created_at: "2026-10-02T10:00:00Z",
+        is_anonymous: true,
+        identities: [{ kind: "WEB", value: "5f0c1e2a-0000-4000-8000-000000000001", strength: "SESSION", verified_at: "2026-10-02T10:00:00Z" }],
+    } as unknown as ContactResponse);
+    assert.equal(visitor.anonymous, true);
+    assert.equal(contactName(visitor), "A visitor to your website");
+    assert.equal(contactSubline(visitor), "Not confirmed yet");
+    assert.equal(handleText(visitor.handles[0]), "Chat on your website");
+    assert.equal(vouchedBy(visitor.handles[0]), "Not confirmed yet");
+});
+
+test("a Slack handle says Slack, whether a colleague's or another company's", () => {
+    assert.equal(handleText({ kind: "SLACK", value: "T9:U7", strength: "CHANNEL" }), "Slack");
+});
+
 test("a widget reads as the app shows it, unknown answers as off", () => {
     const widget = readWidget({
         id: "w1", name: "Shop chat", agent_id: "a", kind: "chat", public_key: "pk_1", allowed_origins: [],
@@ -60,9 +79,18 @@ test("origins are tidied, and only secure ones are accepted", () => {
 });
 
 test("every refusal says why in words", () => {
-    assert.match(followUpRefusal("outside_window"), /WhatsApp/);
-    assert.match(followUpRefusal("unsubscribed"), /asked not to/);
-    assert.equal(followUpRefusal(undefined), "Couldn’t send it. Try again.");
+    /* The API's refusal of the message is a sentence, said as given. */
+    const refused = (statusCode: number, message: string, name = "ApiError") => Object.assign(new Error(message), { statusCode, name });
+    assert.equal(outreachProblem(refused(409, "They asked not to be written to there.")), "They asked not to be written to there.");
+    assert.equal(outreachProblem(refused(422, "WhatsApp only allows a reply within 24 hours of their last message.")), "WhatsApp only allows a reply within 24 hours of their last message.");
+    /* Anything that is not a sentence for a person is never shown raw. */
+    assert.equal(outreachProblem(refused(422, '{"detail":[{"loc":["body","text"]}]}')), "That can’t be sent to them there.");
+    assert.equal(outreachProblem(refused(409, "Conflict")), "They can’t be written to there now.");
+    assert.equal(outreachProblem(refused(500, "Traceback (most recent call last): KeyError")), "Lemma couldn’t send it just now. Try again.");
+    assert.equal(outreachProblem(refused(503, "Service Unavailable")), "Sending isn’t available right now. Try again in a few minutes.");
+    assert.equal(outreachProblem(refused(404, "Contact not found")), "They are not one of this pod’s contacts any more.");
+    assert.match(outreachProblem(Object.assign(new Error("fetch failed"), { name: "NetworkError" })), /Couldn’t reach Lemma/);
+    assert.equal(outreachProblem(undefined), "Couldn’t send it. Try again.");
 });
 
 test("the cap says what was spent, with or without one", () => {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
@@ -40,15 +41,15 @@ async def test_api_lifespan_yields_while_webhook_registration_is_pending(
 
 
 def _polling_receiver():
+    offsets = SimpleNamespace(load=AsyncMock(return_value=None), save=AsyncMock())
     receiver = TelegramManagerPollingReceiver(
         uow_factory=lambda: None,  # type: ignore[arg-type]
         store=AsyncMock(),
         manager_token="manager-token",
         manager_username="manager_bot",
+        offsets=offsets,  # type: ignore[arg-type]
     )
     receiver.should_start = lambda: True
-    receiver._store.load_offset = AsyncMock(return_value=None)
-    receiver._store.save_offset = AsyncMock()
     receiver._service.handle_update = AsyncMock()
     return receiver
 
@@ -74,7 +75,7 @@ async def test_polling_saves_offset_only_after_successful_handling():
         await receiver.run()
 
     receiver._service.handle_update.assert_awaited_once()
-    receiver._store.save_offset.assert_awaited_once_with(18)
+    receiver._offsets.save.assert_awaited_once_with(18)
 
 
 @pytest.mark.asyncio
@@ -95,7 +96,7 @@ async def test_polling_keeps_offset_when_handling_fails(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await receiver.run()
 
-    receiver._store.save_offset.assert_not_awaited()
+    receiver._offsets.save.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -115,9 +116,7 @@ async def test_polling_keeps_offset_when_persisting_offset_fails(monkeypatch):
         raise asyncio.CancelledError
 
     receiver._client.call = AsyncMock(side_effect=_call)
-    receiver._store.save_offset = AsyncMock(
-        side_effect=RuntimeError("redis unavailable")
-    )
+    receiver._offsets.save = AsyncMock(side_effect=RuntimeError("database unavailable"))
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.telegram_manager_receiver.asyncio.sleep",
         AsyncMock(),

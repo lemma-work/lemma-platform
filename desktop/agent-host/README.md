@@ -254,15 +254,33 @@ The setting is `own_settings` in `config.json`, read by each run as it starts.
 Each run's agent may run one `lemma` CLI without a permission request
 (`src/lemma_cli.rs`): the one the local install's backend names, or, for every
 other pairing, the one the app carries in `Contents/Resources/lemma-cli`
-(`make desktop-dmg` stages it with `scripts/build_desktop_lemma_cli.py`). From
-source there is no app bundle, so stage one and name it:
+(`make desktop-dmg` stages it with `scripts/build_desktop_lemma_cli.py`), else
+one the host downloaded for its own release. From source there is no app
+bundle, so stage one and name it:
 
 ```bash
 uv run --no-project python scripts/build_desktop_lemma_cli.py --output /tmp/lemma-cli
 LEMMA_AGENT_HOST_CLI_ROOT=/tmp/lemma-cli cargo run -p lemma-agent-host -- serve
 ```
 
-The variable is read by debug builds only.
+The shipped online app carries no CLI, so a release build downloads
+`lemma-cli-<platform>.tar.gz` from its own GitHub release the first time a
+hosted run needs one (`src/lemma_cli/download.rs`): the manifest URL is
+compiled in, never taken from a server, and the archive's SHA-256 is checked
+against it before it is unpacked into `<data dir>/cli/<version>/`. A failed
+download costs that run its CLI, not its start, and is retried later. To try
+it from source, publish the archive and point a debug build at its manifest:
+
+```bash
+uv run --no-project python scripts/build_desktop_lemma_cli.py --output /tmp/lemma-cli \
+  --archive /tmp/release --release-version 0.9.0 --release-url http://127.0.0.1:8000
+(cd /tmp/release && python3 -m http.server 8000) &
+LEMMA_AGENT_HOST_CLI_MANIFEST_URL=http://127.0.0.1:8000/lemma-cli-aarch64-apple-darwin.json \
+  cargo run -p lemma-agent-host -- serve
+```
+
+Both variables are read by debug builds only. The version in the manifest has
+to be the host's own (`cargo pkgid -p lemma-agent-host`).
 
 ## How many runs at once
 

@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from rich import box
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -111,6 +112,12 @@ SYSTEM_COLUMN_NAMES = {
 
 _INDENT = "  "
 
+# Every value below came from somebody: a channel title, a member's name, a
+# record's field. Rich reads `[...]` in a printed string as markup, so a title
+# "[live] launch" lost its "[live]" and a member could style or link text in
+# another member's terminal. Values are escaped where they meet markup; the
+# markup this module writes itself is the only markup that renders.
+
 
 class _Ctx:
     """Carries the --full setting and tracks whether anything was folded."""
@@ -137,7 +144,7 @@ def emit(state: CliState, data: Any) -> None:
     elif isinstance(data, dict):
         _emit_dict(data, ctx)
     else:
-        console.print(data)
+        console.print(data, markup=False)
     _emit_fold_hint(ctx)
 
 
@@ -169,11 +176,11 @@ def to_plain(value: Any) -> Any:
 def table(
     title: str, rows: list[dict[str, Any]], columns: list[tuple[str, str]]
 ) -> None:
-    view = Table(title=title, box=box.SIMPLE_HEAVY)
+    view = Table(title=escape(title), box=box.SIMPLE_HEAVY)
     for heading, _key in columns:
-        view.add_column(heading)
+        view.add_column(escape(heading))
     for row in rows:
-        view.add_row(*(str(row.get(key, "")) for _heading, key in columns))
+        view.add_row(*(escape(str(row.get(key, ""))) for _heading, key in columns))
     console.print(view)
 
 
@@ -354,43 +361,45 @@ def _render_message(message: dict[str, Any], ctx: _Ctx) -> None:
             if part
         )
         if meta:
-            console.print(f"[dim]{meta}[/dim]")
+            console.print(f"[dim]{escape(meta)}[/dim]")
 
     if kind in ("text", "notification"):
         text = str(message.get("text") or "").strip()
         if text:
-            console.print(f"{_role_tag(role, 'green')} {text}")
+            console.print(f"{_role_tag(role, 'green')} {escape(text)}")
     elif kind == "thinking":
         text = _trunc(str(message.get("text") or ""), ctx, _THINKING_MAX)
         if text:
-            console.print(f"[dim]{_plain_role(role)}·thinking {text}[/dim]")
+            console.print(f"[dim]{_plain_role(role)}·thinking {escape(text)}[/dim]")
     elif kind == "tool_call":
-        name = message.get("tool_name") or "?"
-        args = _compact_value(message.get("tool_args"), ctx, _TOOL_ARGS_MAX)
+        name = escape(str(message.get("tool_name") or "?"))
+        args = escape(_compact_value(message.get("tool_args"), ctx, _TOOL_ARGS_MAX))
         console.print(
             f"[yellow]{_plain_role(role)} ⚙ [bold]{name}[/bold]([/yellow]"
             f"{args}[yellow])[/yellow]"
         )
     elif kind == "tool_return":
-        name = message.get("tool_name") or "?"
-        result = _compact_value(message.get("tool_result"), ctx, _TOOL_RESULT_MAX)
+        name = escape(str(message.get("tool_name") or "?"))
+        result = escape(
+            _compact_value(message.get("tool_result"), ctx, _TOOL_RESULT_MAX)
+        )
         console.print(
             f"[yellow]{_plain_role(role)} ↩ [bold]{name}[/bold][/yellow] {result}"
         )
     else:
-        text = _trunc(str(message.get("text") or ""), ctx, 200)
-        console.print(f"{_role_tag(role, 'white')} [dim]({kind})[/dim] {text}")
+        text = escape(_trunc(str(message.get("text") or ""), ctx, 200))
+        console.print(f"{_role_tag(role, 'white')} [dim]({escape(kind)})[/dim] {text}")
 
 
 def _plain_role(role: str) -> str:
-    return role or "?"
+    return escape(role or "?")
 
 
 def _role_tag(role: str, default_style: str) -> str:
     style = {"user": "cyan", "assistant": "green", "system": "magenta"}.get(
         role.lower(), default_style
     )
-    return f"[{style}]{role or '?'}:[/{style}]"
+    return f"[{style}]{escape(role or '?')}:[/{style}]"
 
 
 def _compact_value(value: Any, ctx: _Ctx, max_length: int) -> str:
@@ -407,7 +416,9 @@ def _emit_dict(data: dict[str, Any], ctx: _Ctx) -> None:
     if set(data) <= {"ok", "path", "saved_to"}:
         message = "Done" if data.get("ok", True) else "Failed"
         suffix = data.get("path") or data.get("saved_to")
-        console.print(f"[green]{message}[/green]" + (f"  {suffix}" if suffix else ""))
+        console.print(
+            f"[green]{message}[/green]" + (f"  {escape(str(suffix))}" if suffix else "")
+        )
         return
 
     if isinstance(data.get("items"), list):
@@ -419,7 +430,7 @@ def _emit_dict(data: dict[str, Any], ctx: _Ctx) -> None:
         _emit_list("Servers", data["servers"], ctx)
         active = data.get("active_server")
         if active:
-            console.print(f"[dim]active server:[/dim] {active}")
+            console.print(f"[dim]active server:[/dim] {escape(str(active))}")
         return
 
     if len(data) == 1:
@@ -439,15 +450,15 @@ def _emit_list(title: str, values: list[Any], ctx: _Ctx) -> None:
     if not rows:
         if values:
             for item in values:
-                console.print(str(item))
+                console.print(str(item), markup=False)
         else:
             console.print("[dim]No results.[/dim]")
         return
 
     columns = _columns_for_rows(rows)
-    view = Table(title=title, box=box.SIMPLE_HEAVY, show_lines=False)
+    view = Table(title=escape(title), box=box.SIMPLE_HEAVY, show_lines=False)
     for heading, _key in columns:
-        view.add_column(heading, overflow="fold")
+        view.add_column(escape(heading), overflow="fold")
     for row in rows:
         view.add_row(*(_format_row_cell(row, key, ctx) for _heading, key in columns))
     console.print(view)
@@ -457,12 +468,12 @@ def _emit_detail(title: str, data: dict[str, Any], ctx: _Ctx) -> None:
     lines: list[str] = []
     primary_id = data.get("id")
     if primary_id:
-        lines.append(f"[dim]id[/dim] {primary_id}")
+        lines.append(f"[dim]id[/dim] {escape(str(primary_id))}")
 
     for key in IMPORTANT_KEYS:
         if key in data and data.get(key) not in (None, "", [], {}):
             lines.append(
-                f"[bold]{_humanize(key)}[/bold] "
+                f"[bold]{_label(key)}[/bold] "
                 f"{_format_cell(data[key], ctx, max_length=160)}"
             )
 
@@ -471,7 +482,7 @@ def _emit_detail(title: str, data: dict[str, Any], ctx: _Ctx) -> None:
             continue
         if key in REDACTED_KEYS:
             if value not in (None, "", [], {}):
-                lines.append(f"[bold]{_humanize(key)}[/bold] [dim][redacted][/dim]")
+                lines.append(f"[bold]{_label(key)}[/bold] [dim]\\[redacted][/dim]")
             continue
         if value in (None, "", [], {}):
             continue
@@ -481,14 +492,14 @@ def _emit_detail(title: str, data: dict[str, Any], ctx: _Ctx) -> None:
 
     if not lines:
         lines.append("[dim]No displayable fields.[/dim]")
-    console.print(Panel("\n".join(lines), title=title, border_style="cyan"))
+    console.print(Panel("\n".join(lines), title=escape(title), border_style="cyan"))
 
 
 def _render_field(
     key: str, value: Any, ctx: _Ctx, *, primary_key: str | None = None
 ) -> list[str]:
     """Render one detail field, possibly as a multi-line indented block."""
-    header = f"[bold]{_humanize(key)}[/bold]"
+    header = f"[bold]{_label(key)}[/bold]"
 
     if key == "columns" and isinstance(value, list):
         max_columns = 9999 if ctx.full else 10
@@ -506,13 +517,13 @@ def _render_field(
             show_options=True,
             max_options=None if ctx.full else 3,
         )
-        return [f"{header} {summary}"] if summary else []
+        return [f"{header} {escape(summary)}"] if summary else []
 
     if key in SCHEMA_KEYS or _looks_like_schema(value):
         body = format_schema(value, ctx)
         if body:
             return [header, *(f"{_INDENT}{line}" for line in body)]
-        return [f"{header} [dim]{_schema_type(value)}[/dim]"]
+        return [f"{header} [dim]{escape(_schema_type(value))}[/dim]"]
 
     if isinstance(value, dict):
         body = _render_mapping(value, ctx, depth=0)
@@ -532,12 +543,12 @@ def _render_list_field(header: str, value: list[Any], ctx: _Ctx) -> list[str]:
         count = len(value)
         if not ctx.full and count > 0:
             ctx.note_fold()
-            preview = _compact_dict(dict_items[0], ctx)
+            preview = escape(_compact_dict(dict_items[0], ctx))
             tail = f" — first: {preview}" if preview else ""
             return [f"{header} [dim]{count} item{_plural(count)}[/dim]{tail}"]
         out = [f"{header} [dim]{count} item{_plural(count)}[/dim]"]
         for item in value:
-            compact = _compact_dict(item, ctx)
+            compact = escape(_compact_dict(item, ctx))
             out.append(f"{_INDENT}- {compact}" if compact else f"{_INDENT}- {{}}")
         return out
     return [f"{header} {_format_cell(value, ctx, max_length=200)}"]
@@ -546,12 +557,13 @@ def _render_list_field(header: str, value: list[Any], ctx: _Ctx) -> list[str]:
 def _render_mapping(value: dict[str, Any], ctx: _Ctx, *, depth: int) -> list[str]:
     lines: list[str] = []
     max_depth = 6 if ctx.full else 2
-    for key, item in value.items():
-        if key in NOISE_KEYS:
+    for raw_key, item in value.items():
+        if raw_key in NOISE_KEYS:
             continue
-        if key in REDACTED_KEYS:
+        key = escape(str(raw_key))
+        if raw_key in REDACTED_KEYS:
             if item not in (None, "", [], {}):
-                lines.append(f"{key}: [dim][redacted][/dim]")
+                lines.append(f"{key}: [dim]\\[redacted][/dim]")
             continue
         if item in (None, "", [], {}):
             continue
@@ -582,7 +594,7 @@ def format_schema(
     if ctx is None:
         ctx = _Ctx(True)
     if not isinstance(schema, dict):
-        return [str(schema)]
+        return [escape(str(schema))]
 
     props = schema.get("properties")
     if isinstance(props, dict) and props:
@@ -591,11 +603,13 @@ def format_schema(
         max_depth = 8 if ctx.full else 3
         for name, sub in props.items():
             sub = sub if isinstance(sub, dict) else {}
-            typ = _schema_type(sub)
+            typ = escape(_schema_type(sub))
             req = " [red]*[/red]" if name in required else ""
             desc = sub.get("description")
-            desc_str = f"  [dim]— {_trunc(str(desc), ctx, 80)}[/dim]" if desc else ""
-            lines.append(f"[cyan]{name}[/cyan]: {typ}{req}{desc_str}")
+            desc_str = (
+                f"  [dim]— {escape(_trunc(str(desc), ctx, 80))}[/dim]" if desc else ""
+            )
+            lines.append(f"[cyan]{escape(str(name))}[/cyan]: {typ}{req}{desc_str}")
             child = _object_child(sub)
             if child is not None:
                 if _depth + 1 >= max_depth:
@@ -609,8 +623,8 @@ def format_schema(
 
     # No properties: describe the type itself (e.g. free-form object / array).
     desc = schema.get("description")
-    suffix = f"  [dim]— {_trunc(str(desc), ctx, 80)}[/dim]" if desc else ""
-    return [f"{_schema_type(schema)}{suffix}"]
+    suffix = f"  [dim]— {escape(_trunc(str(desc), ctx, 80))}[/dim]" if desc else ""
+    return [f"{escape(_schema_type(schema))}{suffix}"]
 
 
 def _object_child(sub: dict[str, Any]) -> dict[str, Any] | None:
@@ -767,11 +781,19 @@ def _format_column(
 
 def _format_row_cell(row: dict[str, Any], key: str, ctx: _Ctx) -> str:
     if key == "columns":
-        return format_columns(row.get(key), primary_key=row.get("primary_key_column"))
+        return escape(
+            format_columns(row.get(key), primary_key=row.get("primary_key_column"))
+        )
     return _format_cell(row.get(key), ctx)
 
 
 def _format_cell(value: Any, ctx: _Ctx, *, max_length: int = 64) -> str:
+    """A value as it goes into markup: shortened, then escaped."""
+    return escape(_cell_text(value, ctx, max_length=max_length))
+
+
+def _cell_text(value: Any, ctx: _Ctx, *, max_length: int = 64) -> str:
+    """A value as one short line of plain text -- not yet escaped."""
     if value is None:
         return ""
     if isinstance(value, bool):
@@ -798,14 +820,14 @@ def _compact_dict(value: dict[str, Any], ctx: _Ctx) -> str:
     for key in IMPORTANT_KEYS:
         item = value.get(key)
         if item not in (None, "", [], {}):
-            parts.append(f"{key}={_format_cell(item, ctx, max_length=36)}")
+            parts.append(f"{key}={_cell_text(item, ctx, max_length=36)}")
     if not parts:
         for key, item in value.items():
             if key in SKIP_LIST_COLUMN_KEYS or item in (None, "", [], {}):
                 continue
             if isinstance(item, (dict, list)):
                 continue
-            parts.append(f"{key}={_format_cell(item, ctx, max_length=36)}")
+            parts.append(f"{key}={_cell_text(item, ctx, max_length=36)}")
             if len(parts) >= 3:
                 break
     return ", ".join(parts)
@@ -845,6 +867,12 @@ def _emit_page_hint(data: dict[str, Any]) -> None:
     # scripts through --json, where the payload is passed straight through.
     if data.get("next_page_token") or data.get("nextPageToken"):
         console.print("[dim]More results available — raise --limit.[/dim]")
+
+
+def _label(key: Any) -> str:
+    """A field name as a heading in markup. Record and schema field names are
+    the pod's own, so they are escaped like any other value."""
+    return escape(_humanize(str(key)))
 
 
 def _humanize(value: str) -> str:

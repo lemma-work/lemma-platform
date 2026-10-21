@@ -28,8 +28,12 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use super::paths::{OpenParams, admissible, default_root};
 use super::seatbelt::{Confinement, MAX_GRANTS};
-use super::wire::{ExecRequest, ExecResponse, OpFailure, kind, method};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+
+use super::wire::{ExecRequest, ExecResponse, OP_MAX_DATA_BYTES, OpFailure, kind, method};
 use crate::link::protocol::OpBody;
+use crate::link::transfer::{TransferClient, TransferError};
 
 /// The first wait before restarting an exec-server that exited, doubling to
 /// `RESTART_MAX`. Reset once one has stayed up for `RESTART_RESET`.
@@ -478,6 +482,9 @@ impl RelayPaths {
 pub struct ExecRelay {
     launcher: Arc<dyn Launcher>,
     paths: RelayPaths,
+    /// How file data moves to and from Lemma; `None` refuses an op that
+    /// names a transfer.
+    transfers: Option<TransferClient>,
     enabled: AtomicBool,
     workspaces: tokio::sync::Mutex<HashMap<String, HostedWorkspace>>,
 }
@@ -503,10 +510,15 @@ impl Drop for ExecRelay {
 }
 
 impl ExecRelay {
-    pub fn new(launcher: Arc<dyn Launcher>, paths: RelayPaths) -> Arc<Self> {
+    pub fn new(
+        launcher: Arc<dyn Launcher>,
+        paths: RelayPaths,
+        transfers: Option<TransferClient>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             launcher,
             paths,
+            transfers,
             enabled: AtomicBool::new(false),
             workspaces: tokio::sync::Mutex::new(HashMap::new()),
         })
@@ -520,6 +532,12 @@ impl ExecRelay {
     #[must_use]
     pub fn available(&self) -> bool {
         self.launcher.available()
+    }
+
+    /// Whether an op that names a transfer can be served: see `forward`.
+    #[must_use]
+    pub fn moves_data_by_transfer(&self) -> bool {
+        self.transfers.is_some()
     }
 
     /// Turn host execution on or off. Off refuses every op from this moment
@@ -592,17 +610,101 @@ impl ExecRelay {
                 };
                 let runner = wait_started(runner, START_WAIT).await;
                 match runner {
-                    Runner::Up { connection, .. } => {
-                        connection
-                            .request(&op.workspace, &op.method, op.params, op.deadline_ms)
-                            .await
-                    }
+                    Runner::Up { connection, .. } => self.forward(&connection, op).await,
                     Runner::Down(failure) => Err(failure),
                     Runner::Starting => Err(OpFailure::unavailable(
                         "the command runner on this computer is still starting; try again",
                     )),
                 }
             }
+        }
+    }
+
+    /// Hand an op to its exec-server, moving its file data over HTTP.
+    ///
+    /// A `file.write` names the transfer its chunk waits in and a `file.read`
+    /// the slot its chunk goes to (`link::transfer`); the bytes never ride the
+    /// link. The exec-server is unchanged by it: confined, it has no network,
+    /// so this side -- outside the sandbox -- fetches and delivers, and the
+    /// exec-server still reads and writes `data` on its stdio. An op naming
+    /// no transfer is from a Lemma that sends data inline, and is passed on
+    /// as it came.
+    async fn forward(&self, connection: &Connection, op: OpBody) -> Result<Value, OpFailure> {
+        let OpBody {
+            workspace,
+            method,
+            mut params,
+            deadline_ms,
+        } = op;
+        let Some(transfer) = take_transfer(&mut params)? else {
+            return connection
+                .request(&workspace, &method, params, deadline_ms)
+                .await;
+        };
+        let transfers = self.transfers.as_ref().ok_or_else(|| {
+            OpFailure::unavailable("this connection cannot move file data to or from Lemma")
+        })?;
+        match method.as_str() {
+            method::FILE_WRITE => {
+                let (Some(size), Some(sha256)) = (transfer.size, transfer.sha256.as_deref()) else {
+                    return Err(OpFailure::invalid(
+                        "a write's transfer must name its size and sha256",
+                    ));
+                };
+                let data = transfers
+                    .fetch(&transfer.id, size, sha256)
+                    .await
+                    .map_err(|error| transfer_failure(&error))?;
+                if let Value::Object(fields) = &mut params {
+                    fields.insert("data".into(), Value::String(STANDARD.encode(data)));
+                }
+                connection
+                    .request(&workspace, &method, params, deadline_ms)
+                    .await
+            }
+            method::FILE_READ => {
+                let limit = transfer.max_bytes.unwrap_or(OP_MAX_DATA_BYTES);
+                if let Value::Object(fields) = &mut params {
+                    let asked = fields
+                        .get("length")
+                        .and_then(Value::as_u64)
+                        .and_then(|length| usize::try_from(length).ok())
+                        .unwrap_or(OP_MAX_DATA_BYTES);
+                    fields.insert("length".into(), json!(asked.min(limit)));
+                }
+                let mut result = connection
+                    .request(&workspace, &method, params, deadline_ms)
+                    .await?;
+                let Value::Object(fields) = &mut result else {
+                    return Err(OpFailure::invalid(
+                        "the exec-server answered a read with no data",
+                    ));
+                };
+                let data = fields
+                    .remove("data")
+                    .and_then(|data| data.as_str().map(str::to_owned))
+                    .map(|data| STANDARD.decode(data))
+                    .transpose()
+                    .map_err(|error| {
+                        OpFailure::invalid(format!("read data is not base64: {error}"))
+                    })?
+                    .unwrap_or_default();
+                let size = data.len();
+                let sha256 = if data.is_empty() {
+                    crate::link::transfer::sha256_hex(&[])
+                } else {
+                    transfers
+                        .deliver(&transfer.id, data)
+                        .await
+                        .map_err(|error| transfer_failure(&error))?
+                };
+                fields.insert("size".into(), json!(size));
+                fields.insert("sha256".into(), json!(sha256));
+                Ok(result)
+            }
+            other => Err(OpFailure::invalid(format!(
+                "{other} does not move data by transfer"
+            ))),
         }
     }
 
@@ -872,6 +974,48 @@ fn prepare_cache(cache: &Path, workspace: &str) -> std::io::Result<(PathBuf, Pat
     let tmp = cache.join("tmp").join(name);
     super::server::create_private_dir(&tmp)?;
     Ok((cache, tmp))
+}
+
+/// What an op names in place of its data: see `ExecRelay::forward`.
+#[derive(Debug, serde::Deserialize)]
+struct TransferRef {
+    id: String,
+    /// A write's: what Lemma staged.
+    #[serde(default)]
+    size: Option<usize>,
+    #[serde(default)]
+    sha256: Option<String>,
+    /// A read's: the most the slot takes.
+    #[serde(default)]
+    max_bytes: Option<usize>,
+}
+
+fn take_transfer(params: &mut Value) -> Result<Option<TransferRef>, OpFailure> {
+    let Some(raw) = params
+        .as_object_mut()
+        .and_then(|fields| fields.remove("transfer"))
+    else {
+        return Ok(None);
+    };
+    if raw.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value(raw)
+        .map(Some)
+        .map_err(|error| OpFailure::invalid(format!("the op's transfer did not parse: {error}")))
+}
+
+/// A transfer that failed, as the op failure the provider maps.
+fn transfer_failure(error: &TransferError) -> OpFailure {
+    let message = format!("moving the file data failed: {error}");
+    match error {
+        TransferError::Mismatch(_) | TransferError::Refused { status: 422, .. } => {
+            OpFailure::new(kind::DIGEST_MISMATCH, message)
+        }
+        TransferError::Refused { status: 413, .. } => OpFailure::new(kind::TOO_LARGE, message),
+        _ if error.is_transient() => OpFailure::unavailable(message),
+        TransferError::Refused { .. } | TransferError::Transport(_) => OpFailure::invalid(message),
+    }
 }
 
 async fn wait_started(mut runner: watch::Receiver<Runner>, wait: Duration) -> Runner {

@@ -122,7 +122,7 @@ impl HostRuntime {
             paths,
             journal,
             manifest,
-            driver: Arc::new(AcpDriver),
+            driver: Arc::new(AcpDriver::default()),
             mcp_bridge_executable: std::env::current_exe()?,
         })
     }
@@ -155,6 +155,9 @@ impl HostRuntime {
         if deleted > 0 {
             tracing::info!(deleted, "cleaned retained Agent Host journal records");
         }
+        // A previous release's downloaded CLI, or a download a crash cut
+        // short. Nothing is downloading yet: the first worker starts below.
+        crate::lemma_cli::download::Downloader::shared(&self.paths.root).remove_stale();
         let global_capacity = Arc::new(Semaphore::new(usize::from(self.config.max_runs)));
         let mut targets =
             HashMap::<Uuid, (watch::Sender<bool>, OwnedTask<anyhow::Result<()>>)>::new();
@@ -292,6 +295,11 @@ impl HostRuntime {
                     for (target_id, target) in enabled {
                         if targets.contains_key(&target_id) {
                             continue;
+                        }
+                        if !target.is_local_install() {
+                            // So a hosted workspace's first run finds the CLI
+                            // already downloaded, when the app carries none.
+                            crate::lemma_cli::prefetch_for_hosted_pairing(&self.paths.root);
                         }
                         let (shutdown_tx, shutdown_rx) = watch::channel(false);
                         let worker = TargetWorker::new(

@@ -16,6 +16,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -26,12 +27,15 @@ from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.private_notes import keeper_started, run_is_private
+from app.modules.agent.domain.private_notes import (
+    keeper_started,
+    run_delivers_to_surface,
+)
 from app.modules.agent.domain.run_context_prompt import (
     render_run_context,
     task_list_section,
 )
-from app.modules.agent.capabilities.open_notifications import open_notification_text
+from app.modules.agent.capabilities.open_questions import open_question_text
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.attached_document_brief import (
     build_attached_document_section,
@@ -40,9 +44,7 @@ from app.modules.agent.services.outsider_brief import outsider_brief
 from app.modules.agent.services.link_brief import link_brief
 from app.modules.agent.services.brief_lines import run_source_of
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.services.surface_context import (
-    surface_context_from_conversation,
-)
+from app.modules.agent.services.surface_context import surface_context_for_run
 from app.modules.agent.domain.workspace_location import (
     has_recorded_cwd,
     pod_cwd_from_workspace_cwd,
@@ -81,7 +83,7 @@ async def build_run_context(
     the harness options, and two calls to `runtime_snapshot()` would be two
     objects that only happen to agree.
     """
-    surface_context = surface_context_from_conversation(conversation)
+    surface_context = surface_context_for_run(conversation, agent_run.metadata)
     workspace_location = resolve_workspace_location(conversation)
     # Same rule the MCP bridge follows: a conversation that never had a
     # cwd written down gets one now, so metadata is the source of truth
@@ -139,7 +141,7 @@ async def build_run_context(
         workspace_readable=AgentToolset.WORKSPACE_CLI in run_toolsets,
         grant_summary=grant_summary,
         audience=audience,
-        delivers_to_surface=not run_is_private(agent_run.metadata),
+        delivers_to_surface=run_delivers_to_surface(agent_run.metadata),
         keeper_asking=for_outsider and keeper_started(agent_run.metadata),
         **surface_context,
     )
@@ -171,6 +173,7 @@ async def build_run_context(
                 # stamped, so only the run can say whether a person is here on
                 # this turn.
                 run_source=run_source_of(agent_run),
+                platform=surface_context["surface_platform"],
             )
             ctx.context_brief, run_brief = brief.stable, brief.per_run
     # The failures a run should survive: a denied grant, a missing file, a
@@ -180,7 +183,8 @@ async def build_run_context(
     # that. A run could lose the pod's name, its tables, its grants and its
     # memory at once, with nothing logged and nothing said to the model, which
     # then saw a pod that appeared to be empty.
-    except DomainError, SQLAlchemyError, OSError, TimeoutError:
+    except (DomainError, SQLAlchemyError, OSError, TimeoutError) as exc:
+        raise_if_database_unavailable(exc)
         logger.warning(
             "agent.run.context_brief_unavailable.degraded",
             agent_id=str(agent.id),
@@ -205,13 +209,18 @@ async def build_run_context(
         )
     # Never on a stranger's run: an open request is the owner's to answer.
     if not for_outsider:
-        ctx.open_notifications = await open_notification_text(conversation.id)
+        ctx.open_questions = await open_question_text(
+            conversation_id=conversation.id,
+            channel_id=getattr(conversation, "channel_id", None),
+            pod_id=conversation.pod_id,
+            user_id=conversation.user_id,
+        )
     ctx.run_context = render_run_context(
         sections=(
             run_brief,
             ctx.attached_document,
             task_list_section(conversation, toolsets=run_toolsets),
-            ctx.open_notifications,
+            ctx.open_questions,
         )
     )
     # How image-returning tools answer on this run. Settled before the

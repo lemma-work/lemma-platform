@@ -236,10 +236,14 @@ export const getResponseBody = async (response: Response): Promise<any> => {
             if (contentType) {
                 const jsonTypes = ['application/json', 'application/problem+json']
                 const isJSON = jsonTypes.some(type => contentType.toLowerCase().startsWith(type));
+                const textTypes = ['text/', 'application/javascript', 'application/xml', 'application/yaml'];
+                const isText = textTypes.some(type => contentType.toLowerCase().startsWith(type));
                 if (isJSON) {
                     return await response.json();
-                } else {
+                } else if (isText) {
                     return await response.text();
+                } else {
+                    return await response.blob();
                 }
             }
         } catch (error) {

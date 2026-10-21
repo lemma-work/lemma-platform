@@ -1,0 +1,3133 @@
+/* A space's channels: the Channels page, one channel's page with its thread
+   and its panel, the sheets that bring the bot into a group, and the bot
+   settings that list its groups.
+
+   Colour only from tokens, weight never past 500. Every phone rule is in
+   space-mobile.css, which loads after this. */
+
+/* ── the sidebar's count of what is new for you ──────────────────────── */
+.side__item .snav__count {
+    margin-left: auto;
+    flex: none;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 11px;
+    line-height: 18px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Only new lines, and nothing asked of you: said, not raised. */
+.side__item .snav__count[data-tone="new"] {
+    background: var(--line-2);
+    color: var(--ink-2);
+}
+
+/* Channels stays lit on one channel's page: the section, beside the page. */
+.side__item[aria-current="true"] {
+    background: var(--line-2);
+}
+
+/* A link that is a button: the blue of a link, inline in a sentence. */
+.gsheet__inline {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--info);
+    font: inherit;
+    cursor: pointer;
+}
+.gsheet__inline:hover:not(:disabled) {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.gsheet__inline:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+.gsheet__inline:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Beside it: what is true about the channel, and each source's settings. */
+.gside {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.gside__head {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--ink-3);
+}
+.gside__text,
+.gside__fine {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.gside__fine {
+    font-size: 13px;
+}
+/* What a group's people from outside the space can be told: one line per
+   Public thing, its folder under it, like the people list above. */
+.gpublic {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.gside__label {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink);
+}
+.gpublic__list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 14px;
+}
+.gpublic__list li {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.gpublic__list span {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.gpublic__list small,
+.gpublic__more {
+    font-size: 12px;
+    color: var(--ink-2);
+}
+.gpeople {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.gpeople li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.gpeople .gface {
+    width: 28px;
+    height: 28px;
+    font-size: 11px;
+}
+.gpeople__who {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    font-size: 14px;
+}
+.gpeople__who span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gpeople__who small {
+    font-size: 12px;
+    color: var(--ink-2);
+}
+.gpeople__invite {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+}
+.gswitch {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+}
+.gswitch input {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 1px 0 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.gswitch input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.gswitch:has(input:disabled) {
+    opacity: 0.6;
+    cursor: default;
+}
+.gswitch__text {
+    display: flex;
+    flex-direction: column;
+    font-size: 14px;
+}
+.gswitch__text small {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink-2);
+}
+.gowner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--ink-2);
+}
+
+/* ── the sheets that start or add one ────────────────────────────────── */
+.modal__titled {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+.modal__mark {
+    flex: none;
+    display: grid;
+    place-items: center;
+}
+.gsheet {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    font-size: 14px;
+    line-height: 1.45;
+}
+.gsheet__block,
+.gsheet__field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.gsheet__block {
+    gap: 10px;
+}
+.gsheet__label,
+.gsheet__check-title,
+.gsheet__em,
+.gsheet__cases dt {
+    font-weight: 500;
+}
+.gsheet__field input {
+    height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+}
+.gsheet__field input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.gsheet__hint,
+.gsheet__fine {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.gsheet__steps {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 16px 16px 16px 34px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.gsheet__steps li::marker {
+    color: var(--ink-3);
+}
+/* Telegram's steps are where you are: the one in hand dark, those done
+   ticked, the rest waiting. */
+.gsheet__steps--dots {
+    gap: 14px;
+    padding: 0;
+    background: none;
+    list-style: none;
+    counter-reset: step;
+}
+.gsheet__steps--dots li {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    color: var(--ink-2);
+    counter-increment: step;
+}
+.gsheet__steps--dots li::before {
+    content: counter(step);
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 12px;
+}
+.gsheet__steps--dots li[data-at] {
+    color: var(--ink);
+}
+.gsheet__steps--dots li[data-at]::before {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+.gsheet__steps--dots li[data-done]::before {
+    content: "✓";
+    background: var(--accent-soft);
+    color: var(--ok);
+}
+.gsheet__check {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    cursor: pointer;
+}
+.gsheet__check input {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 2px 0 0;
+    accent-color: var(--accent);
+}
+.gsheet__check > span {
+    display: flex;
+    flex-direction: column;
+}
+.gsheet__code {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 48px;
+    padding: 6px 6px 6px 14px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.gsheet__code-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+code.gsheet__code-text {
+    padding: 0;
+    background: none;
+    font-family: var(--mono);
+    font-size: 14px;
+}
+.gsheet__copy {
+    height: 36px;
+}
+.gsheet__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.gsheet__acts .ghost-pill {
+    height: 36px;
+    text-decoration: none;
+}
+.gsheet__qr {
+    align-items: flex-start;
+}
+.gsheet__facts,
+.gsheet__cases {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 16px;
+    border-radius: var(--r-md);
+    box-shadow: var(--depth-rest);
+}
+.gsheet__facts div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+.gsheet__facts dt {
+    flex: none;
+    color: var(--ink-2);
+}
+.gsheet__facts dd {
+    margin: 0;
+    text-align: right;
+}
+.gsheet__cases div + div {
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+}
+.gsheet__cases dd {
+    margin: 2px 0 0;
+    color: var(--ink-2);
+}
+.gsheet__big {
+    justify-content: center;
+    width: 100%;
+    height: 52px;
+    font-size: 15px;
+}
+.gsheet__status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
+    padding: 14px 16px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.gsheet__status--done > svg {
+    flex: none;
+    color: var(--ok);
+}
+.gsheet__status-text {
+    flex: 1;
+    min-width: 0;
+}
+.gsheet__dots {
+    flex: none;
+    display: flex;
+    gap: 4px;
+}
+.gsheet__dots i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ink);
+    animation: gsheet-dots 1.2s ease-in-out infinite;
+}
+.gsheet__dots i:nth-child(2) {
+    animation-delay: 0.2s;
+}
+.gsheet__dots i:nth-child(3) {
+    animation-delay: 0.4s;
+}
+@keyframes gsheet-dots {
+    0%, 100% { opacity: 0.25; }
+    40% { opacity: 1; }
+}
+.gsheet__foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 4px;
+}
+.gsheet__foot--split {
+    justify-content: space-between;
+}
+.gsheet__foot .pill-button,
+.gsheet__foot .ghost-pill {
+    height: 42px;
+    padding: 0 18px;
+}
+
+/* ── a channel's settings ────────────────────────────────────────────── */
+.smanage {
+    gap: 16px;
+}
+.smanage__back {
+    justify-self: start;
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.smanage__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.smanage__title {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.smanage__title h3 {
+    font-size: 19px;
+    font-weight: 500;
+}
+.smanage__title span {
+    font-size: 13px;
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+}
+.smanage__health {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 8px 8px 14px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.smanage__state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+}
+.smanage__state i {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ink-3);
+}
+.smanage__state i[data-tone="good"] {
+    background: var(--ok);
+}
+.smanage__state i[data-tone="waiting"] {
+    background: var(--warn);
+}
+.smanage .smanage__recheck {
+    min-height: 32px;
+    height: 32px;
+    padding: 0 12px;
+    font-size: 13px;
+}
+.smanage__quiet {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.smanage__form {
+    gap: 18px;
+}
+.smanage__check {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    cursor: pointer;
+}
+.smanage__check input {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 2px 0 0;
+    accent-color: var(--accent);
+}
+.smanage__check > span {
+    display: flex;
+    flex-direction: column;
+}
+.smanage__check small,
+.smanage__field small {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ink-2);
+}
+.smanage__label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink);
+}
+.smanage__field select {
+    height: 42px;
+    font-size: 14px;
+}
+.smanage__groups {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.smanage__groups-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+.smanage__groups-head h4 {
+    font-size: 14px;
+    font-weight: 500;
+}
+.smanage__all,
+.smanage__group-list a {
+    color: var(--info);
+    text-decoration: none;
+}
+.smanage__all:hover,
+.smanage__group-list a:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.smanage__group-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.smanage__group-list li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 14px;
+}
+.smanage__group-list a {
+    min-width: 0;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+}
+.smanage__group-list small {
+    flex: none;
+    max-width: 60%;
+    font-size: 13px;
+    color: var(--ink-2);
+    text-align: right;
+}
+.smanage .smanage__add {
+    justify-self: start;
+    margin: 0;
+    font-size: 14px;
+    color: var(--info);
+}
+.smanage__foot {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+}
+.smanage__foot .pill-button,
+.smanage__foot .ghost-pill {
+    height: 42px;
+    padding: 0 18px;
+}
+.smanage__confirm {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-right: auto;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.smanage__confirm .linkish {
+    margin: 0;
+    font-size: 13px;
+}
+.smanage .smanage__drop {
+    color: var(--bad);
+    box-shadow: inset 0 0 0 1px var(--bad);
+}
+
+/* Bot-page group rows: the name opens the group's channel. */
+.sgroup__open {
+    color: inherit;
+    text-decoration: none;
+}
+.sgroup__open:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.sgroup__open:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+/* Faces: initials for a person, the agent mark for an agent. */
+.gface {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font-size: 12px;
+}
+.gface--agent {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.gside__problem,
+.gsheet__problem,
+.cline__problem {
+    margin: 0;
+    font-size: 13px;
+    color: var(--bad);
+}
+.gsheet__copy {
+    white-space: nowrap;
+}
+
+.channels__section {
+    margin-bottom: 28px;
+}
+.channels__section h2 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--ink-3);
+}
+.channels__quiet {
+    margin: 0 0 12px;
+    font-size: 14px;
+    color: var(--ink-2);
+}
+.channels__trouble {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 40px 0;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.channels__trouble p {
+    margin: 0;
+}
+.channels__more {
+    margin-bottom: 20px;
+}
+
+/* A new channel: who of the space is in it. */
+.cnew__people {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+.cnew__list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 6px 14px;
+    max-height: 220px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* ── one channel ─────────────────────────────────────────────────────── */
+.channel-pane {
+    background: var(--paper);
+}
+/* The timeline and its composer, and beside them a thread or the panel:
+   columns that scroll on their own. */
+.cpage {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+}
+.cpage__main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+.cpage__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 32px 12px;
+    border-bottom: 1px solid var(--line);
+}
+/* The title keeps a readable width; a contact's controls wrap below it
+   rather than squeezing it to a column of single words. */
+.cpage__who {
+    flex: 1 1 240px;
+    min-width: 0;
+}
+.cpage__who h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+.cpage__who p {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+
+.cpage__head .icon-button[aria-pressed="true"] {
+    background: var(--line-2);
+    color: var(--ink);
+}
+.cpage__note {
+    margin: 12px 32px 0;
+    padding: 10px 14px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+    font-size: 14px;
+    color: var(--ink-2);
+}
+.cpage__note--ask {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.cpage__quiet {
+    margin: 0;
+    padding: 40px;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.cpage__gone {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 40px;
+    font-size: 15px;
+    color: var(--ink-2);
+}
+.cpage__gone p {
+    margin: 0;
+}
+.cpage__gone-acts {
+    display: flex;
+    gap: 8px;
+}
+
+/* What was said, a day at a time. */
+/* The timeline and what floats over it: "Jump to unread" at its top, the
+   new-lines pill at its foot. */
+.ctimeline__wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+.ctimeline {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 32px 16px;
+}
+.ctimeline__jump,
+.ctimeline__fresh {
+    position: absolute;
+    left: 50%;
+    z-index: 2;
+    transform: translateX(-50%);
+    box-shadow: var(--depth-raise);
+}
+.ctimeline__jump {
+    top: 8px;
+    background: var(--paper);
+}
+.ctimeline__fresh {
+    bottom: 10px;
+}
+/* Where the lines unread when the channel was opened begin. */
+.ctimeline__unread {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    list-style: none;
+    font-size: 12px;
+    color: var(--accent);
+}
+.ctimeline__unread::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--accent-line);
+}
+.chthread__more {
+    display: block;
+    margin: 4px auto 12px;
+}
+.chcompose__progress {
+    margin: 0;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.chcompose[data-dragging] {
+    outline: 2px dashed var(--accent-line);
+    outline-offset: 2px;
+}
+.chchip--file[data-state="uploading"] {
+    color: var(--ink-2);
+}
+.chchip--file[data-state="uploaded"] {
+    color: var(--ok);
+}
+.ctimeline__older {
+    display: block;
+    margin: 4px auto 12px;
+}
+.ctimeline__quiet {
+    margin: 0;
+    padding: 24px 0;
+    font-size: 14px;
+    color: var(--ink-2);
+}
+.cday {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 12px;
+}
+.cday__label {
+    margin: 0 0 6px;
+    font-size: 12px;
+    font-weight: 400;
+    text-align: center;
+    color: var(--ink-3);
+}
+.cday__lines {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.cline {
+    display: flex;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: var(--r-md);
+}
+.cline:hover,
+.cline:focus-within {
+    background: var(--wash-b);
+}
+/* A note to members never left Lemma: set apart on its edge, the way an
+   aside is in a document. */
+.cline[data-note] {
+    background: var(--wash-a);
+    box-shadow: inset 2px 0 0 var(--accent-line);
+}
+.cline__face {
+    flex: none;
+    padding-top: 2px;
+}
+.cline__body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.cline__head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+}
+.cline__who {
+    font-size: 14px;
+    font-weight: 500;
+}
+.cline__chip {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--wash-a);
+    font-size: 12px;
+    color: var(--ink-2);
+}
+.cline__chip--note {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.cline__at {
+    font-size: 12px;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+}
+.cline__text {
+    margin: 0;
+    font-size: 14.5px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+/* An agent's markdown at the line's own size, not the reading size a reply
+   gets, and without the pre-wrap that keeps a person's line breaks. */
+.cline__text--md {
+    white-space: normal;
+}
+.cline__text--md .md {
+    font-size: inherit;
+    line-height: inherit;
+}
+.cline__text--md .md p {
+    margin: 0 0 8px;
+}
+.cline__text--md .md > :last-child {
+    margin-bottom: 0;
+}
+.cline__gone {
+    margin: 0;
+    font-size: 13.5px;
+    font-style: italic;
+    color: var(--ink-3);
+}
+.cline__edit {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.cline__edit textarea,
+.cside__add select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    resize: vertical;
+}
+.cline__edit textarea:focus,
+.cside__add select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.cline__edit-acts {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+}
+.cline__edit-acts .linkish {
+    margin: 0;
+}
+/* A question waiting on the reader, answered where it was asked. */
+.cline__ask {
+    margin-top: 6px;
+    border-radius: var(--r-md);
+    background: var(--paper);
+    box-shadow: var(--depth-rest);
+}
+.cline__ask .notify__item {
+    border-bottom: 0;
+}
+.cline__asked {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.cline__asked[data-open] {
+    color: var(--ink-2);
+}
+/* An agent's answer only its asker reads, and the way to share it. */
+.cline__private {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin: 4px 0 0;
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.cline__answer {
+    color: var(--ink);
+}
+.cline__foot {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    min-height: 0;
+}
+.cline__replies,
+.cline__act {
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    color: var(--info);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+.cline__replies:hover,
+.cline__act:hover:not(:disabled) {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.cline__replies:focus-visible,
+.cline__act:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+.cline__act {
+    color: var(--ink-3);
+}
+.cline__act--bad {
+    color: var(--bad);
+}
+.cline__ask-delete {
+    font-size: 12.5px;
+    color: var(--ink-2);
+}
+/* A line's own actions show on hover or focus; on touch, always. */
+.cline__acts {
+    display: inline-flex;
+    gap: 12px;
+    opacity: 0;
+}
+.cline:hover .cline__acts,
+.cline:focus-within .cline__acts {
+    opacity: 1;
+}
+@media (hover: none) {
+    .cline__acts {
+        opacity: 1;
+    }
+}
+
+/* Writing in it. */
+.chcompose {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0 32px 18px;
+    padding: 10px 12px 8px;
+    border-radius: var(--r-lg);
+    background: var(--paper);
+    box-shadow: var(--depth-rest);
+}
+.chcompose:focus-within {
+    box-shadow: var(--depth-rest), 0 0 0 2px var(--accent-line);
+}
+.chcompose[data-note] {
+    background: var(--wash-a);
+}
+.chcompose__text {
+    width: 100%;
+    min-height: 24px;
+    max-height: 220px;
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+    line-height: 1.5;
+    resize: none;
+}
+.chcompose__text:focus {
+    outline: none;
+}
+.chcompose__bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.chcompose__send {
+    margin-left: auto;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent);
+}
+.chcompose__send:disabled {
+    background: var(--line-2);
+    color: var(--ink-3);
+    cursor: default;
+}
+.chcompose__menu {
+    position: absolute;
+    left: 8px;
+    bottom: calc(100% + 6px);
+    z-index: 30;
+    width: 300px;
+    max-width: calc(100% - 16px);
+    margin: 0;
+    padding: 6px;
+    border-radius: var(--r-lg);
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+    list-style: none;
+}
+/* Not enough space above the box (a line at the top of the timeline): below it. */
+.chcompose__menu--below {
+    top: calc(100% + 6px);
+    bottom: auto;
+}
+.chcompose__option {
+    display: flex;
+    flex-direction: column;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 14px;
+    cursor: pointer;
+}
+.chcompose__option small {
+    font-size: 12px;
+    color: var(--ink-2);
+}
+.chcompose__option[aria-selected="true"],
+.chcompose__option:hover {
+    background: var(--accent-soft);
+}
+
+/* Beside it: a thread, or what is true about the channel. */
+.cside {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    width: 340px;
+    min-height: 0;
+    border-left: 1px solid var(--line);
+    background: var(--paper);
+}
+.cside__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 18px 18px 12px 24px;
+    border-bottom: 1px solid var(--line);
+}
+.cside__head h2 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 500;
+}
+.cside__body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+    overflow-y: auto;
+    padding: 20px 24px 64px;
+}
+.cside__link {
+    color: var(--info);
+    text-underline-offset: 3px;
+}
+.cside__ask {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: var(--r-md);
+    background: var(--accent-soft);
+    font-size: 14px;
+}
+.cside__since {
+    color: var(--ink-2);
+}
+.cside__form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.cside__acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    font-size: 14px;
+}
+.cside__add {
+    display: flex;
+    gap: 8px;
+}
+.cside__add select {
+    flex: 1;
+    min-width: 0;
+}
+.cnotify {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.chplaces {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.chplace {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.chplace__row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+}
+.csource {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: var(--r-md);
+    background: var(--wash-b);
+}
+.csource__link {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.chthread__body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 14px;
+}
+.chthread__count {
+    margin: 8px 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+    font-size: 12.5px;
+    color: var(--ink-3);
+}
+.chthread .chcompose {
+    margin: 0 14px 14px;
+}
+
+/* Narrower than a desk: what is beside the timeline covers it instead. */
+@media (max-width: 1100px) {
+    .cpage {
+        position: relative;
+    }
+    .cside {
+        position: absolute;
+        inset: 0 0 0 auto;
+        z-index: 20;
+        width: min(380px, 100%);
+        box-shadow: var(--depth-raise);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    .gsheet__dots i {
+        animation: none;
+        opacity: 0.6;
+    }
+}
+
+/* ── a contact's agent switch ─────────────────────────────────────────── */
+
+.agent-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.agent-switch__label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.agent-switch__label input {
+    accent-color: var(--accent);
+}
+
+.agent-switch__problem {
+    font-size: 12px;
+    color: var(--bad);
+}
+
+/* ── channels v2: live timeline, parts, deliveries, inbox views ─────── */
+
+/* Somebody a line names, and who a line is about to name. */
+.chmention {
+    padding: 0 4px;
+    border-radius: var(--r-sm);
+    background: var(--wash-a);
+    color: var(--ink);
+}
+.chmention[data-agent] {
+    background: var(--accent-soft);
+}
+.chmention[data-you] {
+    background: var(--accent-soft);
+    box-shadow: inset 0 -1px 0 var(--accent-line);
+}
+.cline__text a {
+    color: var(--info);
+    text-underline-offset: 3px;
+}
+.chcompose__chips,
+.cline__parts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.cline__parts {
+    margin-top: 6px;
+}
+.chchip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px 2px 10px;
+    border-radius: 999px;
+    background: var(--wash-a);
+    font-size: 13px;
+    color: var(--ink);
+}
+.chchip[data-agent] {
+    background: var(--accent-soft);
+}
+.chchip--file[data-failed] {
+    color: var(--bad);
+}
+.chchip__x {
+    display: inline-grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+.chchip__x:hover:not(:disabled) {
+    background: var(--line-2);
+}
+.chchip__x:focus-visible,
+.chfile:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.chfile {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 320px;
+    padding: 4px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    color: var(--ink);
+    font-size: 13px;
+    text-decoration: none;
+}
+.chfile:hover {
+    background: var(--wash-a);
+}
+.chfile__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chfile small {
+    color: var(--ink-3);
+}
+.chcompose--off {
+    margin: 0 32px 18px;
+    color: var(--ink-2);
+    font-size: 14px;
+    background: var(--wash-a);
+    box-shadow: none;
+}
+.chcompose[aria-busy] .chcompose__text {
+    color: var(--ink-2);
+}
+
+/* Where the reader's own line went. */
+.cline__sent {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.cline__delivery[data-tone="failed"] {
+    color: var(--bad);
+}
+.cline__delivery[data-tone="skipped"] {
+    color: var(--warn);
+}
+
+/* An answer being written. */
+.cline__answering {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.cline__answering-who {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.cline__text--draft {
+    margin-top: 4px;
+    color: var(--ink-2);
+}
+.cline[data-highlight] {
+    background: var(--accent-soft);
+    border-radius: var(--r-md);
+}
+.ctimeline:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+.cpage__typing {
+    min-height: 18px;
+    margin: 0 32px 4px;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.chthread .cline__answering-who {
+    padding: 0 4px;
+}
+
+.ccontact {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 10px 0;
+}
+.ccontact--compact {
+    flex-direction: row;
+    margin: 0;
+}
+.ccontact__field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.ccontact select,
+.ccontact input,
+.gpeople select,
+.cside__mute select {
+    height: 30px;
+    padding: 0 8px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    /* A form control sits on paper; `--field` is the pod's press tone, for
+       primary actions only. */
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+}
+/* The About panel's own field selects, drawn like the rest. A select left to
+   the platform is white on a dark theme, and so is the list it opens: the
+   options are painted too, and the dark scheme is asked for where it is
+   dark. */
+.gside .gsheet__field select {
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+}
+.gside .gsheet__field select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.gside select option,
+.cside__add select option {
+    background: var(--paper);
+    color: var(--ink);
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .gside select {
+        color-scheme: dark;
+    }
+}
+:root[data-theme="dark"] .gside select {
+    color-scheme: dark;
+}
+.ccontact__hours-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.ccontact__hours-row input {
+    width: 72px;
+}
+
+.chsearch__where {
+    color: var(--ink-3);
+    font-size: 12px;
+}
+.chsearch mark {
+    padding: 0 1px;
+    border-radius: 2px;
+    background: var(--mark-bg);
+    color: var(--mark-fg);
+}
+
+/* Settings beside the timeline. */
+.cside__confirm {
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+}
+.gsheet__inline--bad {
+    color: var(--bad);
+}
+.gface[data-online] {
+    box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--ok);
+}
+.cnew__visibility {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+/* A bot's groups, on its settings page. */
+.sgroup-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+}
+.sgroup-row small {
+    color: var(--ink-3);
+}
+.sgroup-row > .csource {
+    flex-basis: 100%;
+}
+
+/* The bell is the inbox. */
+.notify__group {
+    padding: 6px 0;
+    border-top: 1px solid var(--line);
+}
+.notify__label {
+    margin: 4px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-3);
+}
+.notify__mentions {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.notify__open {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 16px;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+.notify__open small {
+    color: var(--ink-3);
+    font-size: 12px;
+}
+.notify__open:hover {
+    background: var(--wash-a);
+}
+.notify__open:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+.notify__said {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+    .chcompose--off,
+    .cpage__typing {
+        margin-left: 16px;
+        margin-right: 16px;
+    }
+
+    .ccontact--compact {
+        flex-wrap: wrap;
+    }
+}
+button.chfile {
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+button.chfile:disabled {
+    cursor: progress;
+}
+.chfile__wrap {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+}
+.chfile__preview {
+    display: block;
+    max-width: min(320px, 100%);
+    max-height: 240px;
+    border-radius: var(--r-md);
+    box-shadow: var(--depth-rest);
+    object-fit: contain;
+}
+
+/* ── chats that live on a channel ───────────────────────────────────── */
+/* One list of chats: your own, the shared ones, the mirrored groups, and
+   your private line. Their marks, the menu that starts one, the header, the
+   answer under its question, and where a message goes. */
+.chatmark__face {
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--wash-a);
+    font-size: 9px;
+    color: var(--ink-2);
+}
+
+/* The sidebar: "Chats" with a + to start one; a shared chat's mark sits in
+   the icon column, so its name starts on the same edge as a chat's. */
+.snav__label--acts {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-right: 4px;
+}
+.snav__label--acts .chatstart__icon {
+    width: 24px;
+    height: 24px;
+    color: var(--ink-3);
+}
+.snav__label--acts .chatstart__icon:hover,
+.snav__label--acts .chatstart__icon[aria-expanded="true"] {
+    color: var(--ink);
+    background: var(--line-2);
+}
+.snav__shared {
+    padding-left: 10px;
+}
+.snav__shared > span:nth-child(2) {
+    flex: 1;
+}
+.snav__glyph {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    color: var(--ink-2);
+}
+.snav__chat[data-unread] > span:nth-child(2) {
+    color: var(--ink);
+}
+.snav__dot {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    margin-left: auto;
+    border-radius: 50%;
+    background: var(--accent);
+}
+
+/* The menu that starts a chat: a chat, a shared chat, a group. */
+.chatstart {
+    position: relative;
+}
+.chatstart__menu {
+    position: fixed;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    width: 320px;
+    max-width: calc(100vw - 32px);
+    padding: 6px;
+    border-radius: var(--r-lg);
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+    animation: space-pop 160ms var(--settle);
+    transform-origin: top left;
+}
+.chatstart__menu[data-look="pill"] {
+    transform-origin: top right;
+}
+.chatstart__item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: 100%;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.chatstart__item:hover,
+.chatstart__item:focus-visible {
+    background: var(--accent-soft);
+    outline: none;
+}
+.chatstart__mark {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    color: var(--ink-2);
+}
+.chatstart__item:not([data-ready]) .chatstart__mark--platform {
+    opacity: 0.5;
+    filter: grayscale(1);
+}
+.chatstart__text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+.chatstart__title {
+    font-size: 14px;
+}
+.chatstart__note {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.chatstart__sep {
+    height: 1px;
+    margin: 4px 8px;
+    background: var(--line);
+}
+.chatstart__quiet {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+
+/* The channel's header: what it is called, where it is fed from and who
+   answers, and -- on the right -- who is in it, as faces. */
+.cpage__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.cpage__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+    padding: 1px 8px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--wash-a);
+    font: inherit;
+    font-size: 12px;
+    color: var(--ink-2);
+}
+.cpage__chip--go {
+    cursor: pointer;
+}
+.cpage__chip--go:hover,
+.cpage__chip--go[aria-expanded="true"] {
+    background: var(--line-2);
+    color: var(--ink);
+}
+.cpage__said {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cpage__more[aria-expanded="true"] {
+    background: var(--line-2);
+    color: var(--ink);
+}
+/* A contact's channel: where it stands, and the ways to move it. */
+.cpage__strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 8px 32px;
+    border-bottom: 1px solid var(--line);
+    background: var(--wash-b);
+    font-size: 13px;
+    color: var(--ink-2);
+}
+.cpage__strip[data-asks] {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.cpage__strip-state {
+    flex: 1 1 240px;
+    min-width: 0;
+}
+.cpage__strip-acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+}
+.cpage__strip .ccontact {
+    gap: 10px;
+}
+.cpage__strip .ccontact__field {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.cpage__strip .ccontact select {
+    height: 28px;
+    font-size: 13px;
+}
+.cpage__take {
+    height: 28px;
+    padding: 0 12px;
+    font-size: 13px;
+}
+
+/* The details beside a channel, one section at a time. */
+.cside__tabs {
+    display: flex;
+    gap: 2px;
+}
+.cside__tab {
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+.cside__tab:hover {
+    color: var(--ink);
+}
+.cside__tab[aria-selected="true"] {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+
+/* Where a message goes, besides this chat, under the box. */
+.chcompose__dest {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.chcompose__only {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+.chcompose__only:hover:not(:disabled) {
+    color: var(--ink);
+}
+.chcompose__only[aria-pressed="true"] {
+    background: var(--accent-soft);
+    box-shadow: none;
+    color: var(--ink);
+}
+.chcompose__where {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chcompose__where select {
+    height: 24px;
+    max-width: 220px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 6px;
+    background: var(--wash-a);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 12px;
+}
+
+/* The Chats page: a shared chat's count of what is new. */
+.chats-page__unread {
+    display: inline-block;
+    min-width: 18px;
+    height: 18px;
+    margin-left: 8px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 11px;
+    line-height: 18px;
+    text-align: center;
+    vertical-align: 1px;
+}
+.chats-page__origin[data-kind="shared"] svg,
+.chats-page__origin[data-kind="shared"] img {
+    flex: none;
+}
+
+/* The contact queue on the Contacts page, and what was said in shared chats
+   under the Chats page's table. */
+.cqueue__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    margin-bottom: 10px;
+}
+.cqueue__head h2 {
+    margin: 0;
+}
+.cqueue__views {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+}
+.cqueue__view {
+    height: 30px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+.cqueue__view:hover {
+    color: var(--ink);
+}
+.cqueue__view[aria-pressed="true"] {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+.cqueue__status select {
+    height: 30px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 14px;
+}
+.cqueue__row.crow {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+}
+.cqueue__row[data-unread] .crow__name {
+    color: var(--ink);
+}
+.cqueue__mark {
+    display: grid;
+    place-items: center;
+    color: var(--ink-2);
+}
+.cqueue__ask {
+    margin-left: 8px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    font-size: 12px;
+    color: var(--ink);
+}
+.cqueue__side {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.cqueue__more {
+    margin-top: 10px;
+}
+.chats-page__said {
+    margin-top: 32px;
+}
+.chats-page__said h2 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink-3);
+}
+
+/* ── a chat, laid out the way Slack lays out a channel ───────────────── */
+/* Only the messages scroll: the header, the composer and a thread's own
+   header and box stay put. Clipped rather than hidden, so going to a line
+   -- or focusing a box -- can never scroll the pane around them. */
+.channel-pane,
+.cpage,
+.cpage__main,
+.cside {
+    overflow: clip;
+}
+
+/* The header: the chat's mark and name, which open its details; where it
+   is mirrored; its topic; who is in it; details. */
+.cpage__head {
+    flex-wrap: nowrap;
+    gap: 6px;
+    height: 50px;
+    padding: 0 12px 0 12px;
+}
+.cpage__name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 1 auto;
+    min-width: 0;
+    height: 32px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    cursor: pointer;
+}
+.cpage__name:hover,
+.cpage__name[aria-expanded="true"] {
+    background: var(--wash-a);
+}
+.cpage__name h1 {
+    margin: 0;
+    overflow: hidden;
+    font-size: 17px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.cpage__name svg:last-child {
+    flex: none;
+    color: var(--ink-3);
+}
+.cpage__glyph {
+    display: grid;
+    flex: none;
+    place-items: center;
+    color: var(--ink-2);
+}
+.cpage__places {
+    display: inline-flex;
+    flex: 0 1 auto;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+}
+.cpage__topic {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    padding-left: 10px;
+    border-left: 1px solid var(--line-2);
+    font-size: 13px;
+    color: var(--ink-3);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.cpage__spacer {
+    flex: 1;
+}
+
+/* The top of the history: what the chat is, and how to ask in it. */
+.cintro {
+    padding: 28px 20px 8px;
+}
+.cintro__mark {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    margin-bottom: 14px;
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+    color: var(--ink-2);
+}
+.cintro__title {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+.cintro__said {
+    max-width: 640px;
+    margin: 6px 0 0;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.cintro__acts {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+}
+.cintro__acts .ghost-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* The days, with the day's name held at the top while you read it. */
+.ctimeline {
+    padding: 0 0 12px;
+}
+.cday {
+    gap: 0;
+    margin-top: 22px;
+    padding-top: 0;
+    border-top: 1px solid var(--line);
+}
+.cday__label {
+    position: sticky;
+    top: 8px;
+    z-index: 3;
+    display: flex;
+    justify-content: center;
+    margin: -14px 0 6px;
+    pointer-events: none;
+}
+.cday__label span {
+    padding: 4px 14px;
+    border-radius: 999px;
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    pointer-events: auto;
+}
+.cday__lines {
+    gap: 0;
+}
+.ctimeline__unread {
+    position: relative;
+    height: 0;
+    margin: 10px 0;
+    border-top: 1px solid var(--bad);
+}
+.ctimeline__unread::after {
+    display: none;
+}
+.ctimeline__unread span {
+    position: absolute;
+    top: -9px;
+    right: 20px;
+    padding: 0 6px;
+    background: var(--paper);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--bad);
+}
+
+/* A message: the face in a gutter, the name and time on one line, the
+   words under it; a run from one person shows the face once, and the time
+   in the gutter when you point at it. Its actions float at its corner. */
+.cline {
+    position: relative;
+    gap: 8px;
+    padding: 8px 20px;
+    border-radius: 0;
+}
+.cline[data-continued] {
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+.cline:hover,
+.cline:focus-within {
+    background: var(--wash-b);
+}
+.cline[data-highlight] {
+    background: var(--accent-soft);
+}
+.cline__gutter {
+    display: flex;
+    flex: none;
+    justify-content: center;
+    width: 36px;
+    padding-top: 2px;
+}
+.cline__stamp {
+    visibility: hidden;
+    font-size: 11px;
+    line-height: 22px;
+    color: var(--ink-3);
+    white-space: nowrap;
+}
+.cline:hover .cline__stamp,
+.cline:focus-within .cline__stamp {
+    visibility: visible;
+}
+.cline__head {
+    align-items: baseline;
+    gap: 2px 8px;
+}
+.cline__who {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--ink);
+}
+.cline__for,
+.cline__edited {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.cline__text {
+    font-size: 15px;
+    line-height: 1.47;
+}
+.cline__tools {
+    position: absolute;
+    top: -16px;
+    right: 20px;
+    z-index: 4;
+    display: none;
+    gap: 2px;
+    padding: 2px;
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+}
+.cline:hover .cline__tools,
+.cline:focus-within .cline__tools {
+    display: flex;
+}
+.cline__tool {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+.cline__tool:hover,
+.cline__tool:focus-visible {
+    background: var(--wash-a);
+    color: var(--ink);
+    outline: none;
+}
+.cline__tool--bad:hover {
+    color: var(--bad);
+}
+.cline__confirm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    margin-top: 4px;
+    font-size: 13px;
+}
+
+/* A face: round for a person, the teammate's own tile for an agent. */
+.cavatar {
+    display: grid;
+    flex: none;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--wash-a);
+    box-shadow: inset 0 0 0 1px var(--line);
+    color: var(--ink-2);
+    line-height: 1;
+}
+.cavatar[data-contact] {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.cavatar--agent {
+    border-radius: var(--r-face);
+    background: none;
+    box-shadow: none;
+}
+
+/* A thread under its message: who replied, how many, and when. */
+.cline__thread {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: min(100%, 560px);
+    margin: 4px 0 0 -5px;
+    padding: 4px 10px 4px 4px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.cline__thread:hover,
+.cline__thread:focus-visible {
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    outline: none;
+}
+.cline__thread-faces {
+    display: inline-flex;
+    gap: 4px;
+}
+.cline__thread-count {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--info);
+}
+.cline__thread-last,
+.cline__thread-view {
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.cline__thread-view {
+    display: none;
+    margin-left: auto;
+}
+.cline__thread:hover .cline__thread-last,
+.cline__thread:focus-visible .cline__thread-last {
+    display: none;
+}
+.cline__thread:hover .cline__thread-view,
+.cline__thread:focus-visible .cline__thread-view {
+    display: inline;
+}
+
+/* The box: a bordered field with its tools under the words. */
+.chcompose {
+    gap: 0;
+    margin: 0 20px 20px;
+    padding: 0;
+    border-radius: var(--r-md);
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.chcompose:focus-within {
+    box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+.chcompose__text {
+    min-height: 22px;
+    padding: 12px 14px 6px;
+    font-size: 15px;
+}
+.chcompose__chips {
+    padding: 10px 12px 0;
+}
+.chcompose__progress {
+    padding: 0 14px;
+}
+.chcompose__bar {
+    gap: 2px;
+    padding: 2px 6px 6px;
+}
+.chcompose__attach,
+.chcompose__at {
+    width: 30px;
+    height: 30px;
+    color: var(--ink-2);
+}
+.chcompose__at span {
+    font-size: 16px;
+    line-height: 1;
+}
+.chcompose__dest {
+    margin-left: 6px;
+}
+.chcompose__send {
+    width: 34px;
+    height: 30px;
+    border-radius: var(--r-sm);
+}
+
+/* A thread beside the chat: as wide as you drag it, its header level with
+   the chat's, its replies scrolling between it and its box. */
+.cside {
+    width: 380px;
+}
+.cside__head {
+    height: 50px;
+    padding: 0 12px 0 20px;
+}
+.chthread {
+    position: relative;
+}
+.chthread__grip {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -3px;
+    z-index: 5;
+    width: 6px;
+    cursor: col-resize;
+}
+.chthread__grip:hover {
+    background: var(--accent-line);
+}
+.chthread__head {
+    justify-content: flex-start;
+    gap: 10px;
+}
+.chthread__head h2 {
+    font-size: 17px;
+}
+.chthread__where {
+    display: inline-flex;
+    flex: 1;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    color: var(--ink-3);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chthread__body {
+    padding: 8px 0;
+}
+.chthread__count {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 6px 20px;
+    padding: 0;
+    border-bottom: 0;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.chthread__count::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--line-2);
+}
+.chthread .chcompose {
+    margin: 0 16px 16px;
+}
+.chatmark__hash {
+    display: inline-grid;
+    place-items: center;
+    width: 1em;
+    line-height: 1;
+    color: inherit;
+}
+/* "Jump to unread" sits to the side, clear of the day held at the top. */
+.ctimeline__jump {
+    top: 8px;
+    right: 20px;
+    left: auto;
+    transform: none;
+}
+
+/* ── a chat's details, the way Slack shows a channel's ────────────────── */
+/* A dialog of one height, so moving between tabs never jumps: the name and
+   your notifications on top, the tabs, then grey with white cards. */
+.modal__panel--wide:has(.cdet) {
+    width: min(100%, 620px);
+    height: min(86vh, 680px);
+}
+.modal__panel--wide:has(.cdet) > .modal__head {
+    padding: 18px 20px 10px 24px;
+    border-bottom: 0;
+}
+.modal__panel--wide:has(.cdet) .modal__head h2 {
+    font-size: 22px;
+    font-weight: 500;
+}
+.cdet {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
+.cdet__bar {
+    display: flex;
+    gap: 8px;
+    padding: 0 24px 12px;
+}
+.cdet__notify {
+    position: relative;
+}
+.cdet__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.cdet__pill:hover,
+.cdet__pill[aria-expanded="true"] {
+    background: var(--wash-a);
+}
+.cdet__menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    width: 300px;
+    padding: 6px;
+    border-radius: var(--r-lg);
+    background: var(--paper);
+    box-shadow: var(--depth-raise);
+}
+.cdet__menu-label {
+    margin: 4px 10px 4px;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.cdet__menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+.cdet__menu-item:hover,
+.cdet__menu-item:focus-visible {
+    background: var(--accent-soft);
+    outline: none;
+}
+.cdet__tick {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 16px;
+    color: var(--ink);
+}
+.cdet__menu-sep {
+    height: 1px;
+    margin: 6px 8px;
+    background: var(--line);
+}
+.cdet__menu-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 4px 10px 8px;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.cdet__menu-field select,
+.cdet__select select {
+    height: 30px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--wash-a);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13px;
+}
+.cdet__tabs {
+    display: flex;
+    gap: 20px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--line-2);
+}
+.cdet__tab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 38px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+.cdet__tab:hover {
+    color: var(--ink);
+}
+.cdet__tab[aria-selected="true"] {
+    color: var(--ink);
+}
+.cdet__tab[aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--ink);
+}
+.cdet__count {
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.cdet__body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 18px 24px 28px;
+    border-bottom-left-radius: inherit;
+    border-bottom-right-radius: inherit;
+    background: var(--wash-b);
+}
+.cdet__lead {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink-2);
+}
+.cdet__card {
+    display: flex;
+    flex-direction: column;
+    border-radius: var(--r-md);
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.cdet__card > * + * {
+    border-top: 1px solid var(--line);
+}
+.cdet__row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 16px;
+}
+.cdet__row-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.cdet__label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink);
+}
+.cdet__value {
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+}
+.cdet__muted {
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.cdet__link {
+    flex: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--info);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    text-decoration: none;
+}
+.cdet__link:hover:not(:disabled) {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+.cdet__link--bad {
+    color: var(--bad);
+}
+.cdet__edit {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+}
+.cdet__edit input {
+    flex: 1 1 220px;
+    min-width: 0;
+    height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+}
+.cdet__edit input:focus {
+    box-shadow: inset 0 0 0 1px var(--ink-3);
+    outline: none;
+}
+.cdet__danger-row {
+    padding: 14px 16px;
+    border: 0;
+    border-radius: var(--r-md);
+    background: transparent;
+    color: var(--bad);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+}
+.cdet__danger-row:hover:not(:disabled) {
+    background: var(--wash-b);
+}
+.cdet__search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 36px;
+    padding: 0 12px;
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink-3);
+}
+.cdet__search:focus-within {
+    box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+.cdet__search input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+}
+.cdet__person {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 52px;
+    padding: 8px 16px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+}
+.cdet__person:hover {
+    background: var(--wash-b);
+}
+.cdet__person--add {
+    cursor: pointer;
+}
+.cdet__person--candidate {
+    background: var(--wash-b);
+}
+.cdet__add-mark {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--r-sm);
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.cdet__add-mark--plain {
+    background: var(--wash-a);
+}
+.cdet__person-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    font-size: 14px;
+}
+.cdet__name {
+    overflow: hidden;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.cdet__acts {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 14px;
+    opacity: 0;
+}
+.cdet__person:hover .cdet__acts,
+.cdet__person:focus-within .cdet__acts,
+.cdet__acts--shown {
+    opacity: 1;
+}
+.cdet__note {
+    margin: 0;
+    padding: 14px 16px;
+    font-size: 13px;
+    color: var(--ink-3);
+}
+.cdet__place-settings {
+    padding: 4px 16px 16px 60px;
+}
+.cdet__confirm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 16px;
+    background: var(--wash-b);
+}
+.cdet__confirm p {
+    flex: 1 1 100%;
+    margin: 0 0 4px;
+    font-size: 14px;
+    color: var(--ink);
+}
+.cdet__bad {
+    color: var(--bad);
+}
+.cdet__problem {
+    margin: 0;
+    font-size: 13px;
+    color: var(--bad);
+}
+@media (max-width: 767px), (pointer: coarse) {
+    .cdet__acts {
+        opacity: 1;
+    }
+    .cdet__tabs {
+        gap: 16px;
+        overflow-x: auto;
+    }
+}
+
+/* ── Lemma's measure: a shared chat reads like a chat with the teammate ── */
+/* The messages and the box share the solo chat's centred column instead of
+   running edge to edge; the header and a contact's strip stay full width.
+   The box takes the solo chat's rounded, lifted look. */
+.cpage__main {
+    --chat-col: 800px;
+}
+.ctimeline > :not(button):not(.sr-only) {
+    width: min(100%, var(--chat-col));
+    margin-right: auto;
+    margin-left: auto;
+}
+.cline {
+    border-radius: var(--r-md);
+}
+.ctimeline__unread span {
+    right: 12px;
+}
+.cpage__main > .chcompose,
+.cpage__main > .cpage__typing {
+    width: min(100% - 40px, var(--chat-col) - 40px);
+    margin-right: auto;
+    margin-left: auto;
+}
+.chcompose {
+    border-radius: var(--r-xl);
+    box-shadow: var(--depth-raise), inset 0 0 0 1px var(--line-2);
+}
+.chcompose:focus-within {
+    box-shadow: var(--depth-raise), inset 0 0 0 1px var(--accent-line), 0 0 0 3px var(--accent-soft);
+}
+.chcompose__text {
+    padding: 14px 16px 6px;
+}
+.chcompose__bar {
+    padding: 2px 8px 8px;
+}
+.chcompose__send {
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+}
+
+/* Who is in a chat, in its header: up to three faces, each whole -- a
+   person's initials readable, the next face tucked only past them -- an
+   online dot on its corner, and how many in all. */
+.cpage__faces {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    height: 32px;
+    padding: 0 10px 0 6px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--line-2);
+    color: var(--ink-2);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.cpage__faces:hover,
+.cpage__faces[aria-expanded="true"] {
+    background: var(--wash-a);
+    color: var(--ink);
+}
+.cpage__face-stack {
+    display: inline-flex;
+}
+.cpage__face {
+    position: relative;
+    display: block;
+    width: 24px;
+    height: 24px;
+    margin-left: -4px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px var(--paper);
+}
+.cpage__face:first-child {
+    margin-left: 0;
+}
+.cpage__face .cavatar {
+    letter-spacing: -0.02em;
+}
+.cpage__face[data-online]::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 0 2px var(--paper);
+}
+.cpage__faces-count {
+    font-variant-numeric: tabular-nums;
+}
+/* An agent offered to add: inside the card, set in under its row, its
+   description kept to one line. */
+.cdet__person--candidate {
+    padding-left: 32px;
+    background: var(--paper);
+}
+.cdet__clip {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* An answer that is not right under its question says which one it answers:
+   a quiet quote, one line, that goes to it. */
+.cline__quote {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    max-width: 100%;
+    margin: 2px 0 4px;
+    padding: 2px 0 2px 10px;
+    border: 0;
+    border-left: 2px solid var(--line-2);
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+.cline__quote:hover {
+    border-left-color: var(--ink-3);
+    color: var(--ink-2);
+}
+.cline__quote-who {
+    flex: none;
+    font-weight: 500;
+    color: var(--ink-2);
+}
+.cline__quote-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

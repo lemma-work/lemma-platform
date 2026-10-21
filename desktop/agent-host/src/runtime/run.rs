@@ -6,7 +6,8 @@ use super::{
     OwnedSemaphorePermit, OwnedTask, PERMISSION_DECISION_TIMEOUT, ResolvedAdapter, RunSpec,
     RunState, SteerInbox, StreamSegments, TargetWorker, Utc, Value, adapter_failure_message,
     authentication_hint, host_directory_instructions, prepare_run_directory,
-    publish_generated_images, redact_error, terminal_failure, terminal_failure_detail, watch,
+    publish_generated_images, redact_error, start_timeout_message, terminal_failure,
+    terminal_failure_detail, usage_limit_message, watch, without_error_data,
 };
 
 impl TargetWorker {
@@ -125,9 +126,6 @@ impl TargetWorker {
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
                 events_ready: events_ready.clone(),
             });
-            let remaining = (spec.run_deadline - (Utc::now() + clock_offset))
-                .to_std()
-                .unwrap_or(Duration::ZERO);
             // Kept behind, so the failure path below can still ask whether the
             // user pressed Stop.
             let asked_to_stop = cancel_rx.clone();
@@ -140,7 +138,22 @@ impl TargetWorker {
             let own_settings = crate::config::HostConfig::load_or_create(&paths)
                 .is_ok_and(|config| config.own_settings.contains(&adapter.spec.key));
             // Whose pairing this is decides whose word on the CLI is taken.
-            let lemma_cli_bin = crate::lemma_cli::cli_bin_for_run(local_pairing, &spec.mcp);
+            let lemma_cli_bin =
+                crate::lemma_cli::cli_bin_for_run(local_pairing, &spec.mcp, &paths.root).await;
+            // Measured only now: choosing the CLI can wait on a download, and
+            // that wait is part of the run's time, not on top of it.
+            let Some(remaining) = time_left(spec.run_deadline, Utc::now() + clock_offset) else {
+                terminal_failure(
+                    &journal,
+                    target_id,
+                    run_id,
+                    lease_epoch,
+                    RunState::Failed,
+                    "Agent Host run deadline elapsed before the agent started",
+                )?;
+                events_ready.notify_one();
+                return Ok(());
+            };
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,
@@ -237,13 +250,28 @@ impl TargetWorker {
                         // broken to a user who simply stopped it.
                         Some("run cancelled by Lemma; the agent did not stop on request".to_owned())
                     } else {
+                        // Never reached its prompt: a timeout here is the
+                        // machine being slow to start the agent, not a fault.
+                        let never_prompted = run.checkpoint == Checkpoint::Accepted;
                         authentication_hint(&adapter_name, &raw)
+                            .or_else(|| usage_limit_message(&adapter_name, &redact_error(&raw)))
+                            .or_else(|| {
+                                never_prompted
+                                    .then(|| {
+                                        start_timeout_message(&adapter_name, &redact_error(&raw))
+                                    })
+                                    .flatten()
+                            })
                             .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)))
                     };
                     // Rewriting an internal error does not mean the text it
-                    // interrupted was an error. Drop only a proven duplicate.
-                    let supersedes =
-                        rewritten.is_some() && callbacks.stream_matches_failure(&raw)?;
+                    // interrupted was an error. Drop only a proven duplicate:
+                    // the streamed text, with or without the structured data
+                    // the error carries after it. A usage limit is retryable,
+                    // and a leftover copy of it would take Retry away.
+                    let supersedes = rewritten.is_some()
+                        && (callbacks.stream_matches_failure(&raw)?
+                            || callbacks.stream_matches_failure(without_error_data(&raw))?);
                     let message = rewritten.unwrap_or_else(|| redact_error(&raw));
                     terminal_failure_detail(
                         &journal,
@@ -283,4 +311,15 @@ impl TargetWorker {
             },
         );
     }
+}
+
+/// How long a run has left at `now`, or `None` once its deadline has passed.
+pub(super) fn time_left(
+    deadline: chrono::DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
+) -> Option<Duration> {
+    (deadline - now)
+        .to_std()
+        .ok()
+        .filter(|left| !left.is_zero())
 }

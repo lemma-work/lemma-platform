@@ -4,23 +4,27 @@ Resolving an approval is two steps with very different costs: recording the
 user's decision is a single row write, while acting on it can run an approved
 command for minutes or hand a decision to a remote Agent Host. Callers that sit
 behind a deadline — an HTTP request, a platform webhook — must only ever pay for
-the first. This module owns the pieces that let them do that: the deterministic
-job identity, the queueing, and the work the queued job performs.
+the first. This module owns the pieces that let them do that: the work item
+the decision's transaction writes, and the work that item performs.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
+from pydantic import BaseModel
+
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
+from app.core.infrastructure.work import WorkWriter, pod_namespace
 from app.modules.agent.domain.agent_host_permissions import (
     AgentHostPermissionRequest,
     agent_host_permission_request,
 )
 from app.modules.agent.domain.pausing_tools import parked_suspension_of
+from app.modules.agent.domain.run_budget_pause import is_budget_pause
+from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE, approval_key
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
@@ -32,67 +36,82 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-RECONCILE_APPROVAL_JOB = "reconcile_agent_approval"
+
+class ApprovalExecution(BaseModel):
+    """The ``agent.approval.execute`` payload: which decision to carry out.
+
+    ``user_id`` is who decided, recorded for the record only; the approved tool
+    runs with the conversation owner's authority, read from the conversation.
+    """
+
+    conversation_id: UUID
+    approval_id: str
+    user_id: UUID
+    pod_id: UUID
 
 
-def approval_reconcile_job_id(conversation_id: UUID, approval_id: str) -> str:
-    """Return the deterministic worker job id for one approval decision."""
-    return f"agent-approval:{conversation_id}:{approval_id}"
-
-
-async def queue_approval_reconciliation(
+async def stage_approval_execution(
+    uow: SqlAlchemyUnitOfWork,
     *,
     conversation_id: UUID,
     approval_id: str,
     user_id: UUID,
     pod_id: UUID,
 ) -> None:
-    """Hand one already-recorded decision to the worker.
+    """Hand a recorded decision to the worker, in the decision's transaction.
 
-    The deterministic job id makes a double-click (or a retry after a crashed
-    worker) re-enqueue the same job rather than stack a second one, which is
-    safe because reconciliation is itself idempotent.
+    Written beside the decision row, so the two commit together: a process
+    that dies after the commit leaves an item a worker will run, where the old
+    post-commit enqueue left a decision nothing would ever carry out.
+
+    The dedup key coalesces a second decider (a double click, a retry) into
+    the queued item. The concurrency key keeps two items for one approval from
+    ever running at once -- one written while the first is already running --
+    so a second item can only find the first one's work finished, never take
+    a live execution claim for an abandoned one.
     """
-    await get_streaq_job_queue().enqueue(
-        RECONCILE_APPROVAL_JOB,
-        context={
-            "conversation_id": str(conversation_id),
-            "approval_id": approval_id,
-            "user_id": str(user_id),
-            "pod_id": str(pod_id),
-        },
-        _job_id=approval_reconcile_job_id(conversation_id, approval_id),
+    key = approval_key(conversation_id, approval_id)
+    await WorkWriter.of(uow).add(
+        AGENT_APPROVAL_EXECUTE,
+        pod_namespace(pod_id),
+        ApprovalExecution(
+            conversation_id=conversation_id,
+            approval_id=approval_id,
+            user_id=user_id,
+            pod_id=pod_id,
+        ),
+        dedup_key=key,
+        concurrency_key=key,
     )
 
 
-def should_defer_approved_tool(
+def runs_in_worker(
     *,
-    defer_reconciliation: bool,
     kind: str,
     tool_args: JsonObject,
     decision: AgentRunApprovalDecision,
     has_tool_return: bool,
 ) -> bool:
-    """Whether this decision's follow-up work belongs in a worker job.
+    """Whether this decision's follow-up work belongs in a worker item.
 
     Only an approved ``request_approval`` runs something slow: commands can
     legitimately take minutes, and keeping that inside the request made a
     browser's 30-second timeout cancel reconciliation after the decision had
-    already committed. ``ask_user``, denials, already-executed approvals, and
-    Agent Host permissions (a queued command plus a wake-up, measured in
-    milliseconds) stay inline, since deferring them would only add latency to
-    someone who is waiting.
+    already committed. ``ask_user``, denials, already-executed approvals,
+    budget pauses (no tool behind them) and Agent Host permissions (a queued
+    command plus a wake-up, measured in milliseconds) stay inline, since
+    deferring them would only add latency to someone who is waiting.
     """
     return (
-        defer_reconciliation
-        and kind == "request_approval"
+        kind == "request_approval"
         and decision != AgentRunApprovalDecision.DENY
         and not has_tool_return
         and agent_host_permission_request(tool_args) is None
+        and not is_budget_pause(tool_args)
     )
 
 
-async def enqueue_agent_host_permission(
+async def stage_agent_host_permission(
     uow: SqlAlchemyUnitOfWork,
     *,
     request: AgentHostPermissionRequest,
@@ -202,7 +221,7 @@ async def agent_host_permission_tool_return(
     Shaped as a ``request_approval`` return like every other approval, so the
     conversation transcript reads the same however the pause arose. The host
     command is written in the caller's transaction (see
-    ``enqueue_agent_host_permission``); only the wake-up waits for the commit,
+    ``stage_agent_host_permission``); only the wake-up waits for the commit,
     because a Redis publish has no business inside an open write transaction
     and losing one costs at most the link's floor tick.
 
@@ -214,7 +233,7 @@ async def agent_host_permission_tool_return(
     # Lazy: the tool models import the tool registry, which imports back here.
     from app.modules.agent.tools.user_interaction.models import RequestApprovalResponse
 
-    host_id = await enqueue_agent_host_permission(
+    host_id = await stage_agent_host_permission(
         uow, request=request, agent_run_id=agent_run_id, decision=decision
     )
     if host_id is not None:

@@ -60,6 +60,10 @@ RELAY_TOKEN_HEADER = "X-Lemma-Relay-Token"
 #: browser will not start while it is still coming up.
 _ENSURE_TIMEOUT_SECONDS = 300.0
 _QUICK_TIMEOUT_SECONDS = 30.0
+# How long `ensure_running` waits for a started relay to answer: 80 polls a
+# quarter-second apart. See the comment at the loop for why it is this long.
+_START_POLLS = 80
+_START_POLL_INTERVAL_SECONDS = 0.25
 
 
 class BrowserRelayUnavailable(RuntimeError):
@@ -134,10 +138,21 @@ class ProfileCookies(TypedDict):
 class BrowserRelayClient:
     """One sandbox's relay, reached through whatever door its fabric has."""
 
-    def __init__(self, provider, instance: ProviderInstance) -> None:
+    def __init__(
+        self,
+        provider,
+        instance: ProviderInstance,
+        *,
+        start_polls: int = _START_POLLS,
+        start_poll_interval_seconds: float = _START_POLL_INTERVAL_SECONDS,
+    ) -> None:
         self._provider = provider
         self._instance = instance
         self._token = relay_token(instance.provider_id)
+        # A parameter rather than a literal so a test of the give-up path can
+        # shorten the wait instead of sitting out all twenty seconds of it.
+        self._start_polls = start_polls
+        self._start_poll_interval_seconds = start_poll_interval_seconds
 
     async def _endpoint(self, *, deadline_seconds: float) -> SandboxEndpoint:
         require_capability(self._provider, ProviderCapability.PORT_REACH)
@@ -339,8 +354,8 @@ class BrowserRelayClient:
         # are slower on a cold E2B sandbox, which is what the second half of
         # this budget is for.
         answered = False
-        for _ in range(80):
-            await asyncio.sleep(0.25)
+        for _ in range(self._start_polls):
+            await asyncio.sleep(self._start_poll_interval_seconds)
             with suppress(BrowserRelayUnavailable):
                 response = await self._request("GET", "/health")
                 if response.status_code != 200:

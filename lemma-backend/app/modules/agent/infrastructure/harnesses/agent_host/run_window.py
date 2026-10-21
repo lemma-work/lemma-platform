@@ -71,10 +71,10 @@ class RunLease:
 #
 # What it must still sit inside:
 #
-#   * the worker task that drives the harness
-#     (AGENT_RUN_JOB_TIMEOUT_SECONDS). Past that, streaq cancels the job and
-#     Lemma reports the run failed -- so a deadline beyond it is one we cannot
-#     honour, and the host would keep executing a run we have given up on;
+#   * the turn that drives the harness (``events/turn_work.TURN_MAX_RUNTIME``).
+#     Past that, the runtime cancels the turn and Lemma reports the run failed
+#     -- so a deadline beyond it is one we cannot honour, and the host would
+#     keep executing a run we have given up on;
 #   * comfortably above the host's 30-minute permission window, so a permission
 #     parked mid-run can still be answered before the run is over.
 DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS = 14400.0

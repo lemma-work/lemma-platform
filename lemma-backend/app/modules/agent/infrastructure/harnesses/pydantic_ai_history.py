@@ -63,7 +63,9 @@ def history_and_prompt(
     ``replay_prior_run_reasoning`` say which of the thoughts that pass that
     test are this run's own; see `pydantic_ai_thinking`.
     """
-    ordered = sorted(messages, key=lambda message: message.sequence)
+    ordered = _without_unanswered_thoughts(
+        sorted(messages, key=lambda message: message.sequence)
+    )
     user_prompt: str | None = None
     history_messages = list(ordered)
     if (
@@ -88,6 +90,25 @@ def history_and_prompt(
         ),
         user_prompt,
     )
+
+
+def _without_unanswered_thoughts(ordered: list[Message]) -> list[Message]:
+    """``ordered`` without the reasoning trailing after its last user turn.
+
+    A run that failed after only thinking leaves its thoughts newest, and a
+    retry of it replays the user turn before them. A thought with no answer
+    after it is never sent to the model (``PendingThoughts`` drops it), so
+    leaving them in only hid the turn the retry is for, and the run started
+    with no prompt.
+    """
+    end = len(ordered)
+    while (
+        end
+        and ordered[end - 1].role is MessageRole.ASSISTANT
+        and ordered[end - 1].kind is MessageKind.THINKING
+    ):
+        end -= 1
+    return ordered[:end]
 
 
 def _to_pydantic_ai_messages(
@@ -138,7 +159,7 @@ def _to_pydantic_ai_messages(
                     ModelResponse(
                         parts=[
                             *pending.take(),
-                            TextPart(content=_message_text(msg)),
+                            TextPart(content=_said_text(msg)),
                         ],
                         timestamp=getattr(msg, "created_at", None),
                     )
@@ -389,6 +410,22 @@ def _normalize_role(role: object) -> MessageRole | None:
 
 def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
+
+
+#: How a member's own words, written into a conversation the agent answers,
+#: reach the agent: on its side of the conversation, where whoever it answers
+#: cannot write, and marked as a person's -- otherwise they read as something
+#: the agent said itself, and an answer the pod gave is doubted as its own guess.
+MEMBER_WROTE = "[A member of the pod wrote this to them directly, not you:]\n"
+
+
+def _said_text(msg: object) -> str:
+    """An assistant-side line's text, marked when a member wrote it."""
+    text = _message_text(msg)
+    metadata = getattr(msg, "metadata", None) or {}
+    if isinstance(metadata, dict) and metadata.get("follow_up"):
+        return MEMBER_WROTE + text
+    return text
 
 
 def parse_tool_call_args(args: object) -> dict[str, object] | None:

@@ -72,4 +72,8 @@ class HarnessOptions[DepsT = object]:
     #: ``extra``, where every reader re-checked a dict and compared its
     #: protocol as a string.
     runtime_profile: RuntimeSnapshot | None = None
+    #: Whether the worker running this turn still holds it, asked before each
+    #: tool call; a run on the work runtime stops when it says no. None for a
+    #: run nothing leases (a test, the API's own).
+    lease_alive: Callable[[], bool] | None = None
     extra: JsonObject = field(default_factory=dict)

@@ -43,8 +43,12 @@ async def applicable_contacts_cap(
     settings: UsageSettings | None = None,
 ) -> ContactsCap:
     stored = await UsageContactsCapRepository(uow.session).stored(organization_id)
-    default = (settings or usage_settings).usage_contacts_monthly_default_usd
-    return effective_contacts_cap(stored, default_usd=default)
+    chosen = settings or usage_settings
+    return effective_contacts_cap(
+        stored,
+        default_usd=chosen.usage_contacts_monthly_default_usd,
+        default_max_contacts=chosen.usage_contacts_max_default,
+    )
 
 
 async def contacts_cap_status(

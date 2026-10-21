@@ -37,12 +37,15 @@ from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import AgentEventType
 from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+    failure_event,
     user_facing_error_message,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
+    PROVIDER_HTTP_ERROR,
     TRANSIENT_DATABASE_ERROR,
     classify_run_failure,
+    run_failure_reason,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
     HarnessDriverCancelled,
@@ -235,3 +238,88 @@ def test_a_busy_database_is_not_blamed_on_the_model_settings(
 )
 def test_a_real_database_error_is_not_called_transient(exc: BaseException) -> None:
     assert classify_run_failure(exc).code != TRANSIENT_DATABASE_ERROR
+
+
+@pytest.mark.parametrize("status", [400, 401, 404, 405, 429, 503])
+def test_a_provider_http_error_has_a_stable_code_and_its_status(status: int) -> None:
+    """A misconfigured base URL answers 405; the run used to record no code."""
+    exc = _http(status)
+
+    failure = classify_run_failure(exc)
+
+    assert failure.code == PROVIDER_HTTP_ERROR == run_failure_code(exc)
+    assert run_failure_reason(exc) == f"http_{status}"
+    assert f"HTTP {status}" in failure.message
+
+
+def test_an_exhausted_provider_retry_keeps_its_own_code() -> None:
+    exhausted = DomainError("gave up", code="MODEL_PROVIDER_ATTEMPTS_EXHAUSTED")
+    exhausted.__cause__ = _http(503)
+
+    assert classify_run_failure(exhausted).code == "MODEL_PROVIDER_ATTEMPTS_EXHAUSTED"
+
+
+async def test_a_run_the_provider_refused_ends_on_an_error_carrying_the_code() -> None:
+    """The harness catches the refusal itself, so the code has to travel on the
+    event: the runner's own classification never sees this exception."""
+
+    async def refuse(messages, info: AgentInfo) -> AsyncIterator[str]:
+        del messages, info
+        raise _http(405)
+        yield ""  # pragma: no cover - makes this an async generator
+
+    pod_id = uuid4()
+    conversation = Conversation(pod_id=pod_id, user_id=uuid4())
+    events = [
+        event
+        async for event in PydanticAIHarness(
+            model=FunctionModel(stream_function=refuse)
+        ).run(
+            agent=Agent(
+                pod_id=pod_id,
+                user_id=conversation.user_id,
+                name="assistant",
+                instruction="",
+            ),
+            conversation=conversation,
+            messages=[],
+            ctx=AgentContext(
+                user_id=conversation.user_id,
+                pod_id=pod_id,
+                conversation_id=conversation.id,
+            ),
+            options=HarnessOptions(
+                model_name="test-model", history_summarization_enabled=False
+            ),
+            agent_run_id=uuid4(),
+        )
+    ]
+
+    (error,) = [e for e in events if e.type is AgentEventType.ERROR]
+    assert error.error_code == PROVIDER_HTTP_ERROR
+    assert error.error_reason == "http_405"
+    assert "HTTP 405" in str(error.data)
+
+
+async def test_the_pump_records_the_code_an_error_event_carries(monkeypatch) -> None:
+    from app.modules.agent.services import run_event_pump as pump_module
+    from app.modules.agent.services.run_identity import RunIdentity
+
+    calls: list[dict[str, object]] = []
+
+    class _Finalizer:
+        async def finish(self, **kwargs: object) -> None:
+            calls.append(kwargs)
+
+    run = RunIdentity(conversation_id=uuid4(), agent_run_id=uuid4())
+    pump = pump_module.RunEventPump(message_writer=None, finalizer=_Finalizer())
+
+    await pump.handle(
+        event=failure_event(_http(405), agent_run_id=run.agent_run_id),
+        run=run,
+        outcome=pump_module.RunOutcome(),
+    )
+
+    (call,) = calls
+    assert call["error_code"] == PROVIDER_HTTP_ERROR
+    assert call["error_reason"] == "http_405"

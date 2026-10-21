@@ -14,6 +14,10 @@ from app.core.authorization.context import ResourceType
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.entity import CreatedEntity, Entity
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.conversation_metadata import (
+    MANUAL_RETRY_SOURCE,
+    source_of,
+)
 from app.modules.agent.domain.errors import AgentValidationError
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -156,10 +160,21 @@ class Message(CreatedEntity):
 
 
 class Conversation(Entity):
-    """Primary storage aggregate for pod assistant and pod agent chats."""
+    """Primary storage aggregate for pod assistant and pod agent chats.
+
+    A conversation is one agent working for one principal. That is the member
+    ``user_id`` names -- unless ``contact_id`` is set, when it works for that
+    contact, and ``user_id`` is the member who looks after the conversation:
+    whom it may pass a question to, never whose access it has.
+    """
 
     user_id: UUID
     pod_id: UUID
+    #: The contact this conversation answers. Written by the server when it
+    #: opens the conversation, and by a merge; never by anything a client sends.
+    contact_id: UUID | None = None
+    #: The channel it works in, when it lives on one.
+    channel_id: UUID | None = None
     organization_id: UUID | None = None
     agent_id: UUID | None = None
     title: str | None = None
@@ -186,6 +201,9 @@ class Conversation(Entity):
     #: A pause here is waiting on the owner. Read-side only, like the
     #: diagnostics above: set by the reads that answer a person, not stored.
     has_pending_interaction: bool = False
+    #: WAITING on the agent's own work (a sub-agent, a process, a timer), with
+    #: a run to come. Read-side only, set where one conversation is read.
+    waiting_on_work: bool = False
     messages: list[Message] = Field(default_factory=list)
     agent_runs: list["AgentRun"] = Field(default_factory=list)
 
@@ -208,6 +226,21 @@ class Conversation(Entity):
 
     def ordered_messages(self) -> list[Message]:
         return sorted(self.messages, key=lambda message: message.sequence)
+
+
+def replays_without_effect(role: MessageRole, kind: MessageKind) -> bool:
+    """Whether a failed run holding this message can be run again as it was.
+
+    The person's own messages are what a retry replays. The model's reasoning
+    is the one thing it says that does nothing: no text reached anyone and no
+    tool ran, so a run that failed after only thinking is as safe to retry as
+    one that failed before the model answered at all. The retry does not carry
+    the old reasoning forward -- a thought with no answer after it is never
+    replayed to the model.
+    """
+    return role is MessageRole.USER or (
+        role is MessageRole.ASSISTANT and kind is MessageKind.THINKING
+    )
 
 
 class AgentRun(Entity):
@@ -250,11 +283,26 @@ class AgentRun(Entity):
         }
 
     @property
+    def replays_a_retried_turn(self) -> bool:
+        """Whether this run was started by a retry, and so replays a person's
+        turn that belongs to the run it retried rather than to itself."""
+        return source_of(self.metadata) == MANUAL_RETRY_SOURCE
+
+    @property
     def is_safely_retryable(self) -> bool:
+        # A retry owns no user message, so "it holds the person's turn" is
+        # answered by what started it. Its retry was only allowed because the
+        # run before it was replay-safe, so the same turn is still there.
         return (
             self.status == AgentRunStatus.FAILED
-            and bool(self.messages)
-            and all(message.role is MessageRole.USER for message in self.messages)
+            and (
+                self.replays_a_retried_turn
+                or any(message.role is MessageRole.USER for message in self.messages)
+            )
+            and all(
+                replays_without_effect(message.role, message.kind)
+                for message in self.messages
+            )
         )
 
     def ordered_messages(self) -> list[Message]:

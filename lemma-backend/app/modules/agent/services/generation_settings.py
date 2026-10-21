@@ -254,18 +254,31 @@ def compaction_generation_settings(merged: GenerationSettings) -> GenerationSett
     )
 
 
-def title_model_settings(resolved: ResolvedAgentRuntime) -> JsonObject:
+def title_model_settings(
+    resolved: ResolvedAgentRuntime, *, ask_no_reasoning: bool = True
+) -> JsonObject:
     """Request parameters for a conversation title: no reasoning at all.
 
     A title is a few words, and a reasoning model left at its default spends
-    almost all of its output on thinking before writing them. ``none`` is sent
-    only where the model declares it reasons; a model that does not reject the
-    field outright.
+    almost all of its output on thinking before writing them. ``none`` is
+    asked of every model, declared reasoning or not -- an undeclared reasoning
+    model is exactly the one that would otherwise think at length. A model
+    that rejects the field is asked again without it
+    (``ask_no_reasoning=False``); see the title generator.
     """
+    capabilities = list(resolved.capabilities)
+    if ask_no_reasoning:
+        capabilities.append(RuntimeModelCapability.REASONING)
+    else:
+        capabilities = [
+            c
+            for c in capabilities
+            if RuntimeModelCapability(c) is not RuntimeModelCapability.REASONING
+        ]
     return wire_settings(
         GenerationSettings(reasoning_effort=ReasoningEffort.NONE),
         protocol=resolved.profile.protocol,
-        capabilities=resolved.capabilities,
+        capabilities=capabilities,
     )
 
 

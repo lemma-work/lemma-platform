@@ -71,6 +71,7 @@ async def create_surface_claiming_identity(
     credential_mode: SurfaceCredentialMode | None = None,
     account_id: UUID | None = None,
     ctx: Context | None = None,
+    contacts_chosen: bool | None = None,
 ) -> AgentSurfaceEntity:
     """:meth:`create_surface`, claiming a scarce identity when one is needed.
 
@@ -136,4 +137,5 @@ async def create_surface_claiming_identity(
         credential_mode=credential_mode,
         account_id=account_id,
         ctx=ctx,
+        contacts_chosen=contacts_chosen,
     )

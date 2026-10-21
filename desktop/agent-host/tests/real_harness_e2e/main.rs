@@ -67,7 +67,7 @@ pub(crate) async fn run_with_deadline(
     let remaining = (request.run_spec.run_deadline - Utc::now())
         .to_std()
         .unwrap_or_default();
-    tokio::time::timeout(remaining, AcpDriver.run(request, callbacks))
+    tokio::time::timeout(remaining, AcpDriver::default().run(request, callbacks))
         .await
         .map_err(|_| anyhow::anyhow!("live ACP test exceeded its run deadline"))?
 }

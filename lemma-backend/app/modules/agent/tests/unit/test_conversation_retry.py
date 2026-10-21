@@ -11,6 +11,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
+
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
@@ -80,11 +82,16 @@ def _service(
         lock_conversation=AsyncMock(),
         get_active_agent_run_for_update=AsyncMock(return_value=None),
         get_latest_agent_run_for_conversation=AsyncMock(),
-        run_has_only_user_messages=AsyncMock(return_value=True),
+        run_is_replay_safe=AsyncMock(return_value=True),
         create_agent_run=AsyncMock(),
         conversations_with_pending_interaction=AsyncMock(return_value=set()),
     )
-    uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
+    uow = SimpleNamespace(
+        collect_events=MagicMock(),
+        commit=AsyncMock(),
+        # The pod names no default runtime of its own.
+        session=RecordingWorkSession(),
+    )
     service = ConversationService(
         uow=uow,
         conversation_repository=repository,
@@ -146,7 +153,7 @@ async def test_retry_runs_on_the_conversation_s_current_runtime_without_a_new_me
     retry_run = _run(status=AgentRunStatus.RUNNING)
     retry_run.conversation_id = conversation.id
     repository.get_latest_agent_run_for_conversation.return_value = failed_run
-    repository.run_has_only_user_messages.return_value = True
+    repository.run_is_replay_safe.return_value = True
     repository.create_agent_run.return_value = retry_run
     authorize = _authorize(monkeypatch, conversation)
 
@@ -169,10 +176,10 @@ async def test_retry_runs_on_the_conversation_s_current_runtime_without_a_new_me
     # Re-pointing the teammate at another model is how a retired-model failure
     # is fixed, so the retry must not replay the dead runtime.
     assert check.checked == [_CURRENT_RUNTIME]
-    uow.collect_events.assert_called_once()
+    assert uow.session.kinds() == ["agent.turn"]
     uow.commit.assert_awaited_once()
     # Asked about this one run, not handed every run of the conversation.
-    repository.run_has_only_user_messages.assert_awaited_once_with(failed_run.id)
+    repository.run_is_replay_safe.assert_awaited_once_with(failed_run.id)
     # Retrying runs the agent again, so it demands execute rather than read.
     authorize.assert_awaited_once_with(
         repository,
@@ -279,3 +286,37 @@ async def test_a_retry_on_a_model_that_is_gone_is_refused_before_a_run_exists(
 
     repository.create_agent_run.assert_not_awaited()
     uow.commit.assert_not_awaited()
+
+
+def _bare_failed_run(metadata: dict[str, object] | None) -> AgentRun:
+    return AgentRun(
+        conversation_id=uuid4(),
+        status=AgentRunStatus.FAILED,
+        agent_runtime=_CURRENT_RUNTIME,
+        started_at=datetime.now(timezone.utc),
+        metadata=metadata,
+    )
+
+
+def test_a_failed_retry_owning_no_messages_is_safely_retryable() -> None:
+    """The turn a retry replays belongs to the run it retried."""
+    assert _bare_failed_run({"source": "manual_retry"}).is_safely_retryable
+
+
+def test_a_failed_run_with_no_turn_and_no_retry_behind_it_is_not() -> None:
+    assert not _bare_failed_run({"source": "user_message"}).is_safely_retryable
+    assert not _bare_failed_run(None).is_safely_retryable
+
+
+def test_a_failed_retry_that_replied_is_not_safely_retryable() -> None:
+    retry = _bare_failed_run({"source": "manual_retry"})
+    retry.messages = [
+        Message.create(
+            conversation_id=retry.conversation_id,
+            sequence=1,
+            agent_run_id=retry.id,
+            role=MessageRole.ASSISTANT,
+            text="Here is half",
+        )
+    ]
+    assert not retry.is_safely_retryable

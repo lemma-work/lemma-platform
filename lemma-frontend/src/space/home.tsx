@@ -2,8 +2,11 @@
 
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { source, type ConversationRef, type Pod } from "@/data";
+import { source, type ConversationRef, type Pod, type Tab } from "@/data";
+import { AppCover } from "@/stage/app-cover";
 import { AskBox } from "@/chat/ask-box";
+import { ModelPicker } from "@/thread/model-picker";
+import type { Choice } from "@/data/runtimes";
 import { gather } from "@/workflow/waiting-inbox";
 import { byAge, CONVERSATION_ASKS, sayAsked, type AskedRow } from "@/thread/waiting-on-you";
 import { useConversationAsks } from "@/thread/use-conversation-asks";
@@ -30,25 +33,39 @@ const STARTERS: { key: string; title: string; note: string; icon: React.ReactNod
  *  while you were elsewhere. */
 const ON_ITS_OWN = new Set(["channel", "notification", "schedule", "workflow", "task", "ask"]);
 const RECENT_ROWS = 4;
+/** How many apps sit under the name before "All": one row of covers. */
+const HOME_APPS = 4;
 
-/** Where a space opens: the teammate whose space it is, what is waiting on
- *  you, what it has been doing without you, a few ways to start something,
- *  and a plain box to ask it. Sending from the box starts the conversation
+type AppTab = Extract<Tab, { kind: "app" }>;
+
+/** Where a space opens: the teammate whose space it is, the apps it has
+ *  made, what is waiting on you, what it has been doing without you, a few
+ *  ways to start something, and a plain box to ask it. Sending from the box starts the conversation
  *  and moves you into it — Home stays a place you come back to, not a thread
  *  that grows. */
-export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAbout, onAsk }: {
+export function Home({ pod, pods, apps, onOpenApp, onOpenApps, onNewPage, onOpenRun, onOpenConversation, onAbout, onAsk }: {
     pod: Pod;
     pods: Pod[];
+    /** The space's apps: the newest few show as covers under its name. */
+    apps: AppTab[];
+    onOpenApp: (tabId: string) => void;
+    /** The Apps list, when there are more than fit. */
+    onOpenApps: () => void;
     onNewPage: () => Promise<void>;
     onOpenRun: (runId: string, workflowName: string) => void;
     onOpenConversation: (id: string) => void;
     /** The teammate's own page. */
     onAbout: () => void;
-    /** Start a conversation with these words and files, in the Chat tab. */
-    onAsk: (text: string, files: File[]) => void;
+    /** Start a conversation with these words and files, in the Chat tab --
+     *  on the model picked here, when one was. */
+    onAsk: (text: string, files: File[], model: Choice | null) => void;
 }) {
     const mate = pod.teammate?.name || pod.name;
     const [fill, setFill] = useState<{ text: string; id: number } | null>(null);
+    /* The model the next conversation starts on: held here until it exists,
+       then the conversation's own, and set back to the default for the one
+       after. */
+    const [model, setModel] = useState<Choice | null>(null);
     const asks = useRef(0);
 
     const cache = useQueryClient();
@@ -95,6 +112,8 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
         else onOpenConversation(chat.id);
     };
 
+    const newestApps = [...apps].sort((a, b) => (b.updated ?? "").localeCompare(a.updated ?? "")).slice(0, HOME_APPS);
+
     const maker = useMaking();
     const start = (key: string, ask?: string) => {
         if (key === "page") { void maker.run("page", onNewPage); return; }
@@ -115,6 +134,27 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
                         {pod.description && <p>{pod.description}</p>}
                     </div>
                 </header>
+
+                {newestApps.length > 0 && (
+                    <section className="home__section" aria-labelledby="home-apps">
+                        <div className="home__section-head">
+                            <h2 id="home-apps">Apps</h2>
+                            {apps.length > HOME_APPS && <button type="button" className="home__all" onClick={onOpenApps}>All {apps.length}</button>}
+                        </div>
+                        <ul className="home__apps">
+                            {newestApps.map(app => (
+                                <li key={app.id}>
+                                    <button type="button" className="home__app" onClick={() => onOpenApp(app.id)}>
+                                        <span className="home__app-cover">
+                                            <AppCover url={app.url} fallback={<span className="home__app-letter" aria-hidden="true">{app.label.trim().charAt(0).toUpperCase() || "A"}</span>} />
+                                        </span>
+                                        <span className="home__app-name">{app.label}</span>
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    </section>
+                )}
 
                 {/* Only when something is. A heading over "nothing" is a
                     section somebody has to read to learn it is empty. */}
@@ -197,7 +237,13 @@ export function Home({ pod, pods, onNewPage, onOpenRun, onOpenConversation, onAb
             </div>
 
             <div className="home__chat" data-tour="ask">
-                <AskBox placeholder={"Ask " + mate + "…"} fill={fill} onFilled={() => setFill(null)} onAsk={onAsk} />
+                <AskBox
+                    placeholder={"Ask " + mate + "…"}
+                    fill={fill}
+                    onFilled={() => setFill(null)}
+                    onAsk={(text, files) => { onAsk(text, files, model); setModel(null); }}
+                    model={<ModelPicker podId={pod.id} orgId={pod.orgId} conversationId={null} picked={model} onPicked={setModel} />}
+                />
             </div>
         </div>
     );

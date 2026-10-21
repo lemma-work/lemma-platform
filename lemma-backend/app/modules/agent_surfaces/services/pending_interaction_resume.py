@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
@@ -211,7 +212,8 @@ async def resume_pending_interaction(
             if recorded is not None
             else Resumed(ResumeOutcome.NOT_A_DECISION)
         )
-    except Exception:
+    except Exception as exc:
+        raise_if_database_unavailable(exc)
         if recording:
             # The person decided and we could not write it down. Never fall
             # through: the turn that would start supersedes this pause with an

@@ -31,11 +31,19 @@ class MetadataRecord:
 
 
 async def conversation_metadata_record(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, key: str
+    uow: SqlAlchemyUnitOfWork,
+    conversation_id: UUID,
+    key: str,
+    *,
+    for_update: bool = False,
 ) -> JsonValue | None:
-    """The record under ``key``, for its owner to validate; None when absent."""
+    """The record under ``key``, for its owner to validate; None when absent.
+
+    ``for_update`` locks the conversation row until ``uow`` ends, so a
+    read-modify-write of the record cannot interleave with another.
+    """
     return await ConversationRepository(uow).get_conversation_metadata_key(
-        conversation_id, key
+        conversation_id, key, for_update=for_update
     )
 
 

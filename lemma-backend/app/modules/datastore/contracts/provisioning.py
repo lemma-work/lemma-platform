@@ -26,6 +26,8 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
+from app.modules.datastore.contracts.write_intent import WriteIntent
+
 from app.core.authorization.context import Context
 from app.modules.datastore.api.dependencies import (
     build_file_service,
@@ -127,8 +129,13 @@ async def seed_table_rows(
     Upsert rather than insert so a caller replaying the same rows after a crash
     converges instead of raising on duplicates.
     """
+    # An import: triggers that do not take imports skip these rows, recorded.
     return await build_record_service(uow).bulk_create_records(
-        _table_context(pod_id, table), rows, user_id, upsert=True
+        _table_context(pod_id, table),
+        rows,
+        user_id,
+        upsert=True,
+        intent=WriteIntent.IMPORT,
     )
 
 

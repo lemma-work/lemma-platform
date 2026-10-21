@@ -32,7 +32,7 @@ from uuid import UUID
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.agent_surfaces.platforms.common import (
-    PLATFORM_TRANSPORT_ERRORS,
+    platform_transport_errors,
 )
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.surface_representation import SurfaceReach
@@ -284,7 +284,7 @@ class SurfaceReachResolver:
     async def _teams_handle(self, surface: AgentSurfaceEntity) -> str | None:
         app_id = surface_settings.microsoft_bot_app_id
         if app_id:
-            with suppress(*PLATFORM_TRANSPORT_ERRORS):
+            with suppress(*platform_transport_errors()):
                 tenant_id = surface.external_tenant_id or "botframework.com"
                 token = await get_graph_token(tenant_id)
                 if token:

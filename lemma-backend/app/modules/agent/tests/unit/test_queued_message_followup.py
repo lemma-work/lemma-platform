@@ -15,13 +15,13 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import AgentRun, Conversation
-from app.modules.agent.domain.events import AgentRunStartedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
     ConversationStatus,
 )
 from app.modules.agent.services.conversation_turns import TurnCoordinator
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 
 
 def _runtime() -> AgentRuntimeConfig:
@@ -80,7 +80,9 @@ def _coordinator(
         create_agent_run=AsyncMock(return_value=created),
         claim_queued_user_messages=AsyncMock(return_value=[]),
     )
-    uow = SimpleNamespace(collect_events=MagicMock(), commit=AsyncMock())
+    uow = SimpleNamespace(
+        collect_events=MagicMock(), commit=AsyncMock(), session=RecordingWorkSession()
+    )
     coordinator = TurnCoordinator(
         uow=uow,
         conversation_repository=repository,
@@ -115,10 +117,10 @@ async def test_a_message_queued_behind_a_busy_run_gets_its_own_turn() -> None:
         "source": "queued_messages",
         "queued_behind_agent_run_id": str(finished.id),
     }
-    [event] = uow.collect_events.call_args.args[0]
-    assert isinstance(event, AgentRunStartedEvent)
-    assert event.conversation_id == conversation.id
-    assert event.agent_run_id == created.id
+    # The turn is written in the same transaction as the run it executes.
+    turn = uow.session.item("agent.turn")
+    assert turn["dedup_key"] == f"agent-run:{created.id}"
+    assert turn["concurrency_key"] == f"conversation:{conversation.id}"
     uow.commit.assert_awaited_once()
 
 

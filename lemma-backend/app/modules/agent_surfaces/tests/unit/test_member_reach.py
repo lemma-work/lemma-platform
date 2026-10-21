@@ -14,19 +14,20 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceStatus,
 )
 from app.modules.agent_surfaces.services.notification_delivery import (
     UndeliverableReason,
 )
 from app.modules.agent_surfaces.tests.unit.surface_doubles import (
-    _ask_user_link,
+    AnsweredAt,
+    _answered_in_thread,
     _delivering_adapter,
     _slack_event,
     _slack_surface,
     _telegram_event,
     _telegram_surface,
+    answer_at,
     build_member_reach,
     conversation_operations,  # noqa: F401  (autouse fixture)
 )
@@ -39,10 +40,9 @@ async def test_send_to_member_reuses_existing_thread():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
-    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    link = _answered_in_thread(surface, conversation_id, parsed_event)
     adapter = _delivering_adapter()
-    reach = build_member_reach(adapter=adapter, surfaces=[surface], existing_link=link)
-    reach.conversation_link_repository.get_by_conversation_id.return_value = link
+    reach = build_member_reach(adapter=adapter, surfaces=[surface], answered=link)
     reach.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
     )
@@ -55,9 +55,6 @@ async def test_send_to_member_reuses_existing_thread():
             ]
         )
     )
-    reach.conversation_link_repository.get_latest_by_surface_and_external_user = (
-        AsyncMock(return_value=link)
-    )
 
     undeliverable = await reach.send_to_member(
         surface=surface,
@@ -68,10 +65,12 @@ async def test_send_to_member_reuses_existing_thread():
     assert "Your report is ready." in adapter.send_message.await_args.kwargs["message"]
 
 
-async def test_send_to_member_uses_requested_surface_latest_thread():
+async def test_send_to_member_answers_the_newest_thing_they_wrote():
+    """One private chat per person on a surface, however many threads: the
+    message goes where they last wrote."""
     surface = _telegram_surface()
     user_id = uuid4()
-    older_link = AgentSurfaceConversationLink(
+    older = AnsweredAt(
         surface_id=surface.id,
         conversation_id=uuid4(),
         platform="TELEGRAM",
@@ -82,20 +81,15 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
             chat_id="older-chat", message_id="older-message"
         ).model_dump(mode="json"),
     )
-    latest_link = AgentSurfaceConversationLink(
-        surface_id=surface.id,
-        conversation_id=uuid4(),
-        platform="TELEGRAM",
-        external_channel_id="latest-chat",
-        external_thread_id="latest-chat",
-        external_user_id="777",
-        last_event=_telegram_event(
-            chat_id="latest-chat", message_id="latest-message"
-        ).model_dump(mode="json"),
-    )
     adapter = _delivering_adapter()
-    reach = build_member_reach(
-        adapter=adapter, surfaces=[surface], existing_link=older_link
+    reach = build_member_reach(adapter=adapter, surfaces=[surface], answered=older)
+    [place] = reach.seats.sources.values()
+    reach.seats.answer(
+        older.conversation_id,
+        place,
+        _telegram_event(chat_id="latest-chat", message_id="latest-message").model_dump(
+            mode="json"
+        ),
     )
     reach.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
@@ -105,10 +99,6 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
             return_value=[SimpleNamespace(external_user_id="777", tenant_id=None)]
         )
     )
-    reach.conversation_link_repository.get_latest_by_surface_and_external_user = (
-        AsyncMock(return_value=latest_link)
-    )
-    reach.conversation_link_repository.get_by_conversation_id.return_value = latest_link
 
     undeliverable = await reach.send_to_member(
         surface=surface,
@@ -117,10 +107,6 @@ async def test_send_to_member_uses_requested_surface_latest_thread():
     )
 
     assert undeliverable is None
-    reach.conversation_link_repository.get_latest_by_surface_and_external_user.assert_awaited_once_with(
-        surface_id=surface.id,
-        external_user_id="777",
-    )
     event = adapter.send_message.await_args.kwargs["event"]
     assert event.external_thread_id == "latest-chat"
     assert event.reply_target["chat_id"] == "latest-chat"
@@ -130,7 +116,7 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
     system_surface = _telegram_surface()
     custom_surface = _telegram_surface()
     user_id = uuid4()
-    system_link = AgentSurfaceConversationLink(
+    system_link = AnsweredAt(
         surface_id=system_surface.id,
         conversation_id=uuid4(),
         platform="TELEGRAM",
@@ -141,7 +127,7 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
             chat_id="system-chat", message_id="system-message"
         ).model_dump(mode="json"),
     )
-    custom_link = AgentSurfaceConversationLink(
+    custom_link = AnsweredAt(
         surface_id=custom_surface.id,
         conversation_id=uuid4(),
         platform="TELEGRAM",
@@ -152,20 +138,13 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
             chat_id="custom-chat", message_id="custom-message"
         ).model_dump(mode="json"),
     )
-    links_by_surface = {
-        system_surface.id: system_link,
-        custom_surface.id: custom_link,
-    }
-    links_by_conversation = {
-        system_link.conversation_id: system_link,
-        custom_link.conversation_id: custom_link,
-    }
     adapter = _delivering_adapter()
     reach = build_member_reach(
         adapter=adapter,
         surfaces=[system_surface, custom_surface],
-        existing_link=system_link,
+        answered=system_link,
     )
+    answer_at(reach.seats, custom_link, [system_surface, custom_surface])
     reach.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(
             return_value=[system_surface.pod_id, custom_surface.pod_id]
@@ -175,16 +154,6 @@ async def test_send_to_member_does_not_confuse_system_and_custom_threads():
         list_by_resolved_users=AsyncMock(
             return_value=[SimpleNamespace(external_user_id="777", tenant_id=None)]
         )
-    )
-    reach.conversation_link_repository.get_latest_by_surface_and_external_user = (
-        AsyncMock(
-            side_effect=lambda *, surface_id, external_user_id: links_by_surface[
-                surface_id
-            ]
-        )
-    )
-    reach.conversation_link_repository.get_by_conversation_id.side_effect = (
-        lambda conversation_id: links_by_conversation[conversation_id]
     )
 
     custom_sent = await reach.send_to_member(
@@ -238,9 +207,6 @@ async def test_send_to_member_says_they_have_never_written_in():
                 SimpleNamespace(external_user_id="U-MEMBER", tenant_id="T123")
             ]
         )
-    )
-    reach.conversation_link_repository.get_latest_by_surface_and_external_user = (
-        AsyncMock(return_value=None)
     )
 
     undeliverable = await reach.send_to_member(

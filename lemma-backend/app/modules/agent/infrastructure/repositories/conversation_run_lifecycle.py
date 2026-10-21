@@ -54,7 +54,14 @@ async def finish_agent_run(
 
     Statuses only move forward (running, stop requested, terminal), so the
     re-read terminates.
+
+    Lock order: the conversation, then its run -- the order every transaction
+    that starts, resumes, retries or stops a turn takes them in. Updating the
+    run first deadlocks against a resume that holds the conversation and waits
+    for the run: an approval answered while the run that asked for it is still
+    being written as finished.
     """
+    conversation_locked = False
     while True:
         row = (
             await session.execute(
@@ -74,6 +81,13 @@ async def finish_agent_run(
                 conversation_id=row.conversation_id,
                 current_status=current_status,
             )
+
+        if not conversation_locked:
+            await lock_conversation_row(session, conversation_id=row.conversation_id)
+            conversation_locked = True
+            # Waiting for the lock may have let another writer end the run;
+            # read it again under the lock rather than act on the old status.
+            continue
 
         next_status = status
         if (
@@ -124,6 +138,20 @@ async def finish_agent_run(
             conversation_status=resolved_conversation_status,
             updated=True,
         )
+
+
+async def lock_conversation_row(
+    session: AsyncSession, *, conversation_id: UUID
+) -> None:
+    """Take the conversation's row lock: the first lock of any turn transaction.
+
+    See ``finish_agent_run`` for the order and the deadlock it prevents.
+    """
+    await session.execute(
+        select(ConversationModel.id)
+        .where(ConversationModel.id == conversation_id)
+        .with_for_update()
+    )
 
 
 async def _already_finished(

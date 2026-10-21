@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, String, Text
+from sqlalchemy import ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,4 +43,9 @@ class WebWidgetModel(UUIDAuditBase):
     answer: Mapped[str] = mapped_column(String(20), nullable=False)
     looked_after_by: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    #: The product whose users this widget's host tokens name: a host contact
+    #: is ``host:{host_issuer}:{sub}``. Widgets of one product share it.
+    host_issuer: Mapped[str] = mapped_column(
+        String(64), nullable=False, server_default=text("'default'")
     )

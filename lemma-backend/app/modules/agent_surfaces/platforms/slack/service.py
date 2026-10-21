@@ -10,13 +10,14 @@ from app.modules.agent_surfaces.domain.credentials import (
     SlackCredentials,
 )
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import httpx
+
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 from app.modules.agent_surfaces.platforms.slack.reply_blocks import reply_blocks
-from slack_sdk.errors import SlackApiError
-from slack_sdk.web.async_client import AsyncWebClient
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
@@ -73,6 +74,9 @@ from app.modules.agent_surfaces.domain.decision_card import (
     DecisionCardHandle,
 )
 from app.core.log.log import get_logger
+
+if TYPE_CHECKING:
+    from slack_sdk.web.async_client import AsyncWebClient
 
 logger = get_logger(__name__)
 
@@ -212,7 +216,9 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
+        """Post the message; the ``ts`` of its first part (None for an
+        ephemeral), which a reply in its thread names."""
         token = slack_access_token(self.credentials)
         channel = reply_target_as(event, SlackReplyTarget).channel
         if not token or not channel:
@@ -238,6 +244,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         # Empty for a normal channel post; `_post_message` decides on it.
         ephemeral_user = _ephemeral_target(metadata)
         index = 0
+        first: str | None = None
         try:
             for index, chunk in enumerate(chunks):
                 blocks = reply_blocks(
@@ -255,7 +262,8 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                     payload["thread_ts"] = thread_ts
                 payload.update(identity_kwargs)
                 payload["ephemeral_user"] = ephemeral_user
-                await self._post_message(client, payload)
+                ts = await self._post_message(client, payload)
+                first = first or ts
         except Exception:
             if index:
                 note_partial_delivery()
@@ -266,6 +274,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
             raise
         if not ephemeral_user:
             await remove_processing_reaction(self.credentials, event)
+        return first
 
     async def acknowledge_interaction(
         self,
@@ -294,7 +303,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
         if not response_url:
             return
         try:
-            async with httpx.AsyncClient(timeout=10.0) as http_client:
+            async with outbound_http(10.0) as http_client:
                 await http_client.post(
                     response_url,
                     json=slack_acknowledgement_body(
@@ -453,7 +462,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                         loading_messages=[PROCESSING_LOADING_TEXT],
                     )
                     return
-                except SlackApiError as exc:
+                except slack_api_error() as exc:
                     error_code = str((exc.response or {}).get("error") or "")
                     if error_code in {
                         "missing_scope",
@@ -475,7 +484,7 @@ class SlackPlatformService(SlackChannelReadsMixin, SlackFilesMixin):
                 name="eyes",
                 timestamp=str(timestamp),
             )
-        except SlackApiError as exc:
+        except slack_api_error() as exc:
             error_code = str((exc.response or {}).get("error") or "")
             if error_code in {"already_reacted", "missing_scope", "not_reactable"}:
                 logger.debug(

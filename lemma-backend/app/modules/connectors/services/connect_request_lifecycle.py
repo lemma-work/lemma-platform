@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connect_request import (
+    GRANTED_ACCOUNT_ATTRIBUTE,
     ConnectRequestEntity,
 )
 
@@ -35,6 +36,16 @@ _FOLLOWUP_IDENTITY_KEY = "followup_provider_account_id"
 # Where the person was when they started, so the round trip puts them back
 # rather than somewhere plausible.
 _RETURN_TO_KEY = "return_to"
+
+# What another module started the request for (``start_authorization``), kept
+# after the exchange so the grant can say so.
+_PURPOSE_KEY = "purpose"
+# Recorded when the grant is stored: which account it made, and whether the
+# browser that came back carried the starter's own session.
+_GRANTED_ACCOUNT_KEY = GRANTED_ACCOUNT_ATTRIBUTE
+_BROWSER_BOUND_KEY = "browser_bound"
+#: A purpose is a short identifier another module chose, never free text.
+_PURPOSE_MAX = 64
 
 
 def oldest_claimable_connect_request() -> datetime:
@@ -191,3 +202,50 @@ def with_return_path(attributes: dict[str, str], return_to: object) -> dict[str,
     """Record the return path on a request, if the caller named a usable one."""
     path = safe_return_path(return_to)
     return {**attributes, _RETURN_TO_KEY: path} if path else attributes
+
+
+def with_purpose(attributes: dict[str, str], purpose: str | None) -> dict[str, str]:
+    """Record what the request was started for, if its starter said."""
+    if not purpose:
+        return attributes
+    if len(purpose) > _PURPOSE_MAX or not purpose.replace("_", "").isalnum():
+        raise ValueError(f"not a connect purpose: {purpose!r}")
+    return {**attributes, _PURPOSE_KEY: purpose}
+
+
+def purpose_of(connect_request: ConnectRequestEntity) -> str | None:
+    value = (connect_request.attributes or {}).get(_PURPOSE_KEY)
+    return value if isinstance(value, str) and value else None
+
+
+def with_grant(
+    attributes: dict | None, *, account_id: object, browser_bound: bool
+) -> dict:
+    """What a spent request keeps about the grant it ended in."""
+    return {
+        **(attributes or {}),
+        _GRANTED_ACCOUNT_KEY: str(account_id),
+        _BROWSER_BOUND_KEY: browser_bound,
+    }
+
+
+def was_browser_bound(connect_request: ConnectRequestEntity) -> bool:
+    return (connect_request.attributes or {}).get(_BROWSER_BOUND_KEY) is True
+
+
+def request_attributes(
+    state: str,
+    provider_state: str | None,
+    code_verifier: str | None,
+    return_to: object,
+    purpose: str | None,
+) -> dict[str, str]:
+    """What a new connect request remembers until its callback: the flow's
+    secrets, where to put the person back, and what another module started it
+    for (``purpose``, carried to the ``ConnectorAccountConnected`` it emits)."""
+    attributes = {"state": state}
+    if provider_state is not None:
+        attributes["provider_state"] = provider_state
+    if code_verifier:
+        attributes["code_verifier"] = code_verifier
+    return with_purpose(with_return_path(attributes, return_to), purpose)

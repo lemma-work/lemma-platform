@@ -346,7 +346,7 @@ async fn an_unanswered_request_is_denied_when_the_timeout_elapses() {
     let callbacks = Arc::new(Capture::default());
     let started = std::time::Instant::now();
 
-    let outcome = AcpDriver
+    let outcome = AcpDriver::default()
         .run(
             AcpRunRequest {
                 agent_environment: std::collections::BTreeMap::default(),
@@ -458,7 +458,7 @@ async fn run_carrying(
     let scratch = TempDir::new().unwrap();
     let log = scratch.path().join("acp.jsonl");
     let callbacks = Arc::new(Capture::default());
-    let outcome = AcpDriver
+    let outcome = AcpDriver::default()
         .run(
             AcpRunRequest {
                 agent_environment: std::collections::BTreeMap::default(),

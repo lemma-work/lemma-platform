@@ -59,6 +59,22 @@ async def agent_name_for_id(session, agent_id: UUID) -> str | None:
     ).scalar_one_or_none()
 
 
+async def agent_name_in_pod(session, *, pod_id: UUID, agent_id: UUID) -> str:
+    """The stored name of this pod's agent, or ``AgentNotFoundError`` when the
+    pod has no agent with that id -- a caller acting on an agent another pod
+    owns is asking about nothing it may touch."""
+    name = (
+        await session.execute(
+            select(AgentModel.name).where(
+                AgentModel.id == agent_id, AgentModel.pod_id == pod_id
+            )
+        )
+    ).scalar_one_or_none()
+    if name is None:
+        raise AgentNotFoundError(str(agent_id))
+    return name
+
+
 async def agent_names_for_ids(
     session: AsyncSession, agent_ids: Iterable[UUID | None]
 ) -> dict[UUID, str]:
@@ -78,4 +94,9 @@ async def agent_names_for_ids(
     return dict(rows.all())
 
 
-__all__ = ["agent_id_for_name", "agent_name_for_id", "agent_names_for_ids"]
+__all__ = [
+    "agent_id_for_name",
+    "agent_name_for_id",
+    "agent_name_in_pod",
+    "agent_names_for_ids",
+]

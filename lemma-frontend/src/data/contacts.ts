@@ -10,7 +10,7 @@ import type {
     WebWidgetResponse,
 } from "lemma-sdk";
 
-export type HandleKind = "PHONE" | "EMAIL" | "TELEGRAM" | "HOST";
+export type HandleKind = "PHONE" | "EMAIL" | "TELEGRAM" | "HOST" | "SLACK" | "TEAMS" | "WEB";
 
 export interface ContactHandle {
     kind: HandleKind;
@@ -23,6 +23,8 @@ export interface Contact {
     name: string | null;
     createdAt: string;
     handles: ContactHandle[];
+    /** Known only by the browser they wrote from: nobody has vouched for them yet. */
+    anonymous: boolean;
 }
 
 export type WidgetAnswer = "off" | "known" | "anyone";
@@ -65,7 +67,7 @@ export interface WidgetDraft {
 
 export const EMPTY_WIDGET_DRAFT: WidgetDraft = { name: "", origins: "", answer: "anyone" };
 
-const KINDS: HandleKind[] = ["PHONE", "EMAIL", "TELEGRAM", "HOST"];
+const KINDS: HandleKind[] = ["PHONE", "EMAIL", "TELEGRAM", "HOST", "SLACK", "TEAMS", "WEB"];
 
 export function readContact(wire: ContactResponse): Contact {
     return {
@@ -79,11 +81,12 @@ export function readContact(wire: ContactResponse): Contact {
                 value: identity.value,
                 strength: identity.strength,
             })),
+        anonymous: wire.is_anonymous ?? false,
     };
 }
 
 export function readContacts(wire: ContactListResponse): { items: Contact[]; next: string | null } {
-    return { items: (wire.items ?? []).map(readContact), next: wire.next_before ?? null };
+    return { items: (wire.items ?? []).map(readContact), next: wire.next_cursor ?? null };
 }
 
 /** The most pages one list follows: far past any space's contacts or tables,
@@ -127,7 +130,9 @@ export function readCap(wire: ContactsCapResponse): ContactsCap {
 
 /** How a contact is named in a list: their name, else their first handle. */
 export function contactName(contact: Contact): string {
-    return contact.name || (contact.handles[0] ? handleText(contact.handles[0]) : "A contact");
+    if (contact.name) return contact.name;
+    if (contact.anonymous) return "A visitor to your website";
+    return contact.handles[0] ? handleText(contact.handles[0]) : "A contact";
 }
 
 /** One handle as a person reads it. A host id is the customer's own user id,
@@ -136,6 +141,11 @@ export function handleText(handle: ContactHandle): string {
     if (handle.kind === "PHONE") return "+" + handle.value.replace(/^\+/, "");
     if (handle.kind === "TELEGRAM") return "Telegram " + handle.value;
     if (handle.kind === "HOST") return "Signed in on your site";
+    // A colleague in a workspace the organization holds is one too, so it
+    // says only where they write from, not whose company they are in.
+    if (handle.kind === "SLACK") return "Slack";
+    if (handle.kind === "TEAMS") return "Teams, from another company";
+    if (handle.kind === "WEB") return "Chat on your website";
     return handle.value;
 }
 
@@ -146,34 +156,90 @@ export function vouchedBy(handle: ContactHandle): string {
         case "HOST": return "Named by your site";
         case "CODE": return "Confirmed with a code";
         case "MEMBER": return "Added by a member";
+        case "SESSION": return "Not confirmed yet";
         default: return "";
     }
 }
 
 /** The second line of a contact's row. */
 export function contactSubline(contact: Contact): string {
+    if (contact.anonymous) return "Not confirmed yet";
     const handles = contact.handles.map(handleText);
     if (contact.name && handles.length) return handles.join(" · ");
     return handles.slice(1).join(" · ") || "No handle on record";
 }
 
-/** What each answer means, for a bot or a widget, in one line. */
+/** Whom a bot -- a WhatsApp number, a Telegram bot, an email address --
+ *  answers when somebody messages it privately. Its members are always
+ *  answered; the choice is who else is. */
 export function answerChoices(space: string): { value: WidgetAnswer; label: string; note: string }[] {
     return [
-        { value: "off", label: "Only people in " + space, note: "Anybody else is turned away, as now." },
-        { value: "known", label: "People in " + space + " and its contacts", note: "Strangers are turned away." },
-        { value: "anyone", label: "Anyone who writes", note: "A stranger becomes a contact with their first message." },
+        { value: "off", label: "Members only", note: "Anyone outside " + space + " is turned away." },
+        { value: "known", label: "Members and contacts", note: "People already in Contacts are answered too. Strangers are turned away." },
+        { value: "anyone", label: "Everyone", note: "Strangers are answered too, and join Contacts with their first message." },
     ];
 }
 
-/** Why a follow-up was refused, from the code the API gave. */
-export function followUpRefusal(code: string | undefined): string {
-    switch (code) {
-        case "unsubscribed": return "They asked not to be written to there.";
-        case "outside_window": return "WhatsApp only allows a reply within a day of their last message.";
-        case "no_conversation": return "They haven’t written yet, so there is nowhere to write back.";
-        case "no_handle": return "There is no way to reach them on that channel.";
-        default: return "Couldn’t send it. Try again.";
+/** Whom a web chat answers. A visitor is nobody's member, so the choice is
+ *  between any visitor and the people already in Contacts, who confirm
+ *  their email (or are signed in by the site) before they may write. */
+export function widgetAnswerChoices(): { value: WidgetAnswer; label: string; note: string }[] {
+    return [
+        { value: "anyone", label: "Every visitor", note: "Nobody has to sign in." },
+        { value: "known", label: "Only people in Contacts", note: "Visitors confirm their email first, and strangers are turned away." },
+        { value: "off", label: "Off", note: "Every visitor is turned away." },
+    ];
+}
+
+/** A line written to a contact first, and what became of its send. */
+export interface OutreachSent {
+    channelId: string;
+    lineId: string;
+    platform: string | null;
+    status: "PENDING" | "SENT" | "FAILED" | "SKIPPED" | "DEAD";
+    reason: string | null;
+}
+
+/** The handles a member can write to first: an address, a number on
+ *  WhatsApp, a Telegram account. A chat on the website or a colleague in
+ *  another company's Slack waits for them to write. */
+export function writableHandles(contact: Pick<Contact, "handles">): ContactHandle[] {
+    return contact.handles.filter((handle) => handle.kind === "EMAIL" || handle.kind === "PHONE" || handle.kind === "TELEGRAM");
+}
+
+/** What a member is told after writing to a contact first. */
+export function outreachSaid(sent: Pick<OutreachSent, "status" | "reason" | "platform">): string {
+    const where = sent.platform === "WHATSAPP" ? "WhatsApp" : sent.platform === "TELEGRAM" ? "Telegram" : "email";
+    switch (sent.status) {
+        case "SENT": return "Sent by " + where + ". It is in their channel.";
+        case "PENDING": return "In their channel, on its way by " + where + ".";
+        case "SKIPPED": return "In their channel, but not sent" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ".";
+        default: return "In their channel, but it did not go" + (sent.reason ? ": " + sent.reason.replace(/\.$/, "") : "") + ". Retry it from there.";
+    }
+}
+
+/** Why writing to a contact first was refused, in words a member can act
+ *  on. The API's refusals of the message itself -- they asked not to be
+ *  written to there, WhatsApp's window has closed, the pod has no address to
+ *  write from -- are already sentences, and are said as given; anything
+ *  else (a server fault, no connection, a body that is not a sentence) is
+ *  said here, never shown raw. */
+export function outreachProblem(error: unknown): string {
+    const status = error && typeof error === "object" ? (error as { statusCode?: unknown }).statusCode : undefined;
+    const message = error instanceof Error ? error.message.trim() : "";
+    const sentence = message.length > 0 && message.length < 240 && /^[A-Z][^{}<>\n]*[.!?]$/.test(message) && !/^(Request failed|HTTP|Internal Server Error|Bad Request|Conflict|Unprocessable)/.test(message);
+    switch (status) {
+        case 404: return "They are not one of this pod’s contacts any more.";
+        case 403: return "Only an editor of the pod can write to contacts.";
+        case 409:
+        case 422: return sentence ? message : status === 409 ? "They can’t be written to there now." : "That can’t be sent to them there.";
+        case 429: return "Too many sent just now. Wait a minute and try again.";
+        case 503: return "Sending isn’t available right now. Try again in a few minutes.";
+        default:
+            if (typeof status === "number" && status >= 500) return "Lemma couldn’t send it just now. Try again.";
+            return status === undefined && error instanceof Error && error.name === "NetworkError"
+                ? "Couldn’t reach Lemma. Check your connection and try again."
+                : "Couldn’t send it. Try again.";
     }
 }
 

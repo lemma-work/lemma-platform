@@ -31,3 +31,12 @@ class ApprovalResolution(NamedTuple):
 
     status: ApprovalResolutionStatus
     decision: AgentRunApprovalDecision
+
+
+#: In a DENY's response: nobody decided before the question's time ran out --
+#: the run is told so, rather than that a person turned it down.
+EXPIRED_UNANSWERED = "expired_unanswered"
+
+
+def expired_unanswered(response: dict[str, object]) -> bool:
+    return response.get(EXPIRED_UNANSWERED) is True

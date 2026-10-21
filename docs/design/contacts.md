@@ -109,7 +109,8 @@ passes the pod-membership check.
    from a contact's run. It runs as the **function's own workload** with the
    function's grants, never as a member: the run has no user, carries the
    contact, and authenticates with a `function-run` token that reaches only its
-   pod's data. Its reads of contact-owned tables see that contact's rows only.
+   pod's data. Its reads of contact-owned tables see that contact's rows only,
+   and the rows it adds there are written as that contact.
    The platform writes `contact_id` into its input, replacing whatever the
    model sent. Identity strength is not passed yet (see Step-up).
 
@@ -201,22 +202,24 @@ named. That would make Lemma a relay for spam and phishing.
 keep that rule:
 
 - No contact is created and no agent run starts.
-- The message lands in the bot's inbox marked *unverified sender*, so a member
-  can read it and reply by hand if it's genuine.
+- The member who looks after contacts is told, in their own channel, that
+  mail came from an *unverified sender*, so they can read it and reply by hand
+  if it's genuine.
 - A member can add the address to a contact, for outbound mail and for later
   messages that do authenticate. Unverified mail from it is still parked.
   Someone vouching for an address doesn't make the next forged `From:` genuine.
 
 ## Conversations
 
-- One conversation per contact per bot, owned by the member who looks after the
-  bot, like the group's `~outsiders` conversation. All of a contact's channels
-  feed the same conversation, so a WhatsApp follow-up to an email request has the
-  history.
-- **Hand-off.** The agent can pass a conversation to a person. A member takes it
-  over, replies are sent as the bot, and the agent stays quiet until it's handed
-  back. Groups' take-over flow and private notes (`metadata.private_note`) carry
-  over unchanged.
+- One conversation per contact per agent, in the contact's channel, owned by
+  the member who looks after the bot. All of a contact's places -- their chats,
+  email threads and web chat -- are sources of that channel and feed the same
+  conversation, so a WhatsApp follow-up to an email request has the history.
+- **Hand-off.** The agent can pass a conversation to a person. A member steps
+  in -- the contact's channel is assigned to them (`assignee`) -- replies are
+  sent as the bot, and the agent stays quiet until it's handed back, by the
+  member or after the channel's hand-back window. Private notes
+  (`metadata.private_note`) carry over unchanged.
 
 ## Outbound
 
@@ -280,7 +283,9 @@ one:
 
 - **Contacts and identities.** The `contacts` module owns `contacts` and
   `contact_identities`, with `GET`/`PATCH`/`DELETE /pods/{pod_id}/contacts` and
-  `GET .../contacts/{id}/export`. Reading contacts takes `conversation.read`.
+  `GET .../contacts/{id}/export`. Reading contacts -- and their channels -- takes
+  `contact.read`, which editors and admins hold (and `contact.message` implies);
+  a member who only uses the pod sees neither.
   Forgetting a contact deletes their rows in contact-owned tables first (the
   pod's database), then in one main-database transaction their conversations,
   handles, web chat sessions and codes, and the platform profiles stored for
@@ -290,9 +295,8 @@ one:
   `channel` and `member` exist; `host` and `code` come with web widgets.
 - **Who looks after them.** When that member leaves the pod, its
   administrators are told, and the surface carries `contacts_warning` until
-  somebody else is chosen. A contact's conversation is found by its
-  `~contact:` link and moves, history and all, to whoever looks after
-  contacts now.
+  somebody else is chosen. A contact's conversation is found in their channel
+  and moves, history and all, to whoever looks after contacts now.
 - **Who the bot answers.** `config.contacts` on every surface, `answer`
   defaulting to `off`, `looked_after_by` defaulting to whoever turns it on and
   required to be a pod member. Only the pod's own bots answer contacts:
@@ -302,8 +306,7 @@ one:
   which everything the run builds takes its answer from: the CONTACT context,
   the tool allowlist and gate, the brief, the private-note labels and the
   metering scope. A member's note in a contact's chat is labelled as the
-  keeper's and never to be repeated. The routing link `~contact:{id}` is how a
-  conversation that lost its metadata is repaired, to the same contact. Names
+  keeper's and never to be repeated. Names
   reach the prompt sanitised and quoted. Audited as `contact:{id}`.
 - **Their own rows.** `contact_owned` on a datastore table adds `contact_id`,
   the `contact_columns` a contact may read, and the fail-closed row policy. A
@@ -321,6 +324,17 @@ one:
   the contact's rows. At most `FUNCTION_CONTACT_CALLS_PER_DAY` calls per
   contact per function; a tool call is never run twice; a run still going at
   the wait deadline is cancelled and reported as such.
+  A function that also declares `contact` is told who is asking beyond the id:
+  `{id, emails, phones, telegram_ids, host_ids, slack_ids, teams_ids}`, in
+  their stored spellings (E.164, lower-cased, `host:{issuer}:{sub}`), so it can
+  match an order or a project by the address it was placed under. Only handles
+  something proved count -- `channel`, `host` or `code`, never one a member
+  typed in or a browser session -- and whatever the model put under `contact`
+  is dropped, declared or not. A merged contact is told as the survivor (its
+  `id` and handles); `contact_id` stays what the conversation named. `contact`
+  is `null` for an anonymous form submission. A handle the contact said stop
+  on is still listed: a stop is about the pod writing to it, not about whose it
+  is, and outreach checks it on its own.
   What such a run writes is the contact's, not a member's: every row event it
   raises, insert, update or delete, on any table, is marked from outside and
   names `contact:{id}`, as a form row does. A DATASTORE schedule ignores it
@@ -346,36 +360,44 @@ one:
   contact on a contact-owned table. `/public/web/widget.js` is the chat and the
   form drawer. Limits per widget,
   session, address and email, failing closed.
-- **Follow-ups.** `POST /pods/{pod_id}/contacts/{id}/messages` (`contact.message`,
-  editors and up; at most `SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY` per
-  contact) writes to a contact in their most recent conversation, sent first
-  and recorded as not sent when the platform refuses it: WhatsApp within 24 hours of their
-  last message (`contact_identities.last_inbound_at`), Telegram any time, email
-  with an unsubscribe line and a signed link (`/public/contacts/unsubscribe`,
-  a confirmation page whose button does it), a web chat by leaving it for
-  their next visit. Never to a handle they unsubscribed
-  (`unsubscribed_at`); writing again opts them back in, except a message that
-  is only "STOP" or "unsubscribe", which unsubscribes the handle instead. A bot
-  for known contacts gives a stranger one short refusal a day.
-  `channel` on the request is `latest` (the default, all of the above) or
-  `email`: to the contact's most recently verified email handle (strength
-  `CHANNEL`, `HOST` or `CODE`, never `MEMBER`; refused as `unsubscribed` when
-  any email handle is, `no_verified_email` when none qualifies). When the
-  latest conversation is already an email thread it is that thread. Otherwise
-  (a web chat, or another platform) the send is a cold open from the pod's
-  oldest active email surface whose `contacts.answer` is not `off` and whose
-  `looked_after_by` is still a member (`no_email_surface` when there is none),
-  through `open_cold_email_thread` with a random `References` seed
-  (`follow_up_seed_id`). Only after the provider accepts it is a conversation
-  opened for the contact (owned by `looked_after_by`, `audience: contact`) and
-  linked under `~contact:{id}` with the seed as `external_thread_id`, so the
-  reply, authenticated and matched to the contact by its email identity, binds
-  to it in `ContactDoor`. Same daily cap and unsubscribe line; a failed send is
-  written as not sent into the latest conversation, and no link is made. The
-  web chat is left untouched, and the email thread becomes the latest
-  conversation for the next `latest` follow-up.
-- **Unverified email** is parked as an inbox note to the member who looks after
-  contacts, once an hour per sender and at most
+- **Outreach policy** is `contacts`' (`contacts.contracts.outreach`), and every
+  line to a contact's place -- a member's, an agent's answer, an
+  acknowledgement -- is held to it before it goes, in this order: **opt-out
+  first** (a `contact_suppressions` row for the handle's sha256: `stop`,
+  `unsubscribe`, `bounce`; it outlives the contact being forgotten, and holds
+  with nobody looking after contacts), then a handle of the place's kind, then
+  the platform's window (WhatsApp: 24 hours from the contact's last message to
+  that number, the place's `last_inbound_at`), then, for a member's line,
+  `CONTACTS_MEMBER_LINES_PER_CONTACT_PER_DAY`, counted once per line in Redis
+  (Redis away is retried, never sent uncounted). A whole message "STOP" (or an
+  email whose subject is "unsubscribe") opts the handle out, even from a
+  machine; "START" or any message the person typed -- a vouched-for sender, no
+  automatic-mail header -- opts it back in. Email to a contact ends with a
+  signed unsubscribe link and carries `List-Unsubscribe` (the link and a
+  `mailto:` the bot receives) with `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+  (RFC 8058), whose `POST` the unsubscribe controller takes. Handles are
+  normalised: phones E.164 (`phonenumbers`, in `CONTACTS_DEFAULT_PHONE_REGION`
+  when one is set, else read as international), email trimmed and lower-cased,
+  host identities `host:{issuer}:{sub}` with the issuer a widget declares
+  (`host_issuer`, `default` unless given at creation).
+- **Writing first.** `POST /pods/{pod_id}/contacts/{id}/outreach` `{handle, text}`
+  (`contact.message`, editors and up; held to the outreach policy above; an
+  `Idempotency-Key` or `client_message_id` makes a retry the same line) posts
+  the member's line in the contact's channel at the place that handle is
+  reached through, and sends it as a delivery like any line a member writes.
+  Email any time: the pod's mailbox's place for that address, opened the first
+  time, where the send starts a new thread (`cold_email_thread`) whose reply,
+  authenticated and matched to the contact by its email identity, comes back to
+  the same place; it ends with an unsubscribe line and a signed link
+  (`/public/contacts/unsubscribe`, a confirmation page whose button does it).
+  WhatsApp only within 24 hours of their last message to that number, and
+  Telegram only where they have written to the bot. Slack, Teams, web and host
+  handles are answered where the person writes, never written to first. A
+  handle that is not theirs, opted out, is outside its window or was never
+  written from posts nothing and says why. A bot for known contacts gives a
+  stranger one short refusal a day.
+- **Unverified email** is parked as a line in the own channel of the member who
+  looks after contacts, once an hour per sender and at most
   `SURFACE_PARKED_MAIL_NOTES_PER_SURFACE_PER_HOUR` notes a bot, then one
   summary. Mail a machine sent (`Auto-Submitted`, `Precedence`, list headers,
   mailer-daemon and no-reply senders, our own addresses) is neither answered
@@ -385,8 +407,8 @@ one:
   `contacts_month` window held to `usage_contacts_caps`
   (`GET /usage/organizations/{id}/contacts-cap` for owners and editors, `PUT`
   for owners). No row is the deployment default
-  (`USAGE_CONTACTS_MONTHLY_DEFAULT_USD`, $50); removing the cap is recorded as
-  no limit. Past the cap a surface starts no run: the person is told once a day
+  (`USAGE_CONTACTS_MONTHLY_DEFAULT_USD`, $50, and `USAGE_CONTACTS_MAX_DEFAULT`,
+  500 contacts answered); removing the cap is recorded as no limit. Past the cap a surface starts no run: the person is told once a day
   that a person will reply, the member is told, and the conversation is handed
   to them for the rest of the month. The web chat is held the same way. Vision,
   titles and history compaction in an outside run count towards the cap, never
@@ -408,8 +430,7 @@ one:
 - **Every public endpoint is under `/public/`.** The rule, its exceptions and
   the gate that holds it are in CONTRIBUTING.md.
 
-Not built yet: WhatsApp templates (follow-ups past the 24-hour window), a
-`List-Unsubscribe` header on follow-up email, newsletters to subscribers,
+Not built yet: WhatsApp templates (writing first past the 24-hour window), newsletters to subscribers,
 step-up codes for contact functions (the `requires` strength), pod bundles
 carrying `contact_owned`, `contact_columns`, `contacts_invoke` and
 `include_outside_rows`, and a hand-back control in the app for a conversation

@@ -195,6 +195,19 @@ def test_scaffold_app_proxy_keeps_real_api_url_in_env_local(tmp_path):
     assert 'LEMMA_DEV_PROXY_TARGET="http://127.0.0.1:8710"' in dev_local
 
 
+def test_scaffold_app_proxy_forwards_websockets(tmp_path):
+    # The datastore change stream is a WebSocket under '/api'. A proxy entry
+    # without `ws: true` passes every HTTP call and silently drops the upgrade,
+    # so live records never arrive in dev.
+    target = tmp_path / "app"
+    scaffold_app(_options(target, proxy=True))
+
+    vite_config = (target / "vite.config.ts").read_text(encoding="utf-8")
+    proxy_entry = vite_config[vite_config.index("'/api': {") :]
+    proxy_entry = proxy_entry[: proxy_entry.index("}")]
+    assert "ws: true" in proxy_entry
+
+
 def test_scaffold_app_writes_manifest_at_importer_path(tmp_path):
     target = tmp_path / "app"
     scaffold_app(_options(target))

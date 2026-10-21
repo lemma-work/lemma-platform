@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import quote
 
 import aiohttp
+import httpx
 from redis.exceptions import RedisError
 
 from app.core.config import reveal_secret
@@ -262,12 +263,13 @@ async def resolve_graph_team_id(
 def classify_teams_error(exc: Exception) -> DeliveryClassification:
     """Transient for 429 / 5xx / network errors; permanent for other 4xx.
 
-    The Bot Framework Connector is posted to with raw ``aiohttp``, so a
-    throttled reply arrives as ``ClientResponseError`` from
+    The Bot Framework Connector is posted to over the shared ``httpx`` client,
+    so a throttled reply arrives as ``HTTPStatusError`` from
     ``raise_for_status()``. Same classification as the other three platforms.
     """
-    if isinstance(exc, aiohttp.ClientResponseError):
-        if exc.status == 429 or exc.status >= 500:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status == 429 or status >= 500:
             return DeliveryClassification.TRANSIENT
         return DeliveryClassification.PERMANENT
     # A posted activity is not idempotent: a timeout after it went out may
@@ -277,11 +279,13 @@ def classify_teams_error(exc: Exception) -> DeliveryClassification:
 
 def teams_retry_after(exc: Exception) -> float | None:
     """Seconds the Bot Framework asked us to wait, from ``Retry-After``."""
-    if not isinstance(exc, aiohttp.ClientResponseError):
+    if not isinstance(exc, httpx.HTTPStatusError):
         return None
-    raw = (exc.headers or {}).get("Retry-After")
+    raw = exc.response.headers.get("Retry-After")
+    if raw is None:
+        return None
     try:
-        seconds = float(raw)  # type: ignore[arg-type]
-    except TypeError, ValueError:
+        seconds = float(raw)
+    except ValueError:
         return None
     return seconds if seconds > 0 else None

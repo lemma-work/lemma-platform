@@ -1,10 +1,13 @@
-"""Correcting a WhatsApp notification that Meta reported it never delivered.
+"""Correcting a WhatsApp send that Meta reported it never delivered.
 
 Cloud API answers a send with 200 and reports most failures afterwards, in a
-``statuses`` webhook (``platforms/whatsapp/sent_messages``). Those deliveries
-carry no message, so they were parsed to nothing and dropped -- and a
-notification sent to somebody outside the 24-hour window stayed recorded as
-delivered while it never arrived.
+``statuses`` webhook naming the message id -- a recipient outside the 24-hour
+window (131047), a number that cannot receive (131026). Every send of a line
+records that id on its delivery row as soon as Meta answers -- before the
+outcome is recorded -- so the report finds the row by it, however early it
+comes, and marks that one delivery ``DEAD`` with the reason a member reads.
+An id that is not on any row (a progress post, an onboarding step) is only
+logged.
 
 Applied beside ``group_updates`` on every webhook, before the message paths and
 never instead of them.
@@ -12,24 +15,16 @@ never instead of them.
 
 from __future__ import annotations
 
-from uuid import UUID
-
-from redis.exceptions import RedisError
-
-from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.ingress_request import SurfaceIngressRequest
-from app.modules.agent_surfaces.domain.notification import NotificationDeliveryStatus
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
-    NotificationRepository,
+from app.modules.channels.contracts.deliveries import (
+    delivery_by_external,
+    delivery_undelivered,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     WhatsAppFailedDelivery,
     failed_deliveries,
-)
-from app.modules.agent_surfaces.platforms.whatsapp.sent_messages import (
-    notification_sent_as,
 )
 
 logger = get_logger(__name__)
@@ -57,41 +52,21 @@ def failure_reason(failure: WhatsAppFailedDelivery) -> str:
 
 
 async def apply_delivery_statuses(
-    uow: SqlAlchemyUnitOfWork,
-    request: SurfaceIngressRequest,
-    *,
-    notifications: NotificationRepository | None = None,
+    uow: SqlAlchemyUnitOfWork, request: SurfaceIngressRequest
 ) -> None:
-    """Mark the notifications a ``statuses`` webhook says failed."""
+    """Mark the deliveries a ``statuses`` webhook says never arrived."""
     if request.payload.get("object") != "whatsapp_business_account":
         return
-    failures = failed_deliveries(request.payload)
-    if not failures:
-        return
-    notifications = notifications or NotificationRepository(uow)
-    for failure in failures:
-        try:
-            async with connection_released(uow.session):  # Redis, not the DB
-                notification_id = await notification_sent_as(failure.message_id)
-        except RedisError, OSError:
-            logger.warning(
-                "agent_surfaces.whatsapp.sent_message_unreadable.degraded",
-                exc_info=True,
-            )
-            notification_id = None
+    for failure in failed_deliveries(request.payload):
+        delivery = await delivery_by_external(
+            uow, platform="WHATSAPP", external_message_id=failure.message_id
+        )
+        marked = delivery is not None and await delivery_undelivered(
+            uow, delivery.id, reason=failure_reason(failure)
+        )
         logger.warning(
             "agent_surfaces.whatsapp.delivery_failed.degraded",
             error_code=failure.code,
             reason=failure.reason,
-            notification_id=notification_id,
+            deliveries_marked=int(marked),
         )
-        if notification_id is None:
-            continue
-        notification = await notifications.get(UUID(notification_id))
-        if (
-            notification is None
-            or notification.delivery_status is not NotificationDeliveryStatus.DELIVERED
-        ):
-            continue
-        notification.mark_delivery_failed(failure_reason(failure))
-        await notifications.update(notification)

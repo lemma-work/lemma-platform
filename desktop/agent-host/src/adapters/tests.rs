@@ -421,6 +421,34 @@ fn provider_version_output_is_compared_without_guessing() {
     assert!(!version_is_at_least("development build", "1.0.0"));
 }
 
+/// A floor is a floor, not a pin: an agent released after the one this host
+/// was certified against runs, in whatever spelling it prints its version.
+/// The adapter itself is still pinned, by version and integrity, in
+/// `agent-adapters.lock.json`; this is the agent beneath it.
+#[test]
+fn a_newer_agent_than_certified_is_not_refused() {
+    // Claude Code: certified on 2.1.x, floor 2.1.0.
+    assert!(version_is_at_least("3.0.0 (Claude Code)", "2.1.0"));
+    assert!(version_is_at_least("2.9.1-beta.3 (Claude Code)", "2.1.0"));
+    assert!(version_is_at_least("v2.10.0+build.7", "2.1.0"));
+    // Two parts is the release with a zero patch, not an unparseable one.
+    assert!(version_is_at_least("opencode 1.18", "1.17.0"));
+    assert!(!version_is_at_least("opencode 1.16", "1.17.0"));
+    // Calendar versions, as Cursor prints them.
+    assert!(version_is_at_least("2027.1.4-abcdef0", "2026.3.11"));
+    // One bare number is still not read as a version.
+    assert!(!version_is_at_least("build 7", "1.0.0"));
+}
+
+#[test]
+fn a_version_banner_is_recorded_as_its_first_line_within_bounds() {
+    assert_eq!(
+        version_label("\n  2.3.0 (Claude Code)\nWhat's new: ...\n"),
+        "2.3.0 (Claude Code)"
+    );
+    assert_eq!(version_label(&"9".repeat(400)).chars().count(), 128);
+}
+
 #[test]
 fn executable_resolution_uses_explicit_search_paths() {
     let root = tempfile::tempdir().unwrap();

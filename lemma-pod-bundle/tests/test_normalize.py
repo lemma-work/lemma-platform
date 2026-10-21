@@ -157,6 +157,36 @@ def test_normalize_surface_payload_channels_identity_telegram_and_status():
     }
 
 
+def test_normalize_surface_payload_carries_the_whatsapp_reengage_template():
+    payload = _normalize_surface_payload(
+        {
+            "platform": "whatsapp",
+            "config": {
+                "whatsapp": {
+                    "reengage_template": "lemma_reengage",
+                    "language": "pt_BR",
+                    "other": 1,
+                }
+            },
+        }
+    )
+    assert payload["config"] == {
+        "whatsapp": {"reengage_template": "lemma_reengage", "language": "pt_BR"}
+    }
+
+
+def test_normalize_surface_payload_leaves_out_an_unset_whatsapp_template():
+    """A surface with no template exports no whatsapp block, not the default
+    language on its own."""
+    payload = _normalize_surface_payload(
+        {
+            "platform": "whatsapp",
+            "config": {"whatsapp": {"reengage_template": None, "language": "en_US"}},
+        }
+    )
+    assert "config" not in payload
+
+
 def test_normalize_surface_payload_carries_connector_identity():
     surface = {
         "platform": "slack",
@@ -388,3 +418,25 @@ def test_import_drops_a_time_schedule_filter_and_says_so():
     )
     assert dropped is False, "an empty filter is nothing to warn about"
     assert "filter_instruction" not in unchanged
+
+
+def test_a_one_time_schedule_is_past_only_when_its_moment_has_gone() -> None:
+    from datetime import datetime, timezone
+
+    from lemma_pod_bundle.apply_fields import is_past_one_time_schedule
+
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    def once(at: str, **extra: str) -> dict:
+        return {"schedule_type": "TIME", "config": {"scheduled_at": at, **extra}}
+
+    assert is_past_one_time_schedule(once("2026-06-01T11:00:00Z"), now=now)
+    assert not is_past_one_time_schedule(once("2026-06-01T13:00:00Z"), now=now)
+    # A bare time is read in the schedule's zone: 13:00 in Kolkata is 07:30 UTC.
+    assert is_past_one_time_schedule(
+        once("2026-06-01T13:00:00", timezone="Asia/Kolkata"), now=now
+    )
+    cron = {"schedule_type": "TIME", "config": {"cron": "0 * * * *"}}
+    assert not is_past_one_time_schedule(cron, now=now)
+    trigger = {"schedule_type": "DATASTORE", "config": {"scheduled_at": "2020-01-01"}}
+    assert not is_past_one_time_schedule(trigger, now=now)

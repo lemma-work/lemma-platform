@@ -7,6 +7,9 @@ uses what the Agent Host actually hands it:
 * ``mcp`` mode launches the ``mcpServers`` entry from ``session/new`` as a
   subprocess and speaks MCP JSON-RPC over its stdio, exactly as Codex or Claude
   Code would, so the Lemma MCP bridge is driven for real.
+* ``mcp-image`` mode calls the Lemma tool ``lemma_image`` the same way and
+  reports the size and SHA-256 of the image it got back, so a test can prove
+  an image larger than one link frame arrived whole.
 * ``permission`` mode refuses to finish its turn until a
   ``session/request_permission`` round trip comes back, so the host's parked
   responder and its `RESOLVE_PERMISSION` answer are on the critical path rather
@@ -205,6 +208,47 @@ def run_mcp_turn(mcp_servers):
             block.get("text", "") for block in blocks if isinstance(block, dict)
         )
         chunk("agent_message_chunk", "LEMMA_MCP_RESULT:" + text)
+    finally:
+        client.close()
+
+
+def run_mcp_image_turn(mcp_servers):
+    """Call ``lemma_image`` and say exactly what image came back."""
+    import base64
+    import hashlib
+
+    server = stdio_server(mcp_servers)
+    if server is None:
+        chunk("agent_message_chunk", "LEMMA_MCP_MISSING_STDIO_SERVER")
+        return
+    client = StdioMcpClient(server)
+    try:
+        client.request(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "scripted-acp-agent", "version": "1.0.0"},
+            },
+        )
+        client.notify("notifications/initialized")
+        called = client.request(
+            "tools/call", {"name": "lemma_image", "arguments": {}}
+        )
+        blocks = (called.get("result") or {}).get("content") or []
+        images = [
+            base64.b64decode(block["data"])
+            for block in blocks
+            if isinstance(block, dict) and block.get("type") == "image"
+        ]
+        if not images:
+            chunk("agent_message_chunk", "LEMMA_MCP_IMAGE_MISSING:" + json.dumps(called)[:500])
+            return
+        image = images[0]
+        chunk(
+            "agent_message_chunk",
+            f"LEMMA_MCP_IMAGE:{len(image)}:{hashlib.sha256(image).hexdigest()}",
+        )
     finally:
         client.close()
 
@@ -486,6 +530,8 @@ def main():
                 run_mcp_turn(mcp_servers)
             elif MODE == "mcp-refresh":
                 run_mcp_refresh_turn(mcp_servers)
+            elif MODE == "mcp-image":
+                run_mcp_image_turn(mcp_servers)
             elif MODE == "parallel-permission":
                 run_parallel_permission_turn(("call-a", "call-b"))
             elif MODE == "parallel-permission-empty-id":

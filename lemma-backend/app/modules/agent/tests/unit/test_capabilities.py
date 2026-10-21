@@ -1087,7 +1087,7 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
 async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypatch):
     """Deferral hides a toolset's schemas. It must not hide what the tool means.
 
-    `message_user` returns immediately and the reply never comes back as a tool
+    `channel_post` returns immediately and the reply never comes back as a tool
     result, so an agent that only learns the tool exists — from the hint — and
     not how it behaves will send a message and then wait for something that
     cannot arrive. Wrapping the deferred toolset in a plain ToolsetCapability
@@ -1136,12 +1136,12 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     # Hidden from the prefix — an interactive assistant should not reach for
     # "message a colleague" or "go to sleep" without going looking first.
     assert {
-        "message_user",
-        "check_messages",
+        "channel_post",
+        "channel_read",
         "list_pod_members",
         "wait_for",
     } <= captured["deferred"]
-    assert not ({"message_user", "wait_for"} & captured["visible"])
+    assert not ({"channel_post", "wait_for"} & captured["visible"])
 
     # ...but the contract still rides in the prefix.
     messaging = [
@@ -1152,7 +1152,7 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     assert len(messaging) == 1, "deferring messaging dropped its instructions"
     instructions = messaging[0].get_instructions()
     assert "wait_for" in instructions
-    assert "background_instruction" in instructions
+    assert "channel_read(asked_by_me=True)" in instructions
 
 
 @pytest.mark.anyio
@@ -1283,7 +1283,7 @@ async def test_every_deferred_group_is_labelled(monkeypatch):
 
     assert hint is not None
     assert "Additional tools" not in hint
-    # The member lookup has to be discoverable, or message_user stays unusable
+    # The member lookup has to be discoverable, or channel_post stays unusable
     # for anyone the agent only knows by name.
     assert "list_pod_members" in hint
 
@@ -1332,7 +1332,7 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
     await agent.run("hi", deps=deps)
 
-    assert {"message_user", "list_pod_members"} <= captured["visible"]
+    assert {"channel_post", "list_pod_members"} <= captured["visible"]
 
 
 def test_the_deferred_hint_is_byte_stable_across_builds():

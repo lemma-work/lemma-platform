@@ -59,6 +59,9 @@ class ScheduleDetailResponse:
         last_run_id (None | str | Unset):
         listening (ListeningResponse | None | Unset): For a schedule on an MCP server's event: whether it is still
             hearing from the server. Absent for every other schedule.
+        paused_reason (None | str | Unset): Why the platform paused this schedule: `fire_cap` (it fired more than its
+            daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system
+            reason. Absent while it runs, or when a person paused it. Reactivating clears it.
         workflow_name (None | str | Unset):
     """
 
@@ -90,6 +93,7 @@ class ScheduleDetailResponse:
     last_fired_at: datetime.datetime | None | Unset = UNSET
     last_run_id: None | str | Unset = UNSET
     listening: ListeningResponse | None | Unset = UNSET
+    paused_reason: None | str | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -216,6 +220,12 @@ class ScheduleDetailResponse:
         else:
             listening = self.listening
 
+        paused_reason: None | str | Unset
+        if isinstance(self.paused_reason, Unset):
+            paused_reason = UNSET
+        else:
+            paused_reason = self.paused_reason
+
         workflow_name: None | str | Unset
         if isinstance(self.workflow_name, Unset):
             workflow_name = UNSET
@@ -266,6 +276,8 @@ class ScheduleDetailResponse:
             field_dict["last_run_id"] = last_run_id
         if listening is not UNSET:
             field_dict["listening"] = listening
+        if paused_reason is not UNSET:
+            field_dict["paused_reason"] = paused_reason
         if workflow_name is not UNSET:
             field_dict["workflow_name"] = workflow_name
 
@@ -500,6 +512,15 @@ class ScheduleDetailResponse:
 
         listening = _parse_listening(d.pop("listening", UNSET))
 
+        def _parse_paused_reason(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        paused_reason = _parse_paused_reason(d.pop("paused_reason", UNSET))
+
         def _parse_workflow_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -538,6 +559,7 @@ class ScheduleDetailResponse:
             last_fired_at=last_fired_at,
             last_run_id=last_run_id,
             listening=listening,
+            paused_reason=paused_reason,
             workflow_name=workflow_name,
         )
 

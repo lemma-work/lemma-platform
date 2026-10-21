@@ -33,6 +33,7 @@ from app.modules.identity.infrastructure.supertokens_auth.helpers import get_use
 from app.modules.identity.infrastructure.supertokens_auth.token_factory import (
     build_delegation_claims,
 )
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e_authz import (
     auth_headers,
     create_role_visibility_context,
@@ -40,6 +41,12 @@ from app.modules.test_support.e2e_authz import (
 )
 
 pytestmark = pytest.mark.e2e
+
+# One user and organization for the module, a fresh pod per test (`test_pod`).
+# A fresh session per test too: these tests revoke and inspect the session.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user_own_session
+fixed_test_org = e2e_fixtures.module_test_org
 ACCESS_COOKIE = "__Host-lemmaAppAccess"
 CONTENT = "PRIVATE_APP_CONTENT"
 

@@ -43,6 +43,50 @@ class StoredPodFile:
     media_type: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class PodFileFacts:
+    """A file somebody may read: which one it is, under its stored path."""
+
+    file_id: UUID
+    #: The stored path (a private file's carries its owner's id, not ``/me``),
+    #: so it names the same file whoever reads it.
+    path: str
+    name: str
+    media_type: str | None
+    size_bytes: int
+
+
+async def readable_pod_file(
+    uow, *, pod_id: UUID, path: str, ctx: Context
+) -> PodFileFacts | None:
+    """The file at ``path`` if ``ctx`` may read it; ``None`` for a folder, a
+    file that is not there, or one they may not read -- which a caller sharing
+    it on their behalf answers alike."""
+    from app.modules.datastore.domain.errors import (
+        DatastoreAccessDeniedError,
+        DatastoreFileNotFoundError,
+        DatastoreValidationError,
+    )
+
+    try:
+        entity = await build_file_service(uow).get_file_by_path(pod_id, path, ctx)
+    except (
+        DatastoreAccessDeniedError,
+        DatastoreFileNotFoundError,
+        DatastoreValidationError,
+    ):
+        return None
+    if entity.pod_id != pod_id or not entity.is_file:
+        return None
+    return PodFileFacts(
+        file_id=entity.id,
+        path=entity.path,
+        name=entity.name,
+        media_type=entity.mime_type,
+        size_bytes=entity.size_bytes,
+    )
+
+
 async def read_pod_file(
     uow, *, pod_id: UUID, path: str, ctx: Context
 ) -> PodFileContent:
@@ -124,8 +168,10 @@ def _as_requester_path(path: str, user_id: object) -> str:
 
 __all__ = [
     "PodFileContent",
+    "PodFileFacts",
     "StoredPodFile",
     "read_pod_file",
     "read_pod_file_by_id",
+    "readable_pod_file",
     "write_pod_file",
 ]

@@ -6,7 +6,7 @@ import type { ContactResponse } from './ContactResponse.js';
 export type ContactListResponse = {
     items: Array<ContactResponse>;
     /**
-     * Pass as `before` for the next page; absent on the last.
+     * Pass as `cursor` for the next page; absent on the last.
      */
-    next_before?: (string | null);
+    next_cursor?: (string | null);
 };

@@ -33,7 +33,9 @@ what each client requires, is in
   format and its limits are in the architecture doc's Events section.
 
 Tables: `mcp_oauth_clients`, `mcp_oauth_grants`, `mcp_oauth_tokens` (digests
-only), `mcp_event_subscriptions` (secrets encrypted). Pending authorizations and codes are short-lived Redis keys.
+only), `mcp_event_subscriptions` (secrets encrypted), `mcp_event_deliveries` (one row per
+subscription and record change, unique on the pair, so a redelivered page of
+changes sends nothing twice). Pending authorizations and codes are short-lived Redis keys.
 
 ## What it does not own
 

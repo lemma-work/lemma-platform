@@ -115,7 +115,21 @@ class DatastoreFile(UUIDAuditBase):
     processing_attempts: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    #: The processing claim's fencing token. Only ever moves on; never shown.
+    processing_claim: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: The digest the current chunks and derived artifacts were made from.
+    indexed_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: ``path``: bytes keyed by path (a rename copies them). ``object``: keyed
+    #: by id and digest, so a rename touches no bytes.
+    storage_layout: Mapped[str] = mapped_column(
+        String(16), default="path", server_default="path", nullable=False
+    )
+    #: The folder row this one sits in; NULL at the root. Not a foreign key:
+    #: a folder and its subtree leave in one statement, in no particular order.
+    parent_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
     __table_args__ = (
         # Leads with status because the dispatch and recovery sweeps filter it
@@ -144,6 +158,30 @@ class DatastoreFile(UUIDAuditBase):
             "path",
             postgresql_ops={"path": "text_pattern_ops"},
         ),
+        # The folders that may hide what is under them, found without reading
+        # the pod's files (`file_read_rule.resolve_blocked_folders`).
+        Index(
+            "ix_datastore_file_pod_folder_visibility",
+            "pod_id",
+            "visibility",
+            postgresql_where=text("kind = 'FOLDER'"),
+        ),
+        Index("ix_datastore_file_parent", "parent_id"),
+        # What the parent backfill still has to do: rows below the root whose
+        # parent is not recorded. Empty once the backfill has run.
+        Index(
+            "ix_datastore_file_parent_missing",
+            "pod_id",
+            postgresql_where=text(
+                "parent_id IS NULL AND strpos(substr(path, 2), '/') > 0"
+            ),
+        ),
+        # What the storage copy still has to move. Empty once it has run.
+        Index(
+            "ix_datastore_file_path_layout",
+            "id",
+            postgresql_where=text("storage_layout = 'path' AND kind = 'FILE'"),
+        ),
     )
 
     def to_entity(self) -> "DatastoreFileEntity":
@@ -171,6 +209,9 @@ class DatastoreFile(UUIDAuditBase):
             last_processing_error=self.last_processing_error,
             processing_attempts=self.processing_attempts,
             content_sha256=self.content_sha256,
+            indexed_sha256=self.indexed_sha256,
+            storage_layout=self.storage_layout,
+            parent_id=self.parent_id,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )

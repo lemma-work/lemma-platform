@@ -24,6 +24,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.profiles import ModelProfile
 
 from app.modules.decisions.domain.errors import DecisionUnavailableError
 from app.modules.decisions.domain.request import (
@@ -79,9 +80,12 @@ class _Script:
     output_tokens_limit: int | None = None
     seen: list[list[ModelMessage]] = field(default_factory=list)
     resolved: list[dict[str, object]] = field(default_factory=list)
+    profile: ModelProfile | None = None
+    output_modes: list[str] = field(default_factory=list)
 
     def respond(self, messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         self.seen.append(list(messages))
+        self.output_modes.append(info.model_request_parameters.output_mode)
         reply = self.replies[min(len(self.seen) - 1, len(self.replies) - 1)]
         return ModelResponse(
             parts=[ToolCallPart(info.output_tools[0].name, json.dumps(reply))]
@@ -94,7 +98,7 @@ class _Script:
         # What `resolve_system_runtime` hands back for a model that cannot
         # count tokens ahead of a request, which a scripted model cannot.
         return _Runtime(
-            model=FunctionModel(self.respond),
+            model=FunctionModel(self.respond, profile=self.profile),
             runtime_profile={"model_name": "fast-model", "scope": "SYSTEM"},
             usage_limits=replace(
                 limits,
@@ -134,6 +138,29 @@ async def test_answers_come_back_typed_with_no_confidence() -> None:
     }
     assert all(answer.confidence is None for answer in result.answers.values())
     assert (result.provider, result.model) == ("model", "fast-model")
+
+
+async def test_answers_are_asked_for_through_a_tool_on_a_model_that_thinks() -> None:
+    """Named, not left to the model's default.
+
+    On a model that thinks by default, pydantic-ai's default for a structured
+    output is native JSON-schema output, which some Anthropic-compatible
+    gateways refuse; the tool is what every gateway takes.
+    """
+    script = _Script(
+        [{"category": "bug", "urgent": False, "labels": []}],
+        profile=ModelProfile(
+            supports_thinking=True,
+            thinking_enabled_by_default=True,
+            supports_json_schema_output=True,
+            forced_tool_choice_disables_thinking=True,
+        ),
+    )
+
+    result = await _provider(script).decide(_task(), caller=CALLER, timeout_seconds=5)
+
+    assert script.output_modes == ["tool"]
+    assert result.answers["category"].value == "bug"
 
 
 async def test_null_is_an_answer_not_a_failure() -> None:

@@ -812,8 +812,11 @@ async def test_handle_oauth_callback_resets_status_to_connected():
     registry = Mock()
     registry.get.return_value = auth_provider
 
+    # Granted again: the provider's id finds the account, which needs it.
+    existing.status = AccountStatus.REAUTH_REQUIRED
     account_repo = AsyncMock()
     account_repo.get_by_user_and_auth_config.return_value = existing
+    account_repo.get_by_user_auth_config_and_provider_account.return_value = existing
     account_repo.update.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
@@ -1182,8 +1185,11 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
     registry = Mock()
     registry.get.return_value = auth_provider
 
+    # Granted again: the provider's id finds the account, which needs it.
+    existing.status = AccountStatus.REAUTH_REQUIRED
     account_repo = AsyncMock()
     account_repo.get_by_user_and_auth_config.return_value = existing
+    account_repo.get_by_user_auth_config_and_provider_account.return_value = existing
     account_repo.update.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
@@ -1204,6 +1210,7 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
 
     assert account.provider_account_id == "U0999999999"
     account_repo.update.assert_awaited_once()
+    account_repo.create.assert_not_awaited()
 
 
 def _composio_auth_config(connector_id: str) -> AuthConfigEntity:

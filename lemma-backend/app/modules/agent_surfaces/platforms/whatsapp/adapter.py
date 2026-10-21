@@ -77,8 +77,8 @@ class WhatsAppSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await WhatsAppPlatformService(credentials).send_message(
+    ) -> str | None:
+        return await WhatsAppPlatformService(credentials).send_message(
             event, message, metadata
         )
 

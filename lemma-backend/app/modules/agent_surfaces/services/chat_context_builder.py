@@ -28,6 +28,7 @@ def build_chat_context(
     conversation_id: UUID,
     created_conversation_title: str | None,
     audience: Audience = Audience(),
+    source_id: UUID | None = None,
 ) -> SurfaceChatContext:
     """The run to start for a bound conversation, as the worker will read it.
 
@@ -37,6 +38,7 @@ def build_chat_context(
     """
     return SurfaceChatContext(
         audience=audience,
+        source_id=source_id,
         created_conversation_title=created_conversation_title,
         platform=surface.surface_type,
         pod_id=surface.pod_id,

@@ -19,16 +19,21 @@ import inspect
 from types import SimpleNamespace
 
 import pytest
+from pydantic_ai import Agent
+from pydantic_ai.capabilities import ProcessHistory
 from pydantic_ai.messages import (
+    ModelMessage,
     ModelRequest,
     ModelResponse,
     TextPart,
+    ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RunUsage
 
+from app.modules.agent.capabilities.run_context import RunContextCapability
 from app.modules.agent.capabilities.run_notices import RunNoticeCapability
 from app.modules.agent.domain.run_notices import RunNotices
 from app.modules.agent.infrastructure.harnesses.history_compaction import (
@@ -69,7 +74,7 @@ async def _deliver(capability, messages):
         model_request_parameters=None,
     )
     result = await capability.before_model_request(
-        SimpleNamespace(usage=RunUsage()), request_context
+        SimpleNamespace(usage=RunUsage(), messages=list(messages)), request_context
     )
     return result.messages
 
@@ -201,3 +206,70 @@ async def test_a_notice_is_measured_by_the_ceiling_it_has_to_fit_inside():
         "RunNoticeCapability must be registered before the history processors, "
         "or the hard-ceiling guard never sees the notice it has to fit"
     )
+
+
+def _two_step_agent(
+    capabilities: list[object], seen: list[list[ModelMessage]]
+) -> Agent[object, str]:
+    """A run that calls a tool and then answers: two model requests."""
+
+    def model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        del info
+        seen.append(list(messages))
+        if len(seen) == 1:
+            return ModelResponse(parts=[ToolCallPart("step", {})])
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent: Agent[object, str] = Agent(
+        FunctionModel(model_fn), capabilities=capabilities
+    )
+
+    @agent.tool_plain
+    def step() -> str:
+        return "stepped"
+
+    return agent
+
+
+def _untouched(messages: list[ModelMessage]) -> list[ModelMessage]:
+    return messages
+
+
+async def test_a_notice_stays_in_the_history_whatever_is_registered_after_it():
+    """Delivered once, it has to be on every later request of the run too.
+
+    Since pydantic-ai 2.55 only ``ProcessHistory`` writes a hook's result back
+    into the run's history. The notice used to stay only because the history
+    processors registered after it wrote the whole list back; registered last,
+    it reached the first request and vanished from the second, which then
+    diverged from the prefix the provider had cached.
+    """
+    notices = RunNotices()
+    notices.post("the budget is nearly spent")
+    seen: list[list[ModelMessage]] = []
+    agent = _two_step_agent(
+        [ProcessHistory(_untouched), RunNoticeCapability(notices)], seen
+    )
+
+    await agent.run("hello", deps=object())
+
+    assert len(seen) == 2
+    for request in seen:
+        texts = [t for m in request for t in _texts(m)]
+        assert texts.count("the budget is nearly spent") == 1, texts
+
+
+async def test_the_run_context_part_is_where_the_history_has_it():
+    """Moved to the tail on every request, and kept there in the run's history,
+    whatever is registered after it."""
+    context = "<run_context>\nnow\n</run_context>"
+    seen: list[list[ModelMessage]] = []
+    agent = _two_step_agent(
+        [ProcessHistory(_untouched), RunContextCapability(context)], seen
+    )
+
+    result = await agent.run("hello", deps=object())
+
+    kept = [t for m in result.all_messages() for t in _texts(m)]
+    assert kept.count(context) == 1
+    assert _texts(seen[1][-1])[-1] == context

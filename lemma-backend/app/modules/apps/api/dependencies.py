@@ -17,7 +17,6 @@ from app.core.authorization.permissions import Permissions
 from app.core.config import settings
 from app.core.object_storage import build_object_store, local_file_storage_path
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.ports.widget_content import WidgetContentReader
 from app.modules.agent.contracts.widget_content import (
     build_widget_content_reader,
@@ -51,9 +50,8 @@ def _get_app_storage_factory():
 
 def build_app_service(uow) -> AppService:
     """Construct an AppService from a unit of work (single wiring source)."""
-    message_bus = get_message_bus()
     return AppService(
-        app_repository=AppRepository(uow, message_bus=message_bus),
+        app_repository=AppRepository(uow),
         file_manager_factory=_get_app_storage_factory(),
         authorization_service=create_authorization_data_service(uow),
         app_branding_entitlement=build_app_branding_entitlement_port(uow),
@@ -69,7 +67,7 @@ AppServiceDep = Annotated[AppService, Depends(get_app_service)]
 
 def build_app_release_service(uow) -> AppReleaseService:
     """Construct an AppReleaseService from a unit of work."""
-    return AppReleaseService(AppRepository(uow, message_bus=get_message_bus()))
+    return AppReleaseService(AppRepository(uow))
 
 
 def build_app_use_cases(uow_factory: UnitOfWorkFactory) -> AppUseCases:

@@ -50,9 +50,9 @@ async def spawn_subagent(
     """Start a pod agent as a linked child conversation; returns a handle.
 
     Omit agent_name to spawn another instance of yourself for a targeted subtask.
-    Non-blocking: returns {conversation_id, run_id, status}. Use interact_subagent
-    (action='await') to wait, or query_subagents (mode='messages') to poll. If
-    you end your turn without collecting it, its result arrives later as a new
+    Non-blocking: returns {conversation_id, run_id, status}. To collect the
+    result, call `wait_for` with `subagent_run_id` and end your turn; you wake
+    with it. If you end your turn without waiting, it arrives later as a new
     message.
     """
     try:
@@ -60,6 +60,9 @@ async def spawn_subagent(
             ctx.deps,
             agent_name=request.agent_name,
             input_data=request.input,
+            # The recorded call id: a resumed turn re-runs this call under it
+            # and gets the child it already spawned (KEYED, `domain/replay`).
+            tool_call_id=ctx.tool_call_id,
         )
     except SubAgentError as exc:
         return {"success": False, "error": safe_error_text(exc)}

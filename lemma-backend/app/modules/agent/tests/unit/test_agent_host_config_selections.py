@@ -16,6 +16,7 @@ from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.agent_host_selections import (
     carry_agent_host_model,
     carry_agent_host_selections,
+    options_for_model,
     validate_agent_host_model,
     validate_agent_host_selections,
 )
@@ -256,4 +257,106 @@ class TestCarryAgentHostModel:
                 model_name="gpt-5.1",
             )
             is None
+        )
+
+
+def _effort(*values: str) -> dict[str, object]:
+    return {
+        "id": "effort",
+        "category": "thought_level",
+        "name": "Effort",
+        "options": [{"value": value, "name": value.title()} for value in values],
+    }
+
+
+def _claude_like() -> list[object]:
+    """A harness whose default model tops out at ``high`` and whose ``opus``
+    also offers ``max`` -- the per-model contract, ``lemma_options`` on the
+    model's own entry."""
+    return [
+        {
+            "id": "model",
+            "category": "model",
+            "name": "Model",
+            "options": [
+                {"value": "sonnet", "name": "Sonnet"},
+                {
+                    "value": "opus",
+                    "name": "Opus",
+                    "lemma_options": [_effort("low", "high", "max")],
+                },
+            ],
+        },
+        _effort("low", "high"),
+    ]
+
+
+class TestOptionsForModel:
+    def test_no_model_is_the_harness_default_and_gets_the_top_level(self):
+        assert options_for_model(_claude_like(), None) == [_effort("low", "high")]
+        assert options_for_model(_claude_like(), "  ") == [_effort("low", "high")]
+
+    def test_a_model_with_its_own_options_gets_those(self):
+        assert options_for_model(_claude_like(), "opus") == [
+            _effort("low", "high", "max")
+        ]
+
+    def test_a_model_without_its_own_options_gets_the_top_level(self):
+        assert options_for_model(_claude_like(), "sonnet") == [_effort("low", "high")]
+
+    def test_a_model_the_harness_does_not_list_gets_the_top_level(self):
+        assert options_for_model(_claude_like(), "retired") == [_effort("low", "high")]
+
+    def test_the_model_option_itself_is_never_a_selection(self):
+        nested_model = _claude_like()
+        nested_model[0]["options"][1]["lemma_options"].append(
+            {"id": "model", "category": "model", "options": []}
+        )
+        assert all(
+            option["category"] != "model"
+            for option in options_for_model(nested_model, "opus")
+        )
+
+
+class TestSelectionsFollowTheChosenModel:
+    def test_a_value_only_the_chosen_model_offers_is_accepted(self):
+        """``max`` is refused against the machine's default model and accepted
+        against the one that offers it."""
+        assert validate_agent_host_selections(
+            config_options=_claude_like(),
+            selections={"effort": "max"},
+            model_name="opus",
+        ) == {"effort": "max"}
+        with pytest.raises(RuntimeProfileValidationError, match="Invalid value"):
+            validate_agent_host_selections(
+                config_options=_claude_like(),
+                selections={"effort": "max"},
+                model_name="sonnet",
+            )
+        with pytest.raises(RuntimeProfileValidationError, match="Invalid value"):
+            validate_agent_host_selections(
+                config_options=_claude_like(), selections={"effort": "max"}
+            )
+
+    def test_the_model_is_still_refused_as_a_selection(self):
+        with pytest.raises(RuntimeProfileValidationError, match="default_model_name"):
+            validate_agent_host_selections(
+                config_options=_claude_like(),
+                selections={"model": "opus"},
+                model_name="opus",
+            )
+
+    def test_carrying_drops_what_the_model_the_run_uses_does_not_offer(self):
+        assert carry_agent_host_selections(
+            config_options=_claude_like(),
+            selections={"effort": "max"},
+            model_name="opus",
+        ) == {"effort": "max"}
+        assert (
+            carry_agent_host_selections(
+                config_options=_claude_like(),
+                selections={"effort": "max", "model": "opus"},
+                model_name=None,
+            )
+            == {}
         )

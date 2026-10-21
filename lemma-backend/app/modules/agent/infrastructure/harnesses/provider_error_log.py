@@ -21,13 +21,17 @@ rather than truncated — a value long enough to be prose is prose.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic_ai.exceptions import ModelHTTPError
 
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
     classify_run_failure,
     provider_error_identifiers as provider_error_identifiers,
+    run_failure_reason,
 )
+from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
 
 logger = get_logger(__name__)
 
@@ -64,3 +68,20 @@ def user_facing_error_message(exc: BaseException) -> str:
     headers, or model-internal details.
     """
     return classify_run_failure(exc).message
+
+
+def failure_event(exc: BaseException, *, agent_run_id: UUID) -> AgentEvent:
+    """The ERROR a run ends on: the sentence, and the code a client keys off.
+
+    The code used to stay behind in the harness, so a run that ended here was
+    recorded with its message and no code -- a provider refusal read as
+    uncategorised to anything that matched on it.
+    """
+    failure = classify_run_failure(exc)
+    return AgentEvent(
+        type=AgentEventType.ERROR,
+        data=failure.message,
+        agent_run_id=agent_run_id,
+        error_code=failure.code,
+        error_reason=run_failure_reason(exc),
+    )

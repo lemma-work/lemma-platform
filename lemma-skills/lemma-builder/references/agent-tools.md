@@ -78,43 +78,37 @@ and native buttons.
 
 `display_resource`, `say`, and `listen` do **not** pause — they return immediately.
 
-`message_user` does **not** pause either, and that catches people out, because it *looks*
-like asking a question. It reaches a pod member who is **not** in this conversation and
-returns straight away; their reply never arrives as a tool return. The answer comes back
-by a different route entirely — the recipient's own agent handles their reply in their own
-thread, under their own permissions, guided by the `background_instruction` the sender
-wrote, and records it with `respond_to_notification`.
+`channel_post` does **not** pause either, and that catches people out, because it
+*looks* like asking a question. It reaches a pod member who is **not** in this
+conversation and returns straight away; their answer never arrives as a tool return. It
+comes back by a different route — they answer the line in their inbox in Lemma, or tell
+their own agent, which records it with `answer_question` under their own permissions.
 
-So an agent that needs answers sends every message it needs, says who it is waiting on,
-and **ends the turn**. It must not `wait_for` them and must not poll: when the **last**
-outstanding answer is recorded, the backend starts a *fresh turn* in the asking
-conversation on its own, and the agent reads what everyone said with `check_messages`
-there. (Waiting for the last rather than the first is deliberate — an agent that
-messaged four people would otherwise replay the whole conversation four times to learn
-"three still pending" three times over.)
+So an agent that needs answers sends every message it needs (with `wants_answer`), says
+who it is waiting on, and **ends the turn**. It must not `wait_for` them and must not
+poll: when the **last** outstanding answer is recorded, the backend starts a *fresh turn*
+in the asking conversation on its own, and the agent reads what everyone said with
+`channel_read(asked_by_me=True)` there. (Waiting for the last rather than the first is
+deliberate — an agent that asked four people would otherwise replay the whole
+conversation four times to learn "three still pending" three times over.)
 
-Snoozing while you wait is *handled* rather than forbidden — an arriving answer
-resolves the pause and wakes the run early with `woke_because='ANSWERED'`
-instead of leaving it asleep. Ending the turn is still the better default,
-because every wake replays the whole conversation and a turn that simply ended
-does not. Reach for `snooze` when you have something else to wait for as well,
-not merely to sit on a question. Compare:
+An agent already in a `wait_for` for something else is not left asleep: an arriving
+answer resolves the pause and wakes the run early with `woke_because='ANSWERED'`.
+Ending the turn is still the default, because every wake replays the whole
+conversation and a turn that simply ended does not. Compare:
 
 | | Who it reaches | Pauses the run | Where the answer lands |
 | --- | --- | --- | --- |
 | `ask_user` | the person already in this conversation | yes | back in this run, as the tool's return |
-| `message_user` | any pod member, wherever they are | **no** | on the notification — a new turn starts once the last one is answered, read with `check_messages` |
+| `channel_post` | any pod member, wherever they are | **no** | on the line in their channel — a new turn starts once the last one is answered, read with `channel_read(asked_by_me=True)` |
 
 `to` takes a **pod member id, user id, or email address** — a human name does not
-resolve. `background_instruction` is what makes an answer come back at all: omit it and
-nothing does. `expects_response: false` sends a pure FYI; a request expires after 72h
-unless `expires_in_seconds` says otherwise.
+resolve. Without `wants_answer` it is news: nothing comes back.
 
-By default it reaches someone wherever they last spoke to *this* agent, falling back to
-the agent's mailbox. An agent with a reason to choose passes `channel` — `email`, `slack`,
-`teams`, `telegram` or `whatsapp` — and a channel it names is used or refused, never
-swapped for another; `list_pod_members` reports each member's `reachable_on` so the choice
-is a read rather than a guess.
+It is a line in the person's own channel in Lemma; how they hear of it — a push to the
+chat app or email they chose — is the channel's to decide, not the agent's.
+`list_pod_members` reports each member's `reachable_on` for information. `wants_answer`
+asks one person, so it is refused together with `channel_id`.
 
 `MESSAGING` is on for every top-level agent (and withheld from sub-agents); holding it is
 the whole grant. It is **deferred**, though — the tools are not in the prompt prefix, so

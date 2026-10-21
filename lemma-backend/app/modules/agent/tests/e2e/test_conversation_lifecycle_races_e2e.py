@@ -16,7 +16,6 @@ from starlette import status
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRunStatus,
@@ -24,14 +23,15 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.events.handlers import reconcile_agent_approval_now
-from app.modules.agent.events.queued_followup import (
-    start_followup_run_for_queued_messages,
-)
+from app.modules.agent.events.run_followup_work import start_queued_followup_for
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.services.approval_reconciliation import (
+    stage_approval_execution,
+)
+from app.modules.test_support.e2e.agent_work import run_approval_work
 from app.modules.agent.services.mcp_pausing_calls import record_pausing_tool_call
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
@@ -51,19 +51,47 @@ from app.modules.test_support.e2e.function_helpers import create_table
 
 pytestmark = [pytest.mark.e2e]
 
+
+async def _carry_out(seeded, approval_id: str) -> None:
+    """The decision's ``agent.approval.execute`` item, run late -- as a worker
+    that picked it up after everything above would."""
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await stage_approval_execution(
+            uow,
+            conversation_id=seeded.conversation_id,
+            approval_id=approval_id,
+            user_id=seeded.user_id,
+            pod_id=seeded.pod_id,
+        )
+        await uow.commit()
+    await run_approval_work()
+
+
 _TABLE = "chores"
 
 
 async def _completed(seeded: Seeded, run_id: UUID) -> UUID | None:
-    """Deliver the run's completion event to the consumer that follows it up."""
-    return await start_followup_run_for_queued_messages(
-        AgentRunCompletedEvent(
-            conversation_id=seeded.conversation_id,
-            agent_run_id=run_id,
-            status=(await _run(seeded, run_id)).status,
-        ),
-        uow_factory=uow_factory(),
+    """Run the run's ``agent.followup``, as its finalize writes it."""
+    return await start_queued_followup_for(
+        seeded.conversation_id, run_id, uow_factory=uow_factory()
     )
+
+
+async def _held_by_a_worker(seeded: Seeded, run_id: UUID) -> None:
+    """The run's turn, claimed by a worker: a stop marks it, the worker ends it."""
+    from sqlalchemy import text
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await uow.session.execute(
+            text(
+                "INSERT INTO work_items (id, ns, class, kind, payload, dedup_key, "
+                "state, lease_owner, lease_until) VALUES (gen_random_uuid(), :ns, "
+                "'interactive', 'agent.turn', '{}'::jsonb, :key, 'running', "
+                "'elsewhere', now() + interval '1 minute')"
+            ),
+            {"ns": f"pod:{seeded.pod_id}", "key": f"agent-run:{run_id}"},
+        )
+        await uow.commit()
 
 
 async def _run(seeded: Seeded, run_id: UUID):
@@ -79,6 +107,7 @@ def _returns_for(found, tool_call_id: str):
     ]
 
 
+@pytest.mark.drives_work
 async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
     scenario,
 ) -> None:
@@ -138,15 +167,7 @@ async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
     assert sent.json()["agent_run_id"] == str(paused)
 
     # The approval job arriving late, as the worker's retry would.
-    await reconcile_agent_approval_now(
-        {
-            "conversation_id": str(seeded.conversation_id),
-            "approval_id": approval_id,
-            "user_id": str(seeded.user_id),
-            "pod_id": str(seeded.pod_id),
-        },
-        uow_factory=uow_factory(),
-    )
+    await _carry_out(seeded, approval_id)
 
     listed = await scenario.owner_client.get(
         f"/pods/{scenario.pod_id}/datastore/tables/{_TABLE}/records"
@@ -221,6 +242,7 @@ async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
     the run had stopped, and the person heard nothing."""
     seeded = await seeded_conversation(scenario)
     working = await running_run(seeded)
+    await _held_by_a_worker(seeded, working)
     before = await queued_message(seeded, working, "Also check the logs.")
 
     async with owner_uow(seeded) as uow:
@@ -302,6 +324,7 @@ async def test_a_remote_harness_question_is_answered_inside_its_own_run(
     assert [run.id for run in await runs(seeded.conversation_id)] == [working]
 
 
+@pytest.mark.drives_work
 async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
     scenario,
 ) -> None:
@@ -332,15 +355,7 @@ async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
             user_id=seeded.user_id,
             pod_id=seeded.pod_id,
         )
-    await reconcile_agent_approval_now(
-        {
-            "conversation_id": str(seeded.conversation_id),
-            "approval_id": question,
-            "user_id": str(seeded.user_id),
-            "pod_id": str(seeded.pod_id),
-        },
-        uow_factory=uow_factory(),
-    )
+    await _carry_out(seeded, question)
 
     assert len(_returns_for(await messages(seeded.conversation_id), question)) == 1
     assert [run.id for run in await runs(seeded.conversation_id)] == [paused]

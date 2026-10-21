@@ -19,6 +19,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.agent_surfaces.domain.decision_card import CardRetirement
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_request_approval,
@@ -33,6 +34,8 @@ from app.modules.agent_surfaces.tests.e2e.surface_journey import (
 pytestmark = pytest.mark.e2e
 
 TOOL_CALL_ID = "call_card_retirement_1"
+SUPERSEDED = CardRetirement.SUPERSEDED.note
+ANSWERED = CardRetirement.ANSWERED.note
 
 
 def _approval_then(text: str) -> list:
@@ -54,7 +57,7 @@ def _position(messages: list[dict[str, Any]], is_card) -> int:
     return next(index for index, sent in enumerate(messages, 1) if is_card(sent))
 
 
-def _slack_retired(store) -> None:
+def _slack_retired(store, note: str = SUPERSEDED) -> None:
     posted = store.get_all("SLACK")
     card = _position(
         posted,
@@ -69,10 +72,10 @@ def _slack_retired(store) -> None:
     assert blocks, "the card was rewritten with nothing in it"
     assert not [block for block in blocks if block.get("type") == "actions"]
     assert "Show a widget" in str(blocks)
-    assert "No longer needed." in str(blocks[-1])
+    assert note in str(blocks[-1])
 
 
-def _teams_retired(store) -> None:
+def _teams_retired(store, note: str = SUPERSEDED) -> None:
     def has_actions(sent: dict[str, Any]) -> bool:
         return any(
             (attachment.get("content") or {}).get("actions")
@@ -87,10 +90,11 @@ def _teams_retired(store) -> None:
     ]
     assert not has_actions(update)
     assert "Show a widget" in str(update["body"])
-    assert "No longer needed." in str(update["body"])
+    assert note in str(update["body"])
 
 
-def _telegram_retired(store) -> None:
+def _telegram_retired(store, note: str = SUPERSEDED) -> None:
+    del note  # Telegram takes the keyboard away and leaves the text alone.
     card = _position(
         store.get_all("TELEGRAM"),
         lambda sent: (sent.get("reply_markup") or {}).get("inline_keyboard"),
@@ -100,15 +104,21 @@ def _telegram_retired(store) -> None:
     assert str(edit["message_id"]) == str(card)
 
 
-def _whatsapp_retired(store) -> None:
+def _whatsapp_retired(store, note: str = SUPERSEDED) -> None:
     sent = store.get_all("WHATSAPP")
     card = _position(sent, lambda message: message.get("type") == "interactive")
-    [note] = [
+    replies = [
         message
         for message in sent
         if (message.get("context") or {}).get("message_id") == f"wamid.{card}"
     ]
-    assert "No longer needed" in note["text"]["body"]
+    if note == ANSWERED:
+        # WhatsApp cannot edit the card, and only a cancelled one gets a line
+        # of its own; a tap on an answered one is turned away when it lands.
+        assert replies == [], replies
+        return
+    [reply] = replies
+    assert note.rstrip(".") in reply["text"]["body"]
 
 
 _RETIRED = {
@@ -194,3 +204,49 @@ async def test_a_card_answered_in_words_is_marked_answered(
     blocks = _slack_blocks(update)
     assert not [block for block in blocks if block.get("type") == "actions"]
     assert "Answered." in str(blocks[-1])
+
+
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS, ids=lambda p: p.value.lower())
+async def test_a_card_answered_in_the_web_app_is_marked_answered(
+    platform: SurfacePlatform,
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fixed_test_org,
+    message_store,
+    monkeypatch,
+    platform_fake,
+) -> None:
+    """The person decides in Lemma, not on the platform.
+
+    A tap retires its own card and a typed reply retires it when its turn
+    starts; a decision made in the web app went through neither, and the card
+    on the platform kept buttons offering to decide it again.
+    """
+    stage = await stage_surface(
+        platform,
+        fake=platform_fake[platform],
+        toolsets=["USER_INTERACTION"],
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
+    )
+    context = await stage.say(
+        "please show the widget",
+        script=_approval_then("Understood — I did not run it."),
+    )
+    assert await stage.saw("Show a widget"), "the request never reached the person"
+
+    decided = await authenticated_client.post(
+        f"/pods/{stage.pod_id}/conversations/{context.conversation_id}"
+        f"/approvals/{TOOL_CALL_ID}/decision",
+        json={"decision": "DENY"},
+    )
+    assert decided.status_code == 200, decided.text
+
+    _RETIRED[platform](message_store, ANSWERED)

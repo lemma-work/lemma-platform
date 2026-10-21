@@ -32,6 +32,7 @@ from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.tests.e2e.background_reads import background_read
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_surface,
@@ -240,9 +241,7 @@ async def test_telegram_group_mention_from_non_member_is_ignored(
     """Group mentions stay pod-member gated and never post onboarding/access
     prompts into the group."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.events.handlers import (
-        build_surface_ingress,
-    )
+    from app.modules.agent_surfaces.composition import build_surface_ingress
     from app.modules.test_support.e2e_authz import signup_user
 
     _wire_native_telegram(monkeypatch, fake_telegram)
@@ -343,11 +342,8 @@ async def test_telegram_group_injects_reply_as_channel_context(
         conversation_id=str(context.conversation_id),
     )
     user_message = next(m for m in messages if m.get("role") == "user")
-    channel_context = (user_message.get("metadata") or {}).get("channel_context")
-    assert channel_context, channel_context
-    assert any("ship on Friday" in (m.get("text") or "") for m in channel_context), (
-        channel_context
-    )
+    shown = await background_read(user_message.get("metadata"))
+    assert any("ship on Friday" in line.text for line in shown.lines), shown
 
 
 async def test_telegram_dm_has_no_channel_context(
@@ -401,9 +397,7 @@ async def test_telegram_group_without_mention_is_ignored(
     """A plain group message that does NOT mention the bot is ignored (no reply),
     so the bot only speaks when addressed."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.events.handlers import (
-        build_surface_ingress,
-    )
+    from app.modules.agent_surfaces.composition import build_surface_ingress
 
     _wire_native_telegram(monkeypatch, fake_telegram)
     pod_id = test_pod["id"]
@@ -439,9 +433,7 @@ async def test_telegram_group_mention_of_other_user_is_ignored(
     the mentioned user, so the parser records it for bot-identity verification
     and the ingress enrichment confirms it is not the bot before ignoring."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.events.handlers import (
-        build_surface_ingress,
-    )
+    from app.modules.agent_surfaces.composition import build_surface_ingress
 
     _wire_native_telegram(monkeypatch, fake_telegram)
     pod_id = test_pod["id"]

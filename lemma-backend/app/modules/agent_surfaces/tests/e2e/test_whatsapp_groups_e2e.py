@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent_surfaces.tests.e2e.group_timeline import timeline
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.groups import SurfaceGroup
@@ -205,12 +206,19 @@ async def test_a_member_opens_a_group_and_its_confirmation_brings_the_link(
     assert again.invite_link == group.invite_link
     assert len(message_store.get_all("WHATSAPP_GROUP_CREATE")) == 1
 
-    # Listed for the pod, link and all.
-    response = await authenticated_client.get(f"/pods/{test_pod['id']}/groups")
-    assert response.status_code == 200, response.text
-    [listed] = response.json()["items"]
-    assert listed["invite_link"] == group.invite_link
-    assert listed["pending"] is False
+    # A GROUP channel of the pod's, and its source carries the link.
+    listed = await authenticated_client.get(
+        f"/pods/{test_pod['id']}/channels", params={"kind": "GROUP"}
+    )
+    assert listed.status_code == 200, listed.text
+    [channel] = listed.json()["items"]
+    assert channel["id"] == str(group.channel_id)
+    shown = await authenticated_client.get(
+        f"/pods/{test_pod['id']}/channels/{group.channel_id}/sources/{group.id}"
+    )
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["invite_link"] == group.invite_link
+    assert shown.json()["pending"] is False
 
 
 async def test_a_client_in_the_group_is_answered_there_from_what_is_public(
@@ -280,7 +288,7 @@ async def test_a_client_in_the_group_is_answered_there_from_what_is_public(
     assert "customers" not in listed[-1]
 
     # And the pod's log of the group holds both sides.
-    lines = await SurfaceGroupRepository(db_session).recent_lines(group=group, limit=10)
+    lines = await timeline(db_session, group, limit=10)
     said = [line.text for line in lines]
     assert f"@{BUSINESS_NUMBER} what can you tell me?" in said
     assert "I can share the price list." in said
@@ -357,7 +365,7 @@ async def test_talk_nobody_put_to_the_bot_is_logged_and_left_alone(
     await uow.commit()
 
     assert context is None
-    lines = await SurfaceGroupRepository(db_session).recent_lines(group=group, limit=5)
+    lines = await timeline(db_session, group, limit=5)
     assert [line.text for line in lines] == ["Thanks all, talk at 3"]
 
 

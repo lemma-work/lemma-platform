@@ -111,32 +111,30 @@ async def test_a_sender_is_the_same_person_on_every_message(reachable, run):
     )
 
 
-@scenario("A different chat is a different conversation")
+@scenario("A person writing from another chat still has one conversation")
 @proves("PS-SURF-013")
 @covers("agent.conversation.list")
 @stack_lane("two chats at once only a forged delivery can produce")
-async def test_a_separate_chat_is_a_separate_conversation(reachable):
-    # A person has exactly one chat with a bot: they cannot be in two places to
-    # prove the two are kept apart. Forging the second delivery is the only way
-    # to ask this question at all, so this scenario stays in the lane that can.
+async def test_another_chat_from_the_same_person_continues_their_conversation(
+    reachable, run
+):
+    # A person has exactly one chat with a bot: the second address a chat moves
+    # to -- another pool number, another of the pod's bots -- is only something
+    # a forged delivery can stage here. It is the same person, so it is the same
+    # conversation, holding both messages.
     reachable.only_forged("two chats at once is something only a platform has")
 
+    here, there = run.name("over here"), run.name("and over there")
     elsewhere = reachable.chat.in_another_chat()
 
-    await reachable.says("over here")
-    await reachable.waits_for_a_reply()
-    await elsewhere.says("and over there")
-    await elsewhere.waits_for_a_reply()
+    await reachable.says(here)
+    opened = await reachable.waits_for_a_conversation_holding(here)
+    await elsewhere.says(there)
 
-    threads = await eventually(
-        reachable.conversations,
-        lambda found: len(found) >= 2,
-        describe="a second chat to get its own conversation",
-        timeout=UNTIL_A_RUN_SETTLES,
-    )
-    assert len(threads) == 2, (
-        f"two separate chats share one conversation, so each sees the other's "
-        f"history: {threads}"
+    both = await reachable.waits_for_a_conversation_holding(here, there)
+    assert str(both["id"]) == str(opened["id"]), (
+        f"the same person writing from another chat was cut into conversation "
+        f"{both['id']}, away from {opened['id']} and everything said there"
     )
 
 

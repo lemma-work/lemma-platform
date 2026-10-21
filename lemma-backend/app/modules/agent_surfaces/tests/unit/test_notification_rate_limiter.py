@@ -1,9 +1,11 @@
 """Bounding what an agent can send, in the two ways it can run away.
 
-The limiter had no tests at all — which is how it came to be modelled in #264
-and left unenforced until #316. Both windows are covered here, including the
-Redis-is-down behaviour, because "fails open" is a decision that should break a
-test if someone quietly reverses it.
+The push budget bounds how often one pod puts a line on one person's phone; the
+email budget bounds how much one pod spends of the sending domain every pod
+shares. Neither refuses the line itself -- it is in the member's channel
+whatever they say. Both windows are covered here, including the Redis-is-down
+behaviour, because "fails open" is a decision that should break a test if
+someone quietly reverses it.
 """
 
 from __future__ import annotations
@@ -14,9 +16,9 @@ import pytest
 from redis.exceptions import RedisError
 
 from app.modules.agent_surfaces.services.notification_rate_limiter import (
+    EmailBudget,
     EmailSendLimitExceeded,
-    NotificationRateLimitExceeded,
-    NotificationRateLimiter,
+    PushBudget,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -47,42 +49,40 @@ class FakeRedis:
         return count
 
 
-async def test_the_hourly_budget_is_per_pod_and_per_recipient():
+async def test_the_push_budget_is_per_pod_and_per_recipient():
     """Two pods messaging one person are two relationships.
 
     One pod's runaway loop must not mute the other, so the key carries both.
     """
     redis = FakeRedis()
-    limiter = NotificationRateLimiter(limit=2, redis=redis)
+    budget = PushBudget(limit=2, redis=redis)
     pod_a, pod_b, recipient = uuid4(), uuid4(), uuid4()
 
-    await limiter.check(pod_id=pod_a, recipient_user_id=recipient)
-    await limiter.check(pod_id=pod_a, recipient_user_id=recipient)
-    # Pod B's first send, against the same person, is unaffected.
-    await limiter.check(pod_id=pod_b, recipient_user_id=recipient)
+    assert await budget.allows(pod_id=pod_a, recipient_user_id=recipient)
+    assert await budget.allows(pod_id=pod_a, recipient_user_id=recipient)
+    # Pod B's first push, to the same person, is unaffected.
+    assert await budget.allows(pod_id=pod_b, recipient_user_id=recipient)
 
-    with pytest.raises(NotificationRateLimitExceeded):
-        await limiter.check(pod_id=pod_a, recipient_user_id=recipient)
-
+    assert await budget.allows(pod_id=pod_a, recipient_user_id=recipient) is False
     assert redis.expiries[f"notify:rate:{pod_a}:{recipient}"] == 3600
 
 
 async def test_the_email_budget_is_per_pod_and_counts_every_recipient():
-    """The gap the per-recipient limit leaves wide open.
+    """The gap the per-recipient budget leaves wide open.
 
     An agent messaging five hundred different people once each never trips the
-    hourly limit, and every one of those emails leaves the same shared sending
-    domain. This is the limit that notices.
+    hourly push budget, and every one of those emails leaves the same shared
+    sending domain. This is the budget that notices.
     """
     redis = FakeRedis()
-    limiter = NotificationRateLimiter(email_limit=3, redis=redis)
+    budget = EmailBudget(limit=3, redis=redis)
     pod_id = uuid4()
 
     for _ in range(3):
-        await limiter.check_email(pod_id=pod_id)
+        await budget.check(pod_id=pod_id)
 
     with pytest.raises(EmailSendLimitExceeded) as exc:
-        await limiter.check_email(pod_id=pod_id)
+        await budget.check(pod_id=pod_id)
 
     assert "3 emails today" in str(exc.value)
     assert redis.expiries[f"notify:rate:email:{pod_id}"] == 86_400
@@ -91,34 +91,34 @@ async def test_the_email_budget_is_per_pod_and_counts_every_recipient():
 async def test_the_two_budgets_do_not_spend_each_other():
     """Separate keys. A pod at its email ceiling can still reach Slack."""
     redis = FakeRedis()
-    limiter = NotificationRateLimiter(limit=1, email_limit=1, redis=redis)
+    email, push = EmailBudget(limit=1, redis=redis), PushBudget(limit=1, redis=redis)
     pod_id, recipient = uuid4(), uuid4()
 
-    await limiter.check_email(pod_id=pod_id)
+    await email.check(pod_id=pod_id)
     # The hourly per-recipient budget is untouched by that email.
-    await limiter.check(pod_id=pod_id, recipient_user_id=recipient)
+    assert await push.allows(pod_id=pod_id, recipient_user_id=recipient)
 
     with pytest.raises(EmailSendLimitExceeded):
-        await limiter.check_email(pod_id=pod_id)
+        await email.check(pod_id=pod_id)
 
 
-@pytest.mark.parametrize("call", ["check", "check_email"])
-async def test_an_unreachable_redis_lets_the_message_through(call):
+async def test_an_unreachable_redis_lets_the_email_through():
     """Fails open, deliberately, and only for Redis being unreachable.
 
     "Nobody can be told anything while Redis is down" is the wrong side to fail
     on for a system whose whole premise is that people get told. A bug in the
-    limiter itself still raises — only ``RedisError``/``OSError`` is caught.
+    budget itself still raises — only ``RedisError``/``OSError`` is caught.
     """
-    limiter = NotificationRateLimiter(
-        limit=0, email_limit=0, redis=FakeRedis(fail=True)
+    # A limit of zero refuses every email whenever Redis can answer, so
+    # returning at all is the fail-open path being taken.
+    assert (
+        await EmailBudget(limit=0, redis=FakeRedis(fail=True)).check(pod_id=uuid4())
+        is None
     )
 
-    # A limit of zero refuses every message whenever Redis can answer, so
-    # returning at all is the fail-open path being taken.
-    if call == "check":
-        admitted = await limiter.check(pod_id=uuid4(), recipient_user_id=uuid4())
-    else:
-        admitted = await limiter.check_email(pod_id=uuid4())
 
-    assert admitted is None
+async def test_an_unreachable_redis_lets_the_push_through():
+    """The same decision for the push budget: a zero limit, and still allowed."""
+    budget = PushBudget(limit=0, redis=FakeRedis(fail=True))
+
+    assert await budget.allows(pod_id=uuid4(), recipient_user_id=uuid4()) is True

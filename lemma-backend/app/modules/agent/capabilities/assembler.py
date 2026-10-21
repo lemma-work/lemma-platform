@@ -40,8 +40,8 @@ from app.modules.agent.capabilities.prompt_caching import PromptCachingCapabilit
 from app.modules.agent.capabilities.pending_user_messages import (
     PendingUserMessagesCapability,
 )
-from app.modules.agent.capabilities.open_notifications import (
-    OpenNotificationsCapability,
+from app.modules.agent.capabilities.open_questions import (
+    OpenQuestionsCapability,
 )
 from app.modules.agent.capabilities.run_context import RunContextCapability
 from app.modules.agent.domain.run_context_prompt import run_context_for
@@ -58,6 +58,7 @@ from app.modules.agent.domain.prompts import (
     load_pod_prompt,
     load_skills_prompt,
     load_speech_prompt,
+    load_subagents_prompt,
     load_web_search_prompt,
     load_user_interaction_prompt,
     load_workspace_cli_prompt,
@@ -72,6 +73,7 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 )
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
+from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
 from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
@@ -104,6 +106,10 @@ _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
     # `pod_*` sits behind a search with a one-line hint. Runs that never thought
     # to search did every read through the CLI. The fragment names the default.
     (pod_toolset, "pod", load_pod_prompt),
+    # Deferred for the pod default assistant. The hint names the three tools;
+    # it cannot say that the cheap way to collect a child is `wait_for` and
+    # ending the turn, not blocking in `interact_subagent`.
+    (subagents_toolset, "subagents", load_subagents_prompt),
 )
 
 
@@ -171,8 +177,8 @@ def _instructions_for(
 
     One lookup for both wrappers, because deferral is supposed to hide a
     toolset's *schemas*, never its *contract*. Messaging is the case that proves
-    it: ``message_user`` does not pause the turn, so an agent that was never
-    taught the send → wait_for → check_messages loop sends a message and then sits
+    it: ``channel_post`` does not pause the turn, so an agent that was never
+    taught the send → wait_for → channel_read(asked_by_me=True) loop sends a message and then sits
     waiting for a reply that arrives as a tool result never. Advertising the
     tool in the deferred hint while withholding that is the worst of both.
     """
@@ -306,10 +312,10 @@ async def _build_lemma_harness_tooling(
     if getattr(ctx, "memory_enabled", False):
         capabilities.append(MemoryCapability())
 
-    # When the run is on a third-party surface, append standing per-platform
-    # guidance (delivery/forms/formatting/channel-context). Stable per
-    # conversation, so it rides in the cached prefix alongside the other
-    # instruction-bearing capabilities.
+    # When the run talks over a third-party surface, append standing
+    # per-platform guidance (delivery/forms/formatting/channel-context). The
+    # platform is the run's: none for a run asked in Lemma, whatever platform
+    # its conversation was last heard on.
     surface_platform = getattr(ctx, "surface_platform", None)
     audience = run_audience(ctx)
     answers_outsider = audience.answers_outsiders
@@ -340,10 +346,10 @@ async def _build_lemma_harness_tooling(
 
     # Somebody may be waiting on the person this agent is talking to. What they
     # asked is in the run's context part; this hands the run the tools that
-    # answer it. Never on a stranger's run: an open notification is the
-    # owner's question to answer.
-    if not answers_outsider and getattr(ctx, "open_notifications", None):
-        capabilities.append(OpenNotificationsCapability())
+    # answer it. Never on a stranger's run: a question waiting on a member is
+    # theirs to answer, not somebody's outside the pod.
+    if not answers_outsider and getattr(ctx, "open_questions", None):
+        capabilities.append(OpenQuestionsCapability())
 
     if enable_prompt_caching:
         pod_id = getattr(ctx, "pod_id", None)

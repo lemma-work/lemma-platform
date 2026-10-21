@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import json
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Query
+from fastapi.responses import RedirectResponse
 
 from app.core.api.dependencies import CurrentUser
 from app.modules.agent_surfaces.platforms.slack.manifest import (
@@ -62,3 +66,27 @@ async def get_slack_app_manifest(
     """
     del user
     return build_slack_app_manifest(agent_name=agent_name)
+
+
+@platform_router.get(
+    "/slack/manifest/new-app",
+    operation_id="agent.surface.slack_manifest_new_app",
+    include_in_schema=False,
+)
+async def open_slack_manifest_in_slack(
+    agent_name: Annotated[str | None, Query(max_length=255)] = None,
+) -> RedirectResponse:
+    """Slack's own "create an app from a manifest" form, already filled in.
+
+    A redirect, because the manifest URL-encoded is longer than the link on a
+    Slack button may be, and that is where this is opened from. Unauthenticated
+    for the reason the manifest itself needs no more than a session: every value
+    in it is this deployment's public URLs and the scopes its code asks for.
+    """
+    manifest = build_slack_app_manifest(agent_name=agent_name)
+    query = urlencode({"new_app": "1", "manifest_json": _manifest_json(manifest)})
+    return RedirectResponse(f"https://api.slack.com/apps?{query}", status_code=302)
+
+
+def _manifest_json(manifest: dict[str, object]) -> str:
+    return json.dumps(manifest, separators=(",", ":"))

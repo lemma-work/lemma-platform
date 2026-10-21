@@ -8,25 +8,16 @@ they already exist, and the read is the fallback -- see ``_run_scope``.
 
 from __future__ import annotations
 
-from faststream import Depends, Logger
-
+from app.core.analytics.domain_events import projection
 from app.core.analytics import AnalyticsActor, emit
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
 from app.core.origin import Origin, OriginKind
 from app.modules.agent.contracts.conversations import (
     ConversationScope,
     conversation_scope,
 )
 from app.modules.agent.domain.events import (
-    AGENT_EVENTS_STREAM,
     AgentCreatedEvent,
     AgentRunCompletedEvent,
     ConversationStartedEvent,
@@ -38,7 +29,6 @@ from app.modules.analytics.events.wiring import (
     actor_or_system,
     origin_of,
     provide_uow_factory,
-    router,
 )
 from app.modules.analytics.services.buckets import (
     COUNT_EDGES,
@@ -62,18 +52,16 @@ WIRED = frozenset(
 )
 
 
-@reliable_redis_stream_subscriber(
-    router,
-    AGENT_EVENTS_STREAM,
-    group="analytics-agent",
-    consumer="analytics-agent-consumer",
+@projection(
+    AgentRunCompletedEvent.get_event_type(),
+    AgentCreatedEvent.get_event_type(),
+    ConversationStartedEvent.get_event_type(),
 )
 async def on_agent_event(
     event: dict[str, object],
-    fs_logger: Logger,
-    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    uow_factory: UnitOfWorkFactory | None = None,
 ) -> None:
+    uow_factory = uow_factory or provide_uow_factory()
     event_type = event.get("event_type")
     if event_type not in {
         AgentRunCompletedEvent.get_event_type(),
@@ -96,7 +84,7 @@ async def on_agent_event(
             uow_factory, AgentRunCompletedEvent.model_validate(event), origin
         )
 
-    await inbox.process("analytics.agent", event, record)
+    await record()
 
 
 def _record_agent_created(created: AgentCreatedEvent, origin: Origin | None) -> None:

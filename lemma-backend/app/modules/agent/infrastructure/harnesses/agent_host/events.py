@@ -40,6 +40,7 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.event_text import (
+    config_update_event,
     Segment,
     error_event,
     event_text,
@@ -202,10 +203,19 @@ class AgentHostEventNormalizer:
                         sequence=row.sequence,
                     ),
                 ]
+            case AgentHostEventType.CONFIG_UPDATE:
+                return [
+                    *self._drain_tokens(),
+                    config_update_event(
+                        agent_run_id=self.agent_run_id,
+                        payload=payload,
+                        metadata=metadata,
+                        sequence=row.sequence,
+                    ),
+                ]
             case (
                 AgentHostEventType.RUN_STATE
                 | AgentHostEventType.SESSION_UPDATE
-                | AgentHostEventType.CONFIG_UPDATE
                 | AgentHostEventType.STEER_RESULT
             ):
                 return [

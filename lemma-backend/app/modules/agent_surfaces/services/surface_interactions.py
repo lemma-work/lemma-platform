@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.current import reset_current_context, set_current_context
@@ -27,11 +28,7 @@ from app.modules.agent.contracts import (
 from app.modules.agent.contracts.conversations_for_surfaces import SurfaceConversation
 from app.modules.agent_surfaces.domain.entities import (
     platform_value_for_source,
-    AgentSurfaceConversationLink,
-    AgentSurfaceEntity,
-    ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
-    ResolvedSurfaceUser,
 )
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
@@ -39,9 +36,6 @@ from app.modules.agent_surfaces.domain.ports import (
 )
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -58,7 +52,6 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
 )
 from app.modules.agent_surfaces.services.interaction_acks import (
     DONE,
-    REQUEST_MOVED,
     RUNNING_NOW,
     acknowledgement_for,
 )
@@ -68,10 +61,10 @@ from app.modules.agent_surfaces.services.interaction_helpers import (
     parse_interaction_target,
     resolve_current_interaction_delivery,
     resolve_interaction_delivery,
-    resolve_moved_interaction_delivery,
 )
 from app.core.log.log import get_logger
 
+from app.modules.agent_surfaces.services.channel_places import ChannelSeats
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 
@@ -118,7 +111,7 @@ class SurfaceInteractionMixin:
     #: What `interaction_helpers.InteractionIngress` reads off this object, plus
     #: the dedup store -- declared so the mixin can be passed as one.
     surface_repository: SurfaceInstallationRepositoryPort
-    conversation_link_repository: SurfaceConversationLinkRepository
+    seats: ChannelSeats
     credential_resolver: SurfaceCredentialResolver
     adapter_registry: SurfacePlatformAdapterRegistry
     event_dedup_store: SurfaceEventDedupStorePort
@@ -200,7 +193,8 @@ class SurfaceInteractionMixin:
             await self._process_interaction(
                 parsed, attempt, authorized_surface_ids=authorized_surface_ids
             )
-        except Exception:
+        except Exception as exc:
+            raise_if_database_unavailable(exc)
             # Said first, at a level `LOG_LEVEL=INFO` keeps. This handler used to
             # swallow the failure whole: the person got "I couldn't complete
             # that action" and nobody else got anything, so a button that broke
@@ -240,7 +234,7 @@ class SurfaceInteractionMixin:
             return
         delivery, tool_call_id = located
         attempt.delivery = delivery
-        link, surface, _adapter, _credentials = delivery
+        thread, surface, _adapter, _credentials = delivery
 
         if parsed.interaction_state == "other":
             # Remember that they asked to type the answer. Without this the
@@ -251,7 +245,7 @@ class SurfaceInteractionMixin:
             # call, so it cannot be spent on a later, unrelated one.
             await remember_free_text_answer_wanted(
                 self.uow,
-                conversation_id=link.conversation_id,
+                conversation_id=thread.conversation_id,
                 tool_call_id=tool_call_id,
             )
             await self._acknowledge(
@@ -262,7 +256,7 @@ class SurfaceInteractionMixin:
         # Authz: only the surface user who owns the conversation may submit
         # the answer that was shown to them. Ahead of the replay claim, so a
         # refused tap cannot spend the claim a legitimate one would need.
-        if not interaction_sender_matches(link, parsed):
+        if not interaction_sender_matches(thread, parsed):
             # Warning, not debug: this is the control in front of a native
             # Approve, and it now also fires where neither side identified
             # anybody. An operator has to be able to see that happening --
@@ -270,7 +264,7 @@ class SurfaceInteractionMixin:
             logger.warning(
                 "agent_surfaces.ingress_service.interaction_submitter_refused.degraded",
                 external_user_id=parsed.external_user_id,
-                conversation_id=link.conversation_id,
+                conversation_id=thread.conversation_id,
             )
             # Say so, and say which of the two it is. Refusing in silence is
             # indistinguishable from the button being broken, and "not yours
@@ -297,34 +291,32 @@ class SurfaceInteractionMixin:
         # the claim used to be spent first, so a failure left the person's next
         # tap looking like a replay and being ignored in silence.
         #
-        # The connection goes back for it. This is a Redis round trip in the
-        # middle of the interaction path, and everything above it has only
-        # read -- the writes start below, so `safe_to_release` genuinely
-        # releases here rather than quietly declining.
-        async with connection_released(self.uow.session):
-            claimed = await self.event_dedup_store.claim_message(
-                surface_installation_id=surface.id,
-                platform=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_message_id=parsed.dedup_id,
-            )
+        # A durable claim on this request's own session: it commits with the
+        # answer it guards, and a failure that rolls the answer back takes the
+        # claim with it.
+        claimed = await self.event_dedup_store.claim_message(
+            surface_installation_id=surface.id,
+            platform=surface.surface_type,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=parsed.external_thread_id,
+            external_message_id=parsed.dedup_id,
+        )
         if not claimed:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_interaction_ignored_replay_duplicate.observed",
-                conversation_id=link.conversation_id,
+                conversation_id=thread.conversation_id,
                 dedup_id=parsed.dedup_id,
             )
             return
         attempt.claimed = True
 
         conversation = await agent_conversations.surface_conversation(
-            self.uow, link.conversation_id
+            self.uow, thread.conversation_id
         )
         if conversation is None:
             logger.debug(
                 "agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic",
-                conversation_id=link.conversation_id,
+                conversation_id=thread.conversation_id,
             )
             await self._acknowledge(
                 parsed,
@@ -364,23 +356,7 @@ class SurfaceInteractionMixin:
             conversation_id,
             authorized_surface_ids=authorized_surface_ids,
         )
-        if delivery is not None:
-            return delivery, tool_call_id
-        moved = await resolve_moved_interaction_delivery(
-            self,
-            parsed,
-            conversation_id,
-            authorized_surface_ids=authorized_surface_ids,
-        )
-        if moved is not None:
-            await self._acknowledge(
-                parsed,
-                moved,
-                text=REQUEST_MOVED,
-                show_alert=True,
-                clear_actions=True,
-            )
-        return None
+        return (delivery, tool_call_id) if delivery is not None else None
 
     async def _acknowledge(
         self,
@@ -390,7 +366,7 @@ class SurfaceInteractionMixin:
         text: str,
         **options: bool,
     ) -> None:
-        _link, _surface, adapter, credentials = delivery
+        _thread, _surface, adapter, credentials = delivery
         async with connection_released(self.uow.session):
             await adapter.acknowledge_interaction(
                 credentials=credentials,
@@ -406,31 +382,6 @@ class SurfaceInteractionMixin:
         delivery: InteractionDelivery,
         conversation: SurfaceConversation,
     ) -> None:
-        link, surface, _adapter, _credentials = delivery
-        refreshed = await self._refresh_interaction_conversation(
-            link=link,
-            surface=surface,
-            conversation=conversation,
-        )
-        if refreshed is None:
-            await self._acknowledge(
-                parsed,
-                delivery,
-                text="That conversation is gone. Please ask again.",
-                show_alert=True,
-                clear_actions=True,
-            )
-            return
-        link, conversation, restarted = refreshed
-        if restarted:
-            await self._acknowledge(
-                parsed,
-                delivery,
-                text="This chat started a new conversation. Send your message again.",
-                show_alert=True,
-                clear_actions=True,
-            )
-            return
         await agent_conversations.retry_failed_run(
             self.uow,
             conversation_id=conversation.id,
@@ -484,38 +435,3 @@ class SurfaceInteractionMixin:
             show_alert=text not in (DONE, RUNNING_NOW),
             clear_actions=True,
         )
-
-    async def _refresh_interaction_conversation(
-        self,
-        *,
-        link: AgentSurfaceConversationLink,
-        surface: AgentSurfaceEntity,
-        conversation: SurfaceConversation,
-    ) -> tuple[AgentSurfaceConversationLink, SurfaceConversation, bool] | None:
-        """Apply the normal DM agent/TTL reset policy before an action runs."""
-
-        try:
-            last_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
-        except TypeError, ValueError:
-            return link, conversation, False
-        route = await self.router.resolve_route(surface=surface, parsed=last_event)
-        if route is None:
-            return link, conversation, False
-        refreshed_link, _ = await self.binder.bind_conversation(
-            surface=surface,
-            parsed=last_event,
-            resolved_user=ResolvedSurfaceUser(
-                internal_user_id=conversation.user_id,
-                external_user_id=link.external_user_id,
-            ),
-            route=route,
-            current_conversation_agent_id=conversation.agent_id,
-        )
-        if refreshed_link.conversation_id == link.conversation_id:
-            return refreshed_link, conversation, False
-        refreshed_conversation = await agent_conversations.surface_conversation(
-            self.uow, refreshed_link.conversation_id
-        )
-        if refreshed_conversation is None:
-            return None
-        return refreshed_link, refreshed_conversation, True

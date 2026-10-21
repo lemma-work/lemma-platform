@@ -245,17 +245,6 @@ class SurfaceSettings(BaseSettings):
             "short enough that coming back later still gets an answer."
         ),
     )
-    surface_dm_conversation_reset_after_hours: int = Field(
-        default=24,
-        description=(
-            "Hours since a person's last inbound DM after which their next "
-            "message opens a fresh Lemma conversation instead of continuing the "
-            "old one. This is the only way a surface decides which conversation "
-            "a message joins; what the agent then sees of that conversation is "
-            "the agent module's business. Set to 0 to never start a fresh DM "
-            "conversation on inactivity."
-        ),
-    )
     surface_outsider_turns_per_person_per_10_minutes: int = Field(
         default=10,
         description=(
@@ -322,15 +311,6 @@ class SurfaceSettings(BaseSettings):
             "How many strangers one bot set to answer anyone may turn into "
             "contacts in a day. Past it, new senders go unanswered until the "
             "next day; contacts it already knows are unaffected."
-        ),
-    )
-    surface_contact_follow_ups_per_contact_per_day: int = Field(
-        default=10,
-        ge=0,
-        description=(
-            "How many messages members may write first to one contact in a "
-            "day. A follow-up speaks for the pod to somebody who did not ask, "
-            "on a number or address whose sender reputation the pod depends on."
         ),
     )
     surface_parked_mail_notes_per_surface_per_hour: int = Field(

@@ -11,7 +11,9 @@ keeps it).
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SURFACE_APPLY_FIELDS = frozenset(
     {
@@ -60,3 +62,32 @@ def without_time_schedule_filter(
     for field in TIME_SCHEDULE_FILTER_FIELDS:
         copied.pop(field, None)
     return copied, dropped
+
+
+def is_past_one_time_schedule(
+    payload: Mapping[str, Any], *, now: datetime | None = None
+) -> bool:
+    """A TIME schedule that runs once (``scheduled_at``, no cron), at a moment
+    that is not ahead. It already fired, or was missed, in the pod it came
+    from; the server refuses to create one, so an importer leaves it out and
+    says so rather than failing part-way. A bare wall-clock time is read in
+    the schedule's own ``timezone``, as the server reads it."""
+    if str(payload.get("schedule_type") or "").upper() != "TIME":
+        return False
+    config = payload.get("config")
+    if not isinstance(config, Mapping) or config.get("cron"):
+        return False
+    at = config.get("scheduled_at")
+    if not isinstance(at, str):
+        return False
+    try:
+        moment = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if moment.tzinfo is None:
+        try:
+            zone = ZoneInfo(str(config.get("timezone") or "UTC"))
+        except ValueError, ZoneInfoNotFoundError:
+            zone = ZoneInfo("UTC")
+        moment = moment.replace(tzinfo=zone)
+    return moment <= (now or datetime.now(timezone.utc))

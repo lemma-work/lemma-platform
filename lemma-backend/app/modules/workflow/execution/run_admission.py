@@ -4,8 +4,8 @@ A run started while its workflow is at the limit is not refused -- a schedule or
 a webhook burst has nobody to tell -- and not dropped. It is created as usual
 and parked at its entry node on a ``QUEUED`` wait, which does not count towards
 the limit. Whenever a run of the workflow finishes, the oldest parked runs are
-admitted into the places that frees, and the reconciliation sweep does the same
-for any finish whose admission was lost.
+admitted into the places that frees, in the same transaction as the finish --
+so a crash cannot leave a place free and a run parked behind it.
 
 Both sides lock the workflow row, so two starts cannot both take the last place
 and two finishes cannot both admit into it.
@@ -59,40 +59,50 @@ async def queue_wait_if_full(
 async def admit_queued_runs(engine: "WorkflowEngine", flow_id: UUID) -> int:
     """Start as many parked runs of a workflow as it has room for.
 
-    Returns how many were admitted. Commits once, then announces each.
+    In the caller's transaction, which is the one that freed the room; each
+    admitted run is announced once it commits. Returns how many were admitted.
+    One at a time and recounted after each, because an admitted run may end at
+    once and free its place again.
     """
+    unlocked = await engine.flow_repo.get(flow_id)
+    if unlocked is None:
+        return 0
+    if (
+        unlocked.max_concurrent_runs is None
+        and not await engine.wait_repo.oldest_queued(flow_id, limit=1)
+    ):
+        # The common case: no limit and nobody parked. Not worth the lock that
+        # would serialise every finish of the workflow.
+        return 0
     flow = await engine.flow_repo.get_for_update(flow_id)
     if flow is None:
         return 0
-    if flow.max_concurrent_runs is None:
-        room = UNBOUNDED_ADMISSION_BATCH
-    else:
-        room = flow.max_concurrent_runs - await engine.run_repo.count_admitted(flow.id)
-    if room <= 0:
-        return 0
-    admitted: list[tuple[WorkflowRunEntity, WorkflowRunWaitEntity | None]] = []
-    for wait in await engine.wait_repo.oldest_queued(flow.id, limit=room):
-        started = await _admit(engine, flow, wait)
-        if started is not None:
-            admitted.append(started)
-    await engine.uow.commit()
-    for run, pending_wait in admitted:
-        await engine._announce(run)
-        if pending_wait is not None:
-            await engine._announce_human_wait(run, pending_wait)
-    return len(admitted)
+    admitted = 0
+    while admitted < UNBOUNDED_ADMISSION_BATCH:
+        if flow.max_concurrent_runs is not None:
+            room = flow.max_concurrent_runs - await engine.run_repo.count_admitted(
+                flow.id
+            )
+            if room <= 0:
+                break
+        oldest = await engine.wait_repo.oldest_queued(flow.id, limit=1)
+        if not oldest:
+            break
+        if await _admit_parked(engine, flow, oldest[0]):
+            admitted += 1
+    return admitted
 
 
-async def _admit(
+async def _admit_parked(
     engine: "WorkflowEngine", flow: WorkflowEntity, queued: WorkflowRunWaitEntity
-) -> tuple[WorkflowRunEntity, WorkflowRunWaitEntity | None] | None:
-    """Advance one parked run from its entry node; its run and its next wait."""
+) -> bool:
+    """Advance one parked run from its entry node; whether it was admitted."""
     run = await engine.run_repo.get_for_update(queued.run_id)
     if run is None or run.status != WorkflowRunStatus.RUNNING:
         # Cancelled or failed while parked; the wait is all that is left.
         queued.cancel()
         await engine.wait_repo.update(queued)
-        return None
+        return False
     queued.complete()
     await engine.wait_repo.update(queued)
     try:
@@ -110,6 +120,8 @@ async def _admit(
     else:
         result = await engine._stepper(ctx).advance(run, flow)
     run = await engine.run_repo.update(run)
-    next_wait = await engine._persist_wait(run, result)
-    engine._collect_terminal_event(run)
-    return run, next_wait
+    await engine._persist_wait(run, result)
+    # Not admitting again from inside the admission: the loop above recounts.
+    await engine._record_transition(run, admit=False)
+    engine.uow.after_commit(lambda: engine._announce(run))
+    return True

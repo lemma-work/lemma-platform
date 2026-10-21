@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Literal, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -232,81 +232,42 @@ class FunctionPort(ABC):
         """Cancels a dispatched function run. Best effort; see stop_conversation."""
 
 
-class WorkflowNotificationPort(Protocol):
-    """What the engine tells a person's inbox about a run.
+class FormQuestionPort(Protocol):
+    """Where a form waiting on a person is asked: a question in their inbox.
 
-    A Protocol rather than an ABC because the notifier is the one collaborator
-    the engine holds that has no domain of its own here: it exists so that a
-    form waiting on someone, a form they just answered, and a run that was
-    cancelled under them all reach the same inbox. Named at all so the engine's
-    constructor says what it needs instead of taking whatever it is handed.
+    A Protocol rather than an ABC because the asker has no domain of its own
+    here: it exists so that a form waiting on someone, a form they just
+    answered, and a run that ended under them all reach the same inbox. Named
+    at all so the engine's constructor says what it needs.
     """
 
-    async def notify_form_assignee(
+    async def ask_form(
         self,
         *,
         pod_id: UUID,
         run_id: UUID,
         flow_id: UUID,
         node_id: str,
+        wait_id: UUID,
         assigned_pod_member_id: UUID,
         flow_name: str | None,
         schema: dict[str, object] | None,
         actor_user_id: UUID | None,
+        expires_at: datetime | None,
     ) -> None:
-        """Tell the assignee a form is waiting on them."""
+        """Ask the assignee for the form, until ``expires_at``."""
 
-    async def close_form_notification(
+    async def form_answered(
         self,
         *,
         pod_id: UUID,
         run_id: UUID,
         node_id: str,
-        summary: str,
-        data: dict[str, object] | None = None,
+        wait_id: UUID,
+        data: dict[str, object],
+        by_user_id: UUID | None,
     ) -> None:
-        """Close the form's notification once it has been answered."""
+        """The form was submitted: its question is answered with what was sent."""
 
-    async def cancel_for_run(self, *, run_id: UUID) -> None:
-        """Withdraw every notification this run raised, when it is cancelled."""
-
-
-#: Where the job asking a decision is: still going to ask it (queued, waiting
-#: out a retry, or running), never queued at all, or ended without an answer.
-DecisionJobState = Literal["alive", "missing", "ended"]
-
-
-class DecisionPort(Protocol):
-    """Hands a run's pending decision to whoever asks it.
-
-    Called by the decision executor as the run suspends. The question is asked
-    by a job, outside the run's transaction and after it commits: asking inside
-    it would hold the run-row lock and a pooled connection for as long as a
-    model takes to answer, and a job started before the commit could look for
-    a wait that is not stored yet.
-    """
-
-    def ask_once_committed(self, external_ref: str, *, requeue: int = 0) -> None:
-        """Ask the decision waited on under `external_ref`, once it is stored.
-
-        `requeue` counts the sweep's queueings of a job that was lost.
-        """
-
-    async def job_state(
-        self, external_ref: str, *, requeue: int = 0
-    ) -> DecisionJobState | None:
-        """Where the job asking this decision is; None when the queue cannot
-        say."""
-
-
-class SchedulePort(ABC):
-    """Port for interacting with the scheduler."""
-
-    @abstractmethod
-    async def schedule_workflow_wake(
-        self,
-        run_id: UUID,
-        scheduled_at: str,
-        pod_id: UUID,
-        user_id: UUID,
-    ) -> UUID: ...
+    async def run_ended(self, *, pod_id: UUID, run_id: UUID) -> None:
+        """Nothing of this run waits on anybody any more."""

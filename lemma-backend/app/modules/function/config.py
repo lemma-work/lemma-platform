@@ -189,7 +189,15 @@ class FunctionRevisionSettings(BaseSettings):
     function_revision_keep_last: int = Field(default=10, ge=1)
     function_revision_keep_days: int = Field(default=30, ge=0)
     function_revision_max_keep: int = Field(default=20, ge=1)
-    function_revision_retention_cron: str = Field(default="40 4 * * *")
+    function_revision_retention_interval_seconds: int = Field(
+        default=86_400,
+        ge=60,
+        description=(
+            "How often the revision sweep runs, as a periodic work item (no "
+            "wall-clock alignment). Env: "
+            "``FUNCTION_REVISION_RETENTION_INTERVAL_SECONDS``."
+        ),
+    )
     function_revision_retention_batch: int = Field(
         default=200,
         ge=1,

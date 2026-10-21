@@ -10,13 +10,14 @@ Embedding settings stay in core (consumed by ``app/core/embeddings``).
 from typing import Literal, Optional
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
+from app.modules.datastore.config_processing import DocumentWorkSettings
 from app.modules.datastore.renamed_settings import warn_about_renamed_env_vars
 from app.core.settings_env import dotenv_path
 
 
-class DatastoreSettings(BaseSettings):
+class DatastoreSettings(DocumentWorkSettings):
     model_config = SettingsConfigDict(
         env_file=dotenv_path(),
         env_file_encoding="utf-8",
@@ -51,15 +52,35 @@ class DatastoreSettings(BaseSettings):
             "``DATASTORE_ROW_MAX_BYTES``."
         ),
     )
-    datastore_event_payload_max_bytes: int = Field(
-        default=32 * 1024,
+    datastore_change_retention_seconds: int = Field(
+        default=3600,
+        ge=60,
         description=(
-            "Largest encoded size (bytes) of the row body carried on a record "
-            "change event. Above it the body is dropped and the event is flagged "
-            "truncated; consumers read the row instead. Deliberately far below "
-            "the row limit: a row is stored once, while its event is retained "
-            "50,000 times over in a Redis stream capped by entry count. Env: "
-            "``DATASTORE_EVENT_PAYLOAD_MAX_BYTES``."
+            "How long a pod's change log keeps a change every durable "
+            "subscriber has read: the live catch-up window. A change some "
+            "durable subscriber has not read is never deleted -- until it is "
+            "``datastore_change_max_lag_seconds`` old."
+        ),
+    )
+    datastore_change_max_lag_seconds: int = Field(
+        default=86400,
+        ge=60,
+        description=(
+            "The furthest a durable subscriber may fall behind its pod's change "
+            "log. One whose oldest unread change is older than this is lapsed: "
+            "its cursor moves to the horizon and what it skipped is recorded "
+            "(a trigger's history shows it as ``lag_exceeded``), so one stuck "
+            "subscriber cannot keep a pod's log forever. A subscriber row no "
+            "running process recognises is dropped once it has gone this long "
+            "without moving. Env: ``DATASTORE_CHANGE_MAX_LAG_SECONDS``."
+        ),
+    )
+    datastore_change_handoff_poll_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        description=(
+            "Fallback poll of the change-log wake table, for wakes the "
+            "LISTEN connection missed."
         ),
     )
 
@@ -90,14 +111,11 @@ class DatastoreSettings(BaseSettings):
     )
     datastore_search_readable_id_pushdown_limit: int = Field(
         default=5_000,
-        description=(
-            "How many readable file ids a search may enumerate and send to the "
-            "pod database to narrow its chunk query. Below this the filter is "
-            "exact; above it the search runs unnarrowed and authorizes the "
-            "rows it gets back -- bounded by the candidate pool instead of by "
-            "the pod, at the cost of recall for a caller who may read very "
-            "little of a very large pod."
-        ),
+        description="How many file ids a search may send to the pod database to narrow its chunk query: the readable searchable files or the hidden ones, whichever is shorter. When both are longer the search runs unnarrowed and authorizes the rows it gets back -- bounded by the candidate pool, at the cost of recall for a caller who may read very little of a very large pod.",
+    )
+    datastore_search_scope_timeout_ms: int = Field(
+        default=3_000,
+        description="Statement timeout (ms) for working out which files a search may return. Past it the search runs unnarrowed and authorizes what comes back, instead of failing.",
     )
 
     # Document processing
@@ -115,52 +133,16 @@ class DatastoreSettings(BaseSettings):
         ),
     )
     document_processing_debounce_seconds: int = Field(
-        default=300,
-        description="Debounce window for datastore file content updates before enqueueing document processing.",
-    )
-    datastore_per_pod_max_inflight: int = Field(
-        default=4,
-        description=(
-            "Maximum files one pod may have queued or mid-flight (PENDING or "
-            "PROCESSING) before uploads stop being enqueued immediately. Beyond "
-            "this the row is simply left PENDING and the fair dispatcher picks "
-            "it up on its next tick, so a tenant bulk-uploading a thousand "
-            "documents cannot monopolise ingestion or push every other tenant "
-            "behind them. Nothing is dropped — the PENDING row is the durable "
-            "backlog. 0 disables the gate (immediate enqueue for everything, "
-            "the pre-fairness behaviour). Env: "
-            "``DATASTORE_PER_POD_MAX_INFLIGHT``."
-        ),
-    )
-    datastore_dispatch_global_batch: int = Field(
-        default=50,
-        description=(
-            "Maximum files the fair dispatcher enqueues per tick across all "
-            "pods. Bounds how much of the backlog is resident in Redis at once; "
-            "the rest stays PENDING in Postgres and is dispatched on later "
-            "ticks. Env: ``DATASTORE_DISPATCH_GLOBAL_BATCH``."
-        ),
-    )
-    recovery_enqueue_batch_size: int = Field(
         default=10,
         description=(
-            "The recovery cron re-drives stale files in batches of this size, "
-            "yielding to the event loop between batches, so a large backlog is "
-            "spread out instead of dispatched as one burst (which would spike "
-            "worker task pickup and DB connection demand). Env: "
-            "``RECOVERY_ENQUEUE_BATCH_SIZE``."
-        ),
-    )
-    datastore_recovery_max_attempts: int = Field(
-        default=3,
-        description=(
-            "Maximum times the recovery cron will (re)drive a file through "
-            "processing before terminally failing it (status -> FAILED_PERMANENT). "
-            "processing_attempts is incremented on each claim; once it reaches this "
-            "cap the file is no longer re-driven, which stops a permanently-failing "
-            "file (e.g. a down extractor, an unprocessable document) from looping "
-            "forever and pinning worker memory/slots. A fresh upload / content "
-            "update resets the counter. Env: ``DATASTORE_RECOVERY_MAX_ATTEMPTS``."
+            "How long a content update waits before it is processed, so a burst "
+            "of writes to one file extracts once. Short on purpose: until the "
+            "new revision is indexed, search still answers with the previous "
+            "one, so a person who replaced a document keeps finding the words "
+            "they replaced for this long plus the processing time (it was 300, "
+            "which read as the replacement not taking). A write superseded "
+            "inside the window costs nothing: its run finds different bytes and "
+            "stops before extracting. Env: ``DOCUMENT_PROCESSING_DEBOUNCE_SECONDS``."
         ),
     )
     document_processing_max_file_bytes: int = Field(
@@ -364,11 +346,11 @@ class DatastoreSettings(BaseSettings):
     kreuzberg_circuit_failure_threshold: int = Field(
         default=5,
         description=(
-            "Consecutive connection failures before the in-process Kreuzberg "
-            "circuit breaker opens. While open, extractions short-circuit "
-            "immediately (the file is marked FAILED and retried later by the "
-            "recovery cron) instead of each one burning the full retry budget "
-            "against a known-down extractor. Env: "
+            "Failures, each from a different document, before the in-process "
+            "Kreuzberg circuit breaker opens. A document counts once however "
+            "often it fails, so one poison file cannot hold the circuit open. "
+            "While open, extractions wait (not charged) instead of each one "
+            "burning the full retry budget against a known-down extractor. Env: "
             "``KREUZBERG_CIRCUIT_FAILURE_THRESHOLD``."
         ),
     )
@@ -584,9 +566,9 @@ class DatastoreSettings(BaseSettings):
     e2e_disable_worker_file_autoindex: bool = Field(
         default=False,
         description=(
-            "TEST HOOK ONLY. When true, the worker does NOT auto-index uploaded "
-            "datastore files (the upload->event->process_datastore_file_task path "
-            "is skipped). e2e indexes explicitly in-process via the index_file "
+            "TEST HOOK ONLY. When true, writes do NOT enqueue file.process work "
+            "items and deletes purge storage in-process instead of enqueueing "
+            "file.cleanup. e2e indexes explicitly in-process via the index_file "
             "helper; auto-indexing every upload would otherwise overwhelm the "
             "single shared Kreuzberg under parallel load. Production leaves False."
         ),

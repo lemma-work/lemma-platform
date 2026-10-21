@@ -33,7 +33,9 @@ class _TrackingUowFactory:
             async def __aenter__(self_):
                 state["open"] = True
                 state["opens"] += 1
-                return SimpleNamespace(session=object())
+                return SimpleNamespace(
+                    session=object(), after_commit=lambda callback: None
+                )
 
             async def __aexit__(self_, *exc):
                 state["open"] = False
@@ -221,7 +223,7 @@ async def test_delete_path_in_process_cleanup_runs_after_release(monkeypatch):
         ucmod.datastore_settings, "e2e_disable_worker_file_autoindex", True
     )
     enqueue_mock = AsyncMock(return_value=True)
-    monkeypatch.setattr(ucmod, "enqueue_datastore_path_cleanup", enqueue_mock)
+    monkeypatch.setattr(ucmod, "add_file_cleanup_work", enqueue_mock)
 
     await _use_cases(factory, service).delete_path(
         pod_id=uuid4(), path="/x.txt", request=SimpleNamespace(), user_id=uuid4()
@@ -235,7 +237,7 @@ async def test_delete_path_in_process_cleanup_runs_after_release(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_delete_path_offloads_cleanup_after_release(monkeypatch):
+async def test_delete_path_enqueues_cleanup_in_the_deleting_transaction(monkeypatch):
     factory = _TrackingUowFactory()
     cleanup = SimpleNamespace(
         pod_id=uuid4(),
@@ -246,24 +248,24 @@ async def test_delete_path_offloads_cleanup_after_release(monkeypatch):
     service = _FakeDeleteService(factory.state, cleanup)
     enqueue_open_state = {}
 
-    async def _enqueue(**kwargs):
+    async def _enqueue(uow, **kwargs):
         enqueue_open_state["open"] = factory.state["open"]
-        return True
+        return uuid4()
 
     monkeypatch.setattr(
         ucmod.datastore_settings, "e2e_disable_worker_file_autoindex", False
     )
-    monkeypatch.setattr(ucmod, "enqueue_datastore_path_cleanup", _enqueue)
+    monkeypatch.setattr(ucmod, "add_file_cleanup_work", _enqueue)
 
     await _use_cases(factory, service).delete_path(
         pod_id=uuid4(), path="/folder", request=SimpleNamespace(), user_id=uuid4()
     )
 
     assert service.resolved_while_open is True
-    # The cleanup was offloaded (not run in-process) and enqueued only after the
-    # connection was released.
+    # The cleanup is a work item written in the transaction that deleted the
+    # rows -- committed with them or not at all -- and not run in-process.
     assert service.cleanup_called is False
-    assert enqueue_open_state["open"] is False
+    assert enqueue_open_state["open"] is True
     assert factory.state["open"] is False
 
 

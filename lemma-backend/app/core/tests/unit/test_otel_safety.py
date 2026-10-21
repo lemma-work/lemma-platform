@@ -366,10 +366,15 @@ def test_http_clients_are_instrumented_under_stable_semconv(monkeypatch) -> None
         "instrument",
         lambda self, **kwargs: instrumented.append("httpx"),
     )
+    monkeypatch.setattr(
+        httpx_mod.HTTPX2ClientInstrumentor,
+        "instrument",
+        lambda self, **kwargs: instrumented.append("httpx2"),
+    )
 
     telemetry._instrument_libraries()
 
-    assert instrumented == ["aiohttp", "httpx"]
+    assert instrumented == ["aiohttp", "httpx", "httpx2"]
     assert telemetry.os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] == "http"
 
 
@@ -385,6 +390,9 @@ def test_a_deployment_can_still_pin_the_old_http_conventions(monkeypatch) -> Non
     )
     monkeypatch.setattr(
         httpx_mod.HTTPXClientInstrumentor, "instrument", lambda self, **kw: None
+    )
+    monkeypatch.setattr(
+        httpx_mod.HTTPX2ClientInstrumentor, "instrument", lambda self, **kw: None
     )
 
     telemetry._instrument_libraries()

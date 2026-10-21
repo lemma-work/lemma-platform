@@ -19,6 +19,7 @@ choose, and has no edge back into any of this.
 
 from __future__ import annotations
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
 from app.modules.agent_surfaces.domain.channel_setup import (
@@ -45,8 +46,8 @@ from app.modules.agent_surfaces.domain.adapter_port import (
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedSurfaceLifecycleEvent,
-    SurfaceChannelRoute,
     SurfaceLifecycleKind,
+    SurfacePlatform,
     platform_value_for_source,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -70,9 +71,13 @@ from app.modules.agent_surfaces.services.app_home import (
 from app.modules.agent_surfaces.services.configuration_prompt import (
     prompt_for_configuration,
 )
+from app.modules.agent_surfaces.services.app_uninstall import retire_uninstalled_app
+from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (  # noqa: E501
+    SlackManagerRepository,
+)
+from app.modules.agent_surfaces.services.channel_allow import allow_channel
 from app.modules.agent_surfaces.services.group_hello import say_hello_in_group
 from app.modules.agent_surfaces.services.group_registry import (
-    adopt_connected_channel,
     adopt_joined_group,
 )
 from app.modules.agent_surfaces.services.configuration_access import (
@@ -181,7 +186,8 @@ class AppEventHandler:
                 adapter=adapter,
                 credentials=credentials,
             )
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.app_event_handler.channel_setup_failed.failed",
                 surface_id=str(surface.id),
@@ -356,31 +362,14 @@ class AppEventHandler:
     async def _allow_channel(
         self, *, surface, channel_id: str, owner_user_id: UUID | None = None
     ) -> None:
-        """Add one channel to the list this surface's agent answers in.
-
-        It used to point the channel at a chosen agent. A surface has one agent
-        now, so a channel is a place rather than a choice, and adding it twice
-        is the same as adding it once. The channel is one of the pod's groups
-        from here on, and whoever connected it answers for any people outside
-        the pod in it.
-        """
-        if not channel_id:
-            return
-        routes = [
-            route
-            for route in surface.config.channels
-            if str(route.channel_id or "") != channel_id
-        ]
-        routes.append(SurfaceChannelRoute(channel_id=channel_id))
-        surface.config.channels = routes
-        await self.surface_repository.update(surface)
-        await adopt_connected_channel(
+        """Add one channel to the list this surface's agent answers in."""
+        await allow_channel(
             self.uow,
+            surfaces=self.surface_repository,
             surface=surface,
             channel_id=channel_id,
             owner_user_id=owner_user_id,
         )
-        await self.uow.commit()
 
     def _adapter_for_request(self, request):
         if isinstance(request, SurfaceDirectWebhookIngress):
@@ -419,6 +408,23 @@ class AppEventHandler:
             )
         if parsed is None:
             return False
+        if parsed.kind is SurfaceLifecycleKind.UNINSTALLED:
+            # Before the actor's authorization, which it has none of: the
+            # signature that resolved the receivers is what authorizes it.
+            await retire_uninstalled_app(
+                self.uow,
+                surfaces_repo=self.surface_repository,
+                credential_resolver=self.credential_resolver,
+                request=request,
+                parsed=parsed,
+            )
+            await self.uow.commit()
+            return True
+
+        if await _invited_by_the_manager(self.uow, parsed):
+            # Lemma's own app brought this bot in and has already set the
+            # channel up; there is nobody here to ask.
+            return True
 
         (
             candidates,
@@ -454,7 +460,8 @@ class AppEventHandler:
         surface, ctx = selected
         try:
             await self._handle_lifecycle_event(surface=surface, parsed=parsed, ctx=ctx)
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "agent_surfaces.app_event_handler.lifecycle_event_failed.failed",
                 surface_id=str(surface.id),
@@ -557,3 +564,21 @@ class AppEventHandler:
                     credentials=credentials, channel_id=parsed.external_channel_id
                 ),
             )
+
+
+async def _invited_by_the_manager(
+    uow: SqlAlchemyUnitOfWork, parsed: ParsedSurfaceLifecycleEvent
+) -> bool:
+    """A teammate's bot joining a Slack channel because Lemma's own app, the
+    workspace's manager, invited it there."""
+    if (
+        parsed.kind is not SurfaceLifecycleKind.JOINED_CHANNEL
+        or parsed.platform is not SurfacePlatform.SLACK
+        or not parsed.actor_external_user_id
+        or not parsed.tenant_id
+    ):
+        return False
+    install = await SlackManagerRepository(uow.session).install_for_team(
+        parsed.tenant_id
+    )
+    return install is not None and install.bot_user_id == parsed.actor_external_user_id

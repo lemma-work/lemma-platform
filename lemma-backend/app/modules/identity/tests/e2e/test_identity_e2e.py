@@ -5,7 +5,6 @@ import base64
 import hashlib
 import hmac
 import json
-import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,7 +15,7 @@ from uuid import UUID, uuid4
 from httpx import ASGITransport, AsyncClient, Response
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from supertokens_python.recipe.thirdparty.providers import config_utils
 from supertokens_python.recipe.thirdparty.providers.custom import GenericProvider
 from supertokens_python.recipe.thirdparty.types import (
@@ -29,13 +28,11 @@ from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationInvitation,
 )
 from app.modules.identity.infrastructure.models.user_models import User
-from app.core.infrastructure.events.models import DomainEventOutbox
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.domain.events import UserSignedUpEvent
-from app.modules.identity.events.handlers import _dispatch_identity_event
-from app.modules.identity.infrastructure.adapters.email_adapter import (
-    SmtpIdentityEmailAdapter,
-)
+from app.modules.identity.events.identity_work import IDENTITY_EMAIL
+from app.core.infrastructure.work import WorkClass
+from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.identity.services.telegram_oidc import (
     TelegramOIDCError,
     TelegramOIDCService,
@@ -404,10 +401,12 @@ async def test_domain_without_explicit_mx_is_rejected_before_account_creation(
     assert local_user is None
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_emailpassword_verification_welcome_and_password_reset_filesystem_flow(
     async_client: AsyncClient,
     e2e_settings,
+    committed_events,
 ):
     email = f"realistic-auth-{uuid4().hex[:10]}@example.com"
     original_password = "OriginalPassword@123"
@@ -467,27 +466,26 @@ async def test_emailpassword_verification_welcome_and_password_reset_filesystem_
         == "EMAIL_VERIFICATION_INVALID_TOKEN_ERROR"
     )
 
-    # Verification creates one durable welcome event. Deliver it through the
-    # production event handler and filesystem email adapter; the platform's
-    # generic outbox/Redis worker boundary has its own container E2E coverage.
-    async with async_session_maker() as session:
-        welcome_events = list(
-            (
-                await session.scalars(
-                    select(DomainEventOutbox).where(
-                        DomainEventOutbox.event_type
-                        == UserSignedUpEvent.get_event_type()
-                    )
-                )
-            ).all()
-        )
+    # Verification creates one welcome event and, in the same transaction, one
+    # `identity.email` item. Running the work delivers it through the
+    # filesystem email adapter; running it again sends nothing more.
+    welcome_events = [
+        payload
+        for payload in committed_events.of_type(UserSignedUpEvent.get_event_type())
+        if payload.get("email") == email
+    ]
     assert len(welcome_events) == 1
-    assert welcome_events[0].payload["email"] == email
-    await _dispatch_identity_event(
-        welcome_events[0].payload,
-        logging.getLogger("identity-e2e"),
-        SmtpIdentityEmailAdapter(),
-    )
+    async with async_session_maker() as session:
+        welcome_items = await session.scalar(
+            text(
+                "SELECT count(*) FROM work_items WHERE kind = :kind "
+                "AND payload->>'event_type' = :event_type"
+            ),
+            {"kind": IDENTITY_EMAIL, "event_type": UserSignedUpEvent.get_event_type()},
+        )
+    assert welcome_items == 1
+    await run_until_idle(async_session_maker, classes=[WorkClass.DELIVERY])
+    await run_until_idle(async_session_maker, classes=[WorkClass.DELIVERY])
 
     welcome = await _wait_for_email(
         e2e_settings.email_output_dir,
@@ -1560,11 +1558,14 @@ async def test_existing_google_user_can_signinup_again(
     google_signinup,
     mock_google_provider,
 ):
-    email = "test+google-repeat@example.com"
+    # Unique per run: with LEMMA_E2E_REUSE the SuperTokens core outlives the
+    # session, and a fixed identity would already exist on the second run.
+    suffix = uuid4().hex[:12]
+    email = f"test+google-repeat-{suffix}@example.com"
 
     first_response = await google_signinup(
         email,
-        third_party_user_id="google-repeat-user",
+        third_party_user_id=f"google-repeat-{suffix}",
     )
     first_payload = first_response.json()
     assert first_response.status_code == 200
@@ -1573,7 +1574,7 @@ async def test_existing_google_user_can_signinup_again(
 
     second_response = await google_signinup(
         email,
-        third_party_user_id="google-repeat-user",
+        third_party_user_id=f"google-repeat-{suffix}",
     )
     second_payload = second_response.json()
     assert second_response.status_code == 200

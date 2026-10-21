@@ -34,7 +34,14 @@ AGENT_HOST_PERMISSION_KEY = "agent_host_permission"
 
 _ALLOW_ONCE = "allowonce"
 _ALLOW_ALWAYS = "allowalways"
-_REJECT_KINDS = {"rejectonce", "rejectalways"}
+# The kinds a decision may select. ACP defines four, and an agent may one day
+# offer a fifth: nothing in a new kind's name says what it grants, so it is
+# never selected on anyone's behalf -- an approval for once that read a new
+# ``allow_forever`` as "not a reject" granted a standing permission. An option
+# with no kind at all is the one exception: it is the only choice such an
+# agent offers, and refusing it made the approval unanswerable.
+_UNLABELLED = ""
+_ALLOW_KINDS = (_ALLOW_ONCE, _ALLOW_ALWAYS, _UNLABELLED)
 
 
 def _normalized_kind(value: object) -> str:
@@ -76,9 +83,7 @@ class AgentHostPermissionRequest:
         """
         if decision == AgentRunApprovalDecision.DENY:
             return None
-        allowed = [
-            option for option in self.options if option.kind not in _REJECT_KINDS
-        ]
+        allowed = [option for option in self.options if option.kind in _ALLOW_KINDS]
         if decision != AgentRunApprovalDecision.APPROVE_FOR_SESSION:
             allowed = [option for option in allowed if option.kind != _ALLOW_ALWAYS]
         if not allowed:
@@ -88,11 +93,11 @@ class AgentHostPermissionRequest:
             if decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION
             else (_ALLOW_ONCE,)
         )
-        for kind in preferred:
+        for kind in (*preferred, _UNLABELLED):
             for option in allowed:
                 if option.kind == kind:
                     return option.option_id
-        return allowed[0].option_id
+        return None
 
     def refuses_a_one_time_approval(self, decision: AgentRunApprovalDecision) -> bool:
         """An approval for once that was denied because only "always" was offered."""

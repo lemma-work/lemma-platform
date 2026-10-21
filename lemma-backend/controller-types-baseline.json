@@ -3,7 +3,6 @@
   "files": {
     "app/modules/agent/api/controllers/tool_controller.py": 1,
     "app/modules/agent_surfaces/services/email_surface_provisioning.py": 1,
-    "app/modules/agent_surfaces/services/event_receiver_service.py": 1,
     "app/modules/agent_surfaces/services/identity_resolution_service.py": 1,
     "app/modules/agent_surfaces/services/managed_bot_persistence.py": 1,
     "app/modules/agent_surfaces/services/progress_display.py": 12,
@@ -12,11 +11,9 @@
     "app/modules/agent_surfaces/services/surface_inbound_message.py": 3,
     "app/modules/agent_surfaces/services/surface_setup_read.py": 7,
     "app/modules/agent_surfaces/services/telegram_manager_store.py": 4,
-    "app/modules/agent_surfaces/services/token_stream.py": 6,
     "app/modules/apps/api/controllers/app_controller.py": 2,
-    "app/modules/datastore/api/controllers/changes_controller.py": 2,
     "app/modules/datastore/api/controllers/file_controller.py": 11,
-    "app/modules/datastore/api/controllers/record_controller.py": 4,
+    "app/modules/datastore/api/controllers/record_controller.py": 3,
     "app/modules/datastore/api/controllers/table_controller.py": 2,
     "app/modules/function/api/controllers/function_controller.py": 1,
     "app/modules/pod/api/controllers/resource_access_controller.py": 6

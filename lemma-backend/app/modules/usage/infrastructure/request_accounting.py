@@ -145,6 +145,9 @@ async def begin(
             occurred_at=now,
             record_metadata={
                 "metering_state": "PENDING",
+                # No cost until the receipt lands, and none ever if it is
+                # lost: said, so the row never reads as a request that was free.
+                "pricing_missing": True,
                 "execution_id": str(identity.execution_id),
                 "pricing": pricing.model_dump(mode="json"),
                 "request_count": 1,

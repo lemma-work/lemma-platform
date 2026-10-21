@@ -8,6 +8,7 @@ so both can be read and tested without the repository behind them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from pydantic import BaseModel
 
@@ -26,6 +27,13 @@ from app.modules.agent.domain.value_objects import HarnessKind
 logger = get_logger(__name__)
 
 
+class RuntimeHolder(StrEnum):
+    """What a runtime is being saved on, in the words the refusal uses."""
+
+    TEAMMATE = "teammate"
+    CONVERSATION = "conversation"
+
+
 @dataclass(slots=True)
 class ResolvedAgentRuntime:
     profile: AgentRuntimeProfile
@@ -40,6 +48,9 @@ class ResolvedAgentRuntime:
     # capabilities must survive that, because "nothing selected" says nothing
     # about whether the thing on the other end can read an image.
     unselected_capabilities: list[RuntimeModelCapability] = field(default_factory=list)
+    # The run's own Agent Host selections -- pod default, teammate and
+    # conversation, already layered -- laid over the profile's at dispatch.
+    selection_overrides: dict[str, str] = field(default_factory=dict)
 
     @property
     def capabilities(self) -> list[RuntimeModelCapability]:
@@ -83,12 +94,15 @@ class ResolvedAgentRuntime:
             # natively.
             model_capabilities=[capability.value for capability in self.capabilities],
             config=_config_dict(self.profile.config),
+            selection_overrides=dict(self.selection_overrides),
         )
 
 
 def selected_model(
     profile: AgentRuntimeProfile,
     requested_model_name: str | None,
+    *,
+    saving_for: RuntimeHolder | None = None,
 ) -> RuntimeModelCatalogEntry | None:
     """The catalog entry a run uses, or ``None`` when nothing is pinned.
 
@@ -101,6 +115,10 @@ def selected_model(
     The one ``None`` that is not a refusal: a coding agent whose catalog is
     empty publishes no list to check against, and an unpinned profile there
     means "the agent's own default".
+
+    ``saving_for`` names what the runtime is being saved on, when it is. A
+    save may name a model the profile never offered at all, so only a turn --
+    on a pin a save already accepted -- can say the model went away.
     """
     model_name = requested_model_name or profile.default_model_name
     if not model_name:
@@ -115,16 +133,27 @@ def selected_model(
         profile_id=profile.id,
         requested_model_name=model_name,
     )
-    raise model_unavailable_error(profile.name, model_name)
+    raise model_unavailable_error(profile.name, model_name, saving_for=saving_for)
 
 
 def model_unavailable_error(
-    profile_name: str, model_name: str
+    profile_name: str,
+    model_name: str,
+    *,
+    saving_for: RuntimeHolder | None = None,
 ) -> RuntimeUnavailableError:
+    if saving_for is not None:
+        return RuntimeUnavailableError(
+            f"{profile_name} does not offer a model named {model_name}. Pick "
+            f"one of its models for this {saving_for.value}, or refresh the "
+            "model list in Settings → Models."
+        )
+    # A turn's runtime is the conversation's own pin or its teammate's, and
+    # either can be the stale one -- so the remedy names both.
     return RuntimeUnavailableError(
-        f"{profile_name} no longer offers {model_name}, the model this teammate "
-        "is set to use. Pick another model for the teammate, or refresh the "
-        "model list in Settings → Models."
+        f"{profile_name} no longer offers {model_name}, the model this "
+        "conversation is set to use. Pick another model for the teammate or "
+        "the conversation, or refresh the model list in Settings → Models."
     )
 
 

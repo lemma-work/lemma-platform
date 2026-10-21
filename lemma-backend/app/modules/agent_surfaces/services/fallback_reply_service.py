@@ -26,6 +26,7 @@ from app.modules.agent_surfaces.domain.adapter_port import (
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
 )
+from app.modules.agent_surfaces.domain.reply_targets import copied_on_reply
 from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     has_shared_system_bot,
@@ -365,7 +366,7 @@ def to_sender_alone(event: ParsedInboundSurfaceEvent) -> ParsedInboundSurfaceEve
     wrote. On an email thread the reply would otherwise copy everybody else on
     it -- a client among them -- with "you don't have access to this pod".
     """
-    if not event.reply_target.get("cc"):
+    if not copied_on_reply(event):
         return event
     return event.model_copy(update={"reply_target": {**event.reply_target, "cc": []}})
 

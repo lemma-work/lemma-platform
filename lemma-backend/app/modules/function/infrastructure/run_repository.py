@@ -9,74 +9,34 @@ reason.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import and_, delete, literal, or_, select, tuple_
+from sqlalchemy import delete, select
 from sqlalchemy.orm import load_only
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.domain.entities import (
     FunctionRunEntity,
     FunctionRunStatus,
 )
 from app.modules.function.domain.errors import FunctionRunNotFoundError
-from app.modules.function.domain.events import FunctionRunFailedEvent
 from app.modules.function.domain.ports import FunctionRunRepositoryPort
+from app.modules.function.events.run_deadline import add_function_deadline
+from app.modules.function.events.run_work import add_function_run_work
 from app.modules.function.infrastructure.models import (
+    FunctionModel,
     FunctionRunModel,
 )
-
-
-def _expired_run_error(run, *, now: datetime) -> str:
-    """Why a swept run failed, in the terms its reader can act on.
-
-    The budget is stated because it is not visible anywhere else: it comes from
-    a deployment-wide setting chosen by function type, so a reader looking at a
-    failed run has no way to know whether it was given two minutes or ten.
-    """
-
-    started = getattr(run, "started_at", None)
-    deadline = getattr(run, "deadline_at", None)
-    if started is None or deadline is None:
-        # A PENDING run's deadline is only its deadline to start.
-        return (
-            "Function never started before its start deadline. Nothing ran, so "
-            "it is safe to retry."
-        )
-    budget = round((deadline - started).total_seconds())
-    ran_for = round((now - started).total_seconds())
-    return (
-        f"Function execution deadline exceeded: no result after {ran_for}s "
-        f"against a {budget}s budget. The run was ended by the platform sweep, "
-        "so either the function is still working or the runtime never reported "
-        "back."
-    )
-
-
-def _after_run(run_id: UUID):
-    """Keyset condition: runs ordered after ``run_id`` by (created_at, id)."""
-    after_created_at = (
-        select(FunctionRunModel.created_at)
-        .where(FunctionRunModel.id == run_id)
-        .scalar_subquery()
-    )
-    return tuple_(FunctionRunModel.created_at, FunctionRunModel.id) > tuple_(
-        after_created_at, literal(run_id, FunctionRunModel.id.type)
-    )
 
 
 class FunctionRunRepository(FunctionRunRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     def _collect_events(self, entity: FunctionRunEntity) -> None:
         events = entity.collect_events()
@@ -89,7 +49,28 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         self.session.add(model)
         await self.session.flush()
         self._collect_events(entity)
+        await self._schedule(model)
         return model.to_entity()
+
+    async def _schedule(self, run: FunctionRunModel) -> None:
+        """The work that settles this run, committed with it.
+
+        A queued run gets ``function.run``, which starts it. A synchronous run
+        is started by the request that made it, so it gets only the deadline
+        item, which fails it if that request dies before it ends -- the start
+        writes another for the execution deadline.
+        """
+        pod_id = await self.session.scalar(
+            select(FunctionModel.pod_id).where(FunctionModel.id == run.function_id)
+        )
+        if pod_id is None:
+            return
+        if run.job_id is not None:
+            await add_function_run_work(self.session, pod_id=pod_id, run_id=run.id)
+        elif run.deadline_at is not None:
+            await add_function_deadline(
+                self.session, pod_id=pod_id, run_id=run.id, deadline_at=run.deadline_at
+            )
 
     async def update_run_and_collect(
         self, run: FunctionRunEntity, **kwargs
@@ -131,91 +112,6 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
-    async def fail_expired(
-        self,
-        *,
-        now: datetime,
-        limit: int = 100,
-        job_callback_grace_seconds: int = 0,
-    ) -> int:
-        """Terminalize runs whose one allowed execution window has elapsed.
-
-        Note the sweep is deliberately late for job-backed runs: the deadline
-        plus ``job_callback_grace_seconds``, and then only at the next tick of
-        the once-a-minute cron. A run can therefore be marked failed a minute or
-        two after its deadline, which is the grace window doing its job and not
-        a stuck sweep.
-        """
-
-        statement = (
-            select(FunctionRunModel)
-            # The sweep needs the deadline arithmetic, the failure event's
-            # fields, and nothing else. Without this it also dragged
-            # ``input_data`` and ``output_data`` -- two JSONB columns, TOASTed
-            # and detoasted per row -- through a query that never reads them.
-            .options(
-                load_only(
-                    FunctionRunModel.id,
-                    FunctionRunModel.function_id,
-                    FunctionRunModel.status,
-                    FunctionRunModel.error,
-                    FunctionRunModel.logs,
-                    FunctionRunModel.started_at,
-                    FunctionRunModel.deadline_at,
-                    FunctionRunModel.completed_at,
-                )
-            )
-            .where(
-                or_(
-                    and_(
-                        FunctionRunModel.status == FunctionRunStatus.PENDING,
-                        FunctionRunModel.deadline_at <= now,
-                    ),
-                    and_(
-                        FunctionRunModel.status == FunctionRunStatus.RUNNING,
-                        FunctionRunModel.job_id.is_(None),
-                        FunctionRunModel.deadline_at <= now,
-                    ),
-                    and_(
-                        FunctionRunModel.status == FunctionRunStatus.RUNNING,
-                        FunctionRunModel.job_id.is_not(None),
-                        FunctionRunModel.deadline_at
-                        <= now - timedelta(seconds=job_callback_grace_seconds),
-                    ),
-                ),
-                FunctionRunModel.deadline_at.is_not(None),
-            )
-            .order_by(FunctionRunModel.deadline_at, FunctionRunModel.id)
-            .limit(limit)
-            .with_for_update(skip_locked=True)
-        )
-        runs = list((await self.session.scalars(statement)).all())
-        for run in runs:
-            run.status = FunctionRunStatus.FAILED
-            # Says which of the two timeouts this was, and what the budget
-            # actually was. The dispatcher reports its own inline timeout as
-            # "Function execution timed out (deadline exceeded)"; this one is
-            # the sweeper finding a run whose result never came back at all.
-            # The two read identically in a run list and have opposite
-            # remedies — make the function faster, versus find out why the
-            # runtime never reported — so they must not share a sentence.
-            run.error = _expired_run_error(run, now=now)
-            run.completed_at = now
-            self.uow.collect_events(
-                [
-                    FunctionRunFailedEvent(
-                        run_id=run.id,
-                        function_id=run.function_id,
-                        error=run.error,
-                        logs=run.logs,
-                        completed_at=now,
-                    )
-                ]
-            )
-        if runs:
-            await self.session.flush()
-        return len(runs)
-
     async def delete_terminal_before(
         self,
         *,
@@ -256,43 +152,6 @@ class FunctionRunRepository(FunctionRunRepositoryPort):
             )
         )
         return int(getattr(result, "rowcount", 0) or 0)
-
-    async def list_pending_async_runs(
-        self,
-        *,
-        now: datetime,
-        min_age_seconds: int,
-        limit: int = 100,
-        after: UUID | None = None,
-    ) -> list[UUID]:
-        """Return asynchronous runs whose one execution was never queued.
-
-        ``job_id`` is the durable asynchronous-dispatch intent, and publication
-        follows the unit of work that sets it -- so every asynchronous run is
-        briefly PENDING-and-unqueued even when nothing went wrong. Republishing
-        one is harmless (Streaq deduplicates the deterministic task identity)
-        but claiming one is not, which is what ``min_age_seconds`` is for; the
-        argument for its value lives on the constant it is passed from.
-
-        ``after`` is the last run of the previous page. Republishing leaves a
-        run PENDING, so without it every page would be the same first page.
-        """
-
-        statement = (
-            select(FunctionRunModel.id)
-            .where(
-                FunctionRunModel.status == FunctionRunStatus.PENDING,
-                FunctionRunModel.job_id.is_not(None),
-                FunctionRunModel.deadline_at.is_not(None),
-                FunctionRunModel.deadline_at > now,
-                FunctionRunModel.created_at <= now - timedelta(seconds=min_age_seconds),
-            )
-            .order_by(FunctionRunModel.created_at, FunctionRunModel.id)
-            .limit(limit)
-        )
-        if after is not None:
-            statement = statement.where(_after_run(after))
-        return list((await self.session.scalars(statement)).all())
 
     async def list_runs_by_function(
         self, function_id: UUID, limit: int = 100, cursor: str | None = None

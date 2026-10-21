@@ -15,7 +15,7 @@ anonymous run made.
 from __future__ import annotations
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.errors import DatastoreQueryError
@@ -42,7 +42,9 @@ _READ_SQL = text(
 )
 
 
-async def apply_row_principal(session: AsyncSession, principal: RowPrincipal) -> None:
+async def apply_row_principal(
+    session: AsyncSession | AsyncConnection, principal: RowPrincipal
+) -> None:
     """Name the principal for this transaction, all four settings, in one trip.
 
     This runs before every RLS-guarded read and write, so a second statement

@@ -18,18 +18,21 @@ the behaviour they name works. Three ways that happens, all measured below — t
 test asserts nothing; the test asserts that a mock was called; or the test
 patches the very thing it is exercising, so the real code never runs.
 
-The estate is large and, in the places that matter most, good: 6,491 backend
+The estate is large and, in the places that matter most, good: 14,405 backend
 tests, a 405-test black-box scenario suite traced to a numbered specification,
 and meta-gates that each exist because they caught a real regression. The rules
 below are about the gap between that and the doctrine already written down.
 
 | Suite | Tests |
 |---|---:|
-| backend unit + module e2e | 6,491 |
+| backend unit + module e2e | 14,405 |
 | product scenarios | 405 |
 | `lemma-cli` | 584 |
 | `lemma-python` | 68 |
 | `lemma-typescript` | 254 |
+
+The backend figure is `uv run pytest --collect-only -q` in `lemma-backend/`;
+re-run it rather than trusting the table.
 
 ---
 
@@ -202,6 +205,28 @@ The scenario suite's model reports no token usage, never collides a tool-call id
 and never emits partial JSON tool arguments — so the accounting, dedup and
 parsing paths that depend on those are unexercised by every test that uses it.
 When you add a behaviour that depends on the model's shape, extend the double.
+
+### TST-17 — a module e2e file shares one identity and isolates each test with a fresh pod
+
+Signing a user up and creating an organization is most of a short e2e test's
+setup. A file whose tests need *a* user and *an* organization, not new ones,
+takes them once per module:
+
+```python
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
+```
+
+`db_manager` resets each of its tests to exactly those rows (and drops the
+Redis keys that name them), so isolation comes from what the test creates —
+normally its own pod. Use `module_test_user_own_session` when the tests revoke
+or inspect the session. A test that counts users, organizations or members
+across the deployment, or changes the user's credentials, keeps the
+function-scoped fixtures.
+
+*Check:* none; `app/modules/apps/tests/e2e/test_app_access_security.py` is the
+worked example
 
 ---
 

@@ -6,7 +6,7 @@ asking pod (A), the conversation there that is owed the answer, the person it is
 for, and the chain of pods it has passed through. When a run in B finishes and
 leaves the conversation settled rather than waiting on someone, that run's last
 words are the answer, and they are delivered into A's conversation the way
-replies to ``message_user`` are: as input that starts A's next turn.
+replies to ``channel_post`` are: as input that starts A's next turn.
 
 **Who the answer reaches decides whose authority B works with.** A conversation
 belongs to one person and nobody else can read it, so an ask made in a person's
@@ -58,7 +58,7 @@ ASKS_OUT_KEY = "pod_asks_out"
 MAX_ASK_DEPTH = 3
 
 #: ``source`` on a turn the platform started by handing something back -- an
-#: answer from another pod, or replies to ``message_user`` (``REPLY_SOURCE`` in
+#: answer from another pod, or replies to ``channel_post`` (``REPLY_SOURCE`` in
 #: ``services/message_reply_service.py``). Nobody typed it, so it is no
 #: person's say-so to ask anyone anything.
 HANDED_BACK_SOURCES = frozenset({ANSWER_SOURCE, "message_replies"})

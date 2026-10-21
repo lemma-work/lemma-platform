@@ -7,7 +7,7 @@ subtree, a named set, the whole pod -- is the distinction that matters, and it
 was invisible when they sat among the file repository's thirty other methods.
 
 A mixin rather than a separate repository so callers keep one object, the same
-seam ``file_recovery_queries`` already draws.
+seam ``file_status_counts`` already draws.
 """
 
 from __future__ import annotations

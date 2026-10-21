@@ -14,6 +14,7 @@ from __future__ import annotations
 from app.modules.agent_surfaces.domain.reply_targets import (
     TeamsReplyTarget,
     reply_target_as,
+    stored_reply_target_as,
 )
 
 from app.modules.agent_surfaces.domain.models import ProgressHandle
@@ -23,10 +24,9 @@ from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 from typing import Any
 from urllib.parse import quote
 
-import aiohttp
+import httpx
 
 from app.core.log.log import get_logger
-from app.core.net.aiohttp_client import new_aiohttp_session
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
@@ -38,12 +38,13 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import (
     RetryPolicy,
     note_partial_delivery,
     with_retry,
 )
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.teams import client
@@ -76,6 +77,11 @@ type BotFrameworkActivity = dict[str, object]
 # formatting adds still clear it.
 _TEAMS_TEXT_LIMIT = 20_000
 
+#: The total each Bot Framework call had as its own aiohttp session's timeout.
+_BOT_FRAMEWORK_TIMEOUT = 30.0
+#: The shared default a best-effort call (typing, acknowledgement) had.
+_BEST_EFFORT_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+
 
 class TeamsSurfaceEgress(BaseSurfaceAdapter):
     """The outbound half of :class:`TeamsSurfaceAdapter`."""
@@ -95,24 +101,20 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         """
 
         async def send() -> str | None:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as session:
-                async with session.post(
-                    url,
-                    headers=client.auth_headers(token),
-                    json=body,
-                ) as response:
-                    response.raise_for_status()
-                    # The activity id is how it is edited later (a card's
-                    # buttons taken away with a PUT). Best-effort: a body
-                    # that is not the documented JSON leaves it unknown.
-                    try:
-                        sent = await response.json()
-                    except aiohttp.ContentTypeError, ValueError:
-                        return None
-                    activity_id = sent.get("id") if isinstance(sent, dict) else None
-                    return str(activity_id) if activity_id else None
+            async with outbound_http(_BOT_FRAMEWORK_TIMEOUT) as http:
+                response = await http.post(
+                    url, headers=client.auth_headers(token), json=body
+                )
+            response.raise_for_status()
+            # The activity id is how it is edited later (a card's buttons
+            # taken away with a PUT). Best-effort: a body that is not the
+            # documented JSON leaves it unknown.
+            try:
+                sent = response.json()
+            except ValueError:
+                return None
+            activity_id = sent.get("id") if isinstance(sent, dict) else None
+            return str(activity_id) if activity_id else None
 
         return await with_retry(
             send,
@@ -128,8 +130,9 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        """Send a reply via the Bot Framework Connector API.
+    ) -> str | None:
+        """Send a reply via the Bot Framework Connector API; the id of its
+        first activity.
 
         This uses Lemma's own bot credentials (from settings) together with the
         customer's tenant_id to acquire a Bot Framework token, then posts the
@@ -141,6 +144,7 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         reply_to_id = reply_target_as(event, TeamsReplyTarget).reply_to_id
         card = (metadata or {}).get("onboarding_card")
         chunks = chunk_text(message, limit=_TEAMS_TEXT_LIMIT) or [message]
+        first: str | None = None
         for index, chunk in enumerate(chunks):
             body: dict[str, Any] = {
                 "type": "message",
@@ -166,8 +170,8 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                     }
                 ]
             try:
-                await self._post_activity(url, token=token, body=body)
-            except PLATFORM_TRANSPORT_ERRORS:
+                activity_id = await self._post_activity(url, token=token, body=body)
+            except platform_transport_errors():
                 if index:
                     note_partial_delivery()
                     logger.warning(
@@ -177,6 +181,8 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
                         exc_info=True,
                     )
                 raise
+            first = first or activity_id
+        return first
 
     async def _activities_endpoint(
         self, event: ParsedInboundSurfaceEvent, metadata: dict[str, Any] | None
@@ -340,15 +346,13 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         token = await self._get_bot_token(handle.extra.get("tenant_id") or "")
         if not token:
             raise AgentSurfacePlatformError("TEAMS", "bot token unavailable")
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as session:
-            async with session.put(
+        async with outbound_http(_BOT_FRAMEWORK_TIMEOUT) as http:
+            response = await http.put(
                 activity_url(handle),
                 headers=client.auth_headers(token),
                 json=retired_activity(handle, reason),
-            ) as response:
-                response.raise_for_status()
+            )
+        response.raise_for_status()
 
     async def add_processing_indicator(
         self,
@@ -382,14 +386,14 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             f"/v3/conversations/{quote(str(conversation_id))}/activities"
         )
         try:
-            async with new_aiohttp_session() as session:
-                async with session.post(
+            async with outbound_http(_BEST_EFFORT_TIMEOUT) as http:
+                # Best-effort: the status is not read.
+                await http.post(
                     url,
                     headers=client.auth_headers(bot_token),
                     json={"type": "typing"},
-                ):
-                    pass  # best-effort, ignore status
-        except aiohttp.ClientError, TimeoutError:
+                )
+        except httpx.HTTPError, TimeoutError:
             logger.debug(
                 "agent_surfaces.adapter.teams_typing_indicator_best_effort.observed"
             )
@@ -416,8 +420,10 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         already recorded before this runs.
         """
         del credentials, show_alert
-        target = interaction.reply_target or {}
-        conversation_id = target.get("conversation_id")
+        target = stored_reply_target_as(
+            "TEAMS", interaction.reply_target, TeamsReplyTarget
+        )
+        conversation_id = target.conversation_id
         if not conversation_id:
             return
         token = await self._get_bot_token(interaction.tenant_id)
@@ -425,26 +431,25 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             return
 
         activities = (
-            f"{client.bf_service_url(target.get('service_url'))}"
-            f"/v3/conversations/{quote(str(conversation_id))}/activities"
+            f"{client.bf_service_url(target.service_url)}"
+            f"/v3/conversations/{quote(conversation_id)}/activities"
         )
         body = {"type": "message", "text": (text or "").strip() or "Done"}
-        activity_id = target.get("reply_to_id") if clear_actions else None
+        activity_id = target.reply_to_id if clear_actions else None
         try:
-            async with new_aiohttp_session() as session:
+            async with outbound_http(_BEST_EFFORT_TIMEOUT) as http:
                 if activity_id:
-                    async with session.put(
-                        f"{activities}/{quote(str(activity_id))}",
+                    edited = await http.put(
+                        f"{activities}/{quote(activity_id)}",
                         headers=client.auth_headers(token),
                         json=body,
-                    ) as edited:
-                        if edited.status < 400:
-                            return
-                async with session.post(
+                    )
+                    if edited.status_code < 400:
+                        return
+                await http.post(
                     activities, headers=client.auth_headers(token), json=body
-                ):
-                    return
-        except aiohttp.ClientError, TimeoutError:
+                )
+        except httpx.HTTPError, TimeoutError:
             logger.debug(
                 "agent_surfaces.adapter.teams_interaction_acknowledgement_best.observed"
             )
@@ -474,26 +479,25 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         )
         activity_id = progress_handle.message_id if progress_handle else None
         body = {"type": "message", "text": progress_text}
-        timeout = aiohttp.ClientTimeout(total=30)
         try:
             if activity_id:
                 url = (
                     f"{base}/v3/conversations/{quote(str(conversation_id))}"
                     f"/activities/{quote(str(activity_id))}"
                 )
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.put(
+                async with outbound_http(_BOT_FRAMEWORK_TIMEOUT) as http:
+                    response = await http.put(
                         url, headers=client.auth_headers(bot_token), json=body
-                    ) as response:
-                        response.raise_for_status()
+                    )
+                response.raise_for_status()
                 return progress_handle
             url = f"{base}/v3/conversations/{quote(str(conversation_id))}/activities"
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
+            async with outbound_http(_BOT_FRAMEWORK_TIMEOUT) as http:
+                response = await http.post(
                     url, headers=client.auth_headers(bot_token), json=body
-                ) as response:
-                    response.raise_for_status()
-                    data = await response.json()
+                )
+            response.raise_for_status()
+            data = response.json()
             new_id = (data or {}).get("id")
             return (
                 ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id=str(new_id))
@@ -530,12 +534,10 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
             f"/activities/{quote(str(activity_id))}"
         )
         try:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as session:
-                async with session.delete(
+            async with outbound_http(_BOT_FRAMEWORK_TIMEOUT) as http:
+                response = await http.delete(
                     url, headers=client.auth_headers(bot_token)
-                ) as response:
-                    response.raise_for_status()
-        except aiohttp.ClientError, TimeoutError:
+                )
+            response.raise_for_status()
+        except httpx.HTTPError, TimeoutError:
             return

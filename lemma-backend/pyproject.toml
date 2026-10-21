@@ -10,6 +10,10 @@ dependencies = [
     # web_login scoping; see app/modules/web_login/services/scope.py. Already
     # present transitively -- named here because that module imports it.
     "tldextract>=5.3.2",
+    # E.164 for contact phone numbers (contacts/domain/handles.py), so a number
+    # a member types and the one WhatsApp names are one handle. Already present
+    # transitively -- named here because that module imports it.
+    "phonenumbers>=9.0.37",
     "pydantic>=2.11.9",
     "email-validator>=2.1.0",
     "structlog>=25.4.0",
@@ -18,12 +22,13 @@ dependencies = [
     "pgvector>=0.4.1",
     "aiosmtplib>=5.1.1",
     "obstore>=0.8.2",
-    "streaq>=6.3.4",
+    # Cron parsing for TIME schedules (schedule/domain/cron.py); was only
+    # here transitively, through streaq.
+    "crontab>=1.0.5",
     "jsonpath-ng>=1.6.0",
-    "aiohttp>=3.14.3",  # CVE-2026-69244 (HIGH) is fixed in 3.14.3.
+    "aiohttp>=3.14.4",  # CVE-2026-111063, CVE-2026-111064 and GHSA-2g87-pp6c-29x5 are fixed in 3.14.4.
     "aiofiles>=25.1.0",
     "tiktoken>=0.12.0",
-    "faststream[cli,redis]>=0.6.4",
     "jmespath>=1.0.1",
     "jsonschema>=4.26.0",
     # >=3.43 for the agent messaging experience (features.agent_view) and the
@@ -37,11 +42,11 @@ dependencies = [
     "scalar-fastapi>=1.6.1",
     "composio>=0.11.0",
     "openinference-instrumentation-pydantic-ai>=0.1.12",
-    "opentelemetry-exporter-otlp>=1.39.1",
-    "opentelemetry-instrumentation-aiohttp-client>=0.60b1",
-    "opentelemetry-instrumentation-fastapi>=0.60b1",
-    "opentelemetry-instrumentation-httpx>=0.60b1",
-    "opentelemetry-instrumentation-sqlalchemy>=0.60b1",
+    "opentelemetry-exporter-otlp>=1.44.0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.65b0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "opentelemetry-instrumentation-httpx>=0.65b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.65b0",
     "authlib>=1.6.6",
     # Upper-bounded on purpose: the agent harness reaches into a few pydantic-ai
     # internals (see infrastructure/pydantic_ai_compat.py), so a major bump is a
@@ -58,6 +63,9 @@ dependencies = [
     # same time -- and the server apps here rely on that. A 3.x install would
     # satisfy the old floor and speak only the handshake era.
     "fastmcp>=4.0.1",
+    # Arrives through fastmcp and pydantic-ai; floored here past
+    # CVE-2026-59951, which neither of them pins away from.
+    "mcp>=2.2.0",
     # History compaction for providers with no native CompactionPart support.
     "summarization-pydantic-ai>=0.1.11",
     "websockets>=16.0",
@@ -152,6 +160,8 @@ dev = [
     # those rules is its own piece of work.
     "ruff>=0.14.8,<0.17",
     "moto[s3,server]>=5.1",
+    # One visible retry for a failed e2e test (E2E_RERUNS in the Makefile).
+    "pytest-rerunfailures>=15",
 ]
 
 [build-system]
@@ -276,9 +286,10 @@ exclude = ["app/core/log/event_catalog.py"]
 "scripts/**" = ["T20"]
 "app/**/scripts/**" = ["T20"]
 "migrations/**" = ["T20"]
-# Both files end in an `if __name__ == "__main__":` block — an outbox admin CLI
-# and a parser demo. Their prints are that program's output.
+# These end in an `if __name__ == "__main__":` block — the outbox and work
+# admin CLIs and a parser demo. Their prints are that program's output.
 "app/core/infrastructure/events/admin.py" = ["T20"]
+"app/core/infrastructure/work/admin.py" = ["T20"]
 "app/core/file_editor/file_editor.py" = ["T20"]
 # A test pins a fixed instant on purpose; which zone it carries is usually not
 # what the test is about, and naive literals keep the arithmetic readable.

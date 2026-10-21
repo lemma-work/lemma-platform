@@ -168,3 +168,86 @@ def test_column_without_options_is_unchanged():
     )
     assert "n:text" in output
     assert "n:text(" not in output
+
+
+# ---------------------------------------------------------------------------
+# Somebody else's words print as typed
+# ---------------------------------------------------------------------------
+
+_MARKUP = ("[live] launch", "[bold red]x[/bold red]", "[link=https://evil]x[/link]")
+
+
+def test_a_list_prints_markup_in_values_as_typed():
+    state = SimpleNamespace(output="pretty", full=False)
+    rows = [
+        {"title": text, "kind": "GROUP", "id": str(n)} for n, text in enumerate(_MARKUP)
+    ]
+
+    output = _capture_emit(state, {"items": rows})
+
+    for text in _MARKUP:
+        assert text in output
+
+
+def test_a_detail_prints_markup_in_titles_fields_and_keys_as_typed():
+    state = SimpleNamespace(output="pretty", full=True)
+    data = {
+        "title": "[link=https://evil]x[/link]",
+        "topic": "[bold red]x[/bold red]",
+        "data": {"[live] key": "[link=https://evil]v[/link]"},
+        "members": [{"name": "[bold red]Mallory[/bold red]"}],
+        "token": "secret",
+    }
+
+    output = _capture_emit(state, data)
+
+    assert output.count("[link=https://evil]x[/link]") == 2  # panel title + field
+    assert "[bold red]x[/bold red]" in output
+    assert "[live] key: [link=https://evil]v[/link]" in output
+    assert "[bold red]Mallory[/bold red]" in output
+    assert "[redacted]" in output and "secret" not in output
+
+
+def test_a_transcript_prints_markup_in_messages_as_typed():
+    buffer = StringIO()
+    old_console = io_mod.console
+    io_mod.console = Console(file=buffer, highlight=False, width=200)
+    try:
+        io_mod.render_transcript(
+            SimpleNamespace(output="pretty", full=False),
+            [
+                {"sequence": 1, "role": "user", "kind": "text", "text": _MARKUP[2]},
+                {
+                    "sequence": 2,
+                    "role": "assistant",
+                    "kind": "tool_call",
+                    "tool_name": "[bold]t[/bold]",
+                    "tool_args": {"q": _MARKUP[1]},
+                },
+            ],
+        )
+    finally:
+        io_mod.console = old_console
+
+    output = buffer.getvalue()
+    assert _MARKUP[2] in output
+    assert "[bold]t[/bold]" in output
+    assert _MARKUP[1] in output
+
+
+def test_an_error_prints_the_servers_words_as_typed(capsys):
+    import pytest
+    import typer
+
+    import lemma_cli.cli_core.state as state_mod
+
+    old = state_mod.err_console
+    buffer = StringIO()
+    state_mod.err_console = Console(file=buffer, highlight=False, width=200)
+    try:
+        with pytest.raises(typer.Exit):
+            state_mod.fail("Channel '[link=https://evil]x[/link]' is archived")
+    finally:
+        state_mod.err_console = old
+
+    assert "'[link=https://evil]x[/link]'" in buffer.getvalue()

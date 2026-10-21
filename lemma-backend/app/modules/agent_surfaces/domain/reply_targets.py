@@ -120,8 +120,24 @@ def reply_target_as[T: _ReplyTarget](
     """The event's reply target as one platform's model, for that platform's
     adapter. Empty when the event is another platform's, which an adapter is
     never handed."""
-    target = reply_target_of(event)
+    return stored_reply_target_as(str(event.platform), event.reply_target, model)
+
+
+def stored_reply_target_as[T: _ReplyTarget](
+    platform: str, stored: Mapping[str, object] | None, model: type[T]
+) -> T:
+    """A stored mapping as one platform's model -- an interaction's reply
+    target, which is not an event's. Empty when ``platform`` is another's."""
+    target = reply_target_for(platform, stored)
     return target if isinstance(target, model) else model()
+
+
+def copied_on_reply(event: ParsedInboundSurfaceEvent) -> tuple[str, ...]:
+    """Everybody else on an email thread, copied on a reply to it.
+
+    Empty on every other platform: only an email reply copies anyone.
+    """
+    return reply_target_as(event, EmailReplyTarget).cc
 
 
 def reply_target_of(event: ParsedInboundSurfaceEvent) -> ReplyTarget:
@@ -151,7 +167,9 @@ __all__ = [
     "TeamsReplyTarget",
     "TelegramReplyTarget",
     "WhatsAppReplyTarget",
+    "copied_on_reply",
     "reply_target_as",
     "reply_target_for",
     "reply_target_of",
+    "stored_reply_target_as",
 ]

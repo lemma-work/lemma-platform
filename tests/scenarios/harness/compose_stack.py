@@ -192,7 +192,16 @@ def _commands(spec: StackSpec) -> dict[str, list[str]]:
     default = StackSpec(kind="compose", port=0, base_url="")
     commands: dict[str, list[str]] = {}
     if spec.app != default.app:
-        commands["api"] = ["uvicorn", spec.app, "--host", "0.0.0.0", "--port", "8000"]
+        commands["api"] = [
+            "uvicorn",
+            spec.app,
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8000",
+            "--ws-max-size",
+            "1048576",
+        ]
     if spec.worker != default.worker:
         commands["worker"] = ["python", *spec.worker]
     if spec.migrations != default.migrations:

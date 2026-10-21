@@ -315,6 +315,11 @@ impl ProcessTable {
             after_sequence: u64,
             #[serde(default)]
             wait_ms: u64,
+            /// The most output one answer carries. Lemma asks for no more
+            /// than rides the link inline; a Lemma that names none gets the
+            /// most one op ever carried.
+            #[serde(default)]
+            max_bytes: Option<usize>,
         }
         let request: ReadParams = params(raw)?;
         let managed = self.get(&request.process_id)?;
@@ -336,7 +341,11 @@ impl ProcessTable {
         }
         let (snapshot, held_back) = {
             let ring = lock(&managed.ring);
-            let snapshot = ring.read_at_most(request.after_sequence, OP_MAX_DATA_BYTES);
+            let limit = request
+                .max_bytes
+                .unwrap_or(OP_MAX_DATA_BYTES)
+                .clamp(1, OP_MAX_DATA_BYTES);
+            let snapshot = ring.read_at_most(request.after_sequence, limit);
             let held_back = snapshot.next_sequence < ring.next_sequence();
             (snapshot, held_back)
         };

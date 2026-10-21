@@ -1,9 +1,12 @@
-"""Reading Telegram's ``my_chat_member`` update: the bot's own membership changing.
+"""Reading who comes and goes in a Telegram group.
 
-Telegram sends it whenever the bot's status in a chat moves -- added, removed,
-promoted, blocked in a private chat. One of those moves means somebody brought
-the bot into a group, and the update names them in ``from``. That is the only
-one this reads.
+``my_chat_member`` is the bot's own membership moving -- added, removed,
+promoted, blocked in a private chat. Being added to a group is somebody
+bringing the bot in, and the update names them in ``from``
+(``joined_group_event``). Being removed, or put back, stops or resumes the
+group's mirror (``group_membership_updates``), as does a ``left_chat_member``
+service message for anybody else: they are out of the mirror too. Telegram
+sends service messages whatever the bot's privacy mode.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceLifecycleKind,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.groups import GroupUpdateKind, ParsedGroupUpdate
 
 #: Statuses in which the bot is in the chat, and in which it is not.
 _PRESENT = frozenset({"member", "administrator", "creator", "restricted"})
@@ -47,6 +51,53 @@ def joined_group_event(
         actor_external_user_id=actor_id,
         channel_title=title or None,
         raw_payload=payload,
+    )
+
+
+def group_membership_updates(payload: dict[str, object]) -> list[ParsedGroupUpdate]:
+    """The bot taken out of a group or put back, or somebody else leaving it."""
+    update = payload.get("my_chat_member")
+    if isinstance(update, dict):
+        return _bot_moved(update)
+    message = payload.get("message")
+    return _somebody_left(message) if isinstance(message, dict) else []
+
+
+def _bot_moved(update: dict[str, object]) -> list[ParsedGroupUpdate]:
+    chat = _section(update, "chat")
+    chat_id = str(chat.get("id") or "").strip()
+    if chat.get("type") not in _GROUP_TYPES or not chat_id:
+        return []
+    old = _status(update, "old_chat_member")
+    new = _status(update, "new_chat_member")
+    if old in _PRESENT and new in _ABSENT:
+        return [_group_update(GroupUpdateKind.BOT_LEFT, chat_id)]
+    if old in _ABSENT and new in _PRESENT:
+        return [_group_update(GroupUpdateKind.BOT_RETURNED, chat_id)]
+    return []
+
+
+def _somebody_left(message: dict[str, object]) -> list[ParsedGroupUpdate]:
+    """A ``left_chat_member`` service message; the bot's own is ``my_chat_member``."""
+    left = _section(message, "left_chat_member")
+    chat = _section(message, "chat")
+    chat_id = str(chat.get("id") or "").strip()
+    person = str(left.get("id") or "").strip()
+    if left.get("is_bot") or chat.get("type") not in _GROUP_TYPES:
+        return []
+    if not chat_id or not person:
+        return []
+    return [_group_update(GroupUpdateKind.MEMBER_LEFT, chat_id, person=person)]
+
+
+def _group_update(
+    kind: GroupUpdateKind, chat_id: str, *, person: str | None = None
+) -> ParsedGroupUpdate:
+    return ParsedGroupUpdate(
+        platform=SurfacePlatform.TELEGRAM.value,
+        kind=kind,
+        external_channel_id=chat_id,
+        external_user_id=person,
     )
 
 

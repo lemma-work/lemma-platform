@@ -21,10 +21,6 @@ ALREADY_CANCELLED = (
 )
 ALREADY_APPROVED = "This was already approved, so it went ahead."
 CONVERSATION_GONE = "That conversation is gone. Please ask again."
-#: A card whose conversation no longer holds the thread it was tapped in.
-REQUEST_MOVED = (
-    "This request moved or expired. Reply here with what you want, or ask again."
-)
 
 
 def _approves(decision: AgentRunApprovalDecision) -> bool:
@@ -49,4 +45,4 @@ def acknowledgement_for(
     return DONE
 
 
-__all__ = ["DONE", "REQUEST_MOVED", "RUNNING_NOW", "acknowledgement_for"]
+__all__ = ["DONE", "RUNNING_NOW", "acknowledgement_for"]

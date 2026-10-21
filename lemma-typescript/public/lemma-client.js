@@ -10381,6 +10381,10 @@ var LemmaClient = (() => {
         return status >= 500 ? new ServerError(status, message, code, details, rawResponse) : new ApiError(status, message, code, details, rawResponse);
     }
   }
+  var CONNECTOR_PROVIDER_CODE_PREFIX = "OPERATION_EXECUTION_";
+  function isSessionRejection(status, code) {
+    return status === 401 && !(code == null ? void 0 : code.startsWith(CONNECTOR_PROVIDER_CODE_PREFIX));
+  }
   var HttpClient = class {
     constructor(apiUrl, auth, options = {}) {
       __publicField(this, "apiUrl", apiUrl);
@@ -10480,6 +10484,16 @@ var LemmaClient = (() => {
       error.requestId = (_b = response.headers.get("x-request-id")) != null ? _b : void 0;
       return error;
     }
+    /** The error a refused response becomes, once the session has been told
+     *  whether it was the one refused. The body has to be read first: the code
+     *  in it is what tells a dead session from a connector's rejected key. */
+    async failure(response) {
+      const error = await this.parseError(response);
+      if (isSessionRejection(error.statusCode, error.code)) {
+        this.auth.markUnauthenticated();
+      }
+      return error;
+    }
     getRequestBody(options) {
       if (options.body === void 0) {
         return void 0;
@@ -10511,12 +10525,17 @@ var LemmaClient = (() => {
       for (let attempt = 0; ; attempt++) {
         const response = await this.fetchWithTimeout(url, init, options.signal);
         if (response.status === 401) {
-          if (!renewed && await this.auth.renewEmbeddedToken()) {
+          const error = await this.parseError(response);
+          const sessionGone = isSessionRejection(error.statusCode, error.code);
+          if (sessionGone && !renewed && await this.auth.renewEmbeddedToken()) {
             renewed = true;
             init = this.buildRequestInit(method, options);
             continue;
           }
-          this.auth.markUnauthenticated();
+          if (sessionGone) {
+            this.auth.markUnauthenticated();
+          }
+          throw error;
         }
         const retryDelay = retryDelayForStatus(
           response.status,
@@ -10530,7 +10549,7 @@ var LemmaClient = (() => {
           continue;
         }
         if (!response.ok) {
-          throw await this.parseError(response);
+          throw await this.failure(response);
         }
         if (response.status === 204) {
           return void 0;
@@ -10580,11 +10599,8 @@ var LemmaClient = (() => {
           error
         );
       }
-      if (response.status === 401) {
-        this.auth.markUnauthenticated();
-      }
       if (!response.ok) {
-        throw await this.parseError(response);
+        throw await this.failure(response);
       }
       return response;
     }
@@ -10613,11 +10629,8 @@ var LemmaClient = (() => {
         init.headers = { ...init.headers, ...options.headers };
       }
       const response = await this.fetchWithTimeout(url, init);
-      if (response.status === 401) {
-        this.auth.markUnauthenticated();
-      }
       if (!response.ok) {
-        throw await this.parseError(response);
+        throw await this.failure(response);
       }
       return {
         blob: await response.blob(),
@@ -10815,7 +10828,7 @@ var LemmaClient = (() => {
           return await this.runWithTimeout(operation);
         } catch (error) {
           if (error instanceof ApiError2) {
-            if (error.status === 401) {
+            if (isSessionRejection(error.status, extractCode(error.body))) {
               if (!renewed && await this.auth.renewEmbeddedToken()) {
                 renewed = true;
                 this.configure();
@@ -11048,10 +11061,14 @@ var LemmaClient = (() => {
         if (contentType) {
           const jsonTypes = ["application/json", "application/problem+json"];
           const isJSON = jsonTypes.some((type) => contentType.toLowerCase().startsWith(type));
+          const textTypes = ["text/", "application/javascript", "application/xml", "application/yaml"];
+          const isText = textTypes.some((type) => contentType.toLowerCase().startsWith(type));
           if (isJSON) {
             return await response.json();
-          } else {
+          } else if (isText) {
             return await response.text();
+          } else {
+            return await response.blob();
           }
         }
       } catch (error) {
@@ -11899,6 +11916,7 @@ var LemmaClient = (() => {
           status: options.status,
           archived: options.archived,
           search: options.search,
+          in_channel: options.in_channel,
           limit: (_a = options.limit) != null ? _a : 20,
           page_token: options.page_token
         }
@@ -15685,40 +15703,69 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * List Groups
-     * Every group the pod's bots are in, most recently changed first.
+     * Send Notice
+     * Tell another member of the pod something, in their own channel. The
+     * same `Idempotency-Key` from the same member is the same notice; sent with
+     * other text, it is refused (422). A member sends at most
+     * `NOTICES_PER_MINUTE` a minute (429).
      * @param podId
-     * @returns GroupListResponse Successful Response
-     * @throws ApiError
-     */
-    static agentGroupList(podId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/groups",
-        path: {
-          "pod_id": podId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Start Group
-     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
-     *
-     * WhatsApp confirms the group moments later: it comes back ``pending``, and
-     * its invite link appears once confirmed. Telegram and Slack cannot create
-     * groups for a bot; add the bot to one of theirs instead.
-     * @param podId
+     * @param member The member to tell: a pod member id, user id, or email address.
      * @param requestBody
-     * @returns GroupResponse Successful Response
+     * @param idempotencyKey
+     * @returns NoticeResponse Successful Response
      * @throws ApiError
      */
-    static agentGroupStart(podId, requestBody) {
+    static agentNoticeSend(podId, member, requestBody, idempotencyKey) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/pods/{pod_id}/groups",
+        url: "/pods/{pod_id}/members/{member}/notices",
+        path: {
+          "pod_id": podId,
+          "member": member
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          404: `Nobody in this pod is that member.`,
+          422: `Validation Error`,
+          429: `Too many notices this minute; see Retry-After.`
+        }
+      });
+    }
+    /**
+     * List Slack App Workspaces
+     * The Slack workspaces this pod's organization lets Lemma create apps in.
+     * @param podId
+     * @returns SlackAppWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreationList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/surface-setup/slack/app-creation",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Save Slack Configuration Token
+     * Let Lemma create Slack apps in the workspace this token is for.
+     * @param podId
+     * @param requestBody
+     * @returns SlackAppWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreationSave(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/surface-setup/slack/app-creation",
         path: {
           "pod_id": podId
         },
@@ -15730,105 +15777,102 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Group Link
-     * A one-use link that adds the pod's Telegram bot to a group the caller picks.
+     * Forget Slack Configuration Token
+     * Stop Lemma creating apps there. Apps it already made are not touched.
      *
-     * The group is then the caller's to answer for. Which Telegram account is
-     * theirs is still their profile's to say: a link is easily passed on, so the
-     * one that used it is never taken for them. The link works for an hour.
+     * Slack offers no way to revoke a configuration token, so it stays valid at
+     * Slack: revoke it on api.slack.com/apps as well.
      * @param podId
-     * @param requestBody
-     * @returns GroupLinkResponse Successful Response
+     * @param teamId
+     * @returns void
      * @throws ApiError
      */
-    static agentGroupLink(podId, requestBody) {
+    static agentSurfaceSlackAppCreationForget(podId, teamId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}",
+        path: {
+          "pod_id": podId,
+          "team_id": teamId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Slack App
+     * Create an agent's own Slack app, named after it. What is left is
+     * authorising it.
+     *
+     * One app per agent per workspace: until it is authorised, asking again
+     * answers with the same app, and so does the same `Idempotency-Key` from the
+     * same member for a day.
+     * @param podId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns SlackAppCreateResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackAppCreate(podId, requestBody, idempotencyKey) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/pods/{pod_id}/groups/links",
+        url: "/pods/{pod_id}/surface-setup/slack/apps",
+        path: {
+          "pod_id": podId
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          409: `Not set up, the token needs replacing, or busy.`,
+          422: `Validation Error`,
+          429: `Slack is rate-limiting app creation.`
+        }
+      });
+    }
+    /**
+     * List Slack Managed Workspaces
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * @param podId
+     * @returns SlackManagedWorkspaceListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackManagerList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/surface-setup/slack/manager",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Bind Slack Manager
+     * Make Lemma's own app this workspace's manager. The workspace becomes the
+     * organization's, and the person who authorised it is known in Slack.
+     *
+     * Only for a grant this browser finished signed in as the caller: a consent
+     * link somebody else completed is refused.
+     * @param podId
+     * @param requestBody
+     * @returns SlackManagedWorkspaceResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackManagerBind(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/surface-setup/slack/manager",
         path: {
           "pod_id": podId
         },
         body: requestBody,
         mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Get Group
-     * One group: who is in it, and what its outsiders are waiting on you for.
-     * @param podId
-     * @param groupId
-     * @returns GroupDetailResponse Successful Response
-     * @throws ApiError
-     */
-    static agentGroupGet(podId, groupId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/groups/{group_id}",
-        path: {
-          "pod_id": podId,
-          "group_id": groupId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Update Group
-     * Switch outsiders on or off in one group, or take it over.
-     *
-     * The member who answers for the group may; so may anybody who configures the
-     * bot when nobody in the pod answers for it, and an admin of the pod, whose
-     * change the member is told about.
-     * @param podId
-     * @param groupId
-     * @param requestBody
-     * @returns GroupResponse Successful Response
-     * @throws ApiError
-     */
-    static agentGroupUpdate(podId, groupId, requestBody) {
-      return request(OpenAPI, {
-        method: "PATCH",
-        url: "/pods/{pod_id}/groups/{group_id}",
-        path: {
-          "pod_id": podId,
-          "group_id": groupId
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Group Timeline
-     * What was said in the group, oldest first, as far as the pod kept it.
-     *
-     * Kept for WhatsApp and Telegram groups. A Slack channel's history is
-     * Slack's; it comes back empty here. An answer the bot made with one member's
-     * own access comes back withheld to everybody else: they may not be able to
-     * see what it was made from.
-     * @param podId
-     * @param groupId
-     * @param limit
-     * @returns GroupTimelineResponse Successful Response
-     * @throws ApiError
-     */
-    static agentGroupTimeline(podId, groupId, limit = 60) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/groups/{group_id}/timeline",
-        path: {
-          "pod_id": podId,
-          "group_id": groupId
-        },
-        query: {
-          "limit": limit
-        },
         errors: {
           422: `Validation Error`
         }
@@ -16009,9 +16053,9 @@ var LemmaClient = (() => {
      * Send Surface Message
      * Proactively send a message to a pod member on this surface.
      *
-     * Powers notifications from functions/workflows. Reuses the member's existing
-     * thread (bots can't cold-DM), and a 404 carries the reason it could not be
-     * reached, in the vocabulary the notification API uses.
+     * For functions and workflows that message a member on one platform. Reuses
+     * the member's existing thread (bots can't cold-DM), and a 404 carries the
+     * reason they could not be reached.
      * @param podId
      * @param surfaceName
      * @param requestBody
@@ -16206,6 +16250,45 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Slack Install Availability
+     * Whether Lemma's own Slack app is set up on this server, so "Add to
+     * Slack" can work -- checked before a person with no organization is given
+     * one for it.
+     * @returns SlackInstallAvailabilityResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackInstallAvailability() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/surface-setup/slack/install"
+      });
+    }
+    /**
+     * Start Slack Install Flow
+     * Add Lemma to a Slack workspace from "Add to Slack", for this organization.
+     *
+     * Answers with Slack's consent page for Lemma's own app, asking for its bot
+     * alone. Refused before anything is made when Slack isn't set up here, or
+     * the caller may not add the organization's installs. When the grant comes
+     * back to this same signed-in browser, the workspace becomes the
+     * organization's and Lemma's app says hello there; a grant finished anywhere
+     * else adopts nothing.
+     * @param requestBody
+     * @returns SlackInstallResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackInstallStart(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/install",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Slack App Manifest
      * The Slack app manifest to paste when running your own Slack app.
      *
@@ -16228,6 +16311,28 @@ var LemmaClient = (() => {
         query: {
           "agent_name": agentName
         },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Start Slack Sign In
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's link was for.
+     *
+     * Connects nothing. The callback connects only when it sees this same Lemma
+     * session and Slack names this same Slack user and workspace.
+     * @param requestBody
+     * @returns SlackSignInResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSlackPersonSignIn(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/surface-setup/slack/people/sign-in",
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -16335,48 +16440,100 @@ var LemmaClient = (() => {
         () => AgentSurfacesService.agentSurfaceSlackManifest(agentName)
       );
     }
-  };
-
-  // src/namespaces/pod-groups.ts
-  var PodGroupsNamespace = class {
-    constructor(client) {
-      __publicField(this, "client", client);
-    }
-    /** Every group the pod's bots are in, most recently changed first. */
-    list(podId) {
-      return this.client.request(() => AgentSurfacesService.agentGroupList(podId));
-    }
-    /** One group, with the people seen in it and what is waiting on the caller. */
-    get(podId, groupId) {
+    /**
+     * The Slack workspaces this pod's organization lets Lemma create apps in --
+     * one per saved app configuration token. Carries no token. `can_manage` says
+     * whether the caller may save tokens and create apps (an organization owner
+     * or editor); others are shown no workspace.
+     */
+    slackAppWorkspaces(podId) {
       return this.client.request(
-        () => AgentSurfacesService.agentGroupGet(podId, groupId)
+        () => AgentSurfacesService.agentSurfaceSlackAppCreationList(podId)
       );
     }
-    /** What was said in the group, oldest first (WhatsApp and Telegram groups). */
-    timeline(podId, groupId, options = {}) {
+    /**
+     * Let Lemma create Slack apps in a workspace, from the refresh token of an
+     * app configuration token (api.slack.com/apps → Your App Configuration
+     * Tokens). Lemma rotates it at once, which proves it works and names the
+     * workspace. Needs the right to manage the org's connector installs.
+     */
+    saveSlackConfigurationToken(podId, request2) {
       return this.client.request(
-        () => {
-          var _a;
-          return AgentSurfacesService.agentGroupTimeline(podId, groupId, (_a = options.limit) != null ? _a : 60);
-        }
+        () => AgentSurfacesService.agentSurfaceSlackAppCreationSave(podId, request2)
       );
     }
-    /** Start a WhatsApp group with the pod's bot in it. */
-    start(podId, payload) {
+    /**
+     * Stop Lemma creating apps in that workspace. Apps it made are untouched,
+     * and the token stays valid at Slack until revoked there.
+     */
+    forgetSlackConfigurationToken(podId, teamId) {
       return this.client.request(
-        () => AgentSurfacesService.agentGroupStart(podId, payload)
+        () => AgentSurfacesService.agentSurfaceSlackAppCreationForget(podId, teamId)
       );
     }
-    /** A one-use, hour-long Telegram link that adds the bot to a group. */
-    link(podId, surfaceName) {
+    /**
+     * Create an agent's own Slack app (the pod's own agent unless `agent_id` is
+     * given), named after it, and register its credentials as the org's own
+     * install. Authorise that install (`auth_config_id`) to finish. Asking again
+     * for the same agent and workspace answers with the same app until it is
+     * authorised, and so does the same `idempotencyKey` for a day.
+     */
+    createSlackApp(podId, request2, idempotencyKey) {
       return this.client.request(
-        () => AgentSurfacesService.agentGroupLink(podId, { surface_name: surfaceName })
+        () => AgentSurfacesService.agentSurfaceSlackAppCreate(podId, request2, idempotencyKey)
       );
     }
-    /** Switch outsiders on or off in one group, or take it over. */
-    update(podId, groupId, payload) {
+    /**
+     * The Slack workspaces Lemma's own app manages for this pod's organization.
+     * Lemma's app answers nobody: it is where a workspace sees its teammates,
+     * adds one, and hands one a channel.
+     */
+    slackManagedWorkspaces(podId) {
       return this.client.request(
-        () => AgentSurfacesService.agentGroupUpdate(podId, groupId, payload)
+        () => AgentSurfacesService.agentSurfaceSlackManagerList(podId)
+      );
+    }
+    /**
+     * Make Lemma's own app the manager of the workspace an account authorised it
+     * in. The workspace becomes the organization's, and the person who
+     * authorised it is known in Slack from then on. Only for a grant this
+     * browser finished signed in as the caller.
+     */
+    bindSlackManager(podId, request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackManagerBind(podId, request2)
+      );
+    }
+    /**
+     * Start Sign in with Slack for the signed-in person, to prove they are the
+     * Slack user their App Home's "Connect your Lemma account" link was for.
+     * Returns Slack's sign-in page; the callback connects only when it sees this
+     * same Lemma session and Slack names that same Slack user and workspace.
+     */
+    startSlackSignIn(request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackPersonSignIn(request2)
+      );
+    }
+    /**
+     * Whether Lemma's own Slack app is set up on this server, so "Add to Slack"
+     * can work. Ask before giving anybody an organization for it.
+     */
+    slackInstallAvailability() {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackInstallAvailability()
+      );
+    }
+    /**
+     * Add Lemma's own Slack app to a workspace for an organization, from "Add
+     * to Slack" rather than from a pod. Answers with Slack's consent page (bot
+     * scopes only), refused before anything is made when Slack isn't set up
+     * here or the caller may not add the organization's installs. A grant
+     * finished in a browser not signed in as the caller adopts nothing.
+     */
+    startSlackInstall(request2) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSlackInstallStart(request2)
       );
     }
   };
@@ -16515,18 +16672,1449 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/ChannelsService.ts
+  var ChannelsService = class {
+    /**
+     * List Channels
+     * The channels the reader may see, most recently active first, each with
+     * what is new in it for them and its last line.
+     * @param podId
+     * @param kind
+     * @param visibility Only `PUBLIC` or only `PRIVATE` channels; a member's and a contact's own channel are private.
+     * @param q Only channels named by every one of these words, in any order and case: by title, or -- a member's or a contact's own channel -- by whose it is.
+     * @param archived
+     * @param contactId Only this contact's channel.
+     * @param assignee `me`, or a member's user id: contacts' channels assigned to them.
+     * @param unassigned
+     * @param status
+     * @param needsPerson Only contacts' channels waiting on a person: open, unassigned, and the agent off or asking for one.
+     * @param joined Only channels the reader is in.
+     * @param sourceSurface A bot's surface name: only the groups it is in, each with its `source_settings`. Takes reading the bot.
+     * @param cursor
+     * @param limit
+     * @returns ChannelListResponse Successful Response
+     * @throws ApiError
+     */
+    static channelList(podId, kind, visibility, q, archived = false, contactId, assignee, unassigned = false, status, needsPerson = false, joined = false, sourceSurface, cursor, limit = 50) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "kind": kind,
+          "visibility": visibility,
+          "q": q,
+          "archived": archived,
+          "contact_id": contactId,
+          "assignee": assignee,
+          "unassigned": unassigned,
+          "status": status,
+          "needs_person": needsPerson,
+          "joined": joined,
+          "source_surface": sourceSurface,
+          "cursor": cursor,
+          "limit": limit
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Create Channel
+     * A group made in Lemma: public unless asked otherwise, with its maker as
+     * its owner and the members and agents named in it. The same
+     * `Idempotency-Key` from the same member returns the group it made; sent
+     * with another title, topic or visibility, it is refused (422).
+     * @param podId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelCreate(podId, requestBody, idempotencyKey) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels",
+        path: {
+          "pod_id": podId
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Get My Channel
+     * The reader's own channel with the pod; 404 until it is made.
+     * @param podId
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMeGet(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/me",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Create My Channel
+     * Make the reader's own channel with the pod; 200 with it if it exists.
+     * @param podId
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMeCreate(podId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/me",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Delete Channel
+     * Delete a group made in Lemma, and its timeline: its owners' or an
+     * admin's. A channel an outside place feeds is archived instead.
+     * @param podId
+     * @param channelId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelDelete(podId, channelId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Get Channel
+     * One channel, with the places it is fed from, its members and agents,
+     * and how the reader hears of it.
+     * @param podId
+     * @param channelId
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelGet(podId, channelId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Update Channel
+     * Change exactly the fields named; `null` clears.
+     *
+     * A group: `title`, `topic`, `visibility`, `archived`, `answers_shared`
+     * (whether agents' answers made with the asker's access are read by
+     * everybody here, or kept to the asker until they share one) -- its
+     * owners' or an admin's. A contact's channel: `agents_answer`, `hand_back_after_hours`,
+     * `status`, `assignee` -- for who may write to contacts. Switching the agent
+     * on hands the contact back to it now: nobody is assigned.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelUpdate(podId, channelId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/channels/{channel_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * List Cases
+     * A contact's channel's cases, the most recently opened first, each with
+     * what happened in it: time to first response, reopens and time to close
+     * are read from here. Only a contact's channel has cases.
+     * @param podId
+     * @param channelId
+     * @param cursor
+     * @param limit
+     * @returns ChannelCasesResponse Successful Response
+     * @throws ApiError
+     */
+    static channelCaseList(podId, channelId, cursor, limit = 20) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/cases",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        query: {
+          "cursor": cursor,
+          "limit": limit
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * List Members
+     * Who is in a channel -- members, contacts and agents -- in the order
+     * they joined, a page at a time.
+     * @param podId
+     * @param channelId
+     * @param cursor
+     * @param limit
+     * @returns ChannelMemberListResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMemberList(podId, channelId, cursor, limit = 100) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/members",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        query: {
+          "cursor": cursor,
+          "limit": limit
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Add Members
+     * Add members of the pod, and the pod's agents, to a group. An agent
+     * already in it answers as now asked.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMemberAdd(podId, channelId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/members",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Leave Channel
+     * Leave a channel. Leaving one not joined is nothing; a member's own
+     * channel cannot be left, nor a private group by the last person in it (409
+     * `LAST_MEMBER`). A group's last owner leaving hands it to whoever has been
+     * in it longest.
+     * @param podId
+     * @param channelId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelMemberLeave(podId, channelId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/me",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Update My Membership
+     * How the reader hears of this channel's lines outside the app. Absent is
+     * unchanged; `null` clears `notify_via` (the pod's rule) and `muted_until`.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMemberMeUpdate(podId, channelId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/me",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Join Channel
+     * Join a channel the reader may see: a public group, or -- holding
+     * `contact.read` -- a contact's channel. Holding `channel.manage`, a private
+     * group too, on request: how a pod admin finds and takes over a group nobody
+     * let them into; it is logged. Joining one already joined is nothing.
+     * @param podId
+     * @param channelId
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMemberJoin(podId, channelId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/me",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Remove Member
+     * Take somebody out of a group -- its owners' or an editor's -- or leave a
+     * channel oneself. A group keeps an owner, and a private one somebody in it
+     * (409 `LAST_OWNER`, `LAST_MEMBER`): its last owner leaving hands it on.
+     * @param podId
+     * @param channelId
+     * @param kind
+     * @param memberId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelMemberRemove(podId, channelId, kind, memberId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "kind": kind,
+          "member_id": memberId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Update Member
+     * A person's role (`owner` or `member`), or when an agent answers.
+     * @param podId
+     * @param channelId
+     * @param kind
+     * @param memberId
+     * @param requestBody
+     * @returns ChannelDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMemberUpdate(podId, channelId, kind, memberId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "kind": kind,
+          "member_id": memberId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * List Messages
+     * The timeline, oldest first: the newest page, the page before
+     * `before_seq`, or the page after `after_seq`. A thread's replies are not in
+     * it; its first line counts them.
+     * @param podId
+     * @param channelId
+     * @param beforeSeq
+     * @param afterSeq
+     * @param limit
+     * @returns ChannelMessagesResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageList(podId, channelId, beforeSeq, afterSeq, limit = 50) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        query: {
+          "before_seq": beforeSeq,
+          "after_seq": afterSeq,
+          "limit": limit
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Post Message
+     * Write in the channel. A reply goes where its thread is; otherwise to
+     * the place named, or the one the channel last heard from -- unless it is a
+     * note to members. Naming somebody who cannot see the channel is refused.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns ChannelMessageResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessagePost(podId, channelId, requestBody, idempotencyKey) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Delete Message
+     * Delete a line: it keeps its place, saying nothing. One's own -- or,
+     * for who may change the channel, anybody's, shown as removed by them. A
+     * copy already sent outside Lemma stays as sent.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @returns void
+     * @throws ApiError
+     */
+    static channelMessageDelete(podId, channelId, messageId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Edit Message
+     * Change what one's own line says: absent is unchanged, `null` parts
+     * clears them. A copy already sent outside stays as sent.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param requestBody
+     * @returns ChannelMessageResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageUpdate(podId, channelId, messageId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Answer Question
+     * Answer what this line asks the reader: a question, an approval (which
+     * needs a `decision`), a form. Only the person it waits on may -- and an
+     * approval, or an agent's paused question, only by their own hand: an agent
+     * calling with a token delegated by them is refused, as its tool is.
+     *
+     * No session is held across the answer: what asked takes it in its own -- a
+     * run resumed, a form submitted -- and may call out to do so.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param requestBody
+     * @returns ChannelMessageResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageAnswer(podId, channelId, messageId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * List Deliveries
+     * Where a line went outside Lemma, and what became of each send. A push
+     * to a member is shown only to that member.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @returns DeliveriesResponse Successful Response
+     * @throws ApiError
+     */
+    static channelDeliveryList(podId, channelId, messageId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Retry Delivery
+     * Try a failed or given-up send again, now. A send to a place: for who
+     * wrote the line, or may change the channel -- anybody else who reads the
+     * line is refused. A push to a member: theirs alone, as only they see it.
+     * It is one more try: a send that fails again on its last is given up.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param deliveryId
+     * @returns DeliveryResponse Successful Response
+     * @throws ApiError
+     */
+    static channelDeliveryRetry(podId, channelId, messageId, deliveryId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId,
+          "delivery_id": deliveryId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Line File
+     * A file a line shares, for a reader of the line: read as its writer
+     * reads it. Gone with the line, or once its writer can no longer read it.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param fileId
+     * @returns binary The file's bytes
+     * @throws ApiError
+     */
+    static channelMessageFile(podId, channelId, messageId, fileId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId,
+          "file_id": fileId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Share Message
+     * Share an agent's answer made with your own access with everybody in the
+     * channel. Until then only you read it; the others are shown that it was
+     * given. Yours alone to share; sharing it again changes nothing.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @returns ChannelMessageResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageShare(podId, channelId, messageId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * List Thread
+     * A thread: its first line, and a page of its replies, oldest first
+     * within it -- from the start, after `after_seq`, before `before_seq`, or
+     * (`newest`) the latest.
+     * @param podId
+     * @param channelId
+     * @param messageId
+     * @param afterSeq
+     * @param beforeSeq
+     * @param newest The newest page of replies, rather than the first.
+     * @param limit
+     * @returns ThreadResponse Successful Response
+     * @throws ApiError
+     */
+    static channelMessageThread(podId, channelId, messageId, afterSeq, beforeSeq, newest = false, limit = 50) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "message_id": messageId
+        },
+        query: {
+          "after_seq": afterSeq,
+          "before_seq": beforeSeq,
+          "newest": newest,
+          "limit": limit
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Mark Read
+     * The reader has seen the timeline up to line `seq`: it never goes back,
+     * and never past the newest line. Lines of the timeline naming them up to
+     * it are read too; replies naming them are not -- with `thread_root_id`,
+     * the reader has seen that thread up to `seq`, and what named them there is
+     * read, while the timeline's `read_seq` stays where it was.
+     * @param podId
+     * @param channelId
+     * @param requestBody
+     * @returns ReadResponse Successful Response
+     * @throws ApiError
+     */
+    static channelRead(podId, channelId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/{channel_id}/read",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Get Inbox
+     * What is new for the reader across the pod: the badges, the questions
+     * waiting on them, the unread lines naming them -- newest first -- and the
+     * contacts waiting on a reply.
+     * @param podId
+     * @returns InboxResponse Successful Response
+     * @throws ApiError
+     */
+    static channelInboxGet(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/inbox",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Search
+     * Lines matching every word, newest first, in the channels the reader
+     * sees -- or in one of them -- each with its rank and the words around the
+     * match. An answer withheld from the reader is not found by what it said.
+     * @param podId
+     * @param q
+     * @param channelId
+     * @param kind Only channels of this kind.
+     * @param senderKind Only lines said by this person: with `sender_id`.
+     * @param senderId A member's user id, a contact's id or an agent's id.
+     * @param since Said at or after.
+     * @param until Said before.
+     * @param archived Search archived channels too.
+     * @param cursor
+     * @param limit
+     * @returns SearchResponse Successful Response
+     * @throws ApiError
+     */
+    static channelSearch(podId, q, channelId, kind, senderKind, senderId, since, until, archived = false, cursor, limit = 30) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/search",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "q": q,
+          "channel_id": channelId,
+          "kind": kind,
+          "sender_kind": senderKind,
+          "sender_id": senderId,
+          "since": since,
+          "until": until,
+          "archived": archived,
+          "cursor": cursor,
+          "limit": limit
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+  };
+
+  // src/openapi_client/services/ChannelSourcesService.ts
+  var ChannelSourcesService = class {
+    /**
+     * Telegram Link
+     * A one-use link that adds the pod's Telegram bot to a group the caller picks.
+     *
+     * The group becomes a GROUP channel, the caller's to answer for. Which
+     * Telegram account is theirs is still their profile's to say: a link is
+     * easily passed on, so the one that used it is never taken for them. The link
+     * works for an hour.
+     * @param podId
+     * @param requestBody
+     * @returns TelegramLinkResponse Successful Response
+     * @throws ApiError
+     */
+    static channelTelegramLinkCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/telegram-links",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Start Whatsapp Group
+     * Start a WhatsApp group with the pod's bot in it, answered for by the caller.
+     *
+     * It is a new GROUP channel's source: the channel is made with it, and its
+     * id is `channel_id`. WhatsApp confirms the group moments later: it comes
+     * back ``pending``, and its invite link appears once confirmed. Telegram and
+     * Slack cannot create groups for a bot; add the bot to one of theirs instead.
+     * The same `Idempotency-Key` from the same member answers with the group it
+     * started, for a day.
+     * @param podId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns SourceSettingsResponse Successful Response
+     * @throws ApiError
+     */
+    static channelWhatsappGroupStart(podId, requestBody, idempotencyKey) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/channels/whatsapp-groups",
+        path: {
+          "pod_id": podId
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          409: `A start with that Idempotency-Key is still running.`,
+          422: `Validation Error`,
+          429: `The member has started as many groups as a day allows.`
+        }
+      });
+    }
+    /**
+     * Get Source
+     * A group source's settings: who answers its outsiders, and from what.
+     * @param podId
+     * @param channelId
+     * @param sourceId
+     * @returns SourceSettingsDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static channelSourceGet(podId, channelId, sourceId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/sources/{source_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "source_id": sourceId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Source
+     * Switch outsiders on or off in one group, or take it over (`owner: "me"`).
+     * Absent is unchanged; neither can be cleared.
+     *
+     * The member who answers for the group may; so may anybody who configures the
+     * bot when nobody in the pod answers for it, and an admin of the pod, whose
+     * change the member is told about.
+     * @param podId
+     * @param channelId
+     * @param sourceId
+     * @param requestBody
+     * @returns SourceSettingsResponse Successful Response
+     * @throws ApiError
+     */
+    static channelSourceUpdate(podId, channelId, sourceId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/channels/{channel_id}/sources/{source_id}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "source_id": sourceId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/channel-sources.ts
+  var ChannelSourcesNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    /** The groups one bot is in, as channels, each with its `source_settings`;
+     *  most recently active first. Pass `next_cursor` back as `cursor`. */
+    list(podId, surfaceName, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelList(
+            podId,
+            void 0,
+            // kind
+            void 0,
+            // visibility
+            void 0,
+            // q
+            false,
+            void 0,
+            void 0,
+            false,
+            void 0,
+            false,
+            // needsPerson
+            false,
+            // joined
+            surfaceName,
+            options.cursor,
+            (_a = options.limit) != null ? _a : 50
+          );
+        }
+      );
+    }
+    /** A group source's settings: who answers its outsiders, and from what. */
+    get(podId, channelId, sourceId) {
+      return this.client.request(
+        () => ChannelSourcesService.channelSourceGet(podId, channelId, sourceId)
+      );
+    }
+    /** Switch outsiders on or off in one group, or take it over
+     *  (`owner: "me"`). Absent is unchanged. */
+    update(podId, channelId, sourceId, payload) {
+      return this.client.request(
+        () => ChannelSourcesService.channelSourceUpdate(podId, channelId, sourceId, payload)
+      );
+    }
+    /** Start a WhatsApp group with the pod's bot in it: a new group channel
+     *  (`channel_id`). The same `idempotencyKey` answers with the group it started. */
+    startWhatsAppGroup(podId, payload, options = {}) {
+      return this.client.request(
+        () => ChannelSourcesService.channelWhatsappGroupStart(podId, payload, options.idempotencyKey)
+      );
+    }
+    /** A one-use, hour-long Telegram link that adds the bot to a group. */
+    telegramLink(podId, surfaceName) {
+      return this.client.request(
+        () => ChannelSourcesService.channelTelegramLinkCreate(podId, { surface_name: surfaceName })
+      );
+    }
+  };
+
+  // src/namespaces/channels.ts
+  function seats(agents) {
+    return (agents != null ? agents : []).map(
+      (agent) => typeof agent === "string" ? { id: agent } : { id: agent.id, ...agent.answers ? { answers: agent.answers } : {} }
+    );
+  }
+  var ChannelsNamespace = class {
+    constructor(client, http) {
+      __publicField(this, "client", client);
+      __publicField(this, "http", http);
+      /** A group channel's sources from the bot's side, and bringing the bot into
+       *  a group (a WhatsApp group, a Telegram link). */
+      __publicField(this, "sources");
+      this.sources = new ChannelSourcesNamespace(client);
+    }
+    // -- channels ---------------------------------------------------------------
+    /** The channels the caller may see, most recently active first, each with
+     *  what is new in it for them and its last line. `assignee` is `me` or a
+     *  member's user id; `sourceSurface` (a bot's surface name) keeps the groups
+     *  that bot is in, each with its `source_settings`. Pass `next_cursor` back
+     *  as `cursor` for the next page. */
+    list(podId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b, _c, _d, _e;
+          return ChannelsService.channelList(
+            podId,
+            options.kind,
+            options.visibility,
+            options.q,
+            (_a = options.archived) != null ? _a : false,
+            options.contactId,
+            options.assignee,
+            (_b = options.unassigned) != null ? _b : false,
+            options.status,
+            (_c = options.needsPerson) != null ? _c : false,
+            (_d = options.joined) != null ? _d : false,
+            options.sourceSurface,
+            options.cursor,
+            (_e = options.limit) != null ? _e : 50
+          );
+        }
+      );
+    }
+    /** Make a group in Lemma, with the caller as its owner and the members (user
+     *  ids) and agents named in it. The same `idempotencyKey` returns the group
+     *  it made. */
+    create(podId, body, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelCreate(
+            podId,
+            {
+              ...body,
+              members: (_a = body.members) != null ? _a : [],
+              agents: seats(body.agents),
+              visibility: body.visibility
+            },
+            options.idempotencyKey
+          );
+        }
+      );
+    }
+    /** One channel, with the places it is fed from, its members and agents, and
+     *  how the caller hears of it. */
+    get(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelGet(podId, channelId));
+    }
+    /** The caller's own channel with the pod; not found until it is made. */
+    mine(podId) {
+      return this.client.request(() => ChannelsService.channelMeGet(podId));
+    }
+    /** The caller's own channel with the pod, made if it is not there yet. */
+    openMine(podId) {
+      return this.client.request(() => ChannelsService.channelMeCreate(podId));
+    }
+    /** Change exactly the fields present; `null` clears. A group: `title`,
+     *  `topic`, `visibility`, `archived`, `answers_shared` (on, the default:
+     *  an agent's answer made with the asker's own access is read by everybody
+     *  in it; off, by the asker alone until they share it). A contact's
+     *  channel: `agents_answer`,
+     *  `hand_back_after_hours`, `status`, `assignee` (`me` or a user id). */
+    update(podId, channelId, body) {
+      return this.client.request(() => ChannelsService.channelUpdate(podId, channelId, body));
+    }
+    /** Whether a contact's agent answers them. Off, only members do; on hands
+     *  them back to the agent at once (nobody is assigned). */
+    setAgentAnswers(podId, channelId, on, options = {}) {
+      return this.update(podId, channelId, {
+        agents_answer: on,
+        ...options.handBackAfterHours !== void 0 ? { hand_back_after_hours: options.handBackAfterHours } : {}
+      });
+    }
+    /** Delete a group made in Lemma and its timeline. A channel an outside place
+     *  feeds is archived instead. */
+    delete(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelDelete(podId, channelId));
+    }
+    // -- members ----------------------------------------------------------------
+    /** Add members of the pod (user ids) and the pod's agents to a group. */
+    addMembers(podId, channelId, body) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelMemberAdd(podId, channelId, {
+            people: (_a = body.people) != null ? _a : [],
+            agents: seats(body.agents)
+          });
+        }
+      );
+    }
+    /** A person's role in a group, or when an agent in it answers. */
+    updateMember(podId, channelId, kind, memberId, body) {
+      return this.client.request(
+        () => ChannelsService.channelMemberUpdate(podId, channelId, kind, memberId, body)
+      );
+    }
+    /** Take somebody out of a group -- its owners' or an admin's. */
+    removeMember(podId, channelId, kind, memberId) {
+      return this.client.request(
+        () => ChannelsService.channelMemberRemove(podId, channelId, kind, memberId)
+      );
+    }
+    /** Leave a channel the caller is in. */
+    leave(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelMemberLeave(podId, channelId));
+    }
+    /** Join a channel the caller may see: a public group, or -- holding
+     *  `contact.read` -- a contact's channel. */
+    join(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelMemberJoin(podId, channelId));
+    }
+    /** How the caller hears of this channel's lines outside the app: `notify`,
+     *  `notify_via` (`null`: the pod's rule), `muted_until` (`null` unmutes). */
+    updateMyMembership(podId, channelId, body) {
+      return this.client.request(
+        () => ChannelsService.channelMemberMeUpdate(podId, channelId, body)
+      );
+    }
+    /** The caller has seen the channel's timeline up to line `seq` -- or, with
+     *  `threadRootId`, that thread: a mention is read where it was said. It never
+     *  goes back, and never past the newest line. */
+    markRead(podId, channelId, seq, threadRootId) {
+      const body = { seq, ...threadRootId ? { thread_root_id: threadRootId } : {} };
+      return this.client.request(() => ChannelsService.channelRead(podId, channelId, body));
+    }
+    // -- lines ------------------------------------------------------------------
+    /** The timeline, oldest first: the newest page, the page before `beforeSeq`,
+     *  or the page after `afterSeq`. A thread's replies are left out and counted
+     *  on its first line. */
+    messages(podId, channelId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelMessageList(
+            podId,
+            channelId,
+            options.beforeSeq,
+            options.afterSeq,
+            (_a = options.limit) != null ? _a : 50
+          );
+        }
+      );
+    }
+    /** A thread: its first line, and its replies oldest first after `afterSeq`. */
+    thread(podId, channelId, messageId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelMessageThread(
+            podId,
+            channelId,
+            messageId,
+            options.afterSeq,
+            (_a = options.limit) != null ? _a : 50
+          );
+        }
+      );
+    }
+    /** Write in a channel. A reply goes where its thread is; otherwise to
+     *  `source_id`, or the place the channel last heard from -- unless
+     *  `members_only` makes it a note to members. Who it names is read from its
+     *  mention parts; a named agent answers. The same `client_message_id` is the
+     *  same line. */
+    post(podId, channelId, body, options = {}) {
+      return this.client.request(
+        () => ChannelsService.channelMessagePost(podId, channelId, body, options.idempotencyKey)
+      );
+    }
+    /** Change what one of the caller's own lines says: absent is unchanged,
+     *  `parts: null` clears them. Parts sent replace the line's parts, and
+     *  name whoever their mentions name, as a post does. */
+    edit(podId, channelId, messageId, body) {
+      const edit = typeof body === "string" ? { text: body } : body;
+      return this.client.request(
+        () => (
+          // The generated type flattens `parts` to `null`: the API takes a list.
+          ChannelsService.channelMessageUpdate(podId, channelId, messageId, edit)
+        )
+      );
+    }
+    /** Delete one of the caller's own lines; it keeps its place, empty. */
+    deleteMessage(podId, channelId, messageId) {
+      return this.client.request(
+        () => ChannelsService.channelMessageDelete(podId, channelId, messageId)
+      );
+    }
+    /** Answer what a line asks the caller: `{choice}` or `{text}` for a
+     *  question, `{decision}` for an approval, a form's fields. */
+    answer(podId, channelId, messageId, answer) {
+      return this.client.request(
+        () => ChannelsService.channelMessageAnswer(podId, channelId, messageId, { answer })
+      );
+    }
+    /** Share an agent's answer made with the caller's own access with
+     *  everybody in the channel (`can_share` on the line). Until then only the
+     *  caller reads it; sharing it again changes nothing. */
+    share(podId, channelId, messageId) {
+      return this.client.request(
+        () => ChannelsService.channelMessageShare(podId, channelId, messageId)
+      );
+    }
+    /** Where a line went outside Lemma, and what became of each send. */
+    deliveries(podId, channelId, messageId) {
+      return this.client.request(
+        () => ChannelsService.channelDeliveryList(podId, channelId, messageId)
+      );
+    }
+    /** A file a line shares (a `file` part's `file_id`), read as the line's
+     *  writer reads it: the bytes, as a `Blob` of the file's content type. */
+    file(podId, channelId, messageId, fileId) {
+      const path = [podId, "channels", channelId, "messages", messageId, "files", fileId].map(encodeURIComponent).join("/");
+      return this.http.requestBytes("GET", `/pods/${path}`);
+    }
+    /** Try a failed or given-up send again, now. */
+    retryDelivery(podId, channelId, messageId, deliveryId) {
+      return this.client.request(
+        () => ChannelsService.channelDeliveryRetry(podId, channelId, messageId, deliveryId)
+      );
+    }
+    // -- across the pod ---------------------------------------------------------
+    /** What is new for the caller across the pod: the badges, the questions
+     *  waiting on them, and the unread lines naming them. */
+    inbox(podId) {
+      return this.client.request(() => ChannelsService.channelInboxGet(podId));
+    }
+    /** Lines matching every word, newest first, in the channels the caller sees
+     *  -- or in one of them -- each with its `rank` and a plain-text `snippet`.
+     *  `sender` keeps lines one member, contact or agent said; `since`/`until`
+     *  (ISO times) bound when; `archived` searches archived channels too. Page
+     *  with `next_cursor`. */
+    search(podId, q, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b, _c, _d;
+          return ChannelsService.channelSearch(
+            podId,
+            q,
+            options.channelId,
+            options.kind,
+            (_a = options.sender) == null ? void 0 : _a.kind,
+            (_b = options.sender) == null ? void 0 : _b.id,
+            options.since,
+            options.until,
+            (_c = options.archived) != null ? _c : false,
+            options.cursor,
+            (_d = options.limit) != null ? _d : 30
+          );
+        }
+      );
+    }
+    /** A contact's channel's cases, the most recently opened first, each with
+     *  what happened in it: who answered and when, reopens, how it ended. Page
+     *  with `next_cursor`. */
+    cases(podId, channelId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelCaseList(
+            podId,
+            channelId,
+            options.cursor,
+            (_a = options.limit) != null ? _a : 20
+          );
+        }
+      );
+    }
+    /** Who is in a channel -- members, contacts and agents -- in the order they
+     *  joined. Page with `next_cursor`. */
+    members(podId, channelId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return ChannelsService.channelMemberList(
+            podId,
+            channelId,
+            options.cursor,
+            (_a = options.limit) != null ? _a : 100
+          );
+        }
+      );
+    }
+    /** Tell another member of the pod something: a line in their own channel.
+     *  `to` is a pod member id, user id or email address. */
+    notify(podId, body, options = {}) {
+      return this.client.request(
+        () => AgentSurfacesService.agentNoticeSend(
+          podId,
+          body.to,
+          { text: body.text },
+          options.idempotencyKey
+        )
+      );
+    }
+  };
+
+  // src/openapi_client/services/ContactOutreachService.ts
+  var ContactOutreachService = class {
+    /**
+     * Send Outreach
+     * Write to a contact first, on one of their handles: email any time,
+     * WhatsApp within 24 hours of their last message there. The line goes in
+     * their channel, at that handle's place -- opened if new -- and is sent from
+     * there. The same `client_message_id`, or `Idempotency-Key`, from the same
+     * member is the same line: a retry sends nothing new.
+     * @param podId
+     * @param contactId
+     * @param requestBody
+     * @param idempotencyKey
+     * @returns OutreachResponse Successful Response
+     * @throws ApiError
+     */
+    static contactOutreachSend(podId, contactId, requestBody, idempotencyKey) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/contacts/{contact_id}/outreach",
+        path: {
+          "pod_id": podId,
+          "contact_id": contactId
+        },
+        headers: {
+          "Idempotency-Key": idempotencyKey
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          404: `No such contact.`,
+          409: `They asked not to be written to there, or the pod has nowhere to write from.`,
+          422: `Not one of their handles, or not one that may be written to first now.`
+        }
+      });
+    }
+  };
+
   // src/openapi_client/services/ContactsService.ts
   var ContactsService = class {
     /**
      * List Contacts
-     * The pod's contacts, newest first.
+     * The pod's contacts, newest first. Follow `next_cursor` until it is
+     * absent.
      * @param podId
      * @param limit
-     * @param before
+     * @param cursor
+     * @param q Only contacts whose name, email address or number holds this.
      * @returns ContactListResponse Successful Response
      * @throws ApiError
      */
-    static contactList(podId, limit = 50, before) {
+    static contactList(podId, limit = 50, cursor, q) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/contacts",
@@ -16535,7 +18123,8 @@ var LemmaClient = (() => {
         },
         query: {
           "limit": limit,
-          "before": before
+          "cursor": cursor,
+          "q": q
         },
         errors: {
           422: `Validation Error`
@@ -16632,39 +18221,6 @@ var LemmaClient = (() => {
         query: {
           "cursor": cursor
         },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Follow Up Contact
-     * Write to a contact in their most recent conversation, where the channel allows.
-     *
-     * With ``channel: email``, to their verified email address instead, which
-     * reaches a web chat contact who is not on the page.
-     *
-     * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-     * has closed, when they have never written to the pod, or, for email, when
-     * they have no verified address or the pod no email address answering
-     * contacts; 429 past the day's follow-ups for this contact; 502 when the
-     * platform did not take it, which the conversation then shows as not sent.
-     * @param podId
-     * @param contactId
-     * @param requestBody
-     * @returns FollowUpResponse Successful Response
-     * @throws ApiError
-     */
-    static contactFollowUp(podId, contactId, requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/contacts/{contact_id}/messages",
-        path: {
-          "pod_id": podId,
-          "contact_id": contactId
-        },
-        body: requestBody,
-        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -17073,13 +18629,13 @@ var LemmaClient = (() => {
         remove: (podId, widgetId) => this.client.request(() => AgentSurfacesService.agentWebWidgetDelete(podId, widgetId))
       });
     }
-    /** The pod's contacts, newest first. Pass the opaque `next_before` back as
-     *  `before` for the next page. */
+    /** The pod's contacts, newest first. Pass the opaque `next_cursor` back as
+     *  `cursor` for the next page. */
     list(podId, options = {}) {
       return this.client.request(
         () => {
           var _a;
-          return ContactsService.contactList(podId, (_a = options.limit) != null ? _a : 50, options.before);
+          return ContactsService.contactList(podId, (_a = options.limit) != null ? _a : 50, options.cursor);
         }
       );
     }
@@ -17093,17 +18649,13 @@ var LemmaClient = (() => {
         () => ContactsService.contactUpdate(podId, contactId, { display_name: displayName })
       );
     }
-    /** Write to a contact in their latest conversation, where the channel allows:
-     *  never where they unsubscribed, on WhatsApp only within 24 hours of their
-     *  last message, and a few times a day at most. Takes `contact.message`.
-     *  `channel: "email"` sends to their verified email address instead, from
-     *  the pod's email address when their latest conversation is a web chat. */
-    followUp(podId, contactId, message, options = {}) {
+    /** Write to a contact first, on one of their handles: email any time,
+     *  WhatsApp within 24 hours of their last message there, never a handle that
+     *  asked the pod to stop. Returns the line, in their channel at that handle's
+     *  place (opened if new), and its delivery -- `PENDING` until it goes. */
+    outreach(podId, contactId, payload, options = {}) {
       return this.client.request(
-        () => ContactsService.contactFollowUp(podId, contactId, {
-          message,
-          channel: options.channel
-        })
+        () => ContactOutreachService.contactOutreachSend(podId, contactId, payload, options.idempotencyKey)
       );
     }
     /** One page of everything the pod holds about a contact: handles,
@@ -17129,240 +18681,6 @@ var LemmaClient = (() => {
         () => UsageService.usageOrganizationContactsCapUpdate(organizationId, {
           monthly_limit_usd: monthlyLimitUsd
         })
-      );
-    }
-  };
-
-  // src/openapi_client/services/NotificationsService.ts
-  var NotificationsService = class {
-    /**
-     * List My Notifications
-     * Notifications addressed to the current user in this pod, newest first. Filter with `status` (repeatable). Each item carries everything needed to render its action: `awaiting_response` decides whether to offer one, and `responds_through_action` decides whether it is a free-text reply or the form described by `action`.
-     * @param podId
-     * @param status
-     * @param limit
-     * @param pageToken
-     * @returns NotificationListResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationList(podId, status, limit = 50, pageToken) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/notifications",
-        path: {
-          "pod_id": podId
-        },
-        query: {
-          "status": status,
-          "limit": limit,
-          "page_token": pageToken
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Notify A Pod Member
-     * Reach a pod member on whichever surface they actually use, leaving a copy in their Lemma inbox either way.
-     *
-     * Gated on `conversation.write` rather than an editor permission: this opens a conversation and writes a message into it, which is exactly that grant. Requiring `agent.update` is what left the older `surface.send` endpoint with no caller in the product.
-     *
-     * A 201 with `delivery_status` of `UNDELIVERABLE` is a success, not a failure — the notification exists and the inbox has it. Read `undeliverable_reason` to tell the user what to do about it.
-     * @param podId
-     * @param requestBody
-     * @returns NotificationResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationSend(podId, requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications",
-        path: {
-          "pod_id": podId
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Mark All My Notifications Read
-     * Returns the remaining unread count, which is always zero.
-     * @param podId
-     * @returns NotificationUnreadCountResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationMarkAllRead(podId) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications/read-all",
-        path: {
-          "pod_id": podId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Count My Unread Notifications
-     * Unread, not unanswered. A notification you have read but not yet acted on has stopped being new.
-     * @param podId
-     * @returns NotificationUnreadCountResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationUnreadCount(podId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/pods/{pod_id}/notifications/unread-count",
-        path: {
-          "pod_id": podId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Acknowledge A Notification
-     * Dismiss a notification that asked for nothing. Returns 409 when a response is owed — dismissing a question is not answering it.
-     * @param podId
-     * @param notificationId
-     * @returns NotificationResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationAcknowledge(podId, notificationId) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications/{notification_id}/acknowledge",
-        path: {
-          "pod_id": podId,
-          "notification_id": notificationId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Mark Notification Read
-     * @param podId
-     * @param notificationId
-     * @returns NotificationResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationMarkRead(podId, notificationId) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications/{notification_id}/read",
-        path: {
-          "pod_id": podId,
-          "notification_id": notificationId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Respond To A Notification
-     * Answer a notification from the app. Produces the same `RESPONDED` an agent-mediated reply on a chat surface produces, so the asking run sees it either way.
-     *
-     * Returns 409 when the notification is answered by completing its `action` instead — a workflow form is submitted through the workflow run endpoint, where it is validated against the node's schema. It also returns 409 if somebody already answered it, rather than overwriting an answer that may already have been acted on.
-     * @param podId
-     * @param notificationId
-     * @param requestBody
-     * @returns NotificationResponse Successful Response
-     * @throws ApiError
-     */
-    static notificationRespond(podId, notificationId, requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/pods/{pod_id}/notifications/{notification_id}/respond",
-        path: {
-          "pod_id": podId,
-          "notification_id": notificationId
-        },
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-  };
-
-  // src/namespaces/notifications.ts
-  var NotificationsNamespace = class {
-    constructor(client, podId) {
-      __publicField(this, "client", client);
-      __publicField(this, "podId", podId);
-    }
-    /** My notifications in this pod, newest first. */
-    list(options) {
-      return this.client.request(
-        () => NotificationsService.notificationList(
-          this.podId(),
-          options == null ? void 0 : options.status,
-          options == null ? void 0 : options.limit,
-          options == null ? void 0 : options.pageToken
-        )
-      );
-    }
-    /**
-     * How many I have not read. Keyed on being read, not answered — a badge that
-     * only clears when you finish the work is a badge people stop looking at.
-     */
-    unreadCount() {
-      return this.client.request(
-        () => NotificationsService.notificationUnreadCount(this.podId())
-      );
-    }
-    markRead(notificationId) {
-      return this.client.request(
-        () => NotificationsService.notificationMarkRead(this.podId(), notificationId)
-      );
-    }
-    markAllRead() {
-      return this.client.request(
-        () => NotificationsService.notificationMarkAllRead(this.podId())
-      );
-    }
-    /**
-     * Answer one. Produces the same `RESPONDED` an agent-mediated reply on a chat
-     * surface produces, so the run that asked reads one thing either way.
-     *
-     * Rejects with 409 when the notification is answered by completing its
-     * `action` instead (a workflow form, submitted through the workflow run
-     * endpoint where it is validated against the node's schema), and when
-     * somebody has already answered it.
-     */
-    respond(notificationId, payload) {
-      return this.client.request(
-        () => NotificationsService.notificationRespond(
-          this.podId(),
-          notificationId,
-          payload
-        )
-      );
-    }
-    /** Dismiss one that asked for nothing. 409 when a response is owed. */
-    acknowledge(notificationId) {
-      return this.client.request(
-        () => NotificationsService.notificationAcknowledge(this.podId(), notificationId)
-      );
-    }
-    /**
-     * Reach a pod member wherever they are, leaving a copy in their inbox either
-     * way. A 201 whose `delivery_status` is `UNDELIVERABLE` succeeded; read
-     * `undeliverable_reason` to tell the user what to do about it.
-     */
-    send(payload) {
-      return this.client.request(
-        () => NotificationsService.notificationSend(this.podId(), payload)
       );
     }
   };
@@ -18179,6 +19497,34 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * List Schedule Skips
+     * What the trigger let pass without firing -- e.g. the changes of a bulk
+     * write or an import it is set to skip -- newest first.
+     * @param podId
+     * @param scheduleId
+     * @param limit
+     * @param pageToken
+     * @returns TriggerSkipListResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleSkipList(podId, scheduleId, limit = 50, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/schedules/{schedule_id}/skips",
+        path: {
+          "pod_id": podId,
+          "schedule_id": scheduleId
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/schedules.ts
@@ -18231,6 +19577,25 @@ var LemmaClient = (() => {
             (_a = options.limit) != null ? _a : 100,
             (_b = options.status) != null ? _b : void 0,
             options.skipped
+          );
+        }
+      );
+    }
+    /**
+     * What a trigger let pass without firing, newest first, aggregated: one item
+     * per delivered page and reason (`bulk_write`, `import_write`, `fire_cap`)
+     * with its `count`. Pass the response's `next_page_token` back as
+     * `pageToken` for the next page.
+     */
+    skips(scheduleId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b;
+          return SchedulesService.scheduleSkipList(
+            this.podId(),
+            scheduleId,
+            (_a = options.limit) != null ? _a : 50,
+            (_b = options.pageToken) != null ? _b : void 0
           );
         }
       );
@@ -19432,9 +20797,12 @@ var LemmaClient = (() => {
   // src/datastore-changes.ts
   var RECONNECT_BASE_DELAY_MS = 500;
   var RECONNECT_MAX_DELAY_MS = 3e4;
+  var IDLE_CLOSE_MS = 1e3;
+  var PING_INTERVAL_MS = 25e3;
   var WS_UNAUTHENTICATED = 4401;
   var WS_FORBIDDEN = 4403;
   var WS_NOT_FOUND = 4404;
+  var ERROR_UNAVAILABLE = "unavailable";
   function reconnectDelayMs(attempt) {
     const ceiling = Math.min(
       RECONNECT_MAX_DELAY_MS,
@@ -19442,150 +20810,452 @@ var LemmaClient = (() => {
     );
     return Math.random() * ceiling;
   }
-  function changesWsUrl(apiUrl, podId, table, since, token) {
-    const root = apiUrl.replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
-    const url = new URL(`${root}/pods/${podId}/datastore/changes`);
-    if (table) url.searchParams.set("table", table);
-    if (since) url.searchParams.set("since", since);
+  var UnresolvableApiUrl = class extends Error {
+  };
+  function absoluteApiUrl(apiUrl) {
+    var _a;
+    if (/^[a-z][a-z\d+.-]*:/i.test(apiUrl)) return apiUrl;
+    const origin = (_a = globalThis.location) == null ? void 0 : _a.origin;
+    if (!origin || origin === "null") {
+      throw new UnresolvableApiUrl(
+        `Datastore change stream: apiUrl "${apiUrl}" is relative and there is no page origin to resolve it against; pass an absolute URL`
+      );
+    }
+    return new URL(apiUrl, origin).toString();
+  }
+  function liveWsUrl(apiUrl, podId, token) {
+    const root = absoluteApiUrl(apiUrl).replace(/\/$/, "").replace(/^http(s?):\/\//, "ws$1://");
+    const url = new URL(`${root}/pods/${podId}/live`);
     if (token) url.searchParams.set("access_token", token);
     return url.toString();
   }
-  function watchDatastoreChanges(apiUrl, auth, podId, options) {
-    let socket = null;
-    let cursor = options.since;
-    let attempt = 0;
-    let stopped = false;
-    let authRefreshed = false;
-    let reconnectTimer = null;
-    const status = (next) => {
-      var _a;
-      return (_a = options.onStatus) == null ? void 0 : _a.call(options, next);
-    };
-    const fail = (error) => {
-      var _a;
-      if (stopped) return;
-      stopped = true;
-      status("closed");
-      (_a = options.onError) == null ? void 0 : _a.call(options, error);
-    };
-    const scheduleReconnect = () => {
+  function frameCursor(frame) {
+    var _a;
+    const cursor = (_a = frame.cursor) != null ? _a : frame.stream_id;
+    return typeof cursor === "string" && cursor ? cursor : void 0;
+  }
+  var Subscription = class {
+    constructor(id, options) {
+      __publicField(this, "id", id);
+      __publicField(this, "options", options);
+      __publicField(this, "status", null);
+      __publicField(this, "stopped", false);
+      __publicField(this, "cursor");
+      /** Consecutive `unavailable` refusals since the last `subscribed`. */
+      __publicField(this, "retryAttempt", 0);
+      __publicField(this, "retryTimer", null);
+      this.cursor = options.since;
+    }
+    setStatus(next) {
       var _a, _b;
-      if (stopped) return;
-      if (((_a = auth.getState) == null ? void 0 : _a.call(auth).status) === "unauthenticated") {
-        stopped = true;
-        status("closed");
-        (_b = options.onError) == null ? void 0 : _b.call(options, new Error("Datastore change stream: signed out"));
-        return;
-      }
-      if (options.maxRetries != null && attempt >= options.maxRetries) {
-        fail(new Error("Datastore change stream: max reconnect attempts reached"));
-        return;
-      }
-      const delay = reconnectDelayMs(attempt);
-      attempt += 1;
-      status("reconnecting");
-      reconnectTimer = setTimeout(() => void connect(), delay);
-    };
-    const connect = async () => {
+      if (this.status === next) return;
+      this.status = next;
+      (_b = (_a = this.options).onStatus) == null ? void 0 : _b.call(_a, next);
+    }
+    cancelRetry() {
+      if (this.retryTimer != null) clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    subscribeFrame() {
       var _a;
-      if (stopped) return;
-      status(attempt === 0 ? "connecting" : "reconnecting");
+      const frame = {
+        op: "subscribe",
+        id: this.id,
+        topic: "records"
+      };
+      if (this.options.table) frame.table = this.options.table;
+      if ((_a = this.options.ops) == null ? void 0 : _a.length) frame.ops = this.options.ops;
+      if (this.options.when) frame.when = this.options.when;
+      if (this.cursor) frame.since = this.cursor;
+      return JSON.stringify(frame);
+    }
+  };
+  var LiveConnection = class {
+    constructor(apiUrl, auth, podId, useCookie, onDispose) {
+      __publicField(this, "apiUrl", apiUrl);
+      __publicField(this, "auth", auth);
+      __publicField(this, "podId", podId);
+      __publicField(this, "useCookie", useCookie);
+      __publicField(this, "onDispose", onDispose);
+      __publicField(this, "socket", null);
+      __publicField(this, "ready", false);
+      __publicField(this, "attempt", 0);
+      __publicField(this, "authRefreshed", false);
+      __publicField(this, "reconnectTimer", null);
+      __publicField(this, "idleTimer", null);
+      __publicField(this, "pingTimer", null);
+      __publicField(this, "connecting", false);
+      __publicField(this, "nextId", 1);
+      __publicField(this, "closed", false);
+      __publicField(this, "subscriptions", /* @__PURE__ */ new Map());
+    }
+    get isClosed() {
+      return this.closed;
+    }
+    add(options) {
+      if (this.idleTimer != null) {
+        clearTimeout(this.idleTimer);
+        this.idleTimer = null;
+      }
+      const subscription = new Subscription(`s${this.nextId++}`, options);
+      this.subscriptions.set(subscription.id, subscription);
+      subscription.setStatus(
+        this.attempt === 0 ? "connecting" : "reconnecting"
+      );
+      if (this.ready) this.send(subscription.subscribeFrame());
+      else this.ensureConnecting();
+      return subscription;
+    }
+    remove(subscription) {
+      subscription.cancelRetry();
+      if (!this.subscriptions.delete(subscription.id)) return;
+      if (this.ready)
+        this.send(
+          JSON.stringify({ op: "unsubscribe", id: subscription.id })
+        );
+      if (this.subscriptions.size === 0 && this.idleTimer == null) {
+        this.idleTimer = setTimeout(() => {
+          this.idleTimer = null;
+          if (this.subscriptions.size === 0) this.dispose();
+        }, IDLE_CLOSE_MS);
+      }
+    }
+    send(text) {
+      var _a;
+      try {
+        (_a = this.socket) == null ? void 0 : _a.send(text);
+      } catch {
+      }
+    }
+    ensureConnecting() {
+      if (this.socket || this.connecting || this.reconnectTimer != null || this.closed)
+        return;
+      void this.connect();
+    }
+    async connect() {
+      var _a, _b;
+      if (this.closed) return;
+      this.connecting = true;
       let token = null;
-      if (!options.useCookie) {
+      if (!this.useCookie) {
         try {
-          token = await auth.getAccessToken();
+          token = await this.auth.getAccessToken();
         } catch {
           token = null;
         }
       }
-      if (stopped) return;
-      let ws;
+      this.connecting = false;
+      if (this.closed || this.subscriptions.size === 0) return;
+      let url;
       try {
-        ws = new WebSocket(changesWsUrl(apiUrl, podId, options.table, cursor, token));
+        url = liveWsUrl(this.apiUrl, this.podId, token);
       } catch (error) {
-        (_a = options.onError) == null ? void 0 : _a.call(options, error instanceof Error ? error : new Error(String(error)));
-        scheduleReconnect();
+        this.failAll(
+          error instanceof UnresolvableApiUrl ? error : new Error(
+            `Datastore change stream: apiUrl "${this.apiUrl}" is not a valid URL`,
+            { cause: error }
+          )
+        );
         return;
       }
-      socket = ws;
-      ws.onmessage = (event) => {
-        var _a2;
-        let frame;
-        try {
-          frame = JSON.parse(typeof event.data === "string" ? event.data : "");
-        } catch {
-          return;
+      let ws;
+      try {
+        ws = new WebSocket(url);
+      } catch (error) {
+        for (const sub of this.subscriptions.values()) {
+          (_b = (_a = sub.options).onError) == null ? void 0 : _b.call(
+            _a,
+            error instanceof Error ? error : new Error(String(error))
+          );
         }
-        if (!frame || typeof frame !== "object") return;
-        const record = frame;
-        if (record.type === "ready") {
-          attempt = 0;
-          authRefreshed = false;
-          status("open");
-          cursor = record.since || cursor;
-          if (cursor) (_a2 = options.onReady) == null ? void 0 : _a2.call(options, { since: cursor });
-          return;
-        }
-        cursor = record.stream_id || cursor;
-        options.onChange(record);
-      };
+        this.scheduleReconnect();
+        return;
+      }
+      this.socket = ws;
+      ws.onmessage = (event) => this.onMessage(event);
       ws.onclose = (event) => {
-        socket = null;
-        if (stopped) {
-          status("closed");
+        if (this.socket === ws) this.onClose(event.code);
+      };
+      ws.onerror = () => {
+      };
+    }
+    onMessage(event) {
+      var _a, _b, _c, _d, _e, _f;
+      let frame;
+      try {
+        const parsed = JSON.parse(
+          typeof event.data === "string" ? event.data : ""
+        );
+        if (!parsed || typeof parsed !== "object") return;
+        frame = parsed;
+      } catch {
+        return;
+      }
+      if (frame.type === "ready") {
+        this.ready = true;
+        this.attempt = 0;
+        this.authRefreshed = false;
+        for (const sub2 of this.subscriptions.values()) {
+          sub2.cancelRetry();
+          this.send(sub2.subscribeFrame());
+        }
+        this.startPing();
+        return;
+      }
+      const sub = typeof frame.id === "string" ? this.subscriptions.get(frame.id) : void 0;
+      if (!sub) return;
+      const cursor = frameCursor(frame);
+      switch (frame.type) {
+        case "subscribed":
+          sub.cursor = cursor != null ? cursor : sub.cursor;
+          sub.retryAttempt = 0;
+          sub.setStatus("open");
+          if (sub.cursor) (_b = (_a = sub.options).onReady) == null ? void 0 : _b.call(_a, { since: sub.cursor });
+          return;
+        case "changes": {
+          sub.cursor = cursor != null ? cursor : sub.cursor;
+          const changes = Array.isArray(frame.changes) ? frame.changes : [];
+          for (const change of changes)
+            sub.options.onChange(this.toFrame(change, sub.cursor));
           return;
         }
-        if (event.code === WS_UNAUTHENTICATED) {
-          if (authRefreshed) {
-            fail(new Error("Datastore change stream: session rejected after refresh"));
+        case "resync":
+          sub.cursor = cursor != null ? cursor : sub.cursor;
+          (_e = (_d = sub.options).onResync) == null ? void 0 : _e.call(_d, {
+            cursor: (_c = sub.cursor) != null ? _c : "",
+            reason: typeof frame.reason === "string" ? frame.reason : "unknown"
+          });
+          return;
+        case "error":
+          if (frame.code === ERROR_UNAVAILABLE) {
+            this.retrySubscribe(sub);
             return;
           }
-          authRefreshed = true;
-          auth.refreshAccessToken().then(
-            scheduleReconnect,
-            (error) => fail(
-              new Error(
-                `Datastore change stream: session refresh failed (${error instanceof Error ? error.message : String(error)})`
-              )
+          this.end(
+            sub,
+            `subscription refused (${String(frame.code)}): ${String((_f = frame.message) != null ? _f : "")}`
+          );
+          return;
+        case "unsubscribed":
+          if (frame.reason === "client") return;
+          this.end(
+            sub,
+            `subscription ended by the server (${String(frame.reason)})`
+          );
+          return;
+        default:
+          return;
+      }
+    }
+    toFrame(change, cursor) {
+      var _a;
+      return {
+        type: `datastore.record.${change.op}`,
+        pod_id: this.podId,
+        table_name: change.table,
+        record_id: change.record_id,
+        operation: change.op,
+        payload: (_a = change.row) != null ? _a : {},
+        cursor,
+        stream_id: cursor
+      };
+    }
+    /**
+     * Re-send one subscription the server could not start just now, after its
+     * own backoff, on the same socket. A reconnect in the meantime cancels the
+     * timer: `ready` re-sends every subscription anyway.
+     */
+    retrySubscribe(sub) {
+      sub.cancelRetry();
+      const max = sub.options.maxRetries;
+      if (max != null && sub.retryAttempt >= max) {
+        this.end(sub, "max retry attempts reached (unavailable)");
+        return;
+      }
+      sub.setStatus("reconnecting");
+      const delay = reconnectDelayMs(sub.retryAttempt);
+      sub.retryAttempt += 1;
+      sub.retryTimer = setTimeout(() => {
+        sub.retryTimer = null;
+        if (this.closed || !this.ready || this.subscriptions.get(sub.id) !== sub)
+          return;
+        this.send(sub.subscribeFrame());
+      }, delay);
+    }
+    end(sub, message) {
+      var _a, _b;
+      sub.cancelRetry();
+      this.subscriptions.delete(sub.id);
+      sub.stopped = true;
+      sub.setStatus("closed");
+      (_b = (_a = sub.options).onError) == null ? void 0 : _b.call(_a, new Error(`Datastore change stream: ${message}`));
+      if (this.subscriptions.size === 0) this.dispose();
+    }
+    failAll(error) {
+      var _a, _b;
+      for (const sub of [...this.subscriptions.values()]) {
+        sub.cancelRetry();
+        this.subscriptions.delete(sub.id);
+        sub.stopped = true;
+        sub.setStatus("closed");
+        (_b = (_a = sub.options).onError) == null ? void 0 : _b.call(_a, error);
+      }
+      this.dispose();
+    }
+    onClose(code) {
+      this.socket = null;
+      this.ready = false;
+      this.stopPing();
+      for (const sub of this.subscriptions.values()) sub.cancelRetry();
+      if (this.closed) return;
+      if (this.subscriptions.size === 0) {
+        this.dispose();
+        return;
+      }
+      if (code === WS_UNAUTHENTICATED) {
+        if (this.authRefreshed) {
+          this.failAll(
+            new Error(
+              "Datastore change stream: session rejected after refresh"
             )
           );
           return;
         }
-        if (event.code === WS_FORBIDDEN) {
-          fail(new Error("Datastore change stream: no access to this pod's changes"));
-          return;
+        this.authRefreshed = true;
+        this.auth.refreshAccessToken().then(
+          () => this.scheduleReconnect(),
+          (error) => this.failAll(
+            new Error(
+              `Datastore change stream: session refresh failed (${error instanceof Error ? error.message : String(error)})`
+            )
+          )
+        );
+        return;
+      }
+      if (code === WS_FORBIDDEN) {
+        this.failAll(
+          new Error(
+            "Datastore change stream: no access to this pod's changes"
+          )
+        );
+        return;
+      }
+      if (code === WS_NOT_FOUND) {
+        this.failAll(
+          new Error("Datastore change stream: pod or table not found")
+        );
+        return;
+      }
+      this.scheduleReconnect();
+    }
+    scheduleReconnect() {
+      var _a, _b;
+      if (this.closed) return;
+      if (((_b = (_a = this.auth).getState) == null ? void 0 : _b.call(_a).status) === "unauthenticated") {
+        this.failAll(new Error("Datastore change stream: signed out"));
+        return;
+      }
+      for (const sub of [...this.subscriptions.values()]) {
+        const max = sub.options.maxRetries;
+        if (max != null && this.attempt >= max) {
+          this.end(sub, "max reconnect attempts reached");
         }
-        if (event.code === WS_NOT_FOUND) {
-          fail(new Error("Datastore change stream: pod or table not found"));
-          return;
-        }
-        scheduleReconnect();
-      };
-      ws.onerror = () => {
-      };
-    };
-    const close = () => {
-      if (stopped) return;
-      stopped = true;
-      if (reconnectTimer != null) clearTimeout(reconnectTimer);
+      }
+      if (this.closed || this.subscriptions.size === 0) return;
+      for (const sub of this.subscriptions.values())
+        sub.setStatus("reconnecting");
+      const delay = reconnectDelayMs(this.attempt);
+      this.attempt += 1;
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        void this.connect();
+      }, delay);
+    }
+    startPing() {
+      this.stopPing();
+      this.pingTimer = setInterval(
+        () => this.send('{"op":"ping"}'),
+        PING_INTERVAL_MS
+      );
+    }
+    stopPing() {
+      if (this.pingTimer != null) clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+    dispose() {
+      if (this.closed) return;
+      this.closed = true;
+      this.stopPing();
+      for (const sub of this.subscriptions.values()) sub.cancelRetry();
+      if (this.reconnectTimer != null) clearTimeout(this.reconnectTimer);
+      if (this.idleTimer != null) clearTimeout(this.idleTimer);
+      this.reconnectTimer = null;
+      this.idleTimer = null;
+      const socket = this.socket;
+      this.socket = null;
+      this.ready = false;
       if (socket) {
         try {
           socket.close(1e3, "client closed");
         } catch {
         }
-        socket = null;
       }
-      status("closed");
-    };
-    if (options.signal) {
-      if (options.signal.aborted) stopped = true;
-      else options.signal.addEventListener("abort", close, { once: true });
+      this.onDispose(this);
     }
-    if (!stopped) void connect();
+  };
+  var connections = /* @__PURE__ */ new WeakMap();
+  function sharedConnection(apiUrl, auth, podId, useCookie) {
+    let byKey = connections.get(auth);
+    if (!byKey) {
+      byKey = /* @__PURE__ */ new Map();
+      connections.set(auth, byKey);
+    }
+    const key = `${apiUrl.replace(/\/$/, "")}|${podId}|${useCookie ? "cookie" : "token"}`;
+    const existing = byKey.get(key);
+    if (existing && !existing.isClosed) return existing;
+    const map = byKey;
+    const connection = new LiveConnection(
+      apiUrl,
+      auth,
+      podId,
+      useCookie,
+      (gone) => {
+        if (map.get(key) === gone) map.delete(key);
+      }
+    );
+    map.set(key, connection);
+    return connection;
+  }
+  function watchDatastoreChanges(apiUrl, auth, podId, options) {
+    var _a, _b;
+    let subscription = null;
+    let connection = null;
+    let stopped = false;
+    const close = () => {
+      if (stopped) return;
+      stopped = true;
+      if (subscription && connection && !subscription.stopped) {
+        subscription.stopped = true;
+        connection.remove(subscription);
+        subscription.setStatus("closed");
+      }
+    };
+    if ((_a = options.signal) == null ? void 0 : _a.aborted) {
+      stopped = true;
+    } else {
+      (_b = options.signal) == null ? void 0 : _b.addEventListener("abort", close, { once: true });
+      connection = sharedConnection(
+        apiUrl,
+        auth,
+        podId,
+        Boolean(options.useCookie)
+      );
+      subscription = connection.add(options);
+    }
     return {
       close,
       get closed() {
-        return stopped;
+        return stopped || Boolean(subscription == null ? void 0 : subscription.stopped);
       }
     };
   }
@@ -19655,12 +21325,11 @@ var LemmaClient = (() => {
       __publicField(this, "organizations");
       __publicField(this, "podSurfaces");
       /** The WhatsApp, Telegram and Slack groups a pod's bots are in. */
-      __publicField(this, "podGroups");
       /** The other pods a pod can ask, and the pods connected to ask it. */
       __publicField(this, "podLinks");
+      __publicField(this, "channels");
       __publicField(this, "contacts");
       /** The caller's own surfaces across all pods (grouped by platform). */
-      __publicField(this, "notifications");
       __publicField(this, "userSurfaces");
       var _a;
       this._config = resolveConfig(overrides);
@@ -19695,7 +21364,6 @@ var LemmaClient = (() => {
       this.agentHost = new AgentHostNamespace(this._generated);
       this.conversations = new ConversationsNamespace(this._http, podIdFn);
       this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
-      this.notifications = new NotificationsNamespace(this._generated, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
       this.workspace = new WorkspaceNamespace(this._http);
@@ -19720,8 +21388,8 @@ var LemmaClient = (() => {
       this.podRoles = new PodRolesNamespace(this._generated, podIdFn);
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
-      this.podGroups = new PodGroupsNamespace(this._generated);
       this.podLinks = new PodLinksNamespace(this._generated);
+      this.channels = new ChannelsNamespace(this._generated, this._http);
       this.contacts = new ContactsNamespace(this._generated);
       this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }

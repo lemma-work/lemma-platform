@@ -55,6 +55,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     AgentHostRunConfig,
     joined_prompt,
     json_object,
+    offered_selections,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
@@ -235,6 +236,13 @@ async def enqueue_run[DepsT: AgentContext](
         pre_approving = supports_pre_approval(harness.capabilities)
         harness_key = harness.harness_key
         config_revision = harness.config_revision
+        # From the same read as the revision admission pins the run to, so
+        # what survives here is exactly what admission re-validates.
+        run_config = offered_selections(
+            run_config,
+            config_options=list(harness.config_options or []),
+            agent_run_id=agent_run_id,
+        )
         # Set only on a run started to answer a pausing tool call. Read from
         # the run rather than passed in, because the run row is where the
         # resume recorded it and a second copy could only ever disagree.

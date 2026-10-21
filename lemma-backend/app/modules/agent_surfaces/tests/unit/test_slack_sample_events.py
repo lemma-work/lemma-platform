@@ -11,9 +11,11 @@ from uuid import uuid4
 import pytest
 from slack_sdk.web.async_client import AsyncWebClient
 
+from app.modules.test_support.channel_lines_double import RecordingChannelLines
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 from app.core.authorization.context import ActorType, Context
 from app.core.authorization.service import AuthorizationDataService
-from app.modules.agent.domain.entities import Conversation
+from app.modules.agent_surfaces.tests.unit.surface_doubles import surface_conversation
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -97,6 +99,7 @@ def _conversation_operations(monkeypatch, *, conversation):
     """
     operations = SimpleNamespace(
         open_surface_conversation=AsyncMock(return_value=conversation),
+        authorize_surface_conversation=AsyncMock(),
         surface_conversation=AsyncMock(return_value=conversation),
         # A real run id, because the caller checks whether one was started.
         start_surface_turn=AsyncMock(return_value=uuid4()),
@@ -134,12 +137,7 @@ def _build_service(*, surface, monkeypatch):
     surface_repository.list_active_for_routing.side_effect = routing_surfaces_double(
         [surface]
     )
-    conversation_link_repository = AsyncMock()
-    conversation_link_repository.get_by_external_thread.return_value = None
-    # A bare AsyncMock answers every call with a truthy mock, which the binder
-    # would read as "this person has an earlier private-chat link".
-    conversation_link_repository.find_latest_dm_link_for_person.return_value = None
-    conversation_link_repository.create.side_effect = lambda link, **_: link
+    seats = InMemoryChannelSeats()
     slack_credentials = {
         "access_token": "xoxb-test",
         "scope": "assistant:write,chat:write.customize,reactions:write",
@@ -151,7 +149,7 @@ def _build_service(*, surface, monkeypatch):
     router = SurfaceRouter(
         uow=uow,
         surface_repository=surface_repository,
-        conversation_link_repository=conversation_link_repository,
+        seats=seats,
         pod_membership_port=SimpleNamespace(
             get_user_pod_ids=AsyncMock(return_value=[surface.pod_id]),
             get_user_email=AsyncMock(return_value="sender@example.com"),
@@ -176,10 +174,9 @@ def _build_service(*, surface, monkeypatch):
         binder=ConversationBinder(
             uow=uow,
             surface_repository=surface_repository,
-            conversation_link_repository=conversation_link_repository,
+            seats=seats,
         ),
         surface_repository=surface_repository,
-        conversation_link_repository=conversation_link_repository,
         credential_resolver=credential_resolver,
     )
     service._resolve_account_credentials = AsyncMock(return_value={})
@@ -204,10 +201,11 @@ def _build_service(*, surface, monkeypatch):
     async def uow_factory():
         yield uow
 
-    starter = SurfaceTurnStarter(uow_factory=uow_factory)
+    lines = RecordingChannelLines()
+    starter = SurfaceTurnStarter(uow_factory=uow_factory, channel_lines=lines)
     starter._credentials_for = AsyncMock(return_value=slack_credentials)
     starter.event_dedup_store = service.event_dedup_store
-    return SimpleNamespace(ingress=service, starter=starter)
+    return SimpleNamespace(ingress=service, starter=starter, lines=lines)
 
 
 async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch):
@@ -258,13 +256,11 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
         config=SurfaceConfig(),
         is_active=True,
     )
-    conversation = Conversation(
-        id=uuid4(),
+    conversation = surface_conversation(
         pod_id=surface.pod_id,
         agent_id=surface.agent_id,
         user_id=surface.agent_id,
-        title="Slack DM Conversation",
-        metadata={},
+        title="Slack Conversation",
     )
     conversations = _conversation_operations(monkeypatch, conversation=conversation)
     service = _build_service(surface=surface, monkeypatch=monkeypatch)
@@ -293,6 +289,10 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
     message_kwargs = conversations.start_surface_turn.await_args.kwargs
     assert message_kwargs["conversation_id"] == conversation.id
     assert message_kwargs["content"] == event["text"]
+    # What they said is a line of their direct channel, on the DM's source.
+    [heard] = service.lines.heard_lines
+    assert (heard.conversation_id, heard.text) == (conversation.id, event["text"])
+    assert heard.source_id == context.source_id is not None
     assert status_updates == [
         {
             "channel_id": event["channel"],
@@ -347,13 +347,11 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
         config=SurfaceConfig(),
         is_active=True,
     )
-    conversation = Conversation(
-        id=uuid4(),
+    conversation = surface_conversation(
         pod_id=surface.pod_id,
         agent_id=surface.agent_id,
         user_id=surface.agent_id,
-        title="Slack Mention Conversation",
-        metadata={},
+        title="Slack Conversation",
     )
     conversations = _conversation_operations(monkeypatch, conversation=conversation)
     service = _build_service(surface=surface, monkeypatch=monkeypatch)

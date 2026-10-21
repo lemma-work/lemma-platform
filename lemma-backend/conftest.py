@@ -4,6 +4,9 @@ import os
 
 import pytest
 
+#: Fixtures every suite may ask for by name.
+pytest_plugins = ["app.modules.test_support.e2e.committed_events"]
+
 # Tests are deterministic and self-contained: they set the config they need (via
 # fixtures / the defaults below / monkeypatch), NOT a developer's local ``.env``.
 # A leaked ``.env`` makes the suite non-deterministic — a value present locally
@@ -217,6 +220,38 @@ def _isolate_shared_redis_clients():
     redis_client._clients.clear()
 
 
+@pytest.fixture(autouse=True)
+def _hold_session_worker_for_work_drivers(request: pytest.FixtureRequest) -> None:
+    """Hold the session's worker still for a ``drives_work`` test.
+
+    Sync and a no-op for every other test, so the unit lane pays nothing; the
+    hold itself is the async ``held_worker`` fixture. Autouse, so it is set up
+    before the test's own fixtures write any work the worker could take.
+    """
+    if request.node.get_closest_marker("drives_work") is None:
+        return
+    needs_worker = {"worker", "document_worker"} & set(request.fixturenames)
+    if needs_worker:
+        raise pytest.UsageError(
+            f"{request.node.nodeid} is marked drives_work but needs "
+            f"{sorted(needs_worker)}: a held worker would never run its work"
+        )
+    if "db_manager" in request.fixturenames:
+        # Truncate before the hold, not under it: the worker's last transaction
+        # has settled by then, so nothing it does lands in the fresh tables.
+        request.getfixturevalue("db_manager")
+    request.getfixturevalue("held_worker")
+
+
+@pytest.fixture
+async def held_worker():
+    """See ``app/modules/test_support/e2e/worker_hold.py``."""
+    from app.modules.test_support.e2e.worker_hold import worker_held
+
+    async with worker_held():
+        yield
+
+
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
     del nextitem
     marker_names = {marker.name for marker in item.iter_markers()}
@@ -237,6 +272,8 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> 
 _PHASE_DURATIONS: dict[str, dict[str, float]] = {}
 _SESSION_SETUP_CARRIERS: set[str] = set()
 _WORKERS_SEEN: set[str] = set()
+_RERUNS: set[str] = set()
+_FINAL_FAILURES: set[str] = set()
 
 
 def _junit_case_id(report) -> str:
@@ -262,6 +299,14 @@ def pytest_runtest_logreport(report) -> None:
     So note who paid it. `scripts/e2e_durations.py --check` reads this and
     judges that test on its own work instead.
     """
+    if report.outcome == "rerun":
+        # pytest-rerunfailures retried it. Noted so a test that only passes on
+        # its second try is reported as a flake rather than read as green.
+        _RERUNS.add(report.nodeid)
+    elif report.failed:
+        # Failed its retry too: a red test, not a flake, and the sidecar below
+        # must not annotate it as "passed on retry".
+        _FINAL_FAILURES.add(report.nodeid)
     case = _junit_case_id(report)
     phases = _PHASE_DURATIONS.setdefault(case, {})
     phases[report.when] = phases.get(report.when, 0.0) + report.duration
@@ -296,15 +341,61 @@ def _write_phase_sidecar(session: pytest.Session) -> None:
     )
 
 
+def _write_rerun_sidecar(session: pytest.Session) -> None:
+    """List every test that needed a retry, beside the JUnit.
+
+    The e2e shards retry a failed test once (`E2E_RERUNS` in the Makefile), so
+    one flaky test no longer fails a whole pull request. What that must not do
+    is make the flake invisible: CI reads this file and annotates the run with
+    each test in it.
+    """
+    junit = getattr(session.config.option, "xmlpath", None)
+    if not junit or hasattr(session.config, "workerinput"):
+        return
+    from pathlib import Path
+
+    Path(junit).with_suffix(".reruns.txt").write_text(
+        "".join(f"{nodeid}\n" for nodeid in sorted(_RERUNS - _FINAL_FAILURES))
+    )
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     del exitstatus
     _write_phase_sidecar(session)
+    _write_rerun_sidecar(session)
     from app.modules.test_support import e2e_base
 
     # Context managers remove only the containers owned by this pytest process.
     # Never sweep every ``lemma.e2e=true`` container here: a separately invoked
     # pytest session may be running concurrently and uses the same shared label.
     e2e_base._close_shared_contexts()
+
+
+@pytest.hookimpl(trylast=True, specname="pytest_sessionfinish")
+def pytest_sessionfinish_save_worker_coverage(session: pytest.Session) -> None:
+    """Write an xdist worker's coverage before the worker says it is done.
+
+    A worker started under `COVERAGE_PROCESS_START` saves its data from an
+    atexit handler. The controller gives a finished worker ten seconds to exit
+    and then kills it, and a worker can take longer than that to shut down --
+    interpreter exit joins any non-daemon thread a test left behind before
+    atexit runs at all. A killed worker's coverage is simply gone, so the
+    parallel unit lane reported a fraction of its real coverage, a different
+    fraction on each run.
+
+    `trylast` puts this after every other session-finish hook, and still inside
+    xdist's wrapper, which sends "workerfinished" only once this returns. The
+    data file is SQLite, so the second save atexit cannot corrupt this one.
+    """
+    if not hasattr(session.config, "workerinput"):
+        return
+    import coverage
+
+    current = coverage.Coverage.current()
+    if current is None:
+        return
+    current.stop()
+    current.save()
 
 
 @pytest.fixture(scope="session", autouse=True)

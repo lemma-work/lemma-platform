@@ -3,6 +3,7 @@ from __future__ import annotations
 from sandbox_runtime.errors import SandboxUnavailable
 
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -30,13 +31,19 @@ from app.modules.function.domain.entities import (
     FunctionRunRuntimeContext,
     FunctionRunStatus,
 )
-from app.modules.function.tests.fakes import InMemoryPodRunSlots
+
+
+class _IdlePod:
+    """A session over a pod with nothing running: the gate's count is zero."""
+
+    async def scalar(self, _statement):
+        return 0
 
 
 class _UowFactory:
     @asynccontextmanager
     async def __call__(self):
-        yield object()
+        yield SimpleNamespace(session=_IdlePod())
 
 
 async def _token_minter(**_kwargs) -> FunctionSessionToken:
@@ -112,9 +119,7 @@ def _run(
     )
 
 
-def _dispatcher(
-    runtime_client, *, pod_runs: InMemoryPodRunSlots | None = None
-) -> FunctionDispatcher:
+def _dispatcher(runtime_client) -> FunctionDispatcher:
     return FunctionDispatcher(
         uow_factory=_UowFactory(),
         sandbox_client_factory=AsyncMock,
@@ -124,7 +129,7 @@ def _dispatcher(
         runtime_http_client_factory=lambda: runtime_client,
         organization_resolver=_organization_resolver,
         delegated_tokens_enabled=True,
-        pod_runs=pod_runs or InMemoryPodRunSlots(),
+        max_running_per_pod=1_000,
     )
 
 
@@ -153,8 +158,7 @@ async def test_api_dispatch_sends_complete_v2_envelope_and_uses_direct_result(
                 },
             )
 
-    pod_runs = InMemoryPodRunSlots()
-    dispatcher = _dispatcher(_Runtime(), pod_runs=pod_runs)
+    dispatcher = _dispatcher(_Runtime())
     endpoint = _endpoint("https://sandbox.test/runtime/")
     monkeypatch.setattr(
         dispatcher,
@@ -190,9 +194,6 @@ async def test_api_dispatch_sends_complete_v2_envelope_and_uses_direct_result(
     assert observed["json"]["input"] == dispatch.input_data
     assert observed["json"]["config"] == dispatch.config
     assert observed["json"]["identity"]["function_id"] == str(dispatch.function_id)
-    # Settled inline, so the pod's slot is free for the next run.
-    assert pod_runs.released == [dispatch.run_id]
-    assert pod_runs.held[dispatch.pod_id] == set()
 
 
 @pytest.mark.asyncio
@@ -213,8 +214,7 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
                 json={"accepted": True, "run_id": str(dispatch.run_id)},
             )
 
-    pod_runs = InMemoryPodRunSlots()
-    dispatcher = _dispatcher(_Runtime(), pod_runs=pod_runs)
+    dispatcher = _dispatcher(_Runtime())
     monkeypatch.setattr(
         dispatcher,
         "_resolve_dispatch",
@@ -238,10 +238,6 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
     )
 
     assert result.status == FunctionRunStatus.RUNNING
-    # Accepted asynchronously: the runtime holds the run, so its pod slot stays
-    # taken until the terminal callback gives it back.
-    assert pod_runs.held[dispatch.pod_id] == {dispatch.run_id}
-    assert pod_runs.released == []
     assert observed["headers"]["Prefer"] == "respond-async"
     assert observed["headers"]["Authorization"] == "Bearer delegated-function-token"
     assert observed["headers"]["E2B-Traffic-Access-Token"] == "provider-secret"
@@ -712,3 +708,54 @@ async def test_our_own_deadline_is_not_retried() -> None:
         )
 
     assert len(attempts) == 1
+
+
+def test_lemmas_database_unreachable_before_the_start_is_not_a_failed_run() -> None:
+    """Nothing was sent to a sandbox: the run is retried, not failed. Once it
+    started, the outcome is the function's and failing records it."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.modules.function.application.dispatch_failures import not_a_failure
+    from app.modules.function.events.run_work import dead_message
+
+    class _TooMany(Exception):
+        sqlstate = "53300"
+
+    down = OperationalError("SELECT", {}, _TooMany("too many clients"))
+    assert not_a_failure(down, queued=True, started=False)
+    assert not_a_failure(ConnectionRefusedError(), queued=False, started=False)
+    assert not not_a_failure(down, queued=True, started=True)
+    assert not not_a_failure(RuntimeError("boom"), queued=True, started=False)
+    assert "database" in dead_message(
+        "unavailable_exhausted", "Unavailable: database unavailable: OperationalError"
+    )
+    assert "sandbox" in dead_message("unavailable_exhausted", "Unavailable: sandbox")
+
+
+@pytest.mark.asyncio
+async def test_a_queued_run_hands_back_its_slot_when_the_sandbox_is_slow(
+    monkeypatch,
+) -> None:
+    """A queued run holds one of the pod's automation slots while it waits for
+    its sandbox -- shared with titles, schedule starts and filters. It waits a
+    minute, not its whole start deadline, then gives the slot back for its
+    item to retry; the endpoint keeps loading meanwhile."""
+    from app.modules.function.application.dispatch_failures import SandboxNotReady
+
+    dispatch = _dispatch(mode=FunctionDispatchMode.ASYNCHRONOUS).model_copy(
+        update={"deadline_at": datetime.now(timezone.utc) + timedelta(minutes=30)}
+    )
+    dispatcher = _dispatcher(AsyncMock())
+    asked: list[datetime | None] = []
+
+    async def slow_endpoint(_dispatch, *, execution_ends_at, wait_until=None):
+        asked.append(wait_until)
+        raise TimeoutError("function runtime endpoint was not ready")
+
+    monkeypatch.setattr(dispatcher, "_runtime_endpoint", slow_endpoint)
+
+    with pytest.raises(SandboxNotReady):
+        await dispatcher._execute_dispatch(dispatch.run_id, dispatch, queued=True)
+    [wait_until] = asked
+    assert wait_until is not None
+    assert wait_until <= datetime.now(timezone.utc) + timedelta(seconds=61)

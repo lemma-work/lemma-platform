@@ -239,3 +239,107 @@ fn an_unfamiliar_failure_is_left_exactly_as_it_came() {
         assert!(authentication_hint("OpenCode", raw).is_none(), "{raw:?}");
     }
 }
+
+/// A coding agent out of quota is not broken, and a terminal will not help.
+///
+/// Verbatim shape from Claude Code: an internal error whose structured data
+/// names the kind. The kind decides it, not the wording.
+#[test]
+fn an_agent_at_its_usage_limit_is_told_when_it_resets() {
+    let raw = concat!(
+        "Internal error: You've hit your session limit · resets 2pm (Asia/Calcutta): ",
+        r#"{"errorKind": "rate_limit"}"#
+    );
+
+    let message = super::usage_limit_message("Claude Code", raw).expect("a usage limit");
+
+    assert!(
+        message.starts_with("Claude Code has reached its usage limit on this computer"),
+        "{message}"
+    );
+    assert!(message.contains("resets 2pm (Asia/Calcutta)"), "{message}");
+    assert!(message.contains("another runtime"), "{message}");
+    assert!(!message.contains("terminal"), "{message}");
+    assert!(!message.contains("errorKind"), "no adapter internals");
+    assert!(
+        super::authentication_hint("Claude Code", raw).is_none(),
+        "not a sign-in problem"
+    );
+}
+
+#[test]
+fn a_usage_limit_is_recognised_by_its_kind_whatever_it_says() {
+    // Pretty-printed data, as an ACP error formats it, and no reset time.
+    let raw = "Internal error: quota gone: {\n  \"errorKind\": \"usage_limit\"\n}";
+    let message = super::usage_limit_message("OpenCode", raw).expect("a usage limit");
+    assert!(message.contains("Try again once it resets"), "{message}");
+
+    // The same words with another kind, or none, are not a usage limit.
+    assert!(
+        super::usage_limit_message(
+            "Codex",
+            r#"Internal error: resets later: {"errorKind": "authentication_failed"}"#
+        )
+        .is_none()
+    );
+    assert!(super::usage_limit_message("Codex", "You've hit your session limit").is_none());
+}
+
+/// A `resets` inside the structured data is not the adapter telling us when
+/// the limit lifts, and its JSON must not leak into the guidance.
+#[test]
+fn a_reset_time_is_read_from_the_message_not_its_data() {
+    let raw =
+        r#"Internal error: quota gone: {"errorKind": "rate_limit", "detail": "resets tomorrow"}"#;
+    let message = super::usage_limit_message("Claude Code", raw).expect("a usage limit");
+    assert!(message.contains("Try again once it resets"), "{message}");
+    assert!(!message.contains("tomorrow"), "{message}");
+    assert!(!message.contains('"'), "{message}");
+}
+
+#[test]
+fn the_structured_data_is_cut_from_the_message() {
+    assert_eq!(
+        super::without_error_data(r#"Internal error: limit hit: {"errorKind": "rate_limit"}"#),
+        "Internal error: limit hit"
+    );
+    assert_eq!(
+        super::without_error_data("plain {not json"),
+        "plain {not json"
+    );
+}
+
+/// A start that ran out of time says so, rather than calling a working agent
+/// broken and sending the person to a terminal to debug it.
+#[test]
+fn a_start_that_timed_out_is_reported_as_slow_rather_than_broken() {
+    for raw in [
+        r#"Internal error: "the agent did not answer session/new within 30s""#,
+        r#"Internal error: {"details": "workspace routing discovery timed out"}"#,
+    ] {
+        let framed = super::start_timeout_message("Codex", raw).expect("a start timeout");
+        assert!(
+            framed.starts_with("Codex did not start in time on this computer"),
+            "{framed}"
+        );
+        assert!(framed.contains("send the message again"), "{framed}");
+        assert!(!framed.contains("encountered an error"), "{framed}");
+    }
+}
+
+/// Anything that is not a timeout keeps the wording that fits it.
+#[test]
+fn only_a_timeout_is_reported_as_a_slow_start() {
+    for raw in [
+        r#"Internal error: OpenCode service failure: {"service": "session"}"#,
+        "Process exited with exit status: 1",
+        "Failed to authenticate: OAuth session expired",
+        r#"Internal error: {"details": "workspace routing discovery unauthorized (401)"}"#,
+        r#"Invalid params: "unknown model provider \"nope\" in config.toml""#,
+    ] {
+        assert!(
+            super::start_timeout_message("Codex", raw).is_none(),
+            "{raw:?}"
+        );
+    }
+}

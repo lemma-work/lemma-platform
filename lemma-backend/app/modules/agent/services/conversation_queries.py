@@ -18,6 +18,9 @@ from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import BadRequestError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
+)
 from app.modules.agent.domain.ports import (
     AgentRepository,
     ConversationRepository,
@@ -68,6 +71,7 @@ class ConversationQueries:
         search: str | None = None,
         cursor: ConversationListCursor | UUID | None = None,
         limit: int = 20,
+        in_channel: bool | None = None,
     ) -> tuple[list[Conversation], ConversationListCursor | None]:
         """`cursor` may be a bare conversation id: a page token from before
         the list was ordered by activity. It continues after that row."""
@@ -104,6 +108,7 @@ class ConversationQueries:
             search=search,
             cursor=cursor,
             limit=limit,
+            in_channel=in_channel,
         )
         # One query for the page rather than one per row. Not inferable from
         # the status: a WAITING conversation may be waiting on a timer, and an
@@ -174,6 +179,10 @@ class ConversationQueries:
                 [conversation.id]
             )
         )
+        if conversation.status == ConversationStatus.WAITING:
+            conversation.waiting_on_work = await AgentConversationWaitRepository(
+                self.uow
+            ).has_active(conversation.id)
         return conversation
 
     async def _authorized(
@@ -206,7 +215,7 @@ class ConversationQueries:
         latest = conversation.agent_runs[-1] if conversation.agent_runs else None
         if latest is None or latest.status != AgentRunStatus.FAILED:
             return False
-        return await self.conversation_repository.run_has_only_user_messages(latest.id)
+        return await self.conversation_repository.run_is_replay_safe(latest.id)
 
     async def list_messages(
         self,

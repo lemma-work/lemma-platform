@@ -17,10 +17,7 @@ from uuid import uuid7
 
 import pytest
 
-from app.core.infrastructure.jobs.streaq_runtime import (
-    AGENT_RUN_JOB_TIMEOUT_SECONDS,
-)
-from app.modules.agent.events.handlers import _ORPHANED_RUN_CUTOFF_SECONDS
+from app.modules.agent.events.turn_work import TURN_MAX_RUNTIME
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
     DEFAULT_RUN_LEASE_SECONDS,
@@ -57,35 +54,18 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+TURN_SECONDS = TURN_MAX_RUNTIME.total_seconds()
+
+
 class TestTheCeilingsAgree:
-    def test_the_worker_outlives_the_deadline_we_advertise(self) -> None:
-        """Otherwise streaq kills the job while the host is still working, and
-        the remote agent keeps running a turn Lemma has reported as failed."""
-        assert AGENT_RUN_JOB_TIMEOUT_SECONDS > DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
+    def test_the_turn_outlives_the_deadline_we_advertise(self) -> None:
+        """Otherwise the runtime ends the turn while the host is still working,
+        and the remote agent keeps running a turn Lemma has reported as failed."""
+        assert TURN_SECONDS > DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
 
-    def test_the_worker_has_room_to_cancel_and_finalize(self) -> None:
-        headroom = (
-            AGENT_RUN_JOB_TIMEOUT_SECONDS - DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
-        )
+    def test_the_turn_has_room_to_cancel_and_finalize(self) -> None:
+        headroom = TURN_SECONDS - DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
         assert headroom >= 120
-
-    def test_the_orphan_sweep_never_reaps_a_healthy_run(self) -> None:
-        assert _ORPHANED_RUN_CUTOFF_SECONDS > AGENT_RUN_JOB_TIMEOUT_SECONDS
-
-    def test_an_approval_is_never_declared_abandoned_while_it_could_be_running(
-        self,
-    ) -> None:
-        """`_ABANDONED_EXECUTION_SECONDS` is written out rather than imported --
-        ``streaq_runtime`` builds a broker at module scope and the approvals
-        service is on the API's import path. Held together here instead, because
-        a value below the job's own ceiling would write "could not confirm this
-        ran" over a command that is still running."""
-        from app.core.infrastructure.jobs.streaq_runtime import JOB_TIMEOUT_SECONDS
-        from app.modules.agent.services.conversation_approvals import (
-            _ABANDONED_EXECUTION_SECONDS,
-        )
-
-        assert _ABANDONED_EXECUTION_SECONDS > JOB_TIMEOUT_SECONDS
 
     def test_a_run_may_last_hours(self) -> None:
         """An agent host run is a person's real task, not a request.

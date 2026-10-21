@@ -572,6 +572,74 @@
     background: var(--chrome);
     color: var(--ink);
 }
+/* ── which model this conversation answers on ───────────────────────
+   A control the size of the paperclip beside it, not a headline: one line,
+   quiet ink, and no border of its own until it is pointed at. Most
+   conversations are left alone here, and a boxed select next to the send
+   button reads as something to answer before typing. Centred on the row's
+   own line the same way the attach is. */
+.modelpick {
+    flex: none;
+    display: flex;
+    align-items: center;
+    /* Sized by the label rather than by a number: the default row names the
+       model it resolves to, and a cap narrow enough to cut that name turns the
+       one row that explains the default into an ellipsis. Only a genuinely
+       narrow pane truncates it, and then the whole name is a title away. */
+    max-width: min(320px, 46vw);
+    min-width: 0;
+    margin-block-end: calc((var(--composer-line) - 26px) / 2);
+}
+.modelpick__select {
+    width: auto;
+    max-width: 100%;
+    min-width: 0;
+    height: 26px;
+    padding: 0 4px;
+    border: 1px solid transparent;
+    border-radius: var(--r-sm);
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.modelpick__select:hover {
+    background: var(--chrome);
+    color: var(--ink);
+}
+.modelpick__select:focus-visible {
+    outline: none;
+    border-color: var(--accent-line);
+}
+.modelpick__error {
+    flex: none;
+    margin-inline-start: 4px;
+    font-size: 12px;
+    color: var(--bad);
+    white-space: nowrap;
+}
+.modelpick--set {
+    font-size: 12px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Answered, the label is a note rather than a control, and the row it shares
+   is the one the person types in. In a narrow column — a phone, or the pane
+   beside a sidebar — the box was losing most of its width to it, so there it
+   steps aside. Measured on the row, not the viewport: the column is what is
+   narrow. */
+.composer__row {
+    container: composer-row / inline-size;
+}
+@container composer-row (max-width: 520px) {
+    .modelpick--set {
+        display: none;
+    }
+}
 .composer__note[data-bad] {
     color: var(--bad);
 }
@@ -4545,6 +4613,13 @@ button.filecard__open {
 }
 .notify__act:hover {
     border-color: var(--ink-3);
+}
+/* An agent's choices, or approve and deny: a row of answers, wrapping. */
+.notify__choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0 6px;
 }
 .notify__answer {
     display: flex;

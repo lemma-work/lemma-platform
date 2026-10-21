@@ -341,3 +341,67 @@ async def test_an_ordinary_tool_is_not_put_on_the_record_first(monkeypatch):
         agent_run_id=uuid4(),
     )
     assert recorded == []
+
+
+class _ConversationAlreadyLoaded(ConversationMCPService):
+    """The service with its one database read answered in advance.
+
+    Everything after the load -- toolset selection, assembly, MCP naming -- is
+    the real path an Agent Host run's `tools/list` takes.
+    """
+
+    def __init__(self, conversation: Conversation, ctx: BaseAgentContext) -> None:
+        super().__init__()
+        self._conversation = conversation
+        self._ctx = ctx
+
+    async def _load_agent_context(self, *, conversation_id, agent_run_id):
+        del conversation_id, agent_run_id
+        return None, self._conversation, self._ctx, AgentGrantSummary()
+
+
+_SUBAGENT_TOOLS = {
+    "lemma_spawn_subagent",
+    "lemma_interact_subagent",
+    "lemma_query_subagents",
+    "lemma_wait_for",
+}
+
+
+async def _agent_host_tool_names(*, metadata: dict[str, object]) -> set[str]:
+    user_id, pod_id, conversation_id = uuid4(), uuid4(), uuid4()
+    conversation = Conversation(
+        id=conversation_id,
+        user_id=user_id,
+        pod_id=pod_id,
+        title="Delegation",
+        metadata=metadata,
+    )
+    ctx = BaseAgentContext(
+        user_id=user_id,
+        pod_id=pod_id,
+        conversation_id=conversation_id,
+        is_pod_default_agent=True,
+        runtime_profile={"protocol": "AGENT_HOST"},
+    )
+    service = _ConversationAlreadyLoaded(conversation, ctx)
+    return set(
+        await service.exported_tool_names(
+            conversation_id=conversation_id, agent_run_id=uuid4()
+        )
+    )
+
+
+async def test_an_agent_host_run_is_offered_the_subagent_tools_under_their_mcp_names():
+    names = await _agent_host_tool_names(metadata={})
+
+    assert _SUBAGENT_TOOLS <= names
+
+
+async def test_a_sub_agent_on_agent_host_is_not_offered_the_subagent_tools():
+    """The depth rule: a child cannot spawn, or wait inside its parent's turn."""
+    names = await _agent_host_tool_names(metadata={"is_sub_agent": True})
+
+    assert not _SUBAGENT_TOOLS & names
+    # Still a working run, not an empty tool list.
+    assert "lemma_ask_user" in names

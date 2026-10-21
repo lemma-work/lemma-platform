@@ -21,7 +21,6 @@ from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.composition import (
     build_member_reach,
-    build_notification_service,
     build_surface_connection_resolver,
     build_surface_service,
     build_surface_webhook_security_service,
@@ -29,9 +28,6 @@ from app.modules.agent_surfaces.composition import (
     build_user_surfaces_service,
 )
 from app.modules.agent_surfaces.services.member_reach import MemberReach
-from app.modules.agent_surfaces.services.notification_service import (
-    NotificationService,
-)
 from app.modules.agent_surfaces.services.surface_connection_resolver import (
     SurfaceConnectionResolver,
 )
@@ -59,10 +55,6 @@ def get_surface_connection_resolver(uow: UoWDep) -> SurfaceConnectionResolver:
 
 def get_member_reach(uow: UoWDep) -> MemberReach:
     return build_member_reach(uow)
-
-
-def get_notification_service(uow: UoWDep) -> NotificationService:
-    return build_notification_service(uow)
 
 
 def get_user_surfaces_service(uow: UoWDep) -> UserSurfacesService:
@@ -94,7 +86,4 @@ SurfaceWebhookSecurityServiceDep = Annotated[
 ]
 TelegramManagerServiceDep = Annotated[
     TelegramManagerService, Depends(get_telegram_manager_service)
-]
-NotificationServiceDep = Annotated[
-    NotificationService, Depends(get_notification_service)
 ]

@@ -6,7 +6,7 @@ from pathlib import Path
 import typer
 
 from ..cli_app.enums import SURFACE_PLATFORM_HELP
-from .context import selected_conversation, selected_org, selected_pod
+from .context import chat_conversation, selected_org_id, selected_pod
 from .io import emit
 from .lazy import LazyEntry, LazyRootGroup
 from .project_env import load_project_env
@@ -65,6 +65,18 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "apps": (f"{_CMD}.apps", "app", "App commands.", False),
     "schedule": (f"{_CMD}.schedules", "app", "Schedule commands.", False),
     "schedules": (f"{_CMD}.schedules", "app", "Schedule commands.", False),
+    "channel": (
+        f"{_CMD}.channels",
+        "app",
+        "Channel commands: where a pod's members, contacts and agents talk.",
+        False,
+    ),
+    "channels": (
+        f"{_CMD}.channels",
+        "app",
+        "Channel commands: where a pod's members, contacts and agents talk.",
+        False,
+    ),
     "decision": (
         f"{_CMD}.decisions",
         "app",
@@ -467,7 +479,7 @@ def get_resource(
         if normalized in {"pod", "pods"}:
             if name is not None:
                 return client.pods.get(name)
-            return client.pods.list(org_id=selected_org(s), limit=limit)
+            return client.pods.list(org_id=selected_org_id(client, s), limit=limit)
         pod_sdk = pod_client(client, s, pod_id)
         if normalized in {"agent", "agents"}:
             return (
@@ -548,13 +560,21 @@ def chat(
     ),
     conversation: str | None = typer.Option(None, "--conversation"),
     title: str | None = typer.Option(None, "--title"),
+    wait_timeout: float = typer.Option(
+        900.0,
+        "--wait-timeout",
+        help="Seconds to keep following the agent's background work "
+        "(sub-agents, processes, timers) for its answer.",
+    ),
 ) -> None:
     """Chat with a pod agent, interactively or with a single message."""
     from .commands import conversations
 
     state = state_from_ctx(ctx)
-    selected = selected_conversation(state, conversation, required=False)
     parsed_agent, parsed_message = _parse_chat_args(args or [], agent, message)
+    # Not selected_conversation: that falls back to LEMMA_CONVERSATION_ID, which
+    # inside an agent sandbox is the caller's own conversation.
+    selected = chat_conversation(state, conversation, agent=parsed_agent)
     if parsed_message is None:
         conversations.interactive_chat(
             ctx,
@@ -573,6 +593,7 @@ def chat(
         title=title,
         show_header=True,
         show_user_message=True,
+        wait_timeout=wait_timeout,
     )
 
 

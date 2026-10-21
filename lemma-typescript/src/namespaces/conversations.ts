@@ -206,6 +206,9 @@ export class ConversationsNamespace {
     archived?: boolean | null;
     // Titles containing this, case-insensitively; paged like the rest.
     search?: string | null;
+    // false: only conversations of no channel (the chats list); true: only
+    // those in a channel. Omitted: both.
+    in_channel?: boolean | null;
     limit?: number;
     page_token?: string | null;
   } = {}): Promise<ConversationListResponse> {
@@ -220,6 +223,7 @@ export class ConversationsNamespace {
         status: options.status,
         archived: options.archived,
         search: options.search,
+        in_channel: options.in_channel,
         limit: options.limit ?? 20,
         page_token: options.page_token,
       },
@@ -241,6 +245,7 @@ export class ConversationsNamespace {
     options: {
       pod_id?: string | null;
       search?: string | null;
+      in_channel?: boolean | null;
       limit?: number;
       page_token?: string | null;
     } = {},

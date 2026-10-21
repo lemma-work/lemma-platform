@@ -199,7 +199,10 @@ class UsageService(UsagePricing, UsageReporting):
         metadata = dict(usage_data.metadata or {})
         if provider_model_name:
             metadata["provider_model_name"] = provider_model_name
-        if pricing_missing:
+        if pricing_missing or cost_amount is None:
+            # A profile Lemma does not price (a member's own provider, an Agent
+            # Host harness) has no cost either. A bare null sums as zero in every
+            # report, so the record says its price is missing.
             metadata["pricing_missing"] = True
         record = UsageRecord(
             organization_id=ctx.organization_id,

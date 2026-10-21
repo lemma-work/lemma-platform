@@ -10,7 +10,7 @@ from app.modules.agent_surfaces.domain.reply_targets import (
 import asyncio
 from uuid import UUID
 from pydantic import JsonValue, TypeAdapter
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -113,7 +113,7 @@ async def _open_onboarding_modal(
                     token, bound.step, prefill=bound.destination.sender_email or ""
                 ),
             )
-    except (SlackApiError, TimeoutError) as error:
+    except (slack_api_error(), TimeoutError) as error:
         # The private prompt already offers typed replies. Do not retry an
         # expired trigger, or send setup material back to the channel.
         logger.warning(

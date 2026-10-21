@@ -28,6 +28,14 @@ E2E_PARALLEL := -n $(E2E_WORKERS) --dist loadscope
 # they differ again.
 UNIT_MARKERS ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
 
+# xdist workers for the unit lane. Four, not `auto`: a GitHub runner has four
+# vCPUs, so CI gets the same either way, and `auto` on a laptop with twelve
+# cores starves the event loops the timing-sensitive tests wait on. The one
+# suite that shares Postgres gives each worker a database of its own
+# (app/modules/workspace/tests/integration/conftest.py). UNIT_WORKERS=0 runs
+# serially, for bisecting an ordering problem.
+UNIT_WORKERS ?= 4
+
 # The marker filter a CI shard runs under. Defaults to the standard fast-lane
 # exclusions (matches test-e2e-fast); a shard whose module structurally needs
 # real sandbox execution to be covered at all (function -- see e2e.yml) can
@@ -80,7 +88,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate  test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-memory-hazards lint-public-prose lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate  test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-memory-hazards lint-public-prose lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap e2e-reuse-down
 
 help:
 	@echo "Lemma backend:"
@@ -154,7 +162,7 @@ test:
 	uv run pytest
 
 test-unit:
-	uv run pytest -m "$(UNIT_MARKERS)"
+	uv run pytest -n $(UNIT_WORKERS) -m "$(UNIT_MARKERS)"
 
 # Default e2e gate: fast + deterministic. The agent LLM is a mocked
 # FunctionModel and workspace tools hit the in-process fake sandbox, so there
@@ -232,7 +240,7 @@ test-module:
 coverage: coverage-unit coverage-e2e
 
 coverage-unit:
-	uv run pytest -m "$(UNIT_MARKERS)" --cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml
+	uv run pytest -n $(UNIT_WORKERS) -m "$(UNIT_MARKERS)" --cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml
 
 coverage-e2e:
 	uv run pytest -m e2e --cov=app --cov-report=term-missing --cov-report=xml:coverage-e2e.xml
@@ -242,10 +250,17 @@ coverage-backend-unit:
 	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
+		-n $(UNIT_WORKERS) \
 		-m "$(UNIT_MARKERS)" \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-unit.xml
 	$(MAKE) coverage-backend-report COVERAGE_PHASE=unit
 
+# One retry for a failed e2e test, so a single flake does not fail the whole
+# pull request -- and with it a 15-minute rerun of every shard. Not silent:
+# every retried test is listed in junit-<phase>.reruns.txt and annotated on
+# the run by e2e.yml. `E2E_RERUNS=` turns it off. (From #796, which merged into
+# a stacked branch and never reached main.)
+E2E_RERUNS ?= --reruns 1 --reruns-delay 2
 coverage-backend-e2e-shard:
 	@test -n "$(E2E_ARGS)" || (echo "E2E_ARGS is required" && exit 1)
 	@test -n "$(COVERAGE_PHASE)" || (echo "COVERAGE_PHASE is required, e.g. e2e-surfaces" && exit 1)
@@ -253,11 +268,15 @@ coverage-backend-e2e-shard:
 	@rm -f $(BACKEND_COVERAGE_DIR)/junit-*.xml $(BACKEND_COVERAGE_DIR)/junit-*.phases.json $(BACKEND_COVERAGE_DIR)/comment.md $(BACKEND_COVERAGE_DIR)/summary.json $(BACKEND_COVERAGE_DIR)/coverage.json $(BACKEND_COVERAGE_DIR)/coverage.xml
 	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage erase
 	$(BACKEND_COVERAGE_RUN_ENV) uv run coverage run --parallel-mode -m pytest \
-		$(E2E_PARALLEL) $(E2E_ARGS) \
+		$(E2E_PARALLEL) $(E2E_ARGS) $(E2E_RERUNS) \
 		-m "$(E2E_SHARD_MARKERS)" \
 		-o timeout=120 \
 		--junitxml=$(BACKEND_COVERAGE_DIR)/junit-$(COVERAGE_PHASE).xml
-	$(MAKE) coverage-backend-report COVERAGE_PHASE=$(COVERAGE_PHASE)
+# Combine only. The `coverage` job recombines every shard's raw
+# `.coverage.backend` and builds the one report anyone reads; the per-shard
+# text/json/xml/markdown reports cost ~25-35s of each shard's critical path.
+# `make coverage-backend-report COVERAGE_PHASE=...` still builds them locally.
+	$(BACKEND_COVERAGE_DATA_ENV) uv run coverage combine
 
 coverage-backend-report:
 	@test -n "$(COVERAGE_PHASE)" || (echo "COVERAGE_PHASE is required" && exit 1)
@@ -417,7 +436,7 @@ typecheck-critical:
 		app/core/domain/errors.py \
 		app/core/api/schemas.py \
 		app/core/api/uploads.py \
-		app/core/infrastructure/events \
+		app/core/infrastructure/work \
 		app/modules/agent/api/dependencies.py \
 		app/modules/agent/domain/ports.py \
 		app/modules/agent/services \
@@ -611,9 +630,8 @@ benchmark-functions-e2b:
 		uv run pytest $(FUNCTION_BENCH_TEST) -q -s -o timeout=1800
 
 teams-manifest-zip:
-	python3 scripts/package_teams_manifest.py \
-		--manifest-dir "$(TEAMS_MANIFEST_DIR)" \
-		--output "$(OUTPUT)"
+	cd "$(TEAMS_MANIFEST_DIR)" && rm -f "$(abspath $(OUTPUT))" && \
+		zip -X -q "$(abspath $(OUTPUT))" manifest.json color.png outline.png
 
 # --------------------------------------------------------------------------
 # Load testing — WebSocket capacity on a simulated 2 CPU / 2 GB server
@@ -748,6 +766,10 @@ load-test: load-test-build load-test-up load-test-migrate load-test-setup load-t
 docker-reap:
 	uv run python -m app.core.test_utils
 
+# Remove the containers LEMMA_E2E_REUSE=1 keeps running between e2e sessions.
+e2e-reuse-down:
+	uv run python -c "from app.core.test_shared_containers import remove_reused_containers as r; print(*r(), sep='\n')"
+
 # ── Sandbox images ────────────────────────────────────────────────────────────
 # The two images the workspace module provisions. They live here because the
 # module owns them: the runtime inside them is `sandbox_runtime/`, and its
@@ -819,8 +841,32 @@ print-sandbox-images:
 
 sandbox-images: sandbox-image-workspace sandbox-image-function
 
+# Layer cache for the two local builds, off unless SANDBOX_CACHE_REPO is set.
+# CI points it at GHCR so a changed input rebuilds only the layers it touches
+# instead of the whole image (~100s cold, almost all of it the Chromium/apt
+# layer that changes a few times a year). Pushing the cache is main's job
+# (SANDBOX_CACHE_PUSH=1); everything else only reads it, and a read that fails
+# -- a fork's token, a cache not written yet -- is a cold build, as before. A
+# failed cache *write* is ignored too (`ignore-error`): it costs the next run
+# its warm layers, never this run its image.
+# Needs a buildx builder with the docker-container driver, which
+# `docker/setup-buildx-action` makes. (From #795, which merged into a stacked
+# branch and never reached main.)
+SANDBOX_CACHE_REPO ?=
+SANDBOX_CACHE_PUSH ?=
+comma := ,
+ifeq ($(strip $(SANDBOX_CACHE_REPO)),)
+SANDBOX_BUILD = docker build
+sandbox_cache_args =
+else
+SANDBOX_BUILD = docker buildx build --load
+sandbox_cache_args = --cache-from type=registry,ref=$(SANDBOX_CACHE_REPO):$(1) \
+	$(if $(SANDBOX_CACHE_PUSH),--cache-to type=registry$(comma)ref=$(SANDBOX_CACHE_REPO):$(1)$(comma)mode=max$(comma)ignore-error=true)
+endif
+
 sandbox-image-workspace:
-	docker build \
+	$(SANDBOX_BUILD) \
+		$(call sandbox_cache_args,workspace) \
 		--platform $(SANDBOX_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.workspace \
 		$(SANDBOX_BASE_ARGS) \
@@ -828,7 +874,8 @@ sandbox-image-workspace:
 		..
 
 sandbox-image-function:
-	docker build \
+	$(SANDBOX_BUILD) \
+		$(call sandbox_cache_args,function) \
 		--platform $(SANDBOX_FUNCTION_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.function \
 		$(SANDBOX_BASE_ARGS) \

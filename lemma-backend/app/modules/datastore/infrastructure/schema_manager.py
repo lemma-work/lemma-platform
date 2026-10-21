@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.modules.datastore.infrastructure import pod_schema_memo
 from app.core.bounded import BoundedSet
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
@@ -16,6 +17,9 @@ from app.modules.datastore.infrastructure.session import (
     close_datastore_engine,
     get_datastore_engine,
     get_datastore_session_maker,
+)
+from app.modules.datastore.infrastructure.pod_schema_migrations import (
+    migrate_pod_schema,
 )
 from app.modules.datastore.infrastructure.pod_schema_catalog import (
     bootstrap_pod_schema,
@@ -176,6 +180,10 @@ class SchemaManager:
         async with self._engine.begin() as conn:
             await bootstrap_pod_schema(conn, schema_name, grant=grant)
 
+    async def migrate_search_tables(self, pod_id: UUID) -> int:
+        """Bring the pod's search tables to the latest version; see ``pod_schema_migrations``."""
+        return await migrate_pod_schema(self._engine, self._get_schema_name(pod_id))
+
     async def datastore_schema_exists(self, pod_id: UUID) -> bool:
         schema_name = self._get_schema_name(pod_id)
         async with self._engine.connect() as conn:
@@ -194,6 +202,7 @@ class SchemaManager:
         logger.debug(
             "datastore.schema_manager.dropped_schema_pod.observed", pod_id=pod_id
         )
+        pod_schema_memo.forget(schema_name)
 
     async def create_table(
         self,

@@ -10,10 +10,17 @@ from sqlalchemy import case, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
+from app.modules.datastore.contracts.changes import (
+    request_subscriber_sync,
+    subscriber_key,
+)
 from app.modules.mcp_access.infrastructure.models import (
     McpEventSubscription,
     McpOAuthGrant,
 )
+
+logger = get_logger(__name__)
 
 #: Subscriptions read per page when one row event fans out.
 FAN_OUT_PAGE = 200
@@ -76,7 +83,15 @@ def _delivering(now: datetime):
 
 class EventSubscriptionRepository:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+        self._uow = uow
         self._session = uow.session
+
+    async def _resync(self, pod_id: UUID, public_id: str) -> None:
+        """Every write that changes whether a subscription listens asks the
+        change log to bring its subscriber row in line, in this transaction."""
+        await request_subscriber_sync(
+            self._uow, pod_id, subscriber_key("mcp", public_id)
+        )
 
     async def upsert(
         self,
@@ -102,6 +117,14 @@ class EventSubscriptionRepository:
         failed deliveries set. It never lifts the person's Stop: a stopped
         subscription is refused before it gets here.
         """
+        paused_since = await self._session.scalar(
+            select(McpEventSubscription.paused_at).where(
+                McpEventSubscription.grant_id == grant_id,
+                McpEventSubscription.url == url,
+                McpEventSubscription.name == name,
+                McpEventSubscription.arguments_key == arguments_key,
+            )
+        )
         values = {
             "public_id": public_id,
             "grant_id": grant_id,
@@ -136,6 +159,17 @@ class EventSubscriptionRepository:
             .returning(McpEventSubscription)
         )
         row = (await self._session.execute(statement)).scalar_one()
+        if paused_since is not None:
+            # The pause dropped its place in the change log; it resumes from
+            # now, and what was written meanwhile is never sent. The draft
+            # has no gap notice to send the receiver, so it is said here.
+            logger.info(
+                "mcp_access.event_subscription.resumed_after_pause",
+                subscription_id=row.public_id,
+                pod_id=str(row.pod_id),
+                paused_at=paused_since.isoformat(),
+            )
+        await self._resync(row.pod_id, row.public_id)
         return _stored(row)
 
     async def get(self, public_id: str) -> StoredSubscription | None:
@@ -152,20 +186,28 @@ class EventSubscriptionRepository:
         removed = await self._session.execute(
             delete(McpEventSubscription)
             .where(McpEventSubscription.public_id == public_id)
-            .returning(McpEventSubscription.id)
+            .returning(McpEventSubscription.pod_id)
         )
-        return removed.scalar_one_or_none() is not None
+        pod_id = removed.scalar_one_or_none()
+        if pod_id is not None:
+            await self._resync(pod_id, public_id)
+        return pod_id is not None
 
     async def remove_unless_stopped(self, public_id: str) -> None:
         """The client's `events/unsubscribe`. A stopped row is the person's
         tombstone, so the client cannot clear it by unsubscribing and
         subscribing again."""
-        await self._session.execute(
-            delete(McpEventSubscription).where(
+        removed = await self._session.execute(
+            delete(McpEventSubscription)
+            .where(
                 McpEventSubscription.public_id == public_id,
                 McpEventSubscription.stopped_at.is_(None),
             )
+            .returning(McpEventSubscription.pod_id)
         )
+        pod_id = removed.scalar_one_or_none()
+        if pod_id is not None:
+            await self._resync(pod_id, public_id)
 
     async def lock_grant(self, grant_id: UUID) -> None:
         """Serialize subscribing on one connection, so the cap is counted and
@@ -276,11 +318,18 @@ class EventSubscriptionRepository:
                     else_=McpEventSubscription.paused_at,
                 ),
             }
-        await self._session.execute(
-            update(McpEventSubscription)
-            .where(McpEventSubscription.public_id == public_id)
-            .values(**values)
-        )
+        changed = (
+            await self._session.execute(
+                update(McpEventSubscription)
+                .where(McpEventSubscription.public_id == public_id)
+                .values(**values)
+                .returning(McpEventSubscription.pod_id, McpEventSubscription.paused_at)
+            )
+        ).one_or_none()
+        if error is not None and changed is not None and changed.paused_at == now:
+            # This failure paused it: its change-log row goes now, rather than
+            # holding the pod's log until retention notices.
+            await self._resync(changed.pod_id, public_id)
 
     async def for_grants(
         self, grant_ids: list[UUID], *, now: datetime
@@ -317,9 +366,12 @@ class EventSubscriptionRepository:
                 McpEventSubscription.public_id == public_id,
             )
             .values(stopped_at=stopped_at, paused_at=None, failures=0)
-            .returning(McpEventSubscription.id)
+            .returning(McpEventSubscription.pod_id)
         )
-        return changed.scalar_one_or_none() is not None
+        pod_id = changed.scalar_one_or_none()
+        if pod_id is not None:
+            await self._resync(pod_id, public_id)
+        return pod_id is not None
 
     async def sweep(self, *, lapsed_before: datetime, batch: int) -> int:
         """Delete what can never deliver again: subscriptions the client let
@@ -340,9 +392,13 @@ class EventSubscriptionRepository:
             )
             .limit(batch)
         )
-        removed = await self._session.execute(
-            delete(McpEventSubscription)
-            .where(McpEventSubscription.id.in_(doomed))
-            .returning(McpEventSubscription.id)
-        )
-        return len(removed.scalars().all())
+        removed = (
+            await self._session.execute(
+                delete(McpEventSubscription)
+                .where(McpEventSubscription.id.in_(doomed))
+                .returning(McpEventSubscription.pod_id, McpEventSubscription.public_id)
+            )
+        ).all()
+        for pod_id, public_id in removed:
+            await self._resync(pod_id, public_id)
+        return len(removed)

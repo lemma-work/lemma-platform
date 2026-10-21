@@ -21,9 +21,6 @@ if TYPE_CHECKING:
     from ..models.agent_runtime_profile_detail_response_config import (
         AgentRuntimeProfileDetailResponseConfig,
     )
-    from ..models.agent_runtime_profile_detail_response_metadata import (
-        AgentRuntimeProfileDetailResponseMetadata,
-    )
     from ..models.runtime_model_catalog_entry import RuntimeModelCatalogEntry
 
 
@@ -70,10 +67,11 @@ class AgentRuntimeProfileDetailResponse:
             description (None | str | Unset):
             harness (AgentHostHarnessResponse | None | Unset):
             harness_id (None | Unset | UUID):
+            harness_key (None | str | Unset):
             has_credentials (bool | Unset):  Default: False.
             host_status (AgentHostStatus | None | Unset):
-            metadata (AgentRuntimeProfileDetailResponseMetadata | Unset):
             model_catalog (list[RuntimeModelCatalogEntry] | Unset):
+            organization_default (bool | Unset):  Default: False.
             organization_id (None | Unset | UUID):
             user_id (None | Unset | UUID):
     """
@@ -91,10 +89,11 @@ class AgentRuntimeProfileDetailResponse:
     description: None | str | Unset = UNSET
     harness: AgentHostHarnessResponse | None | Unset = UNSET
     harness_id: None | Unset | UUID = UNSET
+    harness_key: None | str | Unset = UNSET
     has_credentials: bool | Unset = False
     host_status: AgentHostStatus | None | Unset = UNSET
-    metadata: AgentRuntimeProfileDetailResponseMetadata | Unset = UNSET
     model_catalog: list[RuntimeModelCatalogEntry] | Unset = UNSET
+    organization_default: bool | Unset = False
     organization_id: None | Unset | UUID = UNSET
     user_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -156,6 +155,12 @@ class AgentRuntimeProfileDetailResponse:
         else:
             harness_id = self.harness_id
 
+        harness_key: None | str | Unset
+        if isinstance(self.harness_key, Unset):
+            harness_key = UNSET
+        else:
+            harness_key = self.harness_key
+
         has_credentials = self.has_credentials
 
         host_status: None | str | Unset
@@ -166,16 +171,14 @@ class AgentRuntimeProfileDetailResponse:
         else:
             host_status = self.host_status
 
-        metadata: dict[str, Any] | Unset = UNSET
-        if not isinstance(self.metadata, Unset):
-            metadata = self.metadata.to_dict()
-
         model_catalog: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.model_catalog, Unset):
             model_catalog = []
             for model_catalog_item_data in self.model_catalog:
                 model_catalog_item = model_catalog_item_data.to_dict()
                 model_catalog.append(model_catalog_item)
+
+        organization_default = self.organization_default
 
         organization_id: None | str | Unset
         if isinstance(self.organization_id, Unset):
@@ -218,14 +221,16 @@ class AgentRuntimeProfileDetailResponse:
             field_dict["harness"] = harness
         if harness_id is not UNSET:
             field_dict["harness_id"] = harness_id
+        if harness_key is not UNSET:
+            field_dict["harness_key"] = harness_key
         if has_credentials is not UNSET:
             field_dict["has_credentials"] = has_credentials
         if host_status is not UNSET:
             field_dict["host_status"] = host_status
-        if metadata is not UNSET:
-            field_dict["metadata"] = metadata
         if model_catalog is not UNSET:
             field_dict["model_catalog"] = model_catalog
+        if organization_default is not UNSET:
+            field_dict["organization_default"] = organization_default
         if organization_id is not UNSET:
             field_dict["organization_id"] = organization_id
         if user_id is not UNSET:
@@ -238,9 +243,6 @@ class AgentRuntimeProfileDetailResponse:
         from ..models.agent_host_harness_response import AgentHostHarnessResponse
         from ..models.agent_runtime_profile_detail_response_config import (
             AgentRuntimeProfileDetailResponseConfig,
-        )
-        from ..models.agent_runtime_profile_detail_response_metadata import (
-            AgentRuntimeProfileDetailResponseMetadata,
         )
         from ..models.runtime_model_catalog_entry import RuntimeModelCatalogEntry
 
@@ -341,6 +343,15 @@ class AgentRuntimeProfileDetailResponse:
 
         harness_id = _parse_harness_id(d.pop("harness_id", UNSET))
 
+        def _parse_harness_key(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        harness_key = _parse_harness_key(d.pop("harness_key", UNSET))
+
         has_credentials = d.pop("has_credentials", UNSET)
 
         def _parse_host_status(data: object) -> AgentHostStatus | None | Unset:
@@ -360,13 +371,6 @@ class AgentRuntimeProfileDetailResponse:
 
         host_status = _parse_host_status(d.pop("host_status", UNSET))
 
-        _metadata = d.pop("metadata", UNSET)
-        metadata: AgentRuntimeProfileDetailResponseMetadata | Unset
-        if isinstance(_metadata, Unset):
-            metadata = UNSET
-        else:
-            metadata = AgentRuntimeProfileDetailResponseMetadata.from_dict(_metadata)
-
         _model_catalog = d.pop("model_catalog", UNSET)
         model_catalog: list[RuntimeModelCatalogEntry] | Unset = UNSET
         if _model_catalog is not UNSET:
@@ -377,6 +381,8 @@ class AgentRuntimeProfileDetailResponse:
                 )
 
                 model_catalog.append(model_catalog_item)
+
+        organization_default = d.pop("organization_default", UNSET)
 
         def _parse_organization_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -426,10 +432,11 @@ class AgentRuntimeProfileDetailResponse:
             description=description,
             harness=harness,
             harness_id=harness_id,
+            harness_key=harness_key,
             has_credentials=has_credentials,
             host_status=host_status,
-            metadata=metadata,
             model_catalog=model_catalog,
+            organization_default=organization_default,
             organization_id=organization_id,
             user_id=user_id,
         )

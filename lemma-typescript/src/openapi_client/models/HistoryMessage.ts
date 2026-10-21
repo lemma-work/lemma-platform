@@ -4,6 +4,10 @@
 /* eslint-disable */
 export type HistoryMessage = {
     client_nonce?: (string | null);
+    /**
+     * A person on the team wrote it, not the bot.
+     */
+    from_person?: boolean;
     role: string;
     sequence: number;
     text: string;

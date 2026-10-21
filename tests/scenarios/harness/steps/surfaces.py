@@ -1,8 +1,9 @@
-"""Surfaces the pod is reachable on, and the notifications it sends back."""
+"""Surfaces the pod is reachable on, and the channels and inbox people read."""
 
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from harness.run import a_name_for
@@ -146,74 +147,123 @@ class SurfaceSteps:
     async def my_surfaces(self) -> list[JSON]:
         return items_of(await self.api.get("/surfaces/me"))
 
-    # --- notifications ---------------------------------------------------
+    # --- channels and the inbox: what needs a person ---------------------
 
-    async def notifies(
+    async def tells(self, person: Any, *, in_pod: JSON, text: str) -> JSON:
+        """A line in their own channel, from the pod's agent on this person's
+        behalf -- carried on to wherever they last spoke to the pod."""
+        return await self.api.post(
+            # The member: a pod member id, user id, or email.
+            f"/pods/{in_pod['id']}/members/{quote(person.email)}/notices",
+            what=f"{self.label} telling {person.label} something",
+            json={"text": text},
+        )
+
+    async def own_channel_in(self, pod: JSON) -> JSON:
+        """This person's own channel with the pod, made if it is not yet."""
+        return await self.api.post(
+            f"/pods/{pod['id']}/channels/me",
+            what=f"{self.label} opening their own channel",
+            status=(200, 201),
+        )
+
+    async def lines_in(self, channel: JSON, *, in_pod: JSON) -> list[JSON]:
+        return items_of(
+            await self.api.get(f"/pods/{in_pod['id']}/channels/{channel['id']}/messages")
+        )
+
+    async def opens_a_channel(self, *, in_pod: JSON, titled: str) -> JSON:
+        return await self.api.post(
+            f"/pods/{in_pod['id']}/channels",
+            what=f"{self.label} opening channel {titled!r}",
+            json={"title": titled},
+        )
+
+    async def writes_in(
         self,
-        person: Any,
+        channel: JSON,
+        text: str,
         *,
         in_pod: JSON,
-        title: str = "Something needs you",
-        body: str = "Please take a look.",
-        expects_response: bool = False,
+        naming: tuple[Any, ...] = (),
     ) -> JSON:
+        """A line in a channel; naming somebody puts it in their inbox."""
         return await self.api.post(
-            f"/pods/{in_pod['id']}/notifications",
-            what=f"{self.label} notifying {person.label}",
+            f"/pods/{in_pod['id']}/channels/{channel['id']}/messages",
+            what=f"{self.label} writing in a channel",
             json={
-                # A plain string: pod member id, user id, or email.
-                "recipient": person.email,
-                "title": title,
-                "body": body,
-                "expects_response": expects_response,
+                "text": text,
+                "parts": [
+                    {"type": "mention", "kind": "MEMBER", "id": str(person.user_id)}
+                    for person in naming
+                ],
             },
         )
 
-    async def notifications_in(self, pod: JSON, **query: Any) -> list[JSON]:
-        return items_of(
-            await self.api.get(f"/pods/{pod['id']}/notifications", params=query or None)
+    async def inbox_in(self, pod: JSON) -> JSON:
+        """``{totals: {channels, mentions, waiting}, waiting: [...]}``."""
+        return await self.api.get(f"/pods/{pod['id']}/inbox")
+
+    async def channel_seen_by_me(self, channel: JSON, *, in_pod: JSON) -> JSON:
+        """The channel as it is listed for this person, with what is new to them."""
+        for row in items_of(await self.api.get(f"/pods/{in_pod['id']}/channels")):
+            if str(row["id"]) == str(channel["id"]):
+                return row
+        raise AssertionError(f"{self.label} does not see channel {channel['id']}")
+
+    async def reads_channel(self, channel: JSON, *, in_pod: JSON) -> None:
+        """Read the channel up to its newest line, as the app marks it."""
+        newest = (await self.channel_seen_by_me(channel, in_pod=in_pod))["last_seq"]
+        await self.api.expect(
+            "POST",
+            f"/pods/{in_pod['id']}/channels/{channel['id']}/read",
+            status=200,
+            json={"seq": newest},
+            what=f"{self.label} reading a channel",
         )
 
-    async def unread_count_in(self, pod: JSON) -> int:
-        payload = await self.api.get(f"/pods/{pod['id']}/notifications/unread-count")
-        for key in ("count", "unread", "unread_count", "total"):
-            if key in payload:
-                return int(payload[key])
-        raise AssertionError(f"no unread count in {payload}")
-
-    async def reads(self, notification: JSON, *, in_pod: JSON) -> JSON:
+    async def answers_question(
+        self, waiting: JSON, *, saying: JSON, in_pod: JSON
+    ) -> JSON:
+        """Answer a question waiting on them, from their inbox."""
         return await self.api.post(
-            f"/pods/{in_pod['id']}/notifications/{notification['id']}/read",
-            what=f"{self.label} reading a notification",
+            _answer_path(waiting, in_pod),
+            what=f"{self.label} answering a question",
+            json={"answer": saying},
         )
 
-    async def reads_everything_in(self, pod: JSON) -> JSON:
-        return await self.api.post(f"/pods/{pod['id']}/notifications/read-all")
-
-    async def acknowledges(self, notification: JSON, *, in_pod: JSON) -> JSON:
-        return await self.api.post(
-            f"/pods/{in_pod['id']}/notifications/{notification['id']}/acknowledge"
-        )
-
-    async def answers(self, notification: JSON, *, saying: str, in_pod: JSON) -> JSON:
-        return await self.api.post(
-            f"/pods/{in_pod['id']}/notifications/{notification['id']}/respond",
-            what=f"{self.label} answering a notification",
-            json={"summary": saying},
-        )
-
-    async def is_refused_answering(
-        self, notification: JSON, *, saying: str, in_pod: JSON
+    async def is_refused_answering_question(
+        self, waiting: JSON, *, saying: JSON, in_pod: JSON
     ) -> int:
         response = await self.api.call(
-            "POST",
-            f"/pods/{in_pod['id']}/notifications/{notification['id']}/respond",
-            json={"summary": saying},
+            "POST", _answer_path(waiting, in_pod), json={"answer": saying}
         )
         if response.status_code < 400:
             raise AssertionError(
                 f"{self.label} was expected to be refused answering this "
-                f"notification, but it was accepted ({response.status_code})"
+                f"question, but it was accepted ({response.status_code})"
+            )
+        return response.status_code
+
+    async def is_refused_reading_channel(self, channel: JSON, *, in_pod: JSON) -> int:
+        response = await self.api.call(
+            "POST",
+            f"/pods/{in_pod['id']}/channels/{channel['id']}/read",
+            json={"seq": 1},
+        )
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused marking a channel "
+                f"read, but it was accepted ({response.status_code})"
+            )
+        return response.status_code
+
+    async def is_refused_inbox(self, pod: JSON) -> int:
+        response = await self.api.call("GET", f"/pods/{pod['id']}/inbox")
+        if response.status_code < 400:
+            raise AssertionError(
+                f"{self.label} was expected to be refused the pod's inbox, "
+                f"but it was given it ({response.status_code})"
             )
         return response.status_code
 
@@ -242,3 +292,11 @@ class SurfaceSteps:
             "/surfaces/me/default",
             json={"platform": platform, "surface_id": str(surface["id"])},
         )
+
+
+def _answer_path(waiting: JSON, pod: JSON) -> str:
+    """Where an inbox item -- ``{channel, message}`` -- is answered."""
+    return (
+        f"/pods/{pod['id']}/channels/{waiting['channel']['id']}"
+        f"/messages/{waiting['message']['id']}/answer"
+    )

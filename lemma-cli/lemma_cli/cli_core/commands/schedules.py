@@ -138,6 +138,34 @@ def get_schedule(
         emit(state, result)
 
 
+def _text_field(payload: dict[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _create_target(
+    payload: dict[str, object],
+    *,
+    agent: str | None,
+    workflow: str | None,
+    account: str | None,
+) -> tuple[str | None, str | None, str | None]:
+    """``(agent, workflow, account)``, from the flags or else the payload.
+
+    A flag wins. Resolved before the check and before the request is built:
+    the flags used to be written over the payload unconditionally, so a target
+    named only in --data/--file was refused as missing or sent as null.
+    """
+    agent = agent or _text_field(payload, "agent_name")
+    workflow = workflow or _text_field(payload, "workflow_name")
+    if bool(agent) == bool(workflow):
+        fail(
+            "Provide exactly one of --agent or --workflow (or agent_name / "
+            "workflow_name in the payload)."
+        )
+    return agent, workflow, account or _text_field(payload, "account_id")
+
+
 @app.command("create")
 def create_schedule(
     ctx: typer.Context,
@@ -198,9 +226,10 @@ def create_schedule(
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Create a schedule."""
-    if bool(agent) == bool(workflow):
-        fail("Provide exactly one of --agent or --workflow.")
     extra = read_json(json_payload, file, required=False)
+    agent, workflow, account = _create_target(
+        extra, agent=agent, workflow=workflow, account=account
+    )
     schedule_type = "TIME"
     config: dict[str, object] = {}
     if cron:

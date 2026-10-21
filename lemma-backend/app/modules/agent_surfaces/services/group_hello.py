@@ -7,7 +7,8 @@ group's members never agreed to a log, so they are told it exists before
 anything goes into it.
 
 Said once: as a message when the bot is added to a Telegram group, however it
-was added, and as the description of a WhatsApp group the bot creates.
+was added; as the teammate's first message in a Slack channel Lemma's own app
+handed it; and as the description of a WhatsApp group the bot creates.
 """
 
 from __future__ import annotations
@@ -24,8 +25,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.domain.groups import GROUP_LOG_RETENTION
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.services.group_names import visible_bot_name
 from app.modules.agent_surfaces.services.pod_name_lookup import pod_name_for
 
@@ -36,8 +36,7 @@ def group_hello(*, name: str, pod: str) -> str:
     return (
         f"Hi, I'm {name}. Mention me or reply to me to ask something. "
         f"People outside {pod} get answers from what {pod} has made public. "
-        f"{pod} keeps what's said here for {GROUP_LOG_RETENTION.days} days, "
-        "so I can follow along."
+        f"{pod} keeps what's said here so I can follow along."
     )
 
 
@@ -64,14 +63,15 @@ async def say_hello_in_group(
         external_thread_id=channel_id,
         message_text="",
         is_dm=False,
-        reply_target={"chat_id": channel_id},
+        # Each platform reads its own key: Telegram's chat, Slack's channel.
+        reply_target={"chat_id": channel_id, "channel": channel_id},
     )
     try:
         async with connection_released(uow.session):
             await adapter.send_message(
                 credentials=credentials, event=event, message=message
             )
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         logger.info(
             "agent_surfaces.group_hello.send_failed.observed",
             surface_id=str(surface.id),

@@ -16,7 +16,6 @@ the middle of a pair and leave the marker this module exists to prevent.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +26,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,
     SurfaceQuestion,
 )
+from app.modules.agent_surfaces.domain.reply_targets import WhatsAppReplyTarget
 from app.modules.agent_surfaces.platforms.attachment_limits import media_kind_for_mime
 from app.modules.agent_surfaces.platforms.rendering import chunk_text, utf16_length
 from app.modules.agent_surfaces.platforms.whatsapp.text_format import (
@@ -120,7 +120,7 @@ class WhatsAppRecipient:
 
 
 def whatsapp_recipient(
-    reply_target: Mapping[str, object], *, fallback_wa_id: str | None = None
+    reply_target: WhatsAppReplyTarget, *, fallback_wa_id: str | None = None
 ) -> WhatsAppRecipient | None:
     """The recipient an inbound message's reply goes to, or None.
 
@@ -128,10 +128,9 @@ def whatsapp_recipient(
     it, and falling back to their number would answer a group question in
     private -- the one place the answer was not asked for.
     """
-    group_id = str(reply_target.get("group_id") or "").strip()
-    if group_id:
-        return WhatsAppRecipient(to=group_id, is_group=True)
-    wa_id = str(reply_target.get("sender_wa_id") or fallback_wa_id or "").strip()
+    if reply_target.group_id:
+        return WhatsAppRecipient(to=reply_target.group_id, is_group=True)
+    wa_id = str(reply_target.sender_wa_id or fallback_wa_id or "").strip()
     return WhatsAppRecipient(to=wa_id) if wa_id else None
 
 

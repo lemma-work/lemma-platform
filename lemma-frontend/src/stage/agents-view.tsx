@@ -5,7 +5,7 @@ import { LoadingRows } from "@/ui/loading";
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { source } from "@/data";
+import { chosenModel, optionsFor, source } from "@/data";
 import {
     AGENT_EDIT, AGENT_REMOVE, REASONING_EFFORTS, agentProblems, draftOfAgent, hasAgentChanges,
     may, runtimeLine, surfacesLost, whyNot,
@@ -405,6 +405,21 @@ export function Editor({ podId, orgId, detail, onDone }: {
     const pinned = detail.runtime;
     const runtime = runtimes.data?.find((one) => one.id === pinned?.profile);
     const model = runtime?.models.find((one) => one.name === (pinned?.model || runtime.defaultModel));
+    /* A coding agent takes none of the generation settings — it runs its own
+       loop, with its own limits — so it gets the options it publishes for the
+       pinned model instead, read off the profile on its own because the list
+       carries no harness. Same key as the teammate's own picker. */
+    const agent = runtime?.kind === "agent" ? runtime : undefined;
+    const agentDetail = useQuery({
+        queryKey: ["runtime", orgId, agent?.id],
+        queryFn: () => source.getRuntime(orgId ?? "", agent?.id ?? ""),
+        enabled: Boolean(orgId && agent),
+        staleTime: 60_000,
+    });
+    const sets = agentDetail.data?.options;
+    const agentOptions = agent && sets && pinned
+        ? optionsFor(sets, chosenModel(agent, { runtimeId: agent.id, model: pinned.model }))
+        : [];
     /* What the server holds, re-read on every render: the PATCH diff is
        against the *current* saved state, so a field somebody never touched is
        never resent — which is the whole point of sending only what changed. */
@@ -458,11 +473,48 @@ export function Editor({ podId, orgId, detail, onDone }: {
                 {found.instruction && <em role="alert">{found.instruction}</em>}
             </div>
 
+            {/* A coding agent's own options, in place of the generation
+                settings it would ignore. Each starts at "Agent's default",
+                which sends nothing and leaves it as the runtime has it. */}
+            {/* Said rather than left blank: an empty section reads as "this
+                agent has no options", which is a different thing. */}
+            {pinned && agent && agentDetail.isError && (
+                <p className="empty-row" role="alert">
+                    Couldn’t read {agent.name}’s options from its computer, so its effort stays as that computer has it.
+                </p>
+            )}
+            {pinned && agent && agentOptions.length > 0 && (
+                <div className="agents-generation">
+                    {agentOptions.map((option) => (
+                        <div className="record-form__field" key={option.key}>
+                            <label htmlFor={"agent-option-" + option.key}>{option.label}</label>
+                            {option.description && <small>{option.description}</small>}
+                            <select
+                                id={"agent-option-" + option.key}
+                                value={draft.selections[option.key] ?? ""}
+                                disabled={save.isPending}
+                                onChange={(event) => setDraft({
+                                    ...draft,
+                                    selections: { ...draft.selections, [option.key]: event.target.value },
+                                })}
+                            >
+                                <option value="">Agent’s default</option>
+                                {option.choices.map((one) => (
+                                    <option key={one.value} value={one.value}>{one.label}</option>
+                                ))}
+                            </select>
+                        </div>
+                    ))}
+                </div>
+            )}
+
             {/* Only on a pinned model: the settings belong to the runtime, and
                 an agent on the pod's default has none of its own to edit. The
                 effort only where the model says it reasons -- elsewhere it is
-                never sent, and a control that does nothing is worse than none. */}
-            {pinned && (
+                never sent, and a control that does nothing is worse than none.
+                Never on a coding agent, which reads none of them -- nor while
+                the list that says which it is is still arriving. */}
+            {pinned && !agent && !runtimes.isLoading && (
                 <div className="agents-generation">
                     {(model?.reasons || draft.reasoningEffort) && (
                         <div className="record-form__field">

@@ -494,6 +494,12 @@ pub(crate) fn stop_locald_for_runtime_maintenance(app: &AppHandle) -> Result<(),
     }
     let shell: State<Shell> = app.state();
     *shell.locald_writer.lock_or_recover() = None;
+    // The daemon is gone, and with it whatever operation the shell was
+    // tracking. The reader thread clears this too, in `locald_gone`, but not
+    // necessarily before the restart below asks: left set, that restart was
+    // refused as busy and a failed update reported services that would not
+    // come back when nothing was wrong.
+    shell.ui.lock_or_recover().active_operation_id.clear();
     Ok(())
 }
 

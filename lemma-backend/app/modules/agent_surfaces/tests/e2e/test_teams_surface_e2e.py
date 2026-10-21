@@ -367,15 +367,14 @@ async def test_teams_resolves_sharepoint_site_and_document_content_url(
     calling ``service.py``'s resolution functions directly (a local fake
     server cannot claim a ``sharepoint.com`` hostname, which is what gates
     this path in production)."""
-    import aiohttp
-
+    from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
     from app.modules.agent_surfaces.platforms.teams import service as teams_service
 
     monkeypatch.setattr(teams_service, "GRAPH_BASE", fake_teams.graph_base_url)
 
-    async with aiohttp.ClientSession() as session:
+    async with outbound_http(10.0) as http:
         root_site_id = await teams_service._resolve_sharepoint_site_id(
-            session=session,
+            http=http,
             token="graph-token",
             hostname="contoso.sharepoint.com",
             site_path="/",
@@ -383,7 +382,7 @@ async def test_teams_resolves_sharepoint_site_and_document_content_url(
         assert root_site_id == "site-root-e2e"
 
         team_site_id = await teams_service._resolve_sharepoint_site_id(
-            session=session,
+            http=http,
             token="graph-token",
             hostname="contoso.sharepoint.com",
             site_path="/sites/Engineering",
@@ -391,7 +390,7 @@ async def test_teams_resolves_sharepoint_site_and_document_content_url(
         assert team_site_id == "site-contoso.sharepoint.com"
 
         content_url = await teams_service._resolve_sharepoint_file_content_url(
-            session=session,
+            http=http,
             token="graph-token",
             url="https://contoso.sharepoint.com/sites/Engineering/Documents/report.pdf",
         )
@@ -400,10 +399,10 @@ async def test_teams_resolves_sharepoint_site_and_document_content_url(
             "/drive/root:/Documents/report.pdf:/content"
         )
 
-        async with session.get(
+        response = await http.get(
             content_url, headers={"Authorization": "Bearer graph-token"}
-        ) as response:
-            body = await response.read()
+        )
+        body = response.content
 
     assert (
         body

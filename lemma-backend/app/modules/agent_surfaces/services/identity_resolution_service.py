@@ -15,6 +15,9 @@ from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (  # noqa: E501
+    SlackManagerRepository,
+)
 from app.modules.agent_surfaces.domain.ports import SurfaceUserDirectoryPort
 from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter import (
     IdentityUserDirectoryAdapter,
@@ -201,12 +204,15 @@ class SurfaceIdentityResolutionService:
             if cached is not None:
                 return cached
 
-        # ── 2-3. Match against Lemma users: email, then phone ──────────────
-        match = (
-            await self._match_proven_sender(event, known)
-            if require_proven_identity
-            else await self._match_user_result(email=known.email, phone=known.phone)
-        )
+        # ── 2-3. Match against Lemma users: Slack's proof, email, then phone ─
+        match = await self._slack_proof(event, known)
+        if match.user_id is None:
+            match = (
+                await self._match_proven_sender(event, known)
+                if require_proven_identity
+                else await self._match_user_result(email=known.email, phone=known.phone)
+            )
+            match = await self._unless_proven_elsewhere(event, known, match)
 
         # Persist the resolved_user_id so the next message is a cache hit.
         if known.external_user_id and not profile_unavailable:
@@ -258,8 +264,11 @@ class SurfaceIdentityResolutionService:
             return None
         if not await self._live_user_lookup(external_user.resolved_user_id):
             return None
-        if require_proven_identity and not await self._cache_is_attested(
-            known, external_user.resolved_user_id
+        if (
+            require_proven_identity
+            and (await self._slack_proof(event, known)).user_id
+            != external_user.resolved_user_id
+            and not await self._cache_is_attested(known, external_user.resolved_user_id)
         ):
             return None
         if await self._cache_rests_on_an_unverified_number(external_user, known, event):
@@ -346,6 +355,59 @@ class SurfaceIdentityResolutionService:
             candidates, verified=True
         )
         return cached_user_id not in verified
+
+    async def _slack_proof(
+        self, event: ParsedInboundSurfaceEvent, known: _KnownSender
+    ) -> _UserMatch:
+        """The Lemma person Slack proved this sender to be in this workspace.
+
+        Through Lemma's own app (``slack_workspace_people``): the installer's
+        grant, or Sign in with Slack. A proof is written through to this
+        cache, so it is usually a cache hit before this is asked; this is for
+        a row something cleared since -- a profile phone change clears every
+        platform identity of its person -- which an email that differs from
+        the Lemma one would otherwise answer as nobody. Proof says who they
+        are, not whether they are in a pod: membership still decides routing.
+        """
+        if (
+            event.platform is not SurfacePlatform.SLACK
+            or not event.tenant_id
+            or not known.external_user_id
+        ):
+            return _UserMatch(None)
+        user_id = await SlackManagerRepository(self.uow.session).person(
+            event.tenant_id, known.external_user_id
+        )
+        if user_id is None or await self._live_user_lookup(user_id) is None:
+            return _UserMatch(None)
+        return _UserMatch(user_id)
+
+    async def _unless_proven_elsewhere(
+        self, event: ParsedInboundSurfaceEvent, known: _KnownSender, match: _UserMatch
+    ) -> _UserMatch:
+        """No match where Slack proved that person to be another Slack user here.
+
+        A Slack profile email is the workspace's word, and a workspace admin
+        can set anybody's: once Slack itself has said which of its users a
+        Lemma person is, another user carrying their email is not them.
+        """
+        if (
+            match.user_id is None
+            or event.platform is not SurfacePlatform.SLACK
+            or not event.tenant_id
+            or not known.external_user_id
+        ):
+            return match
+        proven_as = await SlackManagerRepository(self.uow.session).slack_user_for(
+            event.tenant_id, match.user_id
+        )
+        if proven_as is None or proven_as == known.external_user_id:
+            return match
+        logger.warning(
+            "agent_surfaces.identity.email_of_proven_person_refused.observed",
+            platform=event.platform.value,
+        )
+        return _UserMatch(None)
 
     async def _match_proven_sender(
         self, event: ParsedInboundSurfaceEvent, known: _KnownSender

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -21,6 +20,10 @@ from app.modules.function.domain.entities import (
 class FunctionRepositoryPort(Protocol):
     @abstractmethod
     async def get_for_update(self, owner_id: UUID) -> FunctionEntity | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_for_share(self, owner_id: UUID) -> FunctionEntity | None:
         raise NotImplementedError
 
     @abstractmethod
@@ -206,35 +209,3 @@ class FunctionSchemaExecutionPort(Protocol):
         artifact: FunctionArtifact,
     ) -> FunctionSchemaSet:
         raise NotImplementedError
-
-
-class FunctionRunQueuePort(Protocol):
-    """The one backend queue used for asynchronous function runs."""
-
-    async def enqueue(self, run_id: UUID) -> str:
-        """Publish the stable ``function_run_id`` and return its queue identity."""
-        ...
-
-
-class PodRunSlotsPort(Protocol):
-    """How many runs one pod may have executing at once.
-
-    A slot is taken before a run starts and held until it is settled; each
-    lapses on its own at ``hold_until`` so a dispatcher that dies cannot keep
-    one. ``acquire`` waits until ``wait_until`` and says whether it got one.
-    """
-
-    async def acquire(
-        self,
-        pod_id: UUID,
-        run_id: UUID,
-        *,
-        hold_until: datetime,
-        wait_until: datetime,
-    ) -> bool: ...
-
-    async def extend(
-        self, pod_id: UUID, run_id: UUID, *, hold_until: datetime
-    ) -> None: ...
-
-    async def release(self, pod_id: UUID, run_id: UUID) -> None: ...

@@ -13,6 +13,7 @@ import json
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.core.authorization.authz_epoch import bump_pod_authz_epoch
 from app.core.authorization.context import PrincipalRef
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
@@ -196,7 +197,17 @@ async def invalidate_role_snapshot_cache(
     stale authorization. The ``organization_id``/``pod_id`` args are accepted for
     call-site clarity.
     """
-    _ = (organization_id, pod_id)
+    _ = organization_id
+    await _drop_snapshots(user_id)
+    # Anything keyed by the pod's permissions (the search scope, a live hub's
+    # readers) goes with the snapshots; without a pod, every pod's. After the
+    # delete, never before: a hub that hears the bump rebuilds its readers at
+    # once, and must not rebuild them from the snapshot about to be dropped and
+    # then take itself to be current.
+    await bump_pod_authz_epoch(pod_id)
+
+
+async def _drop_snapshots(user_id: UUID | None) -> None:
     cache = _get_role_cache()
     if cache is None:
         return

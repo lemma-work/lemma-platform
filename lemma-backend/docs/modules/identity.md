@@ -12,7 +12,7 @@ Pod membership is deliberately owned by the [pod module](pod.md).
 | Contribution | Behavior |
 | --- | --- |
 | API routers | `/users`, `/organizations`, `/auth` |
-| Redis consumer | Sends invitation, welcome, and invitation-accepted emails from identity events |
+| Work kinds | `identity.email` (invitation, welcome and invitation-accepted emails) and `identity.whatsapp_verification` (`delivery`), written in the transaction that causes them; `UserMobileChanged` is a fact emitted with the number change |
 | API lifespan | Closes the Redis-backed user cache |
 | External systems | SuperTokens and SMTP/email adapter |
 

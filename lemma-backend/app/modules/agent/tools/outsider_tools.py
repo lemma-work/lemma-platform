@@ -31,10 +31,8 @@ OUTSIDER_TOOL_NAMES = frozenset(
         "pod_search_files",
         # WEB_SEARCH -- a search API call; no pod or owner identity.
         "web_search",
-        # MESSAGING -- fenced to the member who looks after the conversation,
-        # and to notifications this conversation sent.
-        "message_user",
-        "check_messages",
+        # MESSAGING -- only flagging the channel for a member to step in.
+        "ask_a_person",
         # CONTACT -- offered only on a contact's run (``tools/contact_tools``):
         # the contact's own rows of a contact-owned table, and functions the
         # pod opened to contacts. Both take the contact from the run, never
@@ -56,6 +54,10 @@ OUTSIDER_TOOLS_WITHHELD: dict[str, str] = {
     "list_pod_members": "the directory is not the stranger's to read",
     "list_teammates": "lists the owner's other pods, which are not the stranger's to see",
     "ask_teammate": "another pod would answer with the owner's access there",
+    "channel_post": "writes as the pod to its members and channels",
+    "channel_read": "reads the pod's channels, which are the members'",
+    "channel_search": "searches the pod's channels, which are the members'",
+    "channel_list": "lists the pod's channels, which are the members'",
 }
 
 

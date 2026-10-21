@@ -46,7 +46,6 @@ from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.outsiders import (
-    OUTSIDE_ANSWER_TOOL,
     Audience,
 )
 from app.modules.agent.domain.pausing_tools import (
@@ -199,6 +198,20 @@ async def lemma_message_run_started_at(
     return run.started_at
 
 
+async def authorize_surface_conversation(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, agent_name: str | None, user_id: UUID
+) -> None:
+    """Refuse a person who may not run this agent, as opening would.
+
+    It releases the pooled connection while it checks, so a caller that opens
+    under a transaction-scoped lock checks here before taking the lock, and
+    opens with ``require_execute_grant=False``.
+    """
+    await _service(uow).authorize_opening(
+        pod_id=pod_id, agent_name=agent_name, user_id=user_id
+    )
+
+
 async def open_surface_conversation(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -208,8 +221,8 @@ async def open_surface_conversation(
     title: str | None,
     metadata: dict[str, object] | None = None,
     require_execute_grant: bool = True,
-    for_outsiders: bool = False,
-    for_contact: UUID | None = None,
+    contact_id: UUID | None = None,
+    channel_id: UUID | None = None,
 ) -> SurfaceConversation:
     """Start the conversation behind a surface thread.
 
@@ -218,23 +231,15 @@ async def open_surface_conversation(
     permission to run the agent that is writing to them. Every inbound path
     leaves it on.
 
-    ``for_outsiders`` opens the conversation a group's people from outside the
-    pod talk in. ``user_id`` is then the member who looks after that group, and
-    every run in it authorizes as nobody (see ``domain/outsiders``). Marked here,
-    by this module, so the key that decides it is written in one place.
+    ``channel_id`` is the channel it works in (``channel_conversations``).
+    ``contact_id`` opens a contact's conversation -- in a private chat, a group
+    or a web page. ``user_id`` is then the member who looks after it, and every
+    run in it authorizes as that contact (see ``domain/outsiders``).
 
     The caller sets the authorization context, because it is the caller that
     knows whose it is -- an inbound message runs as the sender, a notification
     as nobody in particular.
-
-    ``for_contact`` opens a contact's private chat: the same rules, for one
-    person the pod knows, named on the conversation so the run can address
-    them.
     """
-    if for_contact is not None:
-        metadata = {**(metadata or {}), **Audience.contact(for_contact).to_metadata()}
-    elif for_outsiders:
-        metadata = {**(metadata or {}), **Audience.outsiders().to_metadata()}
     conversation = await _service(uow).create_conversation(
         pod_id=pod_id,
         agent_name=agent_name,
@@ -242,6 +247,8 @@ async def open_surface_conversation(
         title=title,
         metadata=metadata,
         require_execute_grant=require_execute_grant,
+        contact_id=contact_id,
+        channel_id=channel_id,
     )
     return _conversation(conversation)
 
@@ -280,18 +287,46 @@ async def append_notification_message(
     message: str,
     notification_id: UUID,
 ) -> None:
-    """Write an outbound notification into the recipient's thread.
+    """Write an outbound notification into the recipient's thread, once.
 
     Belongs to no run, which is the point: it is what makes the recipient's
     agent able to answer "yes" six hours later against a question it can
-    actually see in its own history.
+    actually see in its own history. A retried send of the same notification
+    finds it there and adds no second copy.
     """
+    from app.modules.agent.contracts.contact_conversations import (
+        notification_keyed,
+    )
+
+    if await notification_keyed(
+        uow, conversation_id, key="notification_id", value=str(notification_id)
+    ):
+        return
     await ConversationRepository(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,
         draft=MessageDraft.of_notification(
             message, metadata={"notification_id": str(notification_id)}
         ),
+    )
+
+
+async def append_delivery_notice(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    message: str,
+    metadata: dict[str, str],
+) -> None:
+    """Write a line about a delivery into the conversation, in no run.
+
+    For what the person reading the conversation in Lemma should know about
+    a message sent on their behalf elsewhere -- that it may not have arrived.
+    """
+    await ConversationRepository(uow).append_message(
+        conversation_id=conversation_id,
+        agent_run_id=None,
+        draft=MessageDraft.of_notification(message, metadata=dict(metadata)),
     )
 
 
@@ -376,7 +411,6 @@ async def resolve_pending_interaction(
     pod_id: UUID | None = None,
     decision: AgentRunApprovalDecision,
     response: dict[str, object] | None = None,
-    defer_reconciliation: bool = True,
 ) -> ApprovalResolution | None:
     """Record a person's decision and resume the run it paused.
 
@@ -396,8 +430,9 @@ async def resolve_pending_interaction(
     Skips the authorization the HTTP entry point does, exactly as the service
     method it replaces did: a surface has already matched the person who tapped
     against the conversation's owner, and it is holding a webhook deadline while
-    it does. ``defer_reconciliation`` is on by default for the same reason --
-    an approved command outlives the webhook that approved it.
+    it does. An approved command outlives the webhook that approved it, so it
+    is a worker's: the decision commits with its ``agent.approval.execute``
+    item and the status comes back ``"queued"``.
 
     ``pod_id`` is optional because the conversation is loaded here anyway and
     knows its own pod. A caller that holds one passes it; one that holds only
@@ -414,7 +449,6 @@ async def resolve_pending_interaction(
         pod_id=pod_id if pod_id is not None else entity.pod_id,
         decision=decision,
         response=response or {},
-        defer_reconciliation=defer_reconciliation,
     )
 
 
@@ -530,7 +564,6 @@ async def set_conversation_metadata_value(
 __all__ = [
     # The tool an approval card for an answer to someone outside the pod
     # approves; the surface renders that card in its own words.
-    "OUTSIDE_ANSWER_TOOL",
     # Re-exported because `resolve_pending_interaction` takes one, and the enum
     # itself lives in `domain`, which is not a surface another module may reach
     # into. A published function whose argument type is unreachable is not
@@ -545,7 +578,9 @@ __all__ = [
     "PendingInteraction",
     "SurfaceAgentIdentity",
     "SurfaceConversation",
+    "append_delivery_notice",
     "append_notification_message",
+    "authorize_surface_conversation",
     "conversation_metadata_value",
     "lemma_message_run_started_at",
     "open_surface_conversation",

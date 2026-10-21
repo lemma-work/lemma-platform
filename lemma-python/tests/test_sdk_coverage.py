@@ -30,7 +30,6 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "scheduler.job",  # internal scheduler ops
     "usage.",
     "workspace.",  # workspace runtime is driven by the backend
-    "channel.",
     "app.public",
     "health_check",  # liveness probe
     # OAuth/consent browser callbacks — never called by a client
@@ -128,6 +127,7 @@ def test_schedule_run_contract_includes_retry_without_fire_aliases() -> None:
     assert "ScheduleRunListResponse" in schemas
     assert schemas["ScheduleRunStatus"]["enum"] == [
         "RECEIVED",
+        "FILTERING",
         "PROCESSING",
         "DISPATCHED",
         "COMPLETED",

@@ -54,6 +54,7 @@ class WebWidgetAdmin:
         allowed_origins: list[str],
         answer: WidgetAnswer,
         looked_after_by: UUID | None,
+        host_issuer: str,
     ) -> CreatedWidget:
         secret = mint_secret()
         widget = await self._widgets.create(
@@ -65,6 +66,7 @@ class WebWidgetAdmin:
             allowed_origins=allowed_origins,
             answer=answer,
             looked_after_by=looked_after_by,
+            host_issuer=host_issuer,
         )
         await self.uow.commit()
         return CreatedWidget(widget=widget, signing_secret=secret)

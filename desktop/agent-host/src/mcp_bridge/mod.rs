@@ -36,15 +36,16 @@ const MAX_MCP_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 /// How long the bridge waits for its host's relay to appear. The adapter
 /// starts the bridge while the host is already running the run, so this only
 /// covers a relay that is still binding.
-const RELAY_WAIT: Duration = Duration::from_secs(30);
+pub(crate) const RELAY_WAIT: Duration = Duration::from_secs(30);
 
 /// The longest a listing may take. Past it the agent is told, rather than
 /// left waiting on a Lemma that is not going to answer.
-const LIST_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const LIST_TIMEOUT: Duration = Duration::from_secs(120);
 /// The longest one tool call may take here, parked waits apart. Lemma bounds
 /// its own tools well inside this; it is the backstop for an answer that was
-/// lost, not a limit a working tool reaches.
-const CALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// lost, not a limit a working tool reaches. Codex is given the same limit
+/// for the server, in place of its own minute (`session_options::codex`).
+pub(crate) const CALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// The MCP revision the bridge answers `initialize` with when the agent does
 /// not ask for one.

@@ -71,6 +71,9 @@ def _routers():
     from app.modules.agent.api.controllers.agent_host_legacy_controller import (
         router as agent_host_legacy,
     )
+    from app.modules.agent.api.controllers.agent_host_transfer_controller import (
+        router as agent_host_transfer,
+    )
     from app.modules.agent.api.controllers.runtime_config_controller import (
         router as runtime_config,
     )
@@ -104,6 +107,7 @@ def _routers():
         agent,
         agent_host,
         agent_host_link,
+        agent_host_transfer,
         agent_host_legacy,
         runtime_config,
         runtime_default,
@@ -119,16 +123,49 @@ def _routers():
     ]
 
 
-def _event_routers():
-    from app.modules.agent.events.handlers import router
-    from app.modules.agent.events.notification_settled import (
-        router as notification_settled_router,
-    )
-    from app.modules.agent.events.pod_links_lifecycle import (
-        router as pod_links_router,
-    )
+def _live():
+    from app.modules.agent.services.live_conversation import live_contribution
 
-    return [router, notification_settled_router, pod_links_router]
+    return live_contribution()
+
+
+def _register_analytics() -> None:
+    # Every process: a memory file written anywhere -- including the shell's
+    # `lemma files write`, which commits in the API -- drops the cached brief
+    # section that quotes it, after the write commits.
+    import app.modules.agent.events.memory_brief_invalidation  # noqa: F401
+
+
+def _register_work() -> None:
+    # Every process: a pod deletion (API) writes this through `PodDeleted`.
+    import app.modules.agent.events.pod_links_lifecycle  # noqa: F401
+
+    # Every process: a merge of two contacts (API, a web visitor proving an
+    # email) writes this through `ContactMerged`.
+    import app.modules.agent.events.contact_merged_work  # noqa: F401
+
+    # Every process: the API starts and stops turns, the worker runs them and
+    # their follow-ups (`NotificationSettled` included, emitted by surfaces).
+    import app.modules.agent.events.run_followup_work  # noqa: F401
+    import app.modules.agent.events.turn_work  # noqa: F401
+
+    # Every process: a member's line in Lemma (API) and a run finishing
+    # (worker) write these; a question closing anywhere settles its batch.
+    # Importing the second also registers what answering a paused tool's
+    # question on its line does (``answers_for("tool")``). A paused question
+    # expiring (the channels' sweeper, worker) resumes its run.
+    import app.modules.agent.events.channel_answer_work  # noqa: F401
+    import app.modules.agent.events.channel_question_work  # noqa: F401
+    import app.modules.agent.events.pause_expiry_work  # noqa: F401
+
+    # Every process: a decision (API, surfaces) writes `agent.approval.execute`
+    # and `wait_for` (worker) writes the wait items; both run on the worker.
+    import app.modules.agent.events.approval_work  # noqa: F401
+    import app.modules.agent.events.wait_work  # noqa: F401
+
+
+def _register_periodic_work() -> None:
+    import app.modules.agent.events.periodic_work  # noqa: F401
 
 
 def _resource_names():
@@ -154,24 +191,12 @@ module = LemmaModule(
     name="agent",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
+    live=_live,
+    register_analytics=_register_analytics,
+    register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
     api_lifespans=(_report_system_model_pricing, _drain_agent_host_links),
     # The worker is where agent runs actually dispatch, so a deployment
     # whose models cannot back its spend limit has to hear it there too.
     worker_lifespans=(_report_system_model_pricing,),
-    stream_groups=(
-        ("agent_events", "agent-events"),
-        # A second group on the datastore's stream, so a memory file written
-        # anywhere -- including the shell's `lemma files write`, which never
-        # reaches this process -- drops the cached brief section that quotes it.
-        # Declared here because publishers create declared groups before XADD;
-        # an undeclared group silently misses everything published before its
-        # first read.
-        ("datastore.events", "agent-memory-brief-invalidation"),
-        # A group on surfaces' stream, so the last answer to an agent's asks
-        # starts the asking conversation's next turn. Declared for the same
-        # reason as the one above: a group nobody declared misses everything
-        # published before it first reads.
-        ("surface_events", "agent-notification-settled"),
-    ),
 )

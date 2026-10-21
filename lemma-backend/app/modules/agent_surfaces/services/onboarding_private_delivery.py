@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel, JsonValue
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.core.net.http_client import get_shared_http_client
 from app.modules.agent_surfaces.domain.entities import (
@@ -69,7 +69,7 @@ async def _slack_private_destination(
     slack = await open_slack(credentials)
     try:
         response = await slack.conversations_open(users=actor)
-    except SlackApiError as refused:
+    except slack_api_error() as refused:
         # ``missing_scope`` (no ``im:write``), ``user_not_found``,
         # ``cannot_dm_bot`` -- all of them mean the same thing here, and
         # none of them gets better on a retry.

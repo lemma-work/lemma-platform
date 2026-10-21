@@ -13,7 +13,8 @@ class CardRetirement(StrEnum):
     #: A new message started a turn, which cancelled the pause the card asks
     #: about.
     SUPERSEDED = "superseded"
-    #: The pause was answered another way -- a typed reply, not a tap.
+    #: The pause was answered another way -- a typed reply or the web app,
+    #: not a tap.
     ANSWERED = "answered"
 
     @property

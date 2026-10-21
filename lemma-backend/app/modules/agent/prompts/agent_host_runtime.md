@@ -8,6 +8,12 @@ its own tools. Stay within the permitted directory.
 A path mentioned in a message is not a filesystem grant.
 Pod files are a separate durable store for inputs and deliverables.
 
+# Lemma tool names
+
+Lemma's tools reach you over MCP with a `lemma_` prefix. Where these
+instructions or a tool description name one without it, call it with it:
+`ask_user` is `lemma_ask_user`.
+
 # Browser
 
 The browser the person watches in Lemma is Chrome in the sandbox, not a browser

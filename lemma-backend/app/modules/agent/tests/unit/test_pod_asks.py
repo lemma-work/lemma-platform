@@ -34,6 +34,7 @@ from app.modules.agent.domain.pod_ask_rules import (
     AskingRun,
     OpenModes,
     chain_for_person,
+    closed_reason,
     open_modes,
     plan_ask,
 )
@@ -163,6 +164,12 @@ class TestWhoMayAskAsTheirPerson:
     def test_not_a_named_agent(self):
         with pytest.raises(AskRefused, match="named agent"):
             chain_for_person(_run(default_agent=False), to_pod_id=THERE)
+
+    def test_a_run_that_can_ask_nobody_is_told_why(self):
+        """An empty list of pods used to say "there is no other pod to ask"
+        when the real reason was the run: a named agent asks none."""
+        assert "named agent" in (closed_reason(_run(default_agent=False)) or "")
+        assert closed_reason(_run()) is None
 
     def test_not_a_conversation_answering_strangers(self):
         with pytest.raises(AskRefused, match="outside the pod"):

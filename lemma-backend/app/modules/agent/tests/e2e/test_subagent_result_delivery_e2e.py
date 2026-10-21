@@ -21,10 +21,9 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     create_uow_from_session_maker,
 )
-from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.subagent_results import RESULT_SOURCE
 from app.modules.agent.domain.value_objects import AgentRunStatus, MessageRole
-from app.modules.agent.events.finished_run import settle_finished_run
+from app.modules.agent.services.subagent_result_delivery import SubagentResultDelivery
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.services.subagent_service import SubAgentService
@@ -76,13 +75,11 @@ async def _child_answers(run_id: UUID, answer: str) -> None:
 
 async def _settle(conversation_id: UUID, run_id: UUID) -> None:
     with suppress_agent_run_enqueue():
-        await settle_finished_run(
-            AgentRunCompletedEvent(
-                conversation_id=conversation_id,
-                agent_run_id=run_id,
-                status=AgentRunStatus.COMPLETED,
-            ),
-            uow_factory=uow_factory(),
+        # What the run's finalize writes for it: its `agent.subagent_result`
+        # item (each follow-up runs in its own transaction).
+        del run_id
+        await SubagentResultDelivery(uow_factory()).settle(
+            conversation_id=conversation_id
         )
 
 

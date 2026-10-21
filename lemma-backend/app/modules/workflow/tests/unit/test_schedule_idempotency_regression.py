@@ -6,12 +6,14 @@ single-owner target dispatch.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.modules.schedule.domain.schedule import (
     ScheduleFireStatus,
@@ -62,9 +64,8 @@ def _engine_with_mocks() -> WorkflowEngine:
         uow,
         agent_adapter=Mock(),
         function_adapter=Mock(),
-        schedule_adapter=Mock(),
-        decision_adapter=Mock(),
-        notification_adapter=AsyncMock(),
+        form_questions=AsyncMock(),
+        work=AsyncMock(),
     )
 
 
@@ -167,6 +168,8 @@ async def test_start_run_emits_transactional_terminal_event():
     engine._entry_node_id = Mock(return_value="entry")
     engine.run_repo = AsyncMock()
     engine.run_repo.update.side_effect = lambda run: run
+    engine.wait_repo = AsyncMock()
+    engine.wait_repo.oldest_queued.return_value = []
 
     async def complete(run, _flow):
         run.complete()
@@ -201,14 +204,20 @@ async def test_reserved_workflow_run_id_is_idempotent():
     )
     engine._require_action = AsyncMock(return_value=None)
     engine._entry_node_id = Mock(return_value="entry")
-    engine.run_repo = AsyncMock(get=AsyncMock(return_value=existing))
+    # The reserved id is not looked up first: its insert conflicts, inside a
+    # savepoint, and the conflict returns the run that already holds it.
+    engine.uow.session.begin_nested = Mock(return_value=nullcontext())
+    engine.run_repo = AsyncMock(
+        get=AsyncMock(return_value=existing),
+        create=AsyncMock(side_effect=IntegrityError("INSERT", {}, Exception("dup"))),
+    )
     engine._stepper = Mock()
 
     result = await engine.start_run(flow_id, user_id, run_id=run_id)
 
     assert result is existing
-    engine.run_repo.create.assert_not_awaited()
     engine._stepper.assert_not_called()
+    engine.run_repo.update.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -241,7 +250,7 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
     run_repo.claim = AsyncMock(return_value=None)
     _stub_run_operations(monkeypatch, run_repo)
 
-    await svc.handle_schedule_fired(
+    await svc.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -273,7 +282,7 @@ async def test_emitted_one_time_fire_runs_after_schedule_is_marked_inactive(
     _stub_schedule_operations(monkeypatch, schedule_repo)
     _stub_run_operations(monkeypatch, run_repo)
 
-    await ScheduleStartService(engine).handle_schedule_fired(
+    await ScheduleStartService(engine).start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -282,47 +291,6 @@ async def test_emitted_one_time_fire_runs_after_schedule_is_marked_inactive(
     )
 
     run_repo.claim.assert_awaited_once()
-
-
-@pytest.mark.anyio
-async def test_workflow_timer_requires_exact_wait_ref() -> None:
-    service = ScheduleStartService(_engine_with_mocks())
-
-    with pytest.raises(ValueError, match="wait_ref is required"):
-        await service.handle_schedule_fired(
-            schedule_id=str(uuid4()),
-            user_id=uuid4(),
-            payload={"workflow_run_id": str(uuid4())},
-            schedule_event_id="timer:event-1",
-        )
-
-
-@pytest.mark.anyio
-async def test_workflow_timer_rejects_non_owner_user() -> None:
-    engine = _engine_with_mocks()
-    run_id = uuid4()
-    engine.run_repo.get = AsyncMock(
-        return_value=SimpleNamespace(
-            id=run_id,
-            user_id=uuid4(),
-            pod_id=uuid4(),
-        )
-    )
-    engine.resume_internal = AsyncMock()
-    service = ScheduleStartService(engine)
-
-    with pytest.raises(ValueError, match="does not match the run owner"):
-        await service.handle_schedule_fired(
-            schedule_id=str(uuid4()),
-            user_id=uuid4(),
-            payload={
-                "workflow_run_id": str(run_id),
-                "wait_ref": str(uuid4()),
-            },
-            schedule_event_id="timer:event-2",
-        )
-
-    engine.resume_internal.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -359,7 +327,7 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
     service._build_user_context = AsyncMock(return_value=context)
     service._record_fire = AsyncMock()
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=row_owner_id,
         payload={"id": "row-1"},
@@ -410,7 +378,7 @@ async def test_workflow_schedule_run_uses_event_user(monkeypatch):
     service._start_workflow_for_schedule = AsyncMock(return_value="workflow-run-1")
     service._record_fire = AsyncMock()
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=row_owner_id,
         payload={"id": "row-1"},
@@ -463,7 +431,7 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
     service._record_fire = AsyncMock()
 
     with pytest.raises(PermissionError, match="agent.execute denied"):
-        await service.handle_schedule_fired(
+        await service.start_for_fire(
             schedule_id=str(schedule.id),
             user_id=row_owner_id,
             payload={"id": "row-1"},
@@ -474,39 +442,6 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
     run_repo.mark_failed.assert_awaited_once()
     assert run_repo.claim.await_args.kwargs["user_id"] == row_owner_id
     assert service._record_fire.await_args.kwargs["dispatch_dead_lettered"] is False
-
-
-@pytest.mark.anyio
-async def test_workflow_timer_without_owner_adopts_the_run_owner() -> None:
-    """Wait timers persisted before ownership existed must still wake their run.
-
-    ``reconcile_time_schedule_jobs`` rewrites logical schedule jobs with an
-    owner at startup but deliberately leaves wait timers alone, so a timer
-    scheduled by an older deployment fires with no user_id. The run row is the
-    authoritative owner, so nothing needs to be synthesized and the wake
-    proceeds instead of hanging forever.
-    """
-    engine = _engine_with_mocks()
-    run_id, owner, pod_id = uuid4(), uuid4(), uuid4()
-    engine.run_repo.get = AsyncMock(
-        return_value=SimpleNamespace(id=run_id, user_id=owner, pod_id=pod_id)
-    )
-    engine.resume_internal = AsyncMock()
-    service = ScheduleStartService(engine)
-    service._build_user_context = AsyncMock(return_value=Mock())
-    wait_ref = str(uuid4())
-
-    await service.handle_schedule_fired(
-        schedule_id=str(uuid4()),
-        user_id=None,
-        payload={"workflow_run_id": str(run_id), "wait_ref": wait_ref},
-        schedule_event_id="timer:legacy-1",
-    )
-
-    engine.resume_internal.assert_awaited_once()
-    assert engine.resume_internal.await_args.kwargs["external_ref"] == wait_ref
-    # The run owner is what authorizes the resume, not anything from the timer.
-    assert service._build_user_context.await_args.kwargs["user_id"] == owner
 
 
 @pytest.mark.anyio
@@ -545,7 +480,7 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
         return_value=schedule_run.target_run_id
     )
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=None,
         payload={},
@@ -554,71 +489,6 @@ async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
 
     assert run_repo.claim.await_args.kwargs["user_id"] == schedule.user_id
     run_repo.mark_dispatched.assert_awaited_once_with(schedule_run.id)
-
-
-@pytest.mark.anyio
-async def test_unparseable_schedule_fire_is_dropped_by_the_inbox() -> None:
-    """Parsing must happen inside the inbox so poison events terminate.
-
-    A ``schedule.fired`` staged by an older deployment can lack the now-required
-    ``source_event_id``. Validating before ``inbox.process`` would nack it out
-    to the subscriber, and the 60s reclaim loop has no attempt cap — the same
-    message would redeliver forever. Inside the inbox it is marked TERMINAL and
-    acked once.
-    """
-    from app.modules.test_support.fakes import ValidationTerminalEventInbox
-    from app.modules.workflow.events.handlers import handle_schedule_events
-
-    inbox = ValidationTerminalEventInbox()
-    job_queue = Mock(enqueue=AsyncMock())
-
-    await handle_schedule_events(
-        {
-            "event_type": "schedule.fired",
-            "schedule_id": str(uuid4()),
-            "user_id": str(uuid4()),
-            "schedule_type": "TIME",
-            "payload": {},
-        },
-        Mock(),
-        job_queue=job_queue,
-        inbox=inbox,
-    )
-
-    assert inbox.terminal == ["workflow.schedule-start:ValidationError"]
-    job_queue.enqueue.assert_not_awaited()
-
-
-@pytest.mark.anyio
-async def test_owner_survives_the_queue_boundary_as_none_not_the_string_none() -> None:
-    """An owner-less fire must reach the worker as None, not ``"None"``.
-
-    The enqueue boundary stringifies its kwargs. ``str(None)`` produces the
-    literal ``"None"``, which is truthy, so the legacy-timer branch would try
-    ``UUID("None")`` and the run would never wake — the exact failure this
-    ownership work is meant to remove.
-    """
-    from app.modules.schedule.domain.events.schedule import ScheduleFired
-    from app.modules.schedule.domain.schedule import ScheduleType
-    from app.modules.workflow.events.handlers import on_schedule_fired
-
-    job_queue = Mock(enqueue=AsyncMock())
-    owner = uuid4()
-
-    for user_id, expected in ((None, None), (owner, str(owner))):
-        job_queue.enqueue.reset_mock()
-        await on_schedule_fired(
-            ScheduleFired(
-                schedule_id=uuid4(),
-                user_id=user_id,
-                schedule_type=ScheduleType.TIME,
-                payload={"workflow_run_id": str(uuid4()), "wait_ref": str(uuid4())},
-                source_event_id="timer:boundary-1",
-            ),
-            Mock(),
-            job_queue,
-        )
-        assert job_queue.enqueue.await_args.kwargs["user_id"] == expected
 
 
 @pytest.mark.anyio
@@ -665,7 +535,7 @@ async def test_an_assistant_schedule_dispatches_down_the_ordinary_agent_path(
     service._build_user_context = AsyncMock(return_value=context)
     service._record_fire = AsyncMock()
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -739,7 +609,7 @@ async def test_pod_default_schedule_authorizes_against_the_pod_not_an_agent(
     service._build_user_context = AsyncMock(return_value=context)
     service._record_fire = AsyncMock()
 
-    await service.handle_schedule_fired(
+    await service.start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -778,7 +648,7 @@ async def test_a_schedule_whose_target_was_deleted_records_the_firing_as_failed(
         _ignoring_uow(outcome_service.record_pre_dispatch_failure),
     )
 
-    await ScheduleStartService(engine).handle_schedule_fired(
+    await ScheduleStartService(engine).start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},
@@ -814,7 +684,7 @@ async def test_an_internal_wait_timer_with_no_target_records_nothing(monkeypatch
         _ignoring_uow(outcome_service.record_pre_dispatch_failure),
     )
 
-    await ScheduleStartService(engine).handle_schedule_fired(
+    await ScheduleStartService(engine).start_for_fire(
         schedule_id=str(schedule.id),
         user_id=schedule.user_id,
         payload={},

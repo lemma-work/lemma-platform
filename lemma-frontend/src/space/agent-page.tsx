@@ -11,7 +11,7 @@ import {
 } from "@/data/agents";
 import { displayAgentName } from "@/data/agent-names";
 import { surfacesForAgent, surfaceStatus } from "@/data/surface-settings";
-import { groupsSupported } from "@/data/surface-groups";
+import { groupsSupported } from "@/channels/sources";
 import { capabilityList, grantedToolsets } from "@/stage/colleagues";
 import { ConfirmRemove, Editor, useRunsOn } from "@/stage/agents-view";
 import { useSchedules } from "@/schedule/queries";
@@ -310,11 +310,6 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
     const [selected, setSelected] = useState<Surface | null>(null);
     const pod = useQuery({ queryKey: ["surface-pod", podId], queryFn: () => source.getPod(podId), enabled: Boolean(selected) });
     const own = surfacesForAgent(surfaces, detail.front ? "pod_default" : detail.name);
-    /* A group's switches take what configuring the bot takes. Read off the
-       bot's own actions rather than `may`, which also says no to editing the
-       main bot's definition — a different question. An empty list is a bot
-       that did not say, and not saying is not a refusal. */
-    const canChange = detail.actions.length > 0 ? detail.actions.includes(AGENT_EDIT) : undefined;
     const saved = () => {
         for (const key of [["surfaces", 2, podId], ["surface-detail", podId], ["surface-setup", podId], ["surface-channels", podId], ["my-surfaces"]]) {
             void cache.invalidateQueries({ queryKey: key });
@@ -346,8 +341,6 @@ function Channels({ space, detail, surfaces, loading }: { space: Pod; detail: Ag
                                         surface={surface}
                                         bot={detail.label}
                                         space={space.name}
-                                        members={space.members}
-                                        canChange={canChange}
                                     />
                                 )}
                             </li>

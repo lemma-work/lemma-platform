@@ -220,44 +220,55 @@ def _routers():
     ]
 
 
-def _event_routers():
-    from app.modules.datastore.events.handlers import router
-    from app.modules.datastore.events.pod_schema_consumer import (
-        router as pod_schema_router,
-    )
+def _live():
+    from app.core.live.topics import LiveContribution
+    from app.modules.datastore.services.live.topic import RecordsTopic
 
-    return [router, pod_schema_router]
+    return LiveContribution(topics=(RecordsTopic(),))
 
 
-def _register_streaq() -> None:
+def _register_work() -> None:
+    # In every process: the pod-create transaction (API) writes this kind
+    # through the `PodCreated` fact this module subscribes it to.
+    import app.modules.datastore.events.contact_merged_work  # noqa: F401
+    import app.modules.datastore.events.pod_provision_work  # noqa: F401
+
+    # Every process: a schedule or MCP subscription change (API) writes
+    # `changes.sync_subscribers`; the worker claims every change-log kind.
+    import app.modules.datastore.changes.horizon  # noqa: F401
+    import app.modules.datastore.changes.retention  # noqa: F401
+    import app.modules.datastore.changes.work  # noqa: F401
+
+
+def _register_periodic_work() -> None:
+    import app.modules.datastore.events.handlers  # noqa: F401
     import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
-    import app.modules.datastore.events.outbox_retention_tasks  # noqa: F401
+
+    # Work-runtime kinds, registered here so the worker's dispatchers can
+    # claim them; the API registers ``file_work`` by importing the repository
+    # that enqueues it.
+    import app.modules.datastore.events.file_work  # noqa: F401
+    import app.modules.datastore.events.pod_schema_work  # noqa: F401
+    import app.modules.datastore.events.storage_work  # noqa: F401
 
 
 @asynccontextmanager
-async def _datastore_outbox_dispatcher(context):
-    """Dispatch the second outbox when pod schemas use a separate database."""
+async def _change_handoff(context):
+    """Hand watched writes' wakes to ``changes.deliver`` items.
+
+    Replaces the datastore outbox dispatcher: record changes no longer travel
+    as stream events. One loop per worker; it holds one direct connection to
+    the datastore database for ``LISTEN`` and polls as a fallback.
+    """
     from app.core.config import settings
-    from app.core.infrastructure.events.message_bus import get_message_bus
-    from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
-    from app.modules.datastore.infrastructure.session import (
-        get_datastore_session_maker,
-    )
-    from app.modules.datastore.infrastructure.transactional_events import (
-        ensure_datastore_event_outbox,
-    )
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.modules.datastore.changes.handoff import change_handoff_lifespan
+    from app.modules.datastore.infrastructure.session import get_datastore_engine
 
     del context
     datastore_url = datastore_settings.datastore_database_url or settings.database_url
-    if datastore_url == settings.database_url:
-        yield
-        return
-    await ensure_datastore_event_outbox()
-    async with outbox_dispatcher_lifespan(
-        get_datastore_session_maker(),
-        get_message_bus(),
-        database_url=datastore_url,
-        label="datastore",
+    async with change_handoff_lifespan(
+        get_datastore_engine(), async_session_maker, database_url=datastore_url
     ):
         yield
 
@@ -273,8 +284,7 @@ async def _close_datastore_engine(context):
 
     Registered *first* on purpose. `AsyncExitStack` unwinds last-entered-first,
     so entering this one first makes it the last of datastore's to unwind --
-    after `_close_reindex_queue` and the outbox dispatcher, both of which can
-    still want the engine on their way out.
+    after the change handoff, which can still want the engine on its way out.
     """
     try:
         yield
@@ -284,18 +294,6 @@ async def _close_datastore_engine(context):
         )
 
         await close_datastore_engine()
-
-
-@asynccontextmanager
-async def _close_reindex_queue(context):
-    try:
-        yield
-    finally:
-        from app.modules.datastore.infrastructure.reindex_queue import (
-            close_datastore_reindex_queue,
-        )
-
-        await close_datastore_reindex_queue()
 
 
 def _resource_names():
@@ -339,20 +337,16 @@ module = LemmaModule(
     name="datastore",
     resource_names=_resource_names,
     routers=_routers,
-    event_routers=_event_routers,
-    register_streaq=_register_streaq,
+    live=_live,
+    register_work=_register_work,
+    register_periodic_work=_register_periodic_work,
     # Nothing here may scale with data: see `test_boot_hooks.py`. The query
-    # role and its grants are ensured lazily, and the datastore outbox table is
-    # created by the first record write or the worker's dispatcher.
+    # role and its grants are ensured lazily; the change handoff starts a loop
+    # and reads nothing at boot.
     api_lifespans=(_preload_local_embeddings,),
     worker_lifespans=(
         _close_datastore_engine,
         _preload_local_embeddings,
-        _datastore_outbox_dispatcher,
-        _close_reindex_queue,
-    ),
-    stream_groups=(
-        ("datastore.events", "datastore-file-events"),
-        ("pod_events", "pod-provisioning-events"),
+        _change_handoff,
     ),
 )

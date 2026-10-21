@@ -291,6 +291,21 @@ describe("SchedulesNamespace.runs", () => {
   });
 });
 
+describe("SchedulesNamespace.skips", () => {
+  it("pages with the token the server returned", async () => {
+    const listSpy = vi
+      .spyOn(SchedulesService, "scheduleSkipList")
+      .mockResolvedValue({ items: [], limit: 50 } as never);
+    const schedules = new SchedulesNamespace(passthroughAdapter, () => "pod-1");
+
+    await schedules.skips("sched-1");
+    await schedules.skips("sched-1", { limit: 10, pageToken: "next" });
+
+    expect(listSpy).toHaveBeenNthCalledWith(1, "pod-1", "sched-1", 50, undefined);
+    expect(listSpy).toHaveBeenNthCalledWith(2, "pod-1", "sched-1", 10, "next");
+  });
+});
+
 describe("PodLinksNamespace.connect", () => {
   it("shares tables and folders for reading only", async () => {
     const connectSpy = vi

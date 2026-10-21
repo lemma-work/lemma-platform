@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
+from app.modules.agent_surfaces.platforms.telegram.line_changes import (
+    telegram_line_changes,
+)
+from app.modules.agent_surfaces.platforms.telegram.membership import (
+    group_membership_updates,
+)
+
 from app.modules.agent_surfaces.platforms.telegram.addressing import (
     addressed_to_this_bot,
     mention_is_provisional,
 )
 
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 
 from app.modules.agent_surfaces.domain.models import ProgressHandle
 
@@ -156,11 +165,19 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
                 bot_username=await service.get_bot_username() or "",
                 bot_user_id=await service.get_bot_user_id(),
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.warning(
                 "agent_surfaces.telegram.mention_unsettled.degraded", exc_info=True
             )
             return event
+
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]:
+        return group_membership_updates(payload)
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        return telegram_line_changes(payload, self._parser)
 
     async def parse_inbound_lifecycle(
         self, payload: dict[str, object], headers: dict[str, str] | None = None
@@ -186,8 +203,8 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await TelegramPlatformService(credentials).send_message(
+    ) -> str | None:
+        return await TelegramPlatformService(credentials).send_message(
             event, message, metadata
         )
 

@@ -33,9 +33,7 @@ from app.modules.agent_surfaces.platforms.teams.adapter import (
 from app.modules.agent_surfaces.platforms.teams import (
     adapter as teams_adapter_module,
 )
-from app.modules.agent_surfaces.platforms.teams import (
-    adapter_egress as teams_egress_module,
-)
+from app.modules.agent_surfaces.tests.fakes import answer_json, platform_http
 
 
 def test_surface_adapter_registry_accepts_surface_platform_enum():
@@ -245,44 +243,8 @@ async def test_teams_dm_uses_conversation_id_as_thread_id():
     assert event.metadata["reply_to_id"] is None
 
 
-@pytest.mark.asyncio
-async def test_teams_send_message_declares_markdown_text_format(monkeypatch):
-    posted: dict = {}
-
-    class _Response:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        def raise_for_status(self):
-            return None
-
-        async def json(self):
-            return {"id": "activity-1"}
-
-    class _Session:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        def post(self, url, *, headers, json):
-            posted["url"] = url
-            posted["headers"] = headers
-            posted["json"] = json
-            return _Response()
-
-    adapter = TeamsSurfaceAdapter()
-    adapter._get_bot_token = AsyncMock(return_value="bot-token")
-    monkeypatch.setattr(
-        teams_egress_module.aiohttp,
-        "ClientSession",
-        lambda *args, **kwargs: _Session(),
-    )
-    event = ParsedInboundSurfaceEvent(
+def _teams_dm_event(**reply_target: str) -> ParsedInboundSurfaceEvent:
+    return ParsedInboundSurfaceEvent(
         platform="TEAMS",
         conversation_type=ConversationType.EXTERNAL_DM,
         tenant_id="tenant-1",
@@ -295,19 +257,32 @@ async def test_teams_send_message_declares_markdown_text_format(monkeypatch):
         reply_target={
             "service_url": "https://smba.trafficmanager.net/teams",
             "conversation_id": "a:dm-conversation",
-            "reply_to_id": "msg-1",
+            **reply_target,
         },
     )
 
-    await adapter.send_message(
-        credentials={},
-        event=event,
-        message="**bold**\n\n- item",
-    )
 
-    assert posted["url"].endswith("/v3/conversations/a%3Adm-conversation/activities")
-    assert posted["headers"]["Authorization"] == "Bearer bot-token"
-    assert posted["json"] == {
+def _teams_adapter_with_token() -> TeamsSurfaceAdapter:
+    adapter = TeamsSurfaceAdapter()
+    adapter._get_bot_token = AsyncMock(return_value="bot-token")
+    return adapter
+
+
+@pytest.mark.asyncio
+async def test_teams_send_message_declares_markdown_text_format():
+    adapter = _teams_adapter_with_token()
+
+    with platform_http(answer_json({"id": "activity-1"})) as http:
+        await adapter.send_message(
+            credentials={},
+            event=_teams_dm_event(reply_to_id="msg-1"),
+            message="**bold**\n\n- item",
+        )
+
+    (posted,) = http.requests
+    assert str(posted.url).endswith("/v3/conversations/a%3Adm-conversation/activities")
+    assert posted.headers["Authorization"] == "Bearer bot-token"
+    assert http.json_of(posted) == {
         "type": "message",
         "text": "**bold**\n\n- item",
         "textFormat": "markdown",
@@ -316,151 +291,58 @@ async def test_teams_send_message_declares_markdown_text_format(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_teams_send_display_resource_posts_adaptive_card(monkeypatch):
-    posted: dict = {}
+async def test_teams_send_display_resource_posts_adaptive_card():
+    adapter = _teams_adapter_with_token()
 
-    class _Response:
-        async def __aenter__(self):
-            return self
+    with platform_http(answer_json({"id": "activity-1"})) as http:
+        await adapter._render_resource(
+            credentials={},
+            event=_teams_dm_event(reply_to_id="msg-1"),
+            render_plan=SurfaceDisplayRenderPlan(
+                resource_type="TABLE",
+                title="Table: deals",
+                summary="3 of 41 records",
+                detail_lines=["Filters: stage eq won"],
+                actions=[
+                    SurfaceDisplayAction(
+                        label="Open in Lemma",
+                        url="https://app.example.test/pod/p/data?tab=deals",
+                    )
+                ],
+            ),
+        )
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        def raise_for_status(self):
-            return None
-
-        async def json(self):
-            return {"id": "activity-1"}
-
-    class _Session:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        def post(self, url, *, headers, json):
-            posted["url"] = url
-            posted["headers"] = headers
-            posted["json"] = json
-            return _Response()
-
-    adapter = TeamsSurfaceAdapter()
-    adapter._get_bot_token = AsyncMock(return_value="bot-token")
-    monkeypatch.setattr(
-        teams_egress_module.aiohttp,
-        "ClientSession",
-        lambda *args, **kwargs: _Session(),
-    )
-    event = ParsedInboundSurfaceEvent(
-        platform="TEAMS",
-        conversation_type=ConversationType.EXTERNAL_DM,
-        tenant_id="tenant-1",
-        external_channel_id="a:dm-conversation",
-        external_thread_id="a:dm-conversation",
-        external_message_id="msg-1",
-        sender_external_user_id="29:user",
-        message_text="hello",
-        is_dm=True,
-        reply_target={
-            "service_url": "https://smba.trafficmanager.net/teams",
-            "conversation_id": "a:dm-conversation",
-            "reply_to_id": "msg-1",
-        },
-    )
-
-    await adapter._render_resource(
-        credentials={},
-        event=event,
-        render_plan=SurfaceDisplayRenderPlan(
-            resource_type="TABLE",
-            title="Table: deals",
-            summary="3 of 41 records",
-            detail_lines=["Filters: stage eq won"],
-            actions=[
-                SurfaceDisplayAction(
-                    label="Open in Lemma",
-                    url="https://app.example.test/pod/p/data?tab=deals",
-                )
-            ],
-        ),
-    )
-
-    attachment = posted["json"]["attachments"][0]
+    body = http.json_of(http.requests[-1])
+    attachment = body["attachments"][0]
     assert attachment["contentType"] == "application/vnd.microsoft.card.adaptive"
     assert attachment["content"]["type"] == "AdaptiveCard"
     assert attachment["content"]["actions"][0]["type"] == "Action.OpenUrl"
-    assert posted["json"]["replyToId"] == "msg-1"
+    assert body["replyToId"] == "msg-1"
     # No inline text bubble dumping the raw URL — the card carries the button and
     # ``summary`` is notification-only.
-    assert "text" not in posted["json"]
-    assert posted["json"]["summary"].startswith("Table: deals")
-    assert "http" not in posted["json"]["summary"]
+    assert "text" not in body
+    assert body["summary"].startswith("Table: deals")
+    assert "http" not in body["summary"]
 
 
 @pytest.mark.asyncio
-async def test_teams_end_progress_deletes_activity(monkeypatch):
-    deleted: dict = {}
+async def test_teams_end_progress_deletes_activity():
+    adapter = _teams_adapter_with_token()
 
-    class _Response:
-        async def __aenter__(self):
-            return self
+    with platform_http(answer_json({})) as http:
+        await adapter.end_progress(
+            credentials={},
+            event=_teams_dm_event(),
+            progress_handle=ProgressHandle(
+                kind=ProgressHandleKind.MESSAGE, message_id="act-99"
+            ),
+        )
 
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        def raise_for_status(self):
-            return None
-
-        async def json(self):
-            return {"id": "activity-1"}
-
-    class _Session:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        def delete(self, url, *, headers):
-            deleted["url"] = url
-            deleted["headers"] = headers
-            return _Response()
-
-    adapter = TeamsSurfaceAdapter()
-    adapter._get_bot_token = AsyncMock(return_value="bot-token")
-    monkeypatch.setattr(
-        teams_egress_module.aiohttp,
-        "ClientSession",
-        lambda *args, **kwargs: _Session(),
-    )
-    event = ParsedInboundSurfaceEvent(
-        platform="TEAMS",
-        conversation_type=ConversationType.EXTERNAL_DM,
-        tenant_id="tenant-1",
-        external_channel_id="a:dm-conversation",
-        external_thread_id="a:dm-conversation",
-        external_message_id="msg-1",
-        sender_external_user_id="29:user",
-        message_text="hello",
-        is_dm=True,
-        reply_target={
-            "service_url": "https://smba.trafficmanager.net/teams",
-            "conversation_id": "a:dm-conversation",
-        },
-    )
-
-    await adapter.end_progress(
-        credentials={},
-        event=event,
-        progress_handle=ProgressHandle(
-            kind=ProgressHandleKind.MESSAGE, message_id="act-99"
-        ),
-    )
-
-    assert deleted["url"].endswith("/activities/act-99")
-    assert "conversations/" in deleted["url"]
-    assert deleted["headers"]["Authorization"] == "Bearer bot-token"
+    (deleted,) = http.requests
+    assert deleted.method == "DELETE"
+    assert str(deleted.url).endswith("/activities/act-99")
+    assert "conversations/" in str(deleted.url)
+    assert deleted.headers["Authorization"] == "Bearer bot-token"
 
 
 @pytest.mark.asyncio

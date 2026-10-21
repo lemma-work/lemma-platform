@@ -63,7 +63,7 @@ def _tenant_db_name(worker_id: str) -> str:
     """Namespace the tenant database per xdist worker.
 
     The e2e stack now shares one Postgres server across all xdist workers
-    (see ``shared_postgres`` in test_utils.py) rather than giving each
+    (see ``shared_postgres`` in test_shared_containers.py) rather than giving each
     worker its own container. A fixed name here would let two workers'
     concurrent DROP DATABASE/CREATE DATABASE calls race on the same
     database -- exactly what happened before this fix, surfacing as

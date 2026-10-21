@@ -33,7 +33,7 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageRole,
 )
-from app.modules.agent.events.pod_links_lifecycle import on_pod_deleted
+import app.modules.agent.events.pod_links_lifecycle  # noqa: F401  subscribes to PodDeleted
 from app.modules.agent.infrastructure.pod_ask_queries import PodAskQueries
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
 from app.modules.agent.services.pod_link_guards import LINK_RUNS_PER_WINDOW
@@ -43,9 +43,10 @@ from app.modules.agent.tests.e2e.pod_link_helpers import (
     task_conversation,
     teammate as find_teammate,
 )
-from app.modules.pod.domain.events import PodDeletedEvent
+from app.modules.pod.contracts.lifecycle import PodDeleted
+from app.core.infrastructure.work import WorkClass, facts
+from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.test_support.e2e.function_helpers import create_folder
-from app.modules.test_support.fakes import PassthroughEventInbox
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.pod_ask_delivery import PodAskDelivery
 from app.modules.agent.services.pod_ask_service import PodAskService
@@ -488,6 +489,7 @@ async def test_pods_in_different_organizations_cannot_be_connected(
     assert "same organization" in refused.text
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_a_deleted_pod_takes_its_links_with_it(
     authenticated_client, fixed_test_org
@@ -511,14 +513,16 @@ async def test_a_deleted_pod_takes_its_links_with_it(
     bystander = await _create_test_pod(authenticated_client, fixed_test_org)
     await _connect(authenticated_client, billing=billing, support=bystander)
 
-    # As the pod stream delivers it to this module's consumer.
-    await on_pod_deleted(
-        PodDeletedEvent(
-            pod_id=UUID(support), organization_id=UUID(fixed_test_org["id"])
-        ).model_dump(mode="json"),
-        uow_factory=_uow_factory(),
-        inbox=PassthroughEventInbox(),
-    )
+    # As the pod's deletion writes it: the fact, then the work it fans out to.
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await facts.emit(
+            uow,
+            PodDeleted(
+                pod_id=UUID(support), organization_id=UUID(fixed_test_org["id"])
+            ),
+        )
+        await uow.commit()
+    await run_until_idle(async_session_maker, classes=[WorkClass.EVENTS])
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
         links = PodLinkQueries(uow)

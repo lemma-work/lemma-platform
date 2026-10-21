@@ -496,6 +496,10 @@ class AgentEvent(BaseModel):
     data: object
     agent_run_id: UUID | None = None
     sequence: int | None = None
+    #: An ERROR's stable code and reason, recorded on the failed run beside
+    #: the sentence in ``data`` -- which is written to be read, not matched on.
+    error_code: str | None = None
+    error_reason: str | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

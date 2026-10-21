@@ -1,151 +1,77 @@
-"""The link between a surface thread and the conversation behind it.
+"""The conversation a message continues, found by where it was said and who said it.
 
-One lifecycle: find the conversation this thread maps to, create it when there
-isn't one, decide when a DM has gone cold enough to start a fresh one, and keep
-the conversation's surface metadata in step.
-
-An object with a constructor rather than a mixin, and the dependency direction
-is why: inbound and interactions both reach for `get_or_create`, and this
-reaches for neither. It was flattened onto one service only so they could see
-it, which is also how the two *callers* came to be unable to see their own
-collaborators' types -- an attribute that resolves to nothing type-checks as
-nothing, and most of this module's baselined errors are that.
+A message is said in a place -- a person's private chat, a group, an email
+thread -- and every place is a source of a channel (``channel_places``). A
+person has one conversation per agent in a channel, however many threads,
+numbers, platforms or days they write across: the thread is new, the place
+and the person are not. So binding is three steps -- place the message, note
+what was heard there (how to answer it), and find or open the person's
+conversation -- and only a different agent, or a different person, opens
+another.
 """
 
 from __future__ import annotations
 
-from app.core.authorization.delegation import agent_display_name
-from app.modules.agent_surfaces.services.surface_route_types import (
-    ResolvedSurfaceRoute,
-)
-
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from uuid import UUID
 
-
 from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.authorization.delegation import agent_display_name
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
-
-from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
-    ThreadShape,
-    thread_shape,
 )
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositoryPort
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
 )
-from app.modules.agent_surfaces.services.dm_link_adoption import (
-    adopt_earlier_dm_link,
-    same_agent as _same_agent,
+from app.modules.agent_surfaces.services.channel_places import (
+    ChannelSeats,
+    ChannelSeatsInDatabase,
+    home_of,
+    place_of,
 )
-from app.core.log.log import get_logger
+from app.modules.agent_surfaces.services.channel_lines import reply_ref_of
 from app.modules.agent_surfaces.services.contact_keepers import owned_or_moved
-from app.modules.agent_surfaces.services.held_replies import has_held_replies
-
-logger = get_logger(__name__)
-
+from app.modules.agent_surfaces.services.surface_route_types import (
+    ResolvedSurfaceRoute,
+)
+from app.modules.channels.contracts import Source
 
 _CONVERSATION_TITLE_MAX_LENGTH = 120
-# Recent thread/channel messages fetched per run for group-mention continuity.
 
 
-def _agent_changed(
-    *,
-    link: AgentSurfaceConversationLink,
-    route: ResolvedSurfaceRoute | None,
-    current_conversation_agent_id: UUID | None,
-) -> bool:
-    """Is the agent that answers now a different one from the conversation's?"""
+@dataclass(frozen=True, slots=True)
+class BoundThread:
+    """The conversation a message continues, and the place it was said."""
 
-    if route is None:
-        return False
-    if current_conversation_agent_id is not None and not _same_agent(
-        current_conversation_agent_id, route.agent_id, pod_id=route.pod_id
-    ):
-        return True
-    return not _same_agent(link.routed_agent_id, route.agent_id, pod_id=route.pod_id)
-
-
-def _idle_beyond_reset_window(
-    *,
-    link: AgentSurfaceConversationLink,
-    route: ResolvedSurfaceRoute | None,
-) -> bool:
-    """Has a thread that shares one id across conversations gone quiet too long?"""
-    shape = thread_shape(
-        link.conversation_kind or (route.conversation_kind if route else None)
-    )
-    if shape is not ThreadShape.MULTIPLEXED:
-        return False
-    reset_hours = surface_settings.surface_dm_conversation_reset_after_hours
-    if reset_hours <= 0:
-        return False
-    # Inbound activity, NOT ``updated_at``: an outbound notification also
-    # writes this row, so keying the reset off ``updated_at`` would let a
-    # proactive message suppress it and leak yesterday's context into today.
-    last_seen = link.inbound_activity_at
-    if last_seen.tzinfo is None:
-        last_seen = last_seen.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - last_seen > timedelta(hours=reset_hours)
-
-
-def should_start_a_new_conversation(
-    *,
-    surface: AgentSurfaceEntity,
-    link: AgentSurfaceConversationLink,
-    route: ResolvedSurfaceRoute | None = None,
-    current_conversation_agent_id: UUID | None = None,
-) -> bool:
-    """Has this thread stopped being the conversation it was?
-
-    Two reasons, and they are not the same reason.
-
-    A **different agent** is a different conversation on every shape. This
-    check used to sit inside a ``surface.mode is DM`` guard, so an email
-    thread re-routed to another agent kept the old one indefinitely.
-
-    A **cold thread** is only a fresh conversation where one thread id
-    carries all of them. On a channel or an email thread the platform
-    already bounded the topic, and cutting it on a timer discards history
-    the person can still see above your reply.
-
-    The clock alone, not the whole decision: a cold thread whose conversation is
-    still waiting on a notification's answer is kept, and only the binder can
-    ask that. See :meth:`ConversationBinder._starts_new_conversation`.
-    """
-    return _agent_changed(
-        link=link,
-        route=route,
-        current_conversation_agent_id=current_conversation_agent_id,
-    ) or _idle_beyond_reset_window(link=link, route=route)
+    conversation_id: UUID
+    source_id: UUID
+    #: Set only when this message opened the conversation: the moment worth
+    #: naming the thread on the platform.
+    created_title: str | None = None
 
 
 class ConversationBinder:
-    """Find or open the conversation a surface thread belongs to."""
+    """Find or open the conversation a message belongs to."""
 
     def __init__(
         self,
         *,
         uow: SqlAlchemyUnitOfWork,
         surface_repository: SurfaceInstallationRepositoryPort,
-        conversation_link_repository: SurfaceConversationLinkRepository,
+        seats: ChannelSeats | None = None,
     ) -> None:
         self.uow = uow
         self.surface_repository = surface_repository
-        self.conversation_link_repository = conversation_link_repository
+        self.seats = seats or ChannelSeatsInDatabase(uow)
 
     async def bind_conversation(
         self,
@@ -154,390 +80,201 @@ class ConversationBinder:
         parsed: ParsedInboundSurfaceEvent,
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
-        current_conversation_agent_id: UUID | None = None,
-        for_outsiders: bool = False,
-        for_contact: UUID | None = None,
-    ) -> tuple[AgentSurfaceConversationLink, str | None]:
-        """Return the link, plus the new conversation's title when one was created.
+        contact_id: UUID | None = None,
+    ) -> BoundThread:
+        """The person's conversation with the answering agent, where they wrote.
 
-        ``for_outsiders`` binds a group's people from outside the pod: the
-        caller passes the member who answers for them as the user and the shared
-        outsiders key as the external id, so the conversation is that member's
-        and one thread per group. A conversation that is no longer theirs --
-        somebody else took the group on -- is left behind for a fresh one.
+        ``resolved_user`` is the member the conversation is kept by: the
+        person themselves, or -- for a contact (``contact_id``) -- the member
+        who looks after them. Its ``external_user_id`` is the sender's own id
+        on the platform, which keys their private place.
 
-        ``for_contact`` binds one contact's private chat the same way: the
-        member who looks after the bot's contacts is the user, and a
-        conversation that is no longer theirs, or no longer that contact's, is
-        left behind.
-
-        The title is how a caller learns a *fresh* conversation started on this
-        turn — which is the only moment worth naming the thread on the platform.
-        None means the link already existed.
-
-        A resolved sender is a precondition, not a hope: a conversation belongs
-        to somebody, and `open_surface_conversation` takes a user id. Both
-        callers already refuse an unresolved sender well before here -- ingestion
-        answers them with a signup link instead -- so this states the contract
-        rather than adding a case. It is stated because this is a published verb
-        now (`ConversationLinker`), and the caller that reaches it through that
-        protocol has no way to see the check the others do.
+        A resolved member is a precondition: every caller refuses an
+        unresolved sender well before here.
         """
-        if resolved_user.internal_user_id is None:
+        user_id = resolved_user.internal_user_id
+        if user_id is None:
             raise ValueError("A conversation cannot be bound to an unresolved sender")
-        external_user_id = resolved_user.external_user_id
-        # Serialise on the chat before deciding anything, then read. A missing
-        # link is not the only decision two messages can race on: a cold DM or
-        # a changed agent makes every concurrent message open a conversation of
-        # its own, and a burst after a quiet day became that many answers from
-        # that many contexts. The lock is held to commit, so the loser reads
-        # the winner's link -- already warm -- and continues it.
-        await self.conversation_link_repository.lock_thread(
-            surface_id=surface.id,
-            platform=surface.surface_type.value,
-            external_channel_id=parsed.external_channel_id,
-            external_thread_id=parsed.external_thread_id,
-            external_user_id=external_user_id,
+        place = place_of(
+            surface=surface,
+            parsed=parsed,
+            route=route,
+            external_user_id=resolved_user.external_user_id,
         )
-        link = await self._link_at(surface, parsed, external_user_id)
-        if link is None:
-            link = await adopt_earlier_dm_link(
-                self.uow,
-                surface_repository=self.surface_repository,
-                links=self.conversation_link_repository,
-                surface=surface,
-                parsed=parsed,
-                resolved_user=resolved_user,
-                route=route,
-                for_contact=for_contact,
-            )
-        event_payload = parsed.model_dump(mode="json")
-        if link is not None:
-            if (
-                (for_outsiders or for_contact is not None)
-                and not await self._still_the_outsiders_thread(
-                    link, resolved_user.internal_user_id, contact_id=for_contact
-                )
-            ) or await self._starts_new_conversation(
-                surface=surface,
-                link=link,
-                route=route,
-                current_conversation_agent_id=current_conversation_agent_id,
-            ):
-                conversation = await self._create_surface_conversation(
-                    user_id=resolved_user.internal_user_id,
-                    surface=surface,
-                    parsed=parsed,
-                    resolved_user=resolved_user,
-                    external_user_id=external_user_id,
-                    route=route,
-                    for_outsiders=for_outsiders,
-                    for_contact=for_contact,
-                )
-                updated = await self.conversation_link_repository.update_conversation(
-                    link_id=link.id,
-                    expected_conversation_id=link.conversation_id,
-                    conversation_id=conversation.id,
-                    last_event=event_payload,
-                    last_message_id=parsed.external_message_id,
-                    routed_agent_id=route.agent_id,
-                    conversation_kind=route.conversation_kind,
-                    route_key=route.route_key,
-                )
-                if updated is not None:
-                    return updated, conversation.title
-                # A writer that does not take the thread lock -- a notification
-                # opening a conversation on this cold thread -- repointed it
-                # first. Continue theirs rather than split one thread in two.
-                logger.info(
-                    "agent_surfaces.conversation_binder.fresh_conversation_superseded.observed",
-                    surface_id=str(surface.id),
-                    conversation_id=str(conversation.id),
-                )
-                link = await self._link_at(surface, parsed, external_user_id) or link
-            updated = await self.conversation_link_repository.update_last_event(
-                link_id=link.id,
-                last_event=event_payload,
-                last_message_id=parsed.external_message_id,
-            )
-            await self._update_conversation_surface_metadata(
-                conversation_id=link.conversation_id,
-                surface=surface,
-                parsed=parsed,
-                external_user_id=external_user_id,
-                route_key=link.route_key or route.route_key,
-                routed_agent_id=link.routed_agent_id or route.agent_id,
-                conversation_kind=link.conversation_kind or route.conversation_kind,
-                agent_name=route.agent_name,
-            )
-            return (updated or link), None
-
-        conversation = await self._create_surface_conversation(
+        source = await self.seats.source_for(
+            pod_id=route.pod_id,
+            place=place,
+            home=home_of(place, user_id=user_id, contact_id=contact_id),
+        )
+        # How to answer the place: its reply target, never what was said.
+        await self.seats.heard_at(source.id, reply_ref_of(parsed))
+        conversation_id, title = await self._persons_conversation(
+            source=source,
             surface=surface,
             parsed=parsed,
             resolved_user=resolved_user,
-            user_id=resolved_user.internal_user_id,
-            external_user_id=external_user_id,
+            user_id=user_id,
+            contact_id=contact_id,
             route=route,
-            for_outsiders=for_outsiders,
-            for_contact=for_contact,
         )
-        created_link = await self.conversation_link_repository.create(
-            AgentSurfaceConversationLink(
-                surface_id=surface.id,
-                conversation_id=conversation.id,
-                platform=surface.surface_type.value,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_user_id=external_user_id,
-                routed_agent_id=route.agent_id,
-                conversation_kind=route.conversation_kind,
-                route_key=route.route_key,
-                last_event=event_payload,
-                last_message_id=parsed.external_message_id,
-                # This row exists because they just wrote to us.
-                last_inbound_at=datetime.now(timezone.utc),
-            ),
-            # Locked and read above, before the conversation was opened.
-            locked=True,
-        )
-        if created_link.conversation_id != conversation.id:
-            # Beaten to the insert despite the lock -- another writer does not
-            # take it -- so the row that stands is theirs, and no conversation
-            # was started on this turn from the platform's point of view.
-            return created_link, None
-        return created_link, conversation.title
-
-    async def _link_at(
-        self,
-        surface: AgentSurfaceEntity,
-        parsed: ParsedInboundSurfaceEvent,
-        external_user_id: str | None,
-    ) -> AgentSurfaceConversationLink | None:
-        return await self.conversation_link_repository.get_by_external_thread(
-            surface_id=surface.id,
-            platform=surface.surface_type.value,
-            external_channel_id=parsed.external_channel_id,
-            external_thread_id=parsed.external_thread_id,
-            external_user_id=external_user_id,
-        )
-
-    async def _still_the_outsiders_thread(
-        self,
-        link: AgentSurfaceConversationLink,
-        user_id: UUID,
-        *,
-        contact_id: UUID | None = None,
-    ) -> bool:
-        """Whether the linked conversation is still ``user_id``'s strangers' thread.
-
-        Owned by the member who answers for the group, *and* still marked as
-        answering outsiders. A conversation that lost the mark is never handed a
-        stranger again: the run would read it, and a stranger's turn must never
-        be one that thinks it is the owner's. A contact's thread must also still
-        be that contact's: one person's history is never another's.
-        """
-        conversation = await agent_conversations.surface_conversation(
-            self.uow, link.conversation_id
-        )
-        return (
-            conversation is not None
-            and conversation.audience.answers_outsiders
-            and conversation.audience.contact_id == contact_id
-            and await owned_or_moved(
-                self.uow, conversation, user_id, contact_id=contact_id
-            )
-        )
-
-    async def _starts_new_conversation(
-        self,
-        *,
-        surface: AgentSurfaceEntity,
-        link: AgentSurfaceConversationLink,
-        route: ResolvedSurfaceRoute,
-        current_conversation_agent_id: UUID | None,
-    ) -> bool:
-        """`should_start_a_new_conversation`, except for a thread owed a reply.
-
-        A cold thread is cut to a fresh conversation so yesterday's context does
-        not leak into today. That is the wrong call for a person answering a
-        notification: the reply is only an answer in the conversation the
-        notification was written into, where the agent can read what was asked
-        and is handed the request to record the answer against. Cut into a new
-        one, "yes" arrives at an agent with nothing to say yes *to*, and the
-        agent that asked never hears back.
-
-        Only the clock is overridden. A different agent still opens a new
-        conversation -- and the notification path keeps the link's agent equal to
-        its conversation's, so that check does not fire for one.
-
-        The question is asked only once the thread is already known to be cold,
-        so the read costs nothing on any message that would have continued
-        anyway.
-        """
-        if not should_start_a_new_conversation(
+        await self._note_surface(
+            conversation_id=conversation_id,
             surface=surface,
-            link=link,
+            parsed=parsed,
+            resolved_user=resolved_user,
             route=route,
-            current_conversation_agent_id=current_conversation_agent_id,
-        ):
-            return False
-        if _agent_changed(
-            link=link,
-            route=route,
-            current_conversation_agent_id=current_conversation_agent_id,
-        ):
-            return True
-        # Messages held behind a closed reply window hold it too: the person
-        # is writing back because they were asked to, and what waits for them
-        # is delivered only on the conversation it was held on.
-        if await has_held_replies(self.uow, link.conversation_id):
-            logger.info(
-                "agent_surfaces.conversation_binder.reset_held_for_held_replies.observed",
-                surface_id=str(surface.id),
-                conversation_id=str(link.conversation_id),
-            )
-            return False
-        # A run paused on the person holds the thread the same way, and for the
-        # same reason: the card they were shown answers only that conversation.
-        # Cutting to a new one left its buttons doing nothing and sent a typed
-        # "approve" to an agent with nothing to approve. Pauses never expire,
-        # so neither does the hold -- until the person answers or moves on.
-        if (
-            await agent_conversations.pending_interaction(
-                self.uow, link.conversation_id
-            )
-            is not None
-        ):
-            logger.info(
-                "agent_surfaces.conversation_binder.reset_held_for_pause.observed",
-                surface_id=str(surface.id),
-                conversation_id=str(link.conversation_id),
-            )
-            return False
-        holds = await self.conversation_link_repository.conversation_holds_notification(
-            link.conversation_id,
-            delivered_since=datetime.now(timezone.utc)
-            - timedelta(
-                hours=surface_settings.surface_dm_conversation_reset_after_hours
-            ),
         )
-        if holds:
-            logger.info(
-                "agent_surfaces.conversation_binder.reset_held_for_notification.observed",
-                surface_id=str(surface.id),
-                conversation_id=str(link.conversation_id),
-            )
-        return not holds
+        return BoundThread(
+            conversation_id=conversation_id, source_id=source.id, created_title=title
+        )
 
-    async def _create_surface_conversation(
+    async def _persons_conversation(
         self,
         *,
+        source: Source,
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
         resolved_user: ResolvedSurfaceUser,
         user_id: UUID,
-        external_user_id: str | None,
+        contact_id: UUID | None,
         route: ResolvedSurfaceRoute,
-        for_outsiders: bool = False,
-        for_contact: UUID | None = None,
-    ):
-        surface_event_metadata = build_surface_event_metadata(
-            surface.surface_type.value,
-            parsed.metadata,
+    ) -> tuple[UUID, str | None]:
+        """The person's conversation with this agent in the channel, opened if new.
+
+        Opening is serialised on the person and the channel, so two first
+        messages open one. The lock lasts only the transaction, and
+        authorizing the person commits -- it hands the connection back -- so
+        they are authorized first, and the lock taken after, around nothing
+        but looking again and opening.
+        """
+        found = await self._kept(
+            source=source, user_id=user_id, contact_id=contact_id, route=route
         )
+        if found is not None:
+            return found, None
         auth_ctx = await create_authorization_data_service(self.uow).build_user_context(
-            user_id=user_id,
-            pod_id=route.pod_id,
+            user_id=user_id, pod_id=route.pod_id
         )
         token = set_current_context(auth_ctx)
         try:
-            return await agent_conversations.open_surface_conversation(
+            await agent_conversations.authorize_surface_conversation(
                 self.uow,
                 pod_id=route.pod_id,
                 agent_name=route.agent_name,
                 user_id=user_id,
-                for_outsiders=for_outsiders,
-                for_contact=for_contact,
-                title=self._surface_conversation_title(
-                    parsed,
-                    fallback=f"{surface.surface_type.value} Conversation",
-                ),
-                metadata={
-                    "source": "agent_surfaces",
-                    "surface_id": str(surface.id),
-                    "surface_platform": surface.surface_type.value,
-                    "external_channel_id": parsed.external_channel_id,
-                    "channel_name": configured_channel_name(surface, parsed),
-                    "external_thread_id": parsed.external_thread_id,
-                    "external_user_id": external_user_id,
-                    "external_message_id": parsed.external_message_id,
-                    "route_key": route.route_key,
-                    "conversation_kind": route.conversation_kind,
-                    "routed_agent_id": str(route.agent_id) if route.agent_id else None,
-                    "agent_display_name": route.agent_display_name,
-                    "surface_event_metadata": (
-                        surface_event_metadata.model_dump(mode="json")
-                        if surface_event_metadata
-                        else None
-                    ),
-                },
             )
+            await self.seats.lock_person(
+                channel_id=source.channel_id,
+                pod_id=route.pod_id,
+                agent_id=route.agent_id,
+                person_id=contact_id or user_id,
+            )
+            # Another message from them may have opened it while they were
+            # being authorized.
+            found = await self._kept(
+                source=source, user_id=user_id, contact_id=contact_id, route=route
+            )
+            if found is not None:
+                return found, None
+            opened = await agent_conversations.open_surface_conversation(
+                self.uow,
+                pod_id=route.pod_id,
+                agent_name=route.agent_name,
+                user_id=user_id,
+                contact_id=contact_id,
+                channel_id=source.channel_id,
+                title=_title(
+                    parsed, fallback=f"{surface.surface_type.value} Conversation"
+                ),
+                metadata=_surface_metadata(surface, parsed, resolved_user, route),
+                # Checked above, so nothing between the lock and the insert
+                # releases the connection.
+                require_execute_grant=False,
+            )
+            return opened.id, opened.title
         finally:
             reset_current_context(token)
 
-    async def _update_conversation_surface_metadata(
+    async def _kept(
+        self,
+        *,
+        source: Source,
+        user_id: UUID,
+        contact_id: UUID | None,
+        route: ResolvedSurfaceRoute,
+    ) -> UUID | None:
+        """The person's conversation with this agent in the channel, if any.
+
+        A contact's found conversation must still be kept by ``user_id`` -- or
+        move to them -- or one keeper's history would be handed to another.
+        """
+        found = await self.seats.conversation_in_channel(
+            channel_id=source.channel_id,
+            pod_id=route.pod_id,
+            agent_id=route.agent_id,
+            user_id=user_id,
+            contact_id=contact_id,
+        )
+        if found is None:
+            return None
+        conversation = await agent_conversations.surface_conversation(self.uow, found)
+        if conversation is not None and await owned_or_moved(
+            self.uow, conversation, user_id, contact_id=contact_id
+        ):
+            return found
+        return None
+
+    async def _note_surface(
         self,
         *,
         conversation_id: UUID,
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
-        external_user_id: str | None,
-        route_key: str | None = None,
-        routed_agent_id: UUID | None = None,
-        conversation_kind: str | None = None,
-        agent_name: str | None = None,
+        resolved_user: ResolvedSurfaceUser,
+        route: ResolvedSurfaceRoute,
     ) -> None:
-        surface_event_metadata = build_surface_event_metadata(
-            surface.surface_type.value,
-            parsed.metadata,
-        )
-        updates = {
-            "source": "agent_surfaces",
-            "surface_id": str(surface.id),
-            "surface_platform": surface.surface_type.value,
-            "external_channel_id": parsed.external_channel_id,
-            "channel_name": configured_channel_name(surface, parsed),
-            "external_thread_id": parsed.external_thread_id,
-            "external_user_id": external_user_id,
-            "external_message_id": parsed.external_message_id,
-            "route_key": route_key,
-            "conversation_kind": conversation_kind,
-            "routed_agent_id": str(routed_agent_id) if routed_agent_id else None,
-            # From the route, which names the agent that is answering. Reading
-            # it off the surface answered "whose installation is this", which is
-            # a different question wherever the two differ -- and the reason the
-            # personal path had to hand this function a doctored surface.
-            "agent_display_name": agent_display_name(agent_name),
-            "surface_event_metadata": (
-                surface_event_metadata.model_dump(mode="json")
-                if surface_event_metadata
-                else None
-            ),
-        }
+        """Where the conversation was last written to, on its own metadata."""
         await self.surface_repository.merge_conversation_metadata(
-            conversation_id, updates
+            conversation_id, _surface_metadata(surface, parsed, resolved_user, route)
         )
 
-    def _surface_conversation_title(
-        self,
-        parsed: ParsedInboundSurfaceEvent,
-        *,
-        fallback: str,
-    ) -> str:
-        title = " ".join((parsed.message_text or "").split())
-        if not title:
-            return fallback
-        if len(title) <= _CONVERSATION_TITLE_MAX_LENGTH:
-            return title
-        return f"{title[: _CONVERSATION_TITLE_MAX_LENGTH - 3].rstrip()}..."
+
+def _surface_metadata(
+    surface: AgentSurfaceEntity,
+    parsed: ParsedInboundSurfaceEvent,
+    resolved_user: ResolvedSurfaceUser,
+    route: ResolvedSurfaceRoute,
+) -> dict[str, object]:
+    surface_event_metadata = build_surface_event_metadata(
+        surface.surface_type.value, parsed.metadata
+    )
+    return {
+        "source": "agent_surfaces",
+        "surface_id": str(surface.id),
+        "surface_platform": surface.surface_type.value,
+        "external_channel_id": parsed.external_channel_id,
+        "channel_name": configured_channel_name(surface, parsed),
+        "external_thread_id": parsed.external_thread_id,
+        "external_user_id": resolved_user.external_user_id,
+        "external_message_id": parsed.external_message_id,
+        "route_key": route.route_key,
+        "conversation_kind": route.conversation_kind,
+        "routed_agent_id": str(route.agent_id) if route.agent_id else None,
+        # From the route, which names the agent that is answering, not the
+        # surface, which only says whose installation it is.
+        "agent_display_name": agent_display_name(route.agent_name),
+        "surface_event_metadata": (
+            surface_event_metadata.model_dump(mode="json")
+            if surface_event_metadata
+            else None
+        ),
+    }
+
+
+def _title(parsed: ParsedInboundSurfaceEvent, *, fallback: str) -> str:
+    title = " ".join((parsed.message_text or "").split())
+    if not title:
+        return fallback
+    if len(title) <= _CONVERSATION_TITLE_MAX_LENGTH:
+        return title
+    return f"{title[: _CONVERSATION_TITLE_MAX_LENGTH - 3].rstrip()}..."

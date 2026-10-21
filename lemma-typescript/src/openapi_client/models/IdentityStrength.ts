@@ -17,4 +17,5 @@ export enum IdentityStrength {
     MEMBER = 'MEMBER',
     HOST = 'HOST',
     CODE = 'CODE',
+    SESSION = 'SESSION',
 }

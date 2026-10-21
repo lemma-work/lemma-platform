@@ -1563,3 +1563,63 @@ async def test_a_credential_is_rotated_without_replacing_the_account(
         f"/organizations/{org_id}/connectors/accounts/{account_id}"
     )
     assert still_there.status_code == 200, "the account survived a rejected rotation"
+
+
+@pytest.mark.asyncio
+async def test_an_install_name_already_active_in_the_org_is_a_conflict_not_an_error(
+    authenticated_client,
+    fixed_test_org,
+    db_session,
+):
+    """A second install of a connector takes its name by default, and that
+    name is one active install's: creating one, or renaming another onto it,
+    is refused with a 409 until the first stops being active."""
+    connector_id = f"twice-{uuid4().hex[:8]}"
+    db_session.add(
+        Connector(
+            id=connector_id,
+            title="Installed twice",
+            description="An API-key connector installed more than once",
+            kinds=[{"kind": "http", "auth_scheme": "API_KEY"}],
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+    base = f"/organizations/{fixed_test_org['id']}/connectors/auth-configs"
+
+    async def install(**extra) -> object:
+        return await authenticated_client.post(
+            base,
+            json={
+                "connector_id": connector_id,
+                "kind": "http",
+                "config_source": "ORG_CUSTOM",
+                **extra,
+            },
+        )
+
+    first = await install()
+    assert first.status_code == 200, first.text
+    assert first.json()["name"] == connector_id
+
+    unnamed = await install()
+    assert unnamed.status_code == 409, unnamed.text
+    assert unnamed.json()["code"] == "CONNECTOR_CONFLICT"
+    assert "INSERT" not in unnamed.text
+
+    second = await install(name=f"{connector_id}-eu")
+    assert second.status_code == 200, second.text
+
+    renamed = await authenticated_client.patch(
+        f"{base}/{connector_id}-eu", json={"name": connector_id}
+    )
+    assert renamed.status_code == 409, renamed.text
+
+    disabled = await authenticated_client.patch(
+        f"{base}/{connector_id}", json={"status": "DISABLED"}
+    )
+    assert disabled.status_code == 200, disabled.text
+    took_the_name = await authenticated_client.patch(
+        f"{base}/{connector_id}-eu", json={"name": connector_id}
+    )
+    assert took_the_name.status_code == 200, took_the_name.text

@@ -51,7 +51,7 @@ async def _capped_agent_schedule(
 
 async def _fire(schedule_id: str, event_id: str) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ScheduleStartService(build_workflow_engine(uow)).handle_schedule_fired(
+        await ScheduleStartService(build_workflow_engine(uow)).start_for_fire(
             schedule_id=schedule_id,
             user_id=None,
             payload={},

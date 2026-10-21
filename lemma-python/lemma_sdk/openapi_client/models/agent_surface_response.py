@@ -43,6 +43,7 @@ class AgentSurfaceResponse:
         connection (None | SurfaceConnection | Unset):
         contacts_warning (None | str | Unset):
         credential_mode (SurfaceCredentialMode | Unset):
+        problem (None | str | Unset):
         reach (None | SurfaceReach | Unset):
         status (AgentSurfaceStatus | Unset):
         surface_identity_email (None | str | Unset):
@@ -63,6 +64,7 @@ class AgentSurfaceResponse:
     connection: None | SurfaceConnection | Unset = UNSET
     contacts_warning: None | str | Unset = UNSET
     credential_mode: SurfaceCredentialMode | Unset = UNSET
+    problem: None | str | Unset = UNSET
     reach: None | SurfaceReach | Unset = UNSET
     status: AgentSurfaceStatus | Unset = UNSET
     surface_identity_email: None | str | Unset = UNSET
@@ -126,6 +128,12 @@ class AgentSurfaceResponse:
         if not isinstance(self.credential_mode, Unset):
             credential_mode = self.credential_mode.value
 
+        problem: None | str | Unset
+        if isinstance(self.problem, Unset):
+            problem = UNSET
+        else:
+            problem = self.problem
+
         reach: dict[str, Any] | None | Unset
         if isinstance(self.reach, Unset):
             reach = UNSET
@@ -187,6 +195,8 @@ class AgentSurfaceResponse:
             field_dict["contacts_warning"] = contacts_warning
         if credential_mode is not UNSET:
             field_dict["credential_mode"] = credential_mode
+        if problem is not UNSET:
+            field_dict["problem"] = problem
         if reach is not UNSET:
             field_dict["reach"] = reach
         if status is not UNSET:
@@ -297,6 +307,15 @@ class AgentSurfaceResponse:
         else:
             credential_mode = SurfaceCredentialMode(_credential_mode)
 
+        def _parse_problem(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        problem = _parse_problem(d.pop("problem", UNSET))
+
         def _parse_reach(data: object) -> None | SurfaceReach | Unset:
             if data is None:
                 return data
@@ -377,6 +396,7 @@ class AgentSurfaceResponse:
             connection=connection,
             contacts_warning=contacts_warning,
             credential_mode=credential_mode,
+            problem=problem,
             reach=reach,
             status=status,
             surface_identity_email=surface_identity_email,

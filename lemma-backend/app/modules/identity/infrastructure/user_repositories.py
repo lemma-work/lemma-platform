@@ -7,8 +7,8 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.identity.events.identity_work import stage_identity_work
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import UserConflictError, UserNotFoundError
 from app.modules.identity.domain.ports import UserRepositoryPort
@@ -35,18 +35,16 @@ class UserRepository(UserRepositoryPort):
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        message_bus: MessageBus | None = None,
     ):
         self.uow = uow
         self.session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
-    def _collect_events(self, entity: UserEntity) -> None:
+    async def _collect_events(self, entity: UserEntity) -> None:
         if hasattr(entity, "collect_events"):
             events = entity.collect_events()
             if events:
                 self.uow.collect_events(events)
+                await stage_identity_work(self.uow, events)
 
     async def create(self, entity: UserEntity) -> UserEntity:
         digits = normalize_mobile_digits(entity.mobile_number)
@@ -68,7 +66,7 @@ class UserRepository(UserRepositoryPort):
             if "uq_users_verified_mobile_e164" in error:
                 raise UserConflictError("This mobile number is already in use") from exc
             raise
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def get(self, id: UUID) -> Optional[UserEntity]:
@@ -233,7 +231,7 @@ class UserRepository(UserRepositoryPort):
             if "uq_users_verified_mobile_e164" in error:
                 raise UserConflictError("This mobile number is already in use") from exc
             raise
-        self._collect_events(entity)
+        await self._collect_events(entity)
         return instance.to_entity()
 
     async def set_preferences(

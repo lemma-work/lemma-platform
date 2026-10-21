@@ -1,10 +1,10 @@
 """Run many prepared record updates inside one transaction.
 
 `update_record` is right for one row and wrong N times: it opens its own
-session, sets the RLS context, runs the UPDATE, stages its event and commits.
+session, sets the RLS context, runs the UPDATE, appends its change and commits.
 A bulk update therefore paid four round trips *and a fresh connection checkout*
-per row, while `_bulk_write_records` had been doing the batched thing for
-create and upsert all along. Production measured the difference on
+per row, while bulk create and upsert had been doing the batched thing all
+along. Production measured the difference on
 `records/bulk/update` at p50 2.3s for a modest batch.
 
 Rows are grouped by the columns they change, and each group is one
@@ -20,20 +20,15 @@ holding an error and no way to tell which rows had landed.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from app.core.domain.events import DomainEvent
+from app.modules.datastore.changes.capture import ChangeCapture
 from app.core.log.log import get_logger
-from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.domain.errors import DatastoreRecordNotFoundError
-from app.modules.datastore.infrastructure.transactional_events import (
-    ensure_datastore_event_outbox,
-    stage_domain_events,
-)
 from app.modules.datastore.infrastructure.record_bulk_sql import (
     chunk_rows,
     unnest_update_statement,
@@ -42,7 +37,6 @@ from app.modules.datastore.infrastructure.record_update_sql import (
     build_assignments,
     previous_image_alias,
     prepare_bulk_updates,
-    split_previous_image,
 )
 from app.modules.datastore.services.record_validator import convert_record
 from app.modules.datastore.infrastructure.record_errors import (
@@ -115,25 +109,22 @@ async def bulk_update_records(
     updates: list[tuple[Any, dict[str, Any]]],
     user_id: UUID,
     *,
+    changes: ChangeCapture,
     enforce_user_scope: bool = True,
-    event_factory: Callable[..., DomainEvent] | None = None,
 ) -> int:
     """Apply many updates in one transaction, like create and upsert do.
 
-    A free function rather than a repository method: `record_repository` is
-    already past the size the architecture gate allows, and this is a cohesive
-    unit that does not need the class.
+    A free function rather than a repository method: this is a cohesive unit
+    that does not need the class.
     """
     if not updates:
         return 0
-    if event_factory is not None:
-        await ensure_datastore_event_outbox()
     grouped = prepare_grouped_updates(
         ctx,
         updates,
         user_id,
         enforce_user_scope=enforce_user_scope,
-        capture_previous=event_factory is not None,
+        capture_previous=False,
     )
     if grouped is None:
         grouped = [
@@ -143,52 +134,97 @@ async def bulk_update_records(
                 updates,
                 user_id,
                 enforce_user_scope=enforce_user_scope,
-                capture_previous=event_factory is not None,
+                capture_previous=False,
             )
         ]
     if not grouped:
         return 0
+    return await _bulk_update_logged(
+        repository,
+        ctx,
+        updates,
+        user_id,
+        grouped,
+        changes,
+        enforce_user_scope=enforce_user_scope,
+    )
 
+
+async def _bulk_update_logged(
+    repository: Any,
+    ctx: TableContext,
+    updates: list[tuple[Any, dict[str, Any]]],
+    user_id: UUID,
+    grouped: list[GroupedUpdate],
+    changes: ChangeCapture,
+    *,
+    enforce_user_scope: bool,
+) -> int:
+    """The same statements, each appending its changes; see ``ChangeCapture``.
+
+    ``grouped`` was built without a prior image. A watched table needs one,
+    so its statements are rebuilt with it once the probe says so -- the rare
+    case pays the second build, the common one never does.
+    """
     schema_manager = repository.schema_manager
-    row_to_entity = repository._row_to_entity
+    await changes.prepare()
     try:
         async with schema_manager.session_factory() as session:
-            if ctx.enable_rls:
-                await schema_manager.set_rls_context(
-                    session,
-                    RowPrincipal.for_user(user_id, is_pod_admin=not enforce_user_scope),
+            principal = ctx.row_principal(user_id, is_pod_admin=not enforce_user_scope)
+            if principal is not None:
+                await schema_manager.set_rls_context(session, principal)
+            await changes.begin(session)
+            if "U" in changes.snapshot:
+                grouped = _with_prior_image(
+                    ctx, updates, user_id, enforce_user_scope=enforce_user_scope
                 )
-
-            events: list[DomainEvent] = []
             updated = 0
-            for sql, params, changed_columns, previous_alias, expected in grouped:
-                result = await session.execute(text(sql), params)
-                rows = result.fetchall()
-                if len(rows) != expected:
-                    # Rolls the whole batch back, which is the point: a partial
-                    # write the caller cannot enumerate is worse than none.
+            for sql, params, changed_columns, alias, expected in grouped:
+                statement, bound = changes.wrap(
+                    sql,
+                    params,
+                    op="U",
+                    previous_alias=alias,
+                    changed=changed_columns,
+                    returning="count",
+                )
+                count = changes.count(await session.execute(text(statement), bound))
+                if count != expected:
                     raise DatastoreRecordNotFoundError(
                         "Record not found or update failed"
                     )
                 updated += expected
-                if event_factory is None:
-                    continue
-                for row in rows:
-                    row_mapping = dict(row._mapping)
-                    events.append(
-                        event_factory(
-                            row_to_entity(row_mapping, ctx),
-                            changed_columns,
-                            split_previous_image(
-                                row_mapping, previous_alias, changed_columns
-                            ),
-                        )
-                    )
-
-            if events:
-                await stage_domain_events(session, events)
+            await changes.wake_handoff(session)
             await session.commit()
             return updated
     except DBAPIError as exc:
         logger.debug("datastore.record.bulk_update.propagated", exc_info=True)
         raise_record_write_error(exc, operation="bulk update records", ctx=ctx)
+
+
+def _with_prior_image(
+    ctx: TableContext,
+    updates: list[tuple[Any, dict[str, Any]]],
+    user_id: UUID,
+    *,
+    enforce_user_scope: bool,
+) -> list[GroupedUpdate]:
+    grouped = prepare_grouped_updates(
+        ctx,
+        updates,
+        user_id,
+        enforce_user_scope=enforce_user_scope,
+        capture_previous=True,
+    )
+    if grouped is not None:
+        return grouped
+    return [
+        (sql, params, changed, alias, 1)
+        for sql, params, changed, alias in prepare_bulk_updates(
+            ctx,
+            updates,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            capture_previous=True,
+        )
+    ]

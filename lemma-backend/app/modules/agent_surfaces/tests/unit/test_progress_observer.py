@@ -122,6 +122,7 @@ class _SurfaceService:
 
 def _observer(service: _SurfaceService) -> SurfaceAgentRunProgressObserver:
     return SurfaceAgentRunProgressObserver(
+        contact_gate=_no_contact_refuses,
         uow_factory=_UowFactory(),
         egress_factory=lambda _uow: service,
     )
@@ -136,6 +137,7 @@ async def test_progress_observer_streams_tool_comment_progress():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "TELEGRAM"},
     )
@@ -167,6 +169,7 @@ async def test_progress_observer_strips_thinking_from_tool_comment():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "TELEGRAM"},
     )
@@ -197,6 +200,7 @@ async def test_progress_observer_skips_all_reasoning_tool_comment():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "SLACK"},
     )
@@ -218,116 +222,16 @@ def _assistant(draft: MessageDraft) -> AgentEvent:
     return AgentEvent(type=AgentEventType.MESSAGE, data=draft)
 
 
-async def test_progress_observer_buffers_text_and_sends_final_answer_on_finish():
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
-    )
-
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("Final answer.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    # Buffered, not sent mid-run.
-    assert service.messages == []
-
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-    assert service.messages == [
-        {
-            "conversation_id": conversation.id,
-            "message": "Final answer.",
-            "attach_files_of": RunFiles(None),
-        }
-    ]
-
-
-async def test_progress_observer_sends_only_final_answer_not_thinking_or_tools():
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
-
-    # Thinking, intermediate narration, a tool call/return, then the answer.
-    await observer.on_event(
-        _assistant(MessageDraft.of_thinking("Let me think about this.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("Let me look that up.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    await observer.on_event(
-        _assistant(
-            MessageDraft.of_tool_call(
-                tool_name="web_search", tool_call_id="t1", tool_args={}
-            )
-        ),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    await observer.on_event(
-        AgentEvent(
-            type=AgentEventType.MESSAGE,
-            data=MessageDraft.of_tool_return(
-                tool_name="web_search", tool_call_id="t1", tool_result="result"
-            ),
-        ),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("The final answer is 42.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-
-    # Nothing delivered as content mid-run.
-    assert service.messages == []
-
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    # Exactly one delivered answer. The pre-tool narration was discarded and
-    # thinking/tool content was never sent as content. No text token streamed
-    # in this run, so there is no live stream to close and the answer arrives
-    # as an ordinary message — see test_slack_final_answer_closes_the_live_stream
-    # for the streamed case.
-    assert [m["message"] for m in service.messages] == ["The final answer is 42."]
-    assert service.finished == []
-
-
-async def test_progress_observer_email_sends_buffered_text_when_no_reply_tool():
-    # Fallback: if the agent never called the reply tool, the observer emails the
-    # buffered final text so the user still gets a response.
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "GMAIL"})
-
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("Quick answer, no attachments.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    assert service.messages == [
-        {
-            "conversation_id": conversation.id,
-            "message": "Quick answer, no attachments.",
-            "attach_files_of": RunFiles(None),
-        }
-    ]
-
-
 async def test_progress_observer_ignores_email_display_resource():
     # display_resource is a no-op for email surfaces — the observer no longer
     # accumulates or sends anything for it.
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), pod_id=uuid4(), metadata={"surface_platform": "GMAIL"}
+        contact_id=None,
+        id=uuid4(),
+        pod_id=uuid4(),
+        metadata={"surface_platform": "GMAIL"},
     )
 
     await observer.on_event(
@@ -352,6 +256,7 @@ async def test_progress_observer_refreshes_telegram_typing_in_process(monkeypatc
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "TELEGRAM"},
     )
@@ -375,118 +280,6 @@ async def test_progress_observer_refreshes_telegram_typing_in_process(monkeypatc
     }
 
 
-async def test_progress_observer_delivers_retryable_telegram_error():
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(),
-        metadata={"surface_platform": "TELEGRAM"},
-    )
-
-    await observer.on_event(
-        AgentEvent(type=AgentEventType.ERROR, data={"error": "provider failed"}),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    # Structured data is not a sentence written for a person: the plain
-    # apology, with what to do next on Telegram.
-    assert service.messages == [
-        {
-            "conversation_id": conversation.id,
-            "message": (
-                "I couldn’t finish that request.\n\n"
-                "Tap Try again, or reply “retry”, and I’ll run it again."
-            ),
-            "metadata": {"retry_action": True},
-        }
-    ]
-
-
-async def test_progress_observer_delivers_preflight_telegram_error():
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(),
-        metadata={"surface_platform": "TELEGRAM"},
-    )
-
-    await observer.on_run_failed(conversation, RuntimeError("runtime missing"))
-
-    assert service.messages == [
-        {
-            "conversation_id": conversation.id,
-            "message": (
-                "I couldn’t finish that request.\n\n"
-                "Tap Try again, or reply “retry”, and I’ll run it again."
-            ),
-            "metadata": {"retry_action": True},
-        }
-    ]
-
-
-async def test_progress_observer_strips_inline_thinking_tags_from_text():
-    """Some models emit thinking inline in TextPart as think tags. The observer
-    must strip them so they never get buffered or delivered to a surface."""
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
-    )
-
-    # Build the message with literal thinking tags (constructed programmatically
-    # so the tags survive in source without being stripped as markup).
-    open_tag = chr(60) + "think" + chr(62)
-    close_tag = chr(60) + "/think" + chr(62)
-    raw_text = f"Let me check that. {open_tag}internal reasoning{close_tag} Here is your answer."
-
-    # The model emitted thinking tags inside a TEXT part (not a ThinkingPart).
-    await observer.on_event(
-        _assistant(MessageDraft.of_text(raw_text)),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    assert len(service.messages) == 1
-    delivered = service.messages[0]["message"]
-    assert "<think" not in delivered.lower()
-    assert "internal reasoning" not in delivered
-    assert "Here is your answer." in delivered
-    assert "Let me check that." in delivered
-
-
-async def test_progress_observer_speaks_when_the_answer_was_only_reasoning():
-    """A model that writes `<think>` and stops must not end the turn in silence.
-
-    Seen live on Slack: the model emitted an unclosed thinking block and no
-    answer, stripping correctly reduced it to "", and the run completed having
-    sent nothing — the placeholder was even deleted. The person cannot tell
-    that from being ignored, so they ask again into the same silence.
-    """
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
-
-    # Unclosed on purpose: this is what the model actually sent.
-    open_tag = chr(60) + "think" + chr(62)
-    raw_text = f"{open_tag}\nUser asks what I can do. Keep it short."
-
-    await observer.on_event(
-        _assistant(MessageDraft.of_text(raw_text)),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    assert len(service.messages) == 1, "the turn must not end in silence"
-    delivered = service.messages[0]["message"]
-    assert "think" not in delivered.lower()
-    assert "User asks what I can do" not in delivered
-
-
 async def test_progress_observer_stays_quiet_when_there_was_no_answer_at_all():
     """The counterpart: nothing written is not the same as an answer lost.
 
@@ -496,61 +289,20 @@ async def test_progress_observer_stays_quiet_when_there_was_no_answer_at_all():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
 
     assert service.messages == []
 
 
-async def test_progress_observer_strips_thinking_tags_and_resets_on_tool():
-    """Inline thinking tags in intermediate narration are stripped, and the
-    pre-tool narration is still discarded when a tool runs."""
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
-
-    open_tag = chr(60) + "think" + chr(62)
-    close_tag = chr(60) + "/think" + chr(62)
-
-    # Pre-tool narration with inline thinking tags.
-    await observer.on_event(
-        _assistant(
-            MessageDraft.of_text(
-                f"Let me look that up. {open_tag}reasoning{close_tag} Searching now."
-            )
-        ),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    # Tool call resets the buffer.
-    await observer.on_event(
-        _assistant(
-            MessageDraft.of_tool_call(
-                tool_name="web_search", tool_call_id="t1", tool_args={}
-            )
-        ),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    # Final answer (no thinking tags).
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("The answer is 42.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    # The point of this test is the stripping: the delivered text carries no
-    # thinking tags. Nothing streamed here, so it arrives as a plain message.
-    assert [m["message"] for m in service.messages] == ["The answer is 42."]
-
-
 async def test_progress_observer_stops_when_indicator_cannot_be_sent(monkeypatch):
     service = _SurfaceService(send_result=False)
     observer = _observer(service)
     conversation = SimpleNamespace(
+        contact_id=None,
         id=uuid4(),
         metadata={"surface_platform": "TELEGRAM"},
     )
@@ -578,7 +330,7 @@ async def test_progress_observer_renders_waiting_tool_call_once():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
     )
     waiting = AgentEvent(
         type=AgentEventType.WAITING,
@@ -626,7 +378,7 @@ class TestAgentHostPermissionPrompt:
         service = _SurfaceService()
         observer = _observer(service)
         conversation = SimpleNamespace(
-            id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+            contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
         )
 
         await observer.on_event(
@@ -644,40 +396,11 @@ class TestAgentHostPermissionPrompt:
             }
         ]
 
-    async def test_the_final_answer_still_arrives_after_the_decision(self):
-        """A normal pause marks the final answer delivered, since the run is
-        over. Doing that here would swallow everything the agent says once it
-        has permission — the whole rest of the turn."""
-        service = _SurfaceService()
-        observer = _observer(service)
-        conversation = SimpleNamespace(
-            id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
-        )
-
-        await observer.on_event(
-            self._permission_event(), conversation, SimpleNamespace(agent_run_id=None)
-        )
-        await observer.on_event(
-            AgentEvent(
-                type=AgentEventType.MESSAGE,
-                data=MessageDraft.of_text("Removed the build directory."),
-            ),
-            conversation,
-            SimpleNamespace(agent_run_id=None),
-        )
-        await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-        assert service.messages[-1] == {
-            "conversation_id": conversation.id,
-            "message": "Removed the build directory.",
-            "attach_files_of": RunFiles(None),
-        }
-
     async def test_an_unrelated_status_event_renders_nothing(self):
         service = _SurfaceService()
         observer = _observer(service)
         conversation = SimpleNamespace(
-            id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+            contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
         )
 
         await observer.on_event(
@@ -696,7 +419,9 @@ async def _run_with_progress_then_answer(service, platform: str):
     is a tool step.
     """
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": platform}
+    )
     if platform == "SLACK":
         await observer.on_event(
             AgentEvent(
@@ -727,42 +452,6 @@ async def _run_with_progress_then_answer(service, platform: str):
     return conversation
 
 
-async def test_slack_final_answer_closes_the_live_stream():
-    """On Slack the answer closes the stream: one message, not three acts.
-
-    The old shape posted a placeholder, deleted it, then posted the answer
-    beside it. Closing the stream keeps the agent's steps and its answer
-    together, so nothing is cleared and nothing is sent separately.
-    """
-    service = _SurfaceService()
-    await _run_with_progress_then_answer(service, "SLACK")
-
-    assert len(service.finished) == 1
-    assert service.finished[0]["already_streamed"] is True
-    assert service.cleared == []
-    assert service.messages == []
-
-
-async def test_slack_falls_back_to_a_plain_message_when_the_stream_will_not_close():
-    """A refused stop must not swallow the answer."""
-    service = _SurfaceService(finish_result=False)
-    await _run_with_progress_then_answer(service, "SLACK")
-
-    assert service.finished  # attempted
-    assert service.cleared  # progress cleaned up the old way
-    assert [m["message"] for m in service.messages] == ["The answer is 42."]
-
-
-async def test_telegram_still_clears_progress_and_sends_the_answer():
-    """Platforms without a streaming API keep the existing two-step delivery."""
-    service = _SurfaceService()
-    await _run_with_progress_then_answer(service, "TELEGRAM")
-
-    assert service.finished == []
-    assert service.cleared
-    assert [m["message"] for m in service.messages] == ["The answer is 42."]
-
-
 def _token(kind: str, data: str) -> AgentEvent:
     return AgentEvent(type=AgentEventType.TOKEN, data={"kind": kind, "data": data})
 
@@ -771,7 +460,9 @@ async def test_text_tokens_stream_to_slack_as_they_arrive():
     """The answer appears as it is written, not all at once when the run ends."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     # One delta over the flush threshold goes out immediately.
     await observer.on_event(
@@ -785,7 +476,9 @@ async def test_thinking_tokens_never_reach_the_surface():
     """Reasoning is not the answer — the same rule every other path enforces."""
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     await observer.on_event(
         _token("thinking", "y" * 500), conversation, SimpleNamespace(agent_run_id=None)
@@ -802,7 +495,9 @@ async def test_first_delta_is_immediate_then_small_ones_batch():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     for _ in range(5):
         await observer.on_event(
@@ -812,34 +507,12 @@ async def test_first_delta_is_immediate_then_small_ones_batch():
     assert [c["text"] for c in service.streamed] == ["hi "]
 
 
-async def test_a_streamed_answer_is_not_delivered_twice():
-    """What already streamed is on screen; only the remainder may be sent."""
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
-
-    await observer.on_event(
-        _token("text", "The answer "), conversation, SimpleNamespace(agent_run_id=None)
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("The answer is 42.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    # The streamed prefix is not repeated — only what was left.
-    assert service.finished[0]["message"] == "is 42."
-    assert service.finished[0]["already_streamed"] is True
-    assert service.messages == []
-
-
 async def test_telegram_ignores_token_events():
     """Only platforms that can show a live stream consume tokens."""
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
     )
 
     await observer.on_event(
@@ -858,7 +531,9 @@ async def test_reasoning_split_across_deltas_never_reaches_slack():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     for delta in [
         "Here is the plan. <thi",
@@ -884,7 +559,9 @@ async def test_slack_gets_no_step_timeline_while_text_streams():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     await observer.on_event(
         AgentEvent(
@@ -910,7 +587,9 @@ async def test_slack_opens_the_stream_at_run_start_so_channels_show_something():
     """
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
 
     await observer.on_run_started(conversation, SimpleNamespace(agent_run_id=None))
 
@@ -920,7 +599,9 @@ async def test_slack_opens_the_stream_at_run_start_so_channels_show_something():
 async def test_failed_token_append_stays_buffered_until_confirmed():
     service = _SurfaceService()
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
+    conversation = SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+    )
     attempts = 0
 
     async def append(**kwargs):
@@ -948,35 +629,11 @@ async def test_failed_token_append_stays_buffered_until_confirmed():
     ]
 
 
-async def test_final_answer_sends_unsent_text_after_append_failure():
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
-
-    async def reject_append(**kwargs):
-        service.streamed.append(kwargs)
-        return StreamAppendResult(
-            handle=ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id=str(1)),
-            appended=False,
-        )
-
-    service.progress.append_streamed_text = reject_append
-    observer._progress_handle = ProgressHandle(
-        kind=ProgressHandleKind.MESSAGE, message_id=str(1)
-    )
-    observer._token_buffer = "complete answer"
-    observer._final_answer_text = "complete answer"
-
-    assert await observer._finish_stream_with_answer(conversation) is True
-    assert service.finished[-1]["message"] == "complete answer"
-    assert service.finished[-1]["already_streamed"] is False
-
-
 async def test_non_streaming_platforms_do_not_open_a_stream_at_run_start():
     service = _SurfaceService()
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
     )
 
     await observer.on_run_started(conversation, SimpleNamespace(agent_run_id=None))
@@ -997,7 +654,9 @@ def _plan_return(*lines: str) -> AgentEvent:
 
 
 def _conversation(platform: str) -> SimpleNamespace:
-    return SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
+    return SimpleNamespace(
+        id=uuid4(), contact_id=None, metadata={"surface_platform": platform}
+    )
 
 
 async def test_the_plan_is_drawn_as_a_checklist_not_as_using_write_todos():
@@ -1270,140 +929,6 @@ def _events_named(caplog, name: str) -> list:
     return [record for record in caplog.records if name in str(record.getMessage())]
 
 
-async def test_a_timeout_closing_the_stream_does_not_cost_the_answer(caplog):
-    """The finish step raised a `TimeoutError` and took `on_run_finished` with it.
-
-    `_finish_stream_with_answer` caught `SQLAlchemyError` only, so a Slack
-    timeout escaped before `_deliver_final_answer` ran, and the runner swallows
-    an observer exception at debug: the stream was left open and the answer was
-    never sent. It is a warning with a traceback now, and the answer goes out as
-    an ordinary message.
-    """
-    service = _SurfaceService()
-    service.finish_error = TimeoutError("slack did not answer")
-    observer = _observer(service)
-    observer._progress_handle = ProgressHandle(
-        kind=ProgressHandleKind.STREAM, message_id="1.0", channel_id="C1"
-    )
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("The answer is 42.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    assert [m["message"] for m in service.messages] == ["The answer is 42."]
-    assert observer._final_delivered is True
-    assert service.cleared, "the stream that could not be closed is disposed of"
-    failed = _events_named(caplog, "finish_stream_failed")
-    assert failed and failed[0].levelname == "WARNING"
-    assert "TimeoutError" in failed[0].getMessage()
-
-
-async def test_a_failure_clearing_the_stream_does_not_cost_the_answer(caplog):
-    service = _SurfaceService()
-
-    async def broken_clear(**kwargs):
-        raise TimeoutError("cannot delete the stream")
-
-    service.progress.clear_progress = broken_clear
-    observer = _observer(service)
-    observer._progress_handle = ProgressHandle(
-        kind=ProgressHandleKind.STREAM, message_id="1.0", channel_id="C1"
-    )
-    service.finish_result = False
-    conversation = SimpleNamespace(id=uuid4(), metadata={"surface_platform": "SLACK"})
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("Still here.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    assert [m["message"] for m in service.messages] == ["Still here."]
-    assert _events_named(caplog, "clear_progress_failed")
-
-
-async def test_an_answer_that_did_not_send_is_not_marked_delivered():
-    service = _SurfaceService(send_result=False)
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("Final answer.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    assert len(service.messages) == 1
-    assert observer._final_delivered is False
-
-
-async def test_an_answer_whose_send_raised_is_logged_and_not_marked_delivered(caplog):
-    service = _SurfaceService()
-    service.send_error = TimeoutError("telegram is down")
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("Final answer.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-
-    assert observer._final_delivered is False
-    lost = _events_named(caplog, "final_answer_not_delivered")
-    assert lost and lost[0].levelname == "WARNING"
-    assert "TimeoutError" in lost[0].getMessage(), "with the traceback, not at debug"
-
-
-async def test_a_delivered_answer_is_marked_delivered_once():
-    service = _SurfaceService()
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
-    )
-    await observer.on_event(
-        _assistant(MessageDraft.of_text("Final answer.")),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
-    await observer._deliver_final_answer(conversation)
-
-    assert len(service.messages) == 1
-    assert observer._final_delivered is True
-
-
-async def test_a_run_error_that_could_not_be_sent_is_logged_and_retried(caplog):
-    service = _SurfaceService()
-    service.send_error = TimeoutError("telegram is down")
-    observer = _observer(service)
-    conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
-    )
-
-    await observer.on_run_failed(conversation, RuntimeError("boom"))
-
-    assert observer._error_delivered is False
-    lost = _events_named(caplog, "run_error_not_delivered")
-    assert lost and lost[0].levelname == "WARNING"
-
-    service.send_error = None
-    await observer._deliver_run_error(conversation)
-    assert observer._error_delivered is True
-
-
 # --- a prompt that did not arrive is asked again, in words --------------------
 
 
@@ -1418,7 +943,7 @@ async def test_a_prompt_that_did_not_arrive_is_asked_again_in_plain_words(caplog
     service = _SurfaceService(send_result=False)
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
     )
 
     await observer.on_event(
@@ -1447,7 +972,7 @@ async def test_a_prompt_that_cannot_be_asked_even_in_words_can_be_tried_again():
     service.text_fallback_result = False
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
     )
 
     await observer.on_event(
@@ -1469,7 +994,7 @@ async def test_a_prompt_that_raised_is_logged_and_asked_in_words(caplog):
     service.send_approval_prompt_for_conversation = broken
     observer = _observer(service)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "WHATSAPP"}
     )
 
     await observer.on_event(
@@ -1487,10 +1012,37 @@ async def test_a_web_conversation_that_pauses_is_not_asked_about_anywhere():
     """The observer is attached to every run, and most are not on a surface."""
     service = _SurfaceService(send_result=False)
     observer = _observer(service)
-    conversation = SimpleNamespace(id=uuid4(), metadata={})
+    conversation = SimpleNamespace(id=uuid4(), contact_id=None, metadata={})
 
     await observer.on_event(
         _waiting(), conversation, SimpleNamespace(agent_run_id=None)
     )
 
     assert service.text_fallbacks == []
+
+
+async def test_the_observer_never_sends_the_answer_it_only_takes_display_down():
+    """The answer is the run's delivery row (``surface.reply_for_run``).
+
+    A run that streamed onto Slack and wrote its answer: the observer closes
+    and removes the live stream, and sends nothing -- so a worker that dies
+    here costs a progress bubble, never the answer.
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = _conversation("SLACK")
+    ctx = SimpleNamespace(agent_run_id=uuid4())
+    observer._progress_handle = ProgressHandle(
+        kind=ProgressHandleKind.MESSAGE, message_id="1.2"
+    )
+
+    await observer.on_run_finished(conversation, ctx)
+
+    assert service.messages == []
+    assert service.finished == []
+    assert len(service.cleared) == 1
+
+
+async def _no_contact_refuses(_conversation_id) -> bool:
+    """No contact here refuses the answer (``contact_stream_gate``)."""
+    return False

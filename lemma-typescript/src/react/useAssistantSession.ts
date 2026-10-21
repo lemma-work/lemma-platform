@@ -163,8 +163,12 @@ export interface UseAssistantSessionResult {
        * job runs the approved tool *before* the run starts, and an approved
        * tool is allowed to take minutes, so the wait is measured against the
        * tool rather than against the queue.
+       *
+       * `"background"`: the agent itself is waiting -- on a sub-agent, a
+       * process, a timer -- and the run that answers starts when that ends.
+       * The session follows such a conversation on its own.
        */
-      expectRun?: boolean | "queued";
+      expectRun?: boolean | "queued" | "background";
       /**
        * Bypass the dedup key that skips a resume already "consumed" for this
        * conversation+status pair. Needed right after an explicit user action
@@ -268,6 +272,21 @@ const RESUME_RACE_DELAYS_MS = [400, 900, 2000];
  * every one of which stops the moment a stream attaches.
  */
 const QUEUED_RESUME_DELAYS_MS = [400, 900, 2000, 4000, 8000, 15_000, 30_000, 30_000, 30_000];
+
+/**
+ * How long to follow a conversation its agent left waiting on its own
+ * background work -- a sub-agent, a process, a timer.
+ *
+ * That run ends COMPLETED with the conversation WAITING, and the answer
+ * arrives in a run the server starts when the wait resolves. Nothing the
+ * person does starts it, so without this the open transcript sat still until
+ * a reload. Quick at first, because a sub-agent often answers in seconds, then
+ * every 15 s, for about as long as a sub-agent may take (15 minutes).
+ */
+const BACKGROUND_RESUME_DELAYS_MS = [
+  500, 1000, 2000, 4000, 8000,
+  ...Array.from({ length: 59 }, () => 15_000),
+];
 
 /**
  * The conversation as it stood before the run a caller is waiting for: enough
@@ -454,6 +473,8 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   const [streamingThinking, setStreamingThinking] = useState("");
   const [streamingTool, setStreamingTool] = useState<AssistantStreamingTool | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  /** The conversation a run just left waiting on its own work, to follow. */
+  const followWaitRef = useRef<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -953,6 +974,9 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           setConversationStatus(parsed.status);
           if (!isConversationRunningStatus(parsed.status)) {
             sawTerminalStatus = true;
+            followWaitRef.current = parsed.waitingOnWork
+              ? (streamConversationId ?? conversationIdRef.current)
+              : null;
             if (parsed.status === "FAILED") sawFailedStatus = true;
             // Read before the clear on the next line, which is the only place
             // this fact survives to: an answer still sitting in the token
@@ -1261,7 +1285,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     explicitConversationId?: string | null,
     options?: {
       knownConversation?: Conversation | null;
-      expectRun?: boolean | "queued";
+      expectRun?: boolean | "queued" | "background";
       force?: boolean;
     },
   ): Promise<boolean> => {
@@ -1285,6 +1309,12 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     const knownConversation = options?.knownConversation?.id === id
       ? options.knownConversation
       : null;
+    // Read as WAITING on the agent's own work: not running yet, but a run is
+    // coming that nothing the person does will start, so it is followed.
+    const waitsOnWork = knownConversation !== null
+      && normalizeConversationStatus(knownConversation.status) === "WAITING"
+      && knownConversation.waiting_on_work === true;
+    const expectRun = waitsOnWork ? (options?.expectRun ?? "background") : options?.expectRun;
     const statusKey = normalizeConversationStatus(knownConversation?.status ?? statusRef.current);
     const resumeKey = `${id}:${statusKey ?? "UNKNOWN"}`;
     if (options?.force) {
@@ -1294,11 +1324,11 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       return false;
     }
 
-    if (knownConversation) {
+    if (knownConversation && !waitsOnWork) {
       if (!isConversationRunningStatus(knownConversation.status)) return false;
       rememberConversation(knownConversation);
       setConversationStatus(statusKey);
-    } else if (!isConversationRunningStatus(statusRef.current)) {
+    } else if (waitsOnWork || !isConversationRunningStatus(statusRef.current)) {
       // `expectRun` is a caller saying it just did the thing that starts a run.
       // The read then has to survive the gap between "the server accepted it"
       // and "the run exists": an approved `request_approval` commits its
@@ -1311,10 +1341,12 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       // Only for a caller that expects one. Everywhere else this stays one
       // read, because everywhere else a not-running conversation is just a
       // conversation that is not running.
-      const delays = options?.expectRun === "queued"
+      const delays = expectRun === "queued"
         ? QUEUED_RESUME_DELAYS_MS
-        : RESUME_RACE_DELAYS_MS;
-      const attempts = options?.expectRun ? delays.length + 1 : 1;
+        : expectRun === "background"
+          ? BACKGROUND_RESUME_DELAYS_MS
+          : RESUME_RACE_DELAYS_MS;
+      const attempts = expectRun ? delays.length + 1 : 1;
       // The status is the caller's own view of the moment it acted. The finish
       // time waits for the first read rather than coming from the record the
       // session holds: that record is only rewritten when it is re-read, not
@@ -1339,7 +1371,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           started = true;
           break;
         }
-        if (latestConversation && options?.expectRun) {
+        if (latestConversation && expectRun) {
           if (runFinishedSince(before, latestConversation)) {
             finishedUnseen = true;
             break;
@@ -1361,19 +1393,24 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
         // a stale card until the ladder ends beats one until a reload.
         if (
           conversationIdRef.current === id
-          && (finishedUnseen || options?.expectRun === "queued")
+          && (
+            finishedUnseen
+            || expectRun === "queued"
+            || expectRun === "background"
+          )
         ) {
           await loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
         }
         return false;
       }
-      if (options?.expectRun === "queued") {
+      if (expectRun === "queued" || expectRun === "background") {
         // The gap this ladder just waited out is a gap in which the server was
-        // writing. A queued decision appends the approved call's tool return
-        // and only then starts the run we are about to attach to, so that
-        // return was published while nothing was subscribed — and the stream we
-        // are opening carries the new run, not the rows that preceded it. One
-        // read, at the only moment we know there is something to catch up on.
+        // writing. A queued decision appends the approved call's tool return,
+        // and a background wait its sub-agent's or process's result, and only
+        // then starts the run we are about to attach to -- so those rows were
+        // published while nothing was subscribed, and the stream we are opening
+        // carries the new run, not what preceded it. One read, at the only
+        // moment we know there is something to catch up on.
         await loadMessages({ conversationId: id, limit: 100 }).catch(() => undefined);
         if (conversationIdRef.current !== id || abortRef.current !== null) return false;
       }
@@ -1429,6 +1466,18 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     }
   }, [status]);
 
+  // A run that ended WAITING on the agent's own work -- its frame says so --
+  // is followed to the run that resumes the conversation: nothing the person
+  // does starts that one, so without this the transcript sat still until a
+  // reload. Consumed once; it gives up after the background ladder, and stops
+  // the moment a send or another stream takes over.
+  useEffect(() => {
+    if (!conversationId || isStreaming) return;
+    if (followWaitRef.current !== conversationId) return;
+    followWaitRef.current = null;
+    void resumeIfRunning(conversationId, { expectRun: "background" }).catch(() => undefined);
+  }, [conversationId, isStreaming, resumeIfRunning, status]);
+
   useEffect(() => {
     if (!autoLoad || !conversationId) {
       autoLoadInFlightKeyRef.current = null;
@@ -1457,6 +1506,12 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
 
       if (!autoResume) return;
       const latestStatus = normalizeConversationStatus(latestConversation?.status) ?? normalizeConversationStatus(statusRef.current);
+      if (latestConversation?.waiting_on_work === true && latestStatus === "WAITING") {
+        // Opened while its agent waits on its own work: follow it to the run
+        // that answers, which no frame of ours will announce.
+        await resumeIfRunning(conversationId, { knownConversation: latestConversation });
+        return;
+      }
       if (!isConversationRunningStatus(latestStatus)) return;
       await resumeIfRunning(conversationId);
     };

@@ -1,11 +1,17 @@
 """Operations inside a host sandbox: the ``SandboxOpsProvider`` half.
 
 Each method is one ``op`` of docs/architecture/desktop-host-execution.md §4 --
-or, for file bodies, a run of them. No frame carries more than
-``OP_MAX_DATA_BYTES`` of data, so a read is a sequence of ranged ``file.read``s
-and a write a sequence of ``file.write`` chunks under one ``upload_id``, the
-last one ``final`` and carrying the digest. The host writes the chunks to a
-temporary sibling and renames on ``final``, so nobody sees half a file.
+or, for file bodies, a run of them. File bodies never ride the link: each
+chunk of at most ``OP_MAX_DATA_BYTES`` crosses HTTP as a transfer the op names
+(``_instance_send`` / ``_instance_receive``). A read is a sequence of ranged
+``file.read``s and a write a sequence of ``file.write`` chunks under one
+``upload_id``, the last one ``final`` and carrying the digest. The host writes
+the chunks to a temporary sibling and renames on ``final``, so nobody sees
+half a file.
+
+What still travels inline -- process output and input, a secret -- is held to
+``INLINE_DATA_BYTES``, so no op frame comes near the API's 1 MiB websocket
+message ceiling.
 
 Paths are the host's own absolute paths; nothing here rewrites them, and
 containment is the exec-server's check (and Seatbelt's underneath it).
@@ -42,9 +48,18 @@ from app.modules.workspace.providers.base import (
     SandboxEndpoint,
 )
 
-#: No single op carries more than this much data before base64. Mirrors
+#: The most one transfer -- one file chunk -- carries. Mirrors
 #: ``OP_MAX_DATA_BYTES`` on the link.
 OP_MAX_DATA_BYTES = 1024 * 1024
+
+#: The most data an op carries inline, before base64. Mirrors
+#: ``LINK_INLINE_DATA_BYTES`` on the link.
+INLINE_DATA_BYTES = 256 * 1024
+
+#: The most one ``file.write`` chunk carries. Half a transfer: a host released
+#: before transfers is sent the chunk inline by its link session, and base64
+#: of half a mebibyte still fits a frame Lemma sends.
+WRITE_CHUNK_BYTES = 512 * 1024
 
 #: The longest one ``process.read`` may wait on the host.
 _MAX_WAIT_MS = 30_000
@@ -145,6 +160,28 @@ class AgentHostOpsMixin:
     ) -> dict[str, object]:
         raise NotImplementedError
 
+    async def _instance_send(
+        self,
+        instance: ProviderInstance,
+        method: str,
+        params: dict[str, object],
+        data: bytes,
+        *,
+        deadline_at: datetime,
+    ) -> dict[str, object]:
+        raise NotImplementedError
+
+    async def _instance_receive(
+        self,
+        instance: ProviderInstance,
+        method: str,
+        params: dict[str, object],
+        max_bytes: int,
+        *,
+        deadline_at: datetime,
+    ) -> tuple[dict[str, object], bytes]:
+        raise NotImplementedError
+
     # --------------------------------------------------------- processes
 
     async def start_process(
@@ -154,6 +191,7 @@ class AgentHostOpsMixin:
         *,
         deadline_at: datetime,
     ) -> str:
+        _inline("initial input", request.initial_input)
         params: dict[str, object] = {
             "operation_id": str(request.operation_id),
             "cwd": request.cwd,
@@ -199,6 +237,9 @@ class AgentHostOpsMixin:
                 "after_sequence": after_sequence,
                 # The exec-server waits at most 30 s per read.
                 "wait_ms": min(_MAX_WAIT_MS, max(0, int(wait_seconds * 1000))),
+                # Output is a stream read by cursor; a read that stops here
+                # leaves the rest for the next one.
+                "max_bytes": INLINE_DATA_BYTES,
             },
             deadline_at=deadline_at,
         )
@@ -237,13 +278,13 @@ class AgentHostOpsMixin:
         data: bytes,
         deadline_at: datetime,
     ) -> None:
-        for offset in range(0, max(len(data), 1), OP_MAX_DATA_BYTES):
+        for offset in range(0, max(len(data), 1), INLINE_DATA_BYTES):
             await self._instance_op(
                 instance,
                 "process.input",
                 {
                     "process_id": process_id,
-                    "data": _b64(data[offset : offset + OP_MAX_DATA_BYTES]),
+                    "data": _b64(data[offset : offset + INLINE_DATA_BYTES]),
                 },
                 deadline_at=deadline_at,
             )
@@ -342,13 +383,13 @@ class AgentHostOpsMixin:
                 if remaining is None
                 else min(remaining, OP_MAX_DATA_BYTES)
             )
-            result = await self._instance_op(
+            result, data = await self._instance_receive(
                 instance,
                 "file.read",
                 {"path": path, "offset": offset, "length": length},
+                length,
                 deadline_at=deadline_at,
             )
-            data = _unb64(result.get("data"))
             if data:
                 yield data
             offset += len(data)
@@ -376,7 +417,7 @@ class AgentHostOpsMixin:
         upload_id = str(uuid4())
         offset = 0
         pending: bytes | None = None
-        async for chunk in rechunk(data, OP_MAX_DATA_BYTES):
+        async for chunk in rechunk(data, WRITE_CHUNK_BYTES):
             if pending is not None:
                 await self._write_chunk(
                     instance,
@@ -416,13 +457,12 @@ class AgentHostOpsMixin:
             "path": path,
             "upload_id": upload_id,
             "offset": offset,
-            "data": _b64(data),
             "final": final,
         }
         if final:
             params["expected_sha256"] = expected_sha256
-        return await self._instance_op(
-            instance, "file.write", params, deadline_at=deadline_at
+        return await self._instance_send(
+            instance, "file.write", params, data, deadline_at=deadline_at
         )
 
     async def move_file(
@@ -496,11 +536,21 @@ class AgentHostOpsMixin:
         deadline_at: datetime,
     ) -> None:
         """Written 0600 under a 0700 parent by the host, never through a shell."""
+        _inline("a secret", value)
         await self._instance_op(
             instance,
             "secret.deliver",
             {"path": path, "data": _b64(value)},
             deadline_at=deadline_at,
+        )
+
+
+def _inline(what: str, data: bytes | None) -> None:
+    """Refuse data too large to travel inline, before anything is sent."""
+    if data is not None and len(data) > INLINE_DATA_BYTES:
+        raise SandboxRejected(
+            f"{what[:1].upper()}{what[1:]} is larger than the Mac takes in one "
+            f"operation ({INLINE_DATA_BYTES} bytes). Write it to a file instead."
         )
 
 

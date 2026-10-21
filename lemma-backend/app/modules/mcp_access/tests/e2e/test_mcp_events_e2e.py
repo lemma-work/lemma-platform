@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import contextvars
 import json
 import os
 import socket
@@ -45,7 +44,7 @@ from app.modules.mcp_access.tests.e2e.test_mcp_oauth_flow_e2e import (
     _Client,
 )
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 SECRET = "whsec_" + base64.b64encode(os.urandom(32)).decode()
 PROTOCOL = "2026-07-28"
@@ -489,82 +488,152 @@ async def test_a_receiver_that_keeps_failing_is_paused_until_the_app_refreshes(
     assert shown["paused_at"] is None and shown["last_error"] is None
 
 
-async def test_a_new_row_goes_from_the_stream_to_the_receiver(
+async def _run(*classes) -> int:
+    """Hand watched writes' wakes off, then run ``classes`` until idle."""
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.work.testing import run_until_idle
+    from app.modules.datastore.changes.handoff import ChangeHandoff
+    from app.modules.datastore.infrastructure.session import get_datastore_engine
+
+    await ChangeHandoff(get_datastore_engine(), async_session_maker).drain()
+    return await run_until_idle(async_session_maker, classes=list(classes))
+
+
+async def _add_rows(person, pod_id: str, table: str, count: int) -> list[str]:
+    ids = []
+    for index in range(count):
+        row = await person.post(
+            f"/pods/{pod_id}/datastore/tables/{table}/records",
+            json={"data": {"company": f"Company {index}"}},
+        )
+        assert row.status_code in (200, 201), row.text
+        ids.append(str(row.json().get("id")))
+    return ids
+
+
+async def _owed(sub_id: str) -> list[tuple[str, str | None]]:
+    from sqlalchemy import text
+
+    async with _session_factory()() as uow:
+        rows = await uow.session.execute(
+            text(
+                "SELECT d.record_id, d.outcome FROM mcp_event_deliveries d "
+                "JOIN mcp_event_subscriptions s ON s.id = d.subscription_id "
+                "WHERE s.public_id = :id ORDER BY d.created_at"
+            ),
+            {"id": sub_id},
+        )
+        return [(str(r[0]), r[1]) for r in rows]
+
+
+async def test_new_rows_reach_the_receiver_once_through_the_change_log(
     mcp_client, authenticated_client, test_pod, receiver
 ):
-    """The path a real insert takes: the stream event fans out to one job per
-    subscription on that table, and the job delivers within its rate."""
-    from app.modules.mcp_access.events.event_deliveries import (
-        TASK,
-        deliver_within_rate,
-        fan_out_record_event,
-    )
-    from app.modules.mcp_access.infrastructure.rate_limit import RateLimiter
+    """The path a real insert takes: the subscription is a change-log
+    subscriber; each new row in its table is one delivery row and one
+    ``mcp.deliver`` item, however often the page is delivered; a send whose
+    completion is lost is sent again under the same id."""
+    from app.core.infrastructure.work import WorkClass
+    from app.modules.mcp_access.events import event_deliveries
 
     pod_id = test_pod["id"]
-    _, _, sub_id, table, record_id = await _subscribed(
+    _, _, sub_id, table, _ = await _subscribed(
         mcp_client, authenticated_client, pod_id, receiver
     )
+    await _run(WorkClass.EVENTS)  # the subscriber row, at the horizon
+    from app.modules.datastore.changes.subscribers import SubscriberTable
 
-    class _Queue:
-        def __init__(self) -> None:
-            self.jobs: list[dict] = []
+    start = await SubscriberTable(UUID(pod_id)).get(f"mcp:{sub_id}")
+    assert start is not None
+    added = await _add_rows(authenticated_client, pod_id, table, 3)
+    await _run(WorkClass.EVENTS)
+    assert [record for record, _ in await _owed(sub_id)] == added
+    await _run(WorkClass.DELIVERY)
+    # Sent concurrently, so in no particular order.
+    assert sorted(e["data"]["record_id"] for e in receiver.events) == sorted(added)
+    ids = [event["_headers"]["webhook-id"] for event in receiver.events]
+    assert len(set(ids)) == 3 and all(i.startswith("chg_") for i in ids)
+    assert all(event["_headers"]["subscription"] == sub_id for event in receiver.events)
 
-        async def enqueue(self, job_name: str, **kwargs):
-            self.jobs.append({"name": job_name, **kwargs})
+    # The page delivered again from the start: nothing is owed twice.
+    from app.modules.datastore.tests.e2e.change_log_support import rewind
 
-    queue = _Queue()
-    event = {
-        "event_type": "datastore.record.insert",
-        "event_id": f"evt_{uuid4().hex}",
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
-        "pod_id": pod_id,
-        "table_name": table,
-        "record_id": record_id,
-    }
-    now = datetime.now(timezone.utc)
-    assert (
-        await fan_out_record_event(
-            event, uow_factory=_session_factory(), queue=queue, now=now
-        )
-        == 1
-    )
-    other_table = {**event, "table_name": "somewhere_else"}
-    assert (
-        await fan_out_record_event(
-            other_table, uow_factory=_session_factory(), queue=queue, now=now
-        )
-        == 0
-    )
+    await rewind(UUID(pod_id), f"mcp:{sub_id}", to=start.cursor)
+    await _run(WorkClass.EVENTS, WorkClass.DELIVERY)
+    assert len(await _owed(sub_id)) == 3 and len(receiver.events) == 3
 
-    [job] = queue.jobs
-    assert job["name"] == TASK and job["subscription_id"] == sub_id
-    # Run as a worker runs it: in a context no request ever touched, so
-    # nothing a test request left behind can stand in for the person's.
-    delivered = asyncio.get_running_loop().create_task(
-        deliver_within_rate(
-            DeliveryJob(
-                subscription_id=job["subscription_id"],
-                pod_id=UUID(job["pod_id"]),
-                table=job["table"],
-                record_id=job["record_id"],
-                event_id=job["event_id"],
-                occurred_at=job["occurred_at"],
+    # The receiver took the fourth, then the worker died before its
+    # completion committed: the state that leaves is an unsettled delivery
+    # with its item still owed. It is sent again with the same id, and is
+    # owed once.
+    from sqlalchemy import text
+
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.work import WorkWriter, pod_namespace
+
+    [fourth] = await _add_rows(authenticated_client, pod_id, table, 1)
+    await _run(WorkClass.EVENTS, WorkClass.DELIVERY)
+    async with async_session_maker() as session:
+        delivery_id = await session.scalar(
+            text(
+                "UPDATE mcp_event_deliveries SET delivered_at = NULL, outcome = NULL "
+                "WHERE record_id = :record RETURNING id"
             ),
-            deferrals=0,
-            delivery=EventDelivery(
-                SqlDeliveryLedger(_session_factory()), read_record=read_record_for
-            ),
-            limiter=RateLimiter(),
-            queue=queue,
-            now=now,
-        ),
-        context=contextvars.Context(),
+            {"record": fourth},
+        )
+        await WorkWriter(session).add(
+            event_deliveries.DELIVER,
+            pod_namespace(UUID(pod_id)),
+            event_deliveries.DeliveryRef(delivery_id=delivery_id),
+            rate_key=f"mcp:{sub_id}",
+        )
+        await session.commit()
+    await _run(WorkClass.DELIVERY)
+    again = [e for e in receiver.events if e["data"]["record_id"] == fourth]
+    assert len(again) == 2
+    assert again[0]["_headers"]["webhook-id"] == again[1]["_headers"]["webhook-id"]
+    owed = await _owed(sub_id)
+    assert [record for record, _ in owed] == [*added, fourth]
+    assert {outcome for _, outcome in owed} == {"sent"}
+
+
+async def test_deliveries_past_a_subscriptions_rate_wait_and_are_not_charged(
+    mcp_client, authenticated_client, test_pod, receiver
+):
+    from sqlalchemy import text
+
+    from app.core.infrastructure.work import WorkClass
+
+    pod_id = test_pod["id"]
+    _, _, sub_id, table, _ = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
     )
-    assert await delivered is Outcome.SENT
-    [sent] = receiver.events
-    assert sent["eventId"] == event["event_id"]
-    assert sent["data"]["record"]["company"] == "Northwind"
+    await _run(WorkClass.EVENTS)
+    await _add_rows(authenticated_client, pod_id, table, 5)
+    await _run(WorkClass.EVENTS)
+    async with _session_factory()() as uow:
+        await uow.session.execute(
+            text(
+                "UPDATE work_queues SET rates = COALESCE(rates, '{}'::jsonb) || "
+                '\'{"mcp_delivery": {"limit": 2, "per_seconds": 3600}}\'::jsonb '
+                "WHERE class = 'delivery' AND ns = :ns"
+            ),
+            {"ns": f"pod:{pod_id}"},
+        )
+        await uow.commit()
+    await _run(WorkClass.DELIVERY)
+    assert len(receiver.events) == 2, "two tokens, two sends"
+    async with _session_factory()() as uow:
+        waiting = (
+            await uow.session.execute(
+                text(
+                    "SELECT state, attempts, run_at > now() FROM work_items "
+                    "WHERE kind = 'mcp.deliver' AND ns = :ns"
+                ),
+                {"ns": f"pod:{pod_id}"},
+            )
+        ).all()
+    assert [tuple(row) for row in waiting] == [("queued", 0, True)] * 3
 
 
 async def test_the_sweep_removes_what_can_never_deliver_again(
@@ -632,3 +701,74 @@ async def test_the_sweep_removes_a_revoked_connections_subscriptions(
         await uow.commit()
     async with _session_factory()() as uow:
         assert await EventSubscriptionRepository(uow).get(sub_id) is None
+
+
+async def test_a_paused_subscription_holds_none_of_the_pods_log(
+    mcp_client, authenticated_client, test_pod, receiver
+):
+    """Paused by failures, a subscription gives up its place in the change
+    log: retention trims what is written meanwhile, and the refresh that
+    resumes it watches from then on -- the rows written while it was paused
+    are never sent."""
+    from sqlalchemy import text
+
+    from app.core.infrastructure.work import WorkClass
+    from app.modules.datastore.changes.retention import retain
+    from app.modules.datastore.changes.schema import changes_table
+    from app.modules.datastore.changes.subscribers import SubscriberTable
+    from app.modules.datastore.infrastructure.pod_schema_migrations import (
+        schema_name_for_pod,
+    )
+    from app.modules.datastore.infrastructure.session import get_datastore_engine
+    from app.modules.datastore.tests.e2e.change_log_support import log_final
+    from app.modules.mcp_access.infrastructure.subscription_repository import (
+        PAUSE_AFTER_FAILURES,
+        EventSubscriptionRepository,
+    )
+
+    pod_id = test_pod["id"]
+    token, params, sub_id, table, _ = await _subscribed(
+        mcp_client, authenticated_client, pod_id, receiver
+    )
+    await _run(WorkClass.EVENTS)
+    subscribers = SubscriberTable(UUID(pod_id))
+    assert await subscribers.get(f"mcp:{sub_id}") is not None
+
+    now = datetime.now(timezone.utc)
+    async with _session_factory()() as uow:
+        repository = EventSubscriptionRepository(uow)
+        for _ in range(PAUSE_AFTER_FAILURES):
+            await repository.record_delivery(sub_id, now=now, error="http_500")
+        await uow.commit()
+    await _run(WorkClass.EVENTS)  # the sync the pause asked for
+    assert await subscribers.get(f"mcp:{sub_id}") is None
+
+    missed = await _add_rows(authenticated_client, pod_id, table, 3)
+    await _run(WorkClass.EVENTS)
+    assert not {record for record, _ in await _owed(sub_id)} & set(missed)
+    # Old enough to go, and nobody holds it: retention takes it.
+    await log_final()
+    async with get_datastore_engine().begin() as conn:
+        await conn.execute(
+            text(
+                f"UPDATE {changes_table(schema_name_for_pod(UUID(pod_id)))} "
+                "SET at = now() - interval '2 hours'"
+            )
+        )
+    assert await retain(UUID(pod_id), await subscribers.all()) >= 3
+
+    refreshed = await _rpc(mcp_client, pod_id, token, "events/subscribe", params)
+    assert "result" in refreshed, refreshed
+    await _run(WorkClass.EVENTS)
+    assert await subscribers.get(f"mcp:{sub_id}") is not None
+    [after] = await _add_rows(authenticated_client, pod_id, table, 1)
+    # Read below the cluster's oldest open transaction: in a shared CI run
+    # another test's can hold the new row back past one delivery pass.
+    await log_final()
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.work.testing import make_due
+
+    await make_due(async_session_maker, kind="changes.deliver")
+    await _run(WorkClass.EVENTS)
+    owed = [record for record, _ in await _owed(sub_id)]
+    assert after in owed and not set(owed) & set(missed)

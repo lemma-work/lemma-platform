@@ -31,6 +31,10 @@ clap = { version = "4.5", features = ["derive", "env"] }
 getrandom = "0.3"
 hex = "0.4"
 rusqlite = { version = "0.40.2", features = ["bundled", "uuid"] }
+# Bulk bytes beside the link: file chunks an op moves and images a run's events
+# name (`link::transfer`), since the link takes no message past 1 MiB. The
+# workspace's pinned version, already in the lockfile for the app and locald.
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

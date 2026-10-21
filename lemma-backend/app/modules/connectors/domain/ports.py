@@ -119,6 +119,10 @@ class ConnectRequestRepositoryPort(Protocol):
         self, state: str, *, not_before: datetime
     ) -> Optional[ConnectRequestEntity]: ...
 
+    async def latest_grant(
+        self, *, account_id: UUID, user_id: UUID, auth_config_id: UUID
+    ) -> Optional[ConnectRequestEntity]: ...
+
 
 class ConnectorTriggerRepositoryPort(Protocol):
     async def get(self, id: str) -> Optional[ConnectorTriggerEntity]: ...

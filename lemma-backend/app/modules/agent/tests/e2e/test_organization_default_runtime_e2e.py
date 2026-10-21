@@ -24,7 +24,6 @@ from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.errors import OrganizationDefaultConflictError
-from app.modules.agent.domain.organization_default import ORGANIZATION_DEFAULT_KEY
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
@@ -120,11 +119,7 @@ async def _pod_runtime(pod_id: str):
 
 
 def _marked(listing: dict) -> set[str]:
-    return {
-        item["id"]
-        for item in listing["items"]
-        if ORGANIZATION_DEFAULT_KEY in (item.get("metadata") or {})
-    }
+    return {item["id"] for item in listing["items"] if item["organization_default"]}
 
 
 @pytest.mark.asyncio

@@ -23,7 +23,7 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceQuestionRenderPlan,
 )
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.decision_cards import remember_decision_card
 from app.modules.agent_surfaces.platforms.telegram import outbound
 from app.modules.agent_surfaces.platforms.telegram.callback_token_store import (
@@ -88,7 +88,7 @@ async def render_choices(
                 outbound.question_with_option_notes(question),
                 metadata={"reply_markup": {"inline_keyboard": rows}},
             )
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             if not index:
                 # Nothing went out: the caller's fallback sends every
                 # question as text, and none of them is a duplicate.

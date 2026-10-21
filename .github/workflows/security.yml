@@ -13,7 +13,13 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: security-${{ github.ref }}
+  # Superseded pull request pushes are cancelled; pushes to main never are.
+  # Main's runs are the ones that warm every cache a pull request restores
+  # from, and a burst of merges used to cancel all but the last of them.
+  # On main the group is the commit itself, so no run there is ever queued
+  # behind, or cancelled by, the next merge. (From #796, which merged into a
+  # stacked branch and never reached main.)
+  group: security-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,8 +39,7 @@ jobs:
         id: filter
         with:
           filters: |
-            python:
-              - '**/*.py'
+            python_manifests:
               - '**/pyproject.toml'
               - '**/uv.lock'
               - '.github/workflows/security.yml'
@@ -67,12 +72,27 @@ jobs:
               - 'lemma-pod-bundle/pyproject.toml'
               - 'lemma-pod-bundle/uv.lock'
               - '.github/workflows/security.yml'
+      # Python that ships, which is what CodeQL's findings are about. A pull
+      # request that only edits tests no longer starts the 5-minute analysis;
+      # the push to main and the weekly schedule still analyse everything.
+      # Its own step because a negated pattern needs `every`, and that
+      # quantifier would apply to every filter in a step.
+      - uses: dorny/paths-filter@v4
+        id: python-code
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**/*.py'
+              - '!**/tests/**'
+              - '!**/test_*.py'
+              - '!**/conftest.py'
       - name: Resolve scheduled/manual scope
         id: scope
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          PYTHON_CHANGED: ${{ steps.filter.outputs.python }}
+          PYTHON_CHANGED: ${{ steps.python-code.outputs.code == 'true' || steps.filter.outputs.python_manifests == 'true' }}
           JAVASCRIPT_CHANGED: ${{ steps.filter.outputs.javascript }}
           DEPENDENCIES_CHANGED: ${{ steps.filter.outputs.dependencies }}
           PYTHON_DEPENDENCIES_CHANGED: ${{ steps.filter.outputs.python_dependencies }}
@@ -155,7 +175,12 @@ jobs:
     needs:
       - codeql-python
       - codeql-javascript
-    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    # Only when an analysis actually ran: with both skipped there is nothing
+    # to report, and the job would still take a runner slot.
+    if: >-
+      !cancelled() && github.event_name == 'pull_request' &&
+      (needs.codeql-python.result != 'skipped' ||
+       needs.codeql-javascript.result != 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -245,6 +270,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - run: uv sync --extra local
       - name: Export locked third-party dependency graph
         run: >-

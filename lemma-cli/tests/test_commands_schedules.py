@@ -220,6 +220,61 @@ def test_schedule_create_connector_trigger_dispatches_api(monkeypatch):
     assert req["agent_name"] == "my-agent"
 
 
+def _create(*args: str):
+    return runner.invoke(app, ["--pod", "pod-1", "schedules", "create", *args])
+
+
+def test_schedule_create_sends_the_agent_named_in_the_payload(monkeypatch):
+    """`--data`/`--file` is a whole request; its agent target was refused as
+    missing, and would have been overwritten with null had it got through."""
+    captured = _create_capture(monkeypatch)
+
+    result = _create(
+        "--data",
+        '{"name": "digest", "agent_name": "triage", "config": {"cron": "0 9 * * *"}}',
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["request"]["agent_name"] == "triage"
+    assert captured["request"]["config"] == {"cron": "0 9 * * *"}
+
+
+def test_schedule_create_sends_the_workflow_named_in_the_payload(monkeypatch):
+    captured = _create_capture(monkeypatch)
+
+    result = _create("--cron", "0 9 * * *", "--data", '{"workflow_name": "nightly"}')
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["request"]["workflow_name"] == "nightly"
+
+
+def test_schedule_create_flag_overrides_the_payload_agent(monkeypatch):
+    captured = _create_capture(monkeypatch)
+
+    result = _create(
+        "--agent",
+        "from-flag",
+        "--cron",
+        "0 9 * * *",
+        "--data",
+        '{"agent_name": "from-payload"}',
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["request"]["agent_name"] == "from-flag"
+
+
+def test_schedule_create_refuses_an_agent_and_a_workflow_across_flag_and_payload(
+    monkeypatch,
+):
+    captured = _create_capture(monkeypatch)
+
+    result = _create("--workflow", "nightly", "--data", '{"agent_name": "triage"}')
+
+    assert result.exit_code != 0
+    assert "request" not in captured
+
+
 def test_schedules_list_shows_the_target(monkeypatch):
     """The list had an `Agent Id` column and nothing for workflows, so a
     workflow-targeted schedule showed a blank target and you had to run
@@ -292,10 +347,14 @@ def test_schedules_list_json_is_untouched_by_the_target_column(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _update_capture(monkeypatch):
+def _schedules_capture(monkeypatch):
     captured = {}
 
     class FakeSchedules:
+        def create(self, request):
+            captured["request"] = request.to_dict()
+            return {"id": "sched-new"}
+
         def update(self, schedule, request):
             captured["schedule"] = schedule
             captured["payload"] = request.to_dict()
@@ -307,6 +366,9 @@ def _update_capture(monkeypatch):
         _make_fake_client_and_run(FakeSchedules(), captured),
     )
     return captured
+
+
+_create_capture = _update_capture = _schedules_capture
 
 
 def test_schedules_update_takes_the_instruction_as_a_flag(monkeypatch):

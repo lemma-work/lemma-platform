@@ -38,6 +38,20 @@ def encode_run_chunk(*, event_type: str, data: Any) -> str:
     return f"data: {payload}\n\n"
 
 
+async def run_is_watched(
+    run_id: UUID, *, channel_service: RealtimeChannel | None = None
+) -> bool:
+    """Whether anyone streams ``run_id`` now.
+
+    Building the run's payload reads the database, and a run advances on every
+    step whether or not a single viewer has it open -- inside a work handler,
+    on the connection the next step is waiting for. Raises what the channel
+    raises; the announcer treats that like any other failed publish.
+    """
+    service = channel_service or await get_channel_service()
+    return await service.subscriber_count(workflow_run_channel(run_id)) > 0
+
+
 async def publish_run_state(
     run_id: UUID,
     payload: dict[str, Any],

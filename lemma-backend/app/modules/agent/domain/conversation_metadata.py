@@ -23,6 +23,10 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict
 CWD_KEY = "cwd"
 SOURCE_KEY = "source"
 WORKFLOW_RUN_ID_KEY = "workflow_run_id"
+#: The ``source`` of a run started by ``POST .../retry``. Such a run owns no
+#: message of its own: it replays the person's turn, which stays on the run it
+#: retried.
+MANUAL_RETRY_SOURCE = "manual_retry"
 
 
 def _text(value: object) -> str | None:

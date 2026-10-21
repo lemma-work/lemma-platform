@@ -73,7 +73,8 @@ class _FlatResourceProxy:
             body["parent_id"] = parent_id
         return self._resource.create(self._pod_id, body)
 
-    def _send_stream(self, conversation_id: str, message: str):  # type: ignore[no-untyped-def]
+    def _send_stream(self, conversation_id: str, message: str, **_options):  # type: ignore[no-untyped-def]
+        # Older flat clients take no stream options, such as `read_timeout`.
         return self._resource.send_message(
             self._pod_id,
             conversation_id,

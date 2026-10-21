@@ -1,4 +1,4 @@
-"""A schedule's filter, asked as a decision, through the real task.
+"""A schedule's filter, asked as a decision, through the real ``schedule.filter`` job.
 
 The e2e stand-in model answers every yes/no with no, so every event here is
 skipped -- which is the half of PS-SCHED-012 this suite can prove without a
@@ -13,19 +13,16 @@ from uuid import UUID, uuid4
 
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import func, select
-from streaq import StreaqRetry
-
+from sqlalchemy import func, select, text
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.request_context import bind_job_context
+from app.core.infrastructure.work import WorkClass, WorkWriter, pod_namespace
+from app.core.infrastructure.work.testing import dispatcher_for, make_due
 from app.modules.decisions.config import decisions_settings
 from app.modules.schedule.config import schedule_settings
 from app.modules.schedule.domain.schedule import ScheduleRunStatus
-from app.modules.schedule.handlers.schedule_consumer import (
-    FILTER_MAX_TRIES,
-    handle_llm_filter_task,
-)
+from app.modules.schedule.work.kinds import SCHEDULE_FILTER, FilterEvent
+from app.modules.schedule.work.registration import FILTER_RETRY
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
@@ -43,7 +40,7 @@ from app.modules.schedule.tests.e2e.test_schedule_e2e import (
 from app.modules.test_support.e2e.function_helpers import seed_user
 from app.modules.usage.infrastructure.models import UsageRecord
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.drives_work]
 
 EVENT = {"from": "billing@vendor.example.com", "subject": "Invoice 4411", "total": 1200}
 
@@ -79,13 +76,43 @@ async def _webhook_schedule(client, org, db_session) -> tuple[str, dict]:
     return pod_id, schedule
 
 
+async def _queue_filter(
+    schedule: dict,
+    event_id: str,
+    *,
+    payload: dict = EVENT,
+    metadata: dict | None = None,
+    user_id: UUID | None = None,
+) -> None:
+    """What a webhook or table change writes for a filtered schedule."""
+    async with async_session_maker() as session:
+        await WorkWriter(session).add(
+            SCHEDULE_FILTER,
+            pod_namespace(UUID(schedule["pod_id"])),
+            FilterEvent(
+                schedule_id=UUID(schedule["id"]),
+                source_event_id=event_id,
+                payload=payload,
+                metadata=metadata or {"provider": "custom"},
+                user_id=user_id,
+            ),
+            dedup_key=f"filter:{schedule['id']}:{event_id}",
+            concurrency_key=f"schedule:{schedule['id']}",
+            rate_key=f"schedule:{schedule['id']}",
+        )
+        await session.commit()
+
+
+async def _run_filters() -> list[str]:
+    """Claim and run every due filter item once; the outcome of each execution."""
+    await make_due(async_session_maker, kind=SCHEDULE_FILTER)
+    dispatcher = dispatcher_for(async_session_maker, WorkClass.AUTOMATION)
+    return [await dispatcher.execute(item) for item in await dispatcher.claim_once()]
+
+
 async def _judge(schedule: dict, event_id: str) -> None:
-    await handle_llm_filter_task.fn(
-        payload=EVENT,
-        metadata={"provider": "custom"},
-        schedule_id=schedule["id"],
-        source_event_id=event_id,
-    )
+    await _queue_filter(schedule, event_id)
+    await _run_filters()
 
 
 async def test_a_skipped_event_is_one_run_carrying_the_answers(
@@ -121,9 +148,10 @@ async def test_a_skipped_event_is_one_run_carrying_the_answers(
     assert fired.json()["items"] == []
     assert [run["id"] for run in by_status.json()["items"]] == [runs[0]["id"]]
 
-    stored = await db_session.get(Schedule, UUID(schedule["id"]))
-    await db_session.refresh(stored)
-    assert stored.last_fire_status == "FILTERED"
+    detail = await authenticated_client.get(
+        f"/pods/{pod_id}/schedules/{schedule['id']}"
+    )
+    assert detail.json()["last_fire_status"] == "FILTERED"
     metered = await db_session.scalar(
         select(func.count())
         .select_from(UsageRecord)
@@ -145,8 +173,10 @@ async def test_an_unanswered_filter_is_retried_then_dead_lettered_not_sent_on(
     monkeypatch.setattr(decisions_settings, "typesafe_api_key", SecretStr("sk-e2e"))
     monkeypatch.setattr(decisions_settings, "typesafe_base_url", "http://127.0.0.1:9")
 
-    with pytest.raises(StreaqRetry):
-        await _judge(schedule, "evt-outage-1")
+    await _queue_filter(schedule, "evt-outage-1")
+    # The provider is unreachable: waited out, not charged, and no run is left
+    # claimed for it -- the next try may ask again without paying twice.
+    assert await _run_filters() == ["retry"]
     assert (
         await db_session.scalar(
             select(func.count())
@@ -155,13 +185,20 @@ async def test_an_unanswered_filter_is_retried_then_dead_lettered_not_sent_on(
         )
         == 0
     ), "a retryable failure must not leave a run behind"
-
-    with bind_job_context(
-        job_id="schedule-filter-e2e",
-        task_name="handle_llm_filter_task",
-        attempt=FILTER_MAX_TRIES,
-    ):
-        await _judge(schedule, "evt-outage-1")
+    # ... until the outage outlasts the kind's budget.
+    async with async_session_maker() as session:
+        await session.execute(
+            text(
+                "UPDATE work_items SET first_unavailable_at = now() - make_interval(secs => :budget) "
+                "WHERE kind = :kind"
+            ),
+            {
+                "budget": FILTER_RETRY.unavailable_budget.total_seconds() * 2,
+                "kind": SCHEDULE_FILTER,
+            },
+        )
+        await session.commit()
+    assert await _run_filters() == ["dead"]
 
     runs = (
         await authenticated_client.get(
@@ -240,7 +277,7 @@ async def test_a_deployment_without_a_provider_is_not_counted_against_a_schedule
 async def test_a_table_change_is_judged_as_the_owner_of_the_row(
     authenticated_client, fixed_test_org, db_session
 ):
-    """Table changes are judged by this same task now, not inline on the
+    """Table changes are judged by this same job, not inline on the
     stream, and run as the changed row's owner (PS-SCHED-011)."""
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     agent = await _create_agent(authenticated_client, pod_id)
@@ -256,13 +293,14 @@ async def test_a_table_change_is_judged_as_the_owner_of_the_row(
     )
     row_owner = await seed_user(db_session)
 
-    await handle_llm_filter_task.fn(
+    await _queue_filter(
+        schedule,
+        "evt-row-1",
         payload={"id": "r1", "source": "web"},
         metadata={"table_name": table, "record_id": "r1", "operation": "INSERT"},
-        schedule_id=schedule["id"],
-        source_event_id="evt-row-1",
-        user_id=str(row_owner.id),
+        user_id=row_owner.id,
     )
+    await _run_filters()
 
     run = await db_session.scalar(
         select(ScheduleRun).where(ScheduleRun.schedule_id == UUID(schedule["id"]))

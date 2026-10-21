@@ -28,6 +28,7 @@ from app.modules.agent_surfaces.domain.credentials import (
     WhatsAppCredentials,
 )
 from app.modules.agent_surfaces.platforms.common import assert_safe_api_base
+from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 from app.modules.agent_surfaces.platforms.delivery import (
     DeliveryClassification,
     RetryPolicy,
@@ -357,7 +358,7 @@ class WhatsAppClient:
         """Upload a media object; return its media id."""
         url = f"{self._api_base}/{phone_number_id}/media"
         await assert_safe_api_base(url, platform="WhatsApp")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.post(
                 url,
                 data={"messaging_product": "whatsapp", "type": mime_type},
@@ -370,13 +371,13 @@ class WhatsAppClient:
     async def get_media_info(self, media_id: str) -> dict[str, Any] | None:
         url = f"{self._api_base}/{media_id}"
         await assert_safe_api_base(url, platform="WhatsApp")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.get(url, headers=self._auth_headers)
         data = self._parse(response, method="media.info")
         return data if isinstance(data, dict) else None
 
     async def download_media(self, url: str) -> bytes:
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             async with client.stream(
                 "GET", url, headers=self._auth_headers
             ) as response:
@@ -420,7 +421,7 @@ class WhatsAppClient:
         """The link people join a group by."""
         url = f"{groups_api_base(self._api_base)}/{group_id}/invite_link"
         await assert_safe_api_base(url, platform="WhatsApp")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.get(url, headers=self._auth_headers)
         data = self._parse(response, method="groups.invite_link")
         return str(data.get("invite_link") or "").strip() or None
@@ -430,7 +431,7 @@ class WhatsAppClient:
         if not self._access_token or not self._phone_number_id:
             return None
         url = f"{self._api_base}/{self._phone_number_id}"
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.get(
                 url, params={"fields": field}, headers=self._auth_headers
             )
@@ -445,7 +446,7 @@ class WhatsAppClient:
         # `api_base_url` is tenant-supplied (a sovereign Graph endpoint is a
         # real deployment), so the target is checked before the token goes out.
         await assert_safe_api_base(url, platform="WhatsApp")
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
+        async with outbound_http(self._timeout) as client:
             response = await client.post(url, json=json, headers=self._auth_headers)
         return self._parse(response, method=method)
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pausing_tools import PausingKind, PendingPause
@@ -22,9 +23,22 @@ from app.modules.agent.services.conversation_approvals import ApprovalCoordinato
 from app.modules.agent.services.pause_resume import PAUSING_TOOL_NAMES
 
 
+async def _retire_platform_cards(conversation_id: UUID, approval_id: str) -> None:
+    # Deferred like `agent_service`'s reach into the surfaces: the contract
+    # loads the platforms, and only a decision in the web app needs them.
+    from app.modules.agent_surfaces.contracts.egress import (
+        retire_cards_answered_in_lemma,
+    )
+
+    await retire_cards_answered_in_lemma(
+        conversation_id=conversation_id, tool_call_id=approval_id
+    )
+
+
 class ConversationPauses:
     """Reads and answers a conversation's pauses; mixed into ConversationService."""
 
+    uow: SqlAlchemyUnitOfWork
     conversation_repository: ConversationRepository
     agent_repository: AgentRepository
     approvals: ApprovalCoordinator
@@ -39,7 +53,6 @@ class ConversationPauses:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
-        defer_reconciliation: bool = False,
     ) -> ApprovalResolution:
         """Record the user's decision and resume the paused agent run.
 
@@ -63,7 +76,7 @@ class ConversationPauses:
             agent_name=agent_name,
             action=Permissions.AGENT_EXECUTE,
         )
-        return await self.resolve_user_approval_internal(
+        resolution = await self.resolve_user_approval_internal(
             conversation=conversation,
             approval_id=approval_id,
             user_id=user_id,
@@ -71,8 +84,15 @@ class ConversationPauses:
             decision=decision,
             response=response,
             agent_name=agent_name,
-            defer_reconciliation=defer_reconciliation,
         )
+        # Answered here, not on the platform: the cards posted there for this
+        # pause are retired once the decision has committed. A tap or a typed
+        # reply retires its own, which is why this is on the web entry point
+        # and not on the internal one they share.
+        self.uow.after_commit(
+            lambda: _retire_platform_cards(conversation.id, approval_id)
+        )
+        return resolution
 
     async def resolve_user_approval_internal(
         self,
@@ -84,7 +104,6 @@ class ConversationPauses:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
-        defer_reconciliation: bool = False,
     ) -> ApprovalResolution:
         """Resume a paused run for an already-authorized + loaded conversation.
 
@@ -100,7 +119,6 @@ class ConversationPauses:
             decision=decision,
             response=response,
             agent_name=agent_name,
-            defer_reconciliation=defer_reconciliation,
         )
 
     async def get_pending_ask_user(

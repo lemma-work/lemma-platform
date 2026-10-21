@@ -102,6 +102,22 @@ export function apiErrorFromStatus(
   }
 }
 
+/** Every code in this family relays what a connector's provider answered. */
+const CONNECTOR_PROVIDER_CODE_PREFIX = "OPERATION_EXECUTION_";
+
+/**
+ * Whether a refusal says the caller's own Lemma session is gone.
+ *
+ * A 401, unless its code relays a connector's provider: a third party refusing
+ * the connected account's API key is not this session ending, and signing
+ * somebody out over it sends a person who is signed in to the sign-in page.
+ * The server answers that refusal with 424 now; a server from before the
+ * change answered 401, and this is what keeps this SDK from trusting it.
+ */
+export function isSessionRejection(status: number, code?: string): boolean {
+  return status === 401 && !code?.startsWith(CONNECTOR_PROVIDER_CODE_PREFIX);
+}
+
 export class HttpClient {
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
@@ -220,6 +236,17 @@ export class HttpClient {
     return error;
   }
 
+  /** The error a refused response becomes, once the session has been told
+   *  whether it was the one refused. The body has to be read first: the code
+   *  in it is what tells a dead session from a connector's rejected key. */
+  private async failure(response: Response): Promise<ApiError> {
+    const error = await this.parseError(response);
+    if (isSessionRejection(error.statusCode, error.code)) {
+      this.auth.markUnauthenticated();
+    }
+    return error;
+  }
+
   private getRequestBody(options: RequestOptions): BodyInit | undefined {
     if (options.body === undefined) {
       return undefined;
@@ -263,16 +290,22 @@ export class HttpClient {
     for (let attempt = 0; ; attempt++) {
       const response = await this.fetchWithTimeout(url, init, options.signal);
 
-      // Only 401 means the session is gone — 403 is a permission/RLS error, not an auth failure
+      // A framed app holds a short-lived token from the view around it; when
+      // the session is refused, ask that view once for another before giving
+      // up on it. A connector's rejected key is not the session (see
+      // `isSessionRejection`), so it is thrown as it came.
       if (response.status === 401) {
-        // An app framed in an AI tool holds a short-lived token from the view
-        // around it; ask that view once for another before giving up on it.
-        if (!renewed && (await this.auth.renewEmbeddedToken())) {
+        const error = await this.parseError(response);
+        const sessionGone = isSessionRejection(error.statusCode, error.code);
+        if (sessionGone && !renewed && (await this.auth.renewEmbeddedToken())) {
           renewed = true;
           init = this.buildRequestInit(method, options);
           continue;
         }
-        this.auth.markUnauthenticated();
+        if (sessionGone) {
+          this.auth.markUnauthenticated();
+        }
+        throw error;
       }
 
       const retryDelay = retryDelayForStatus(
@@ -288,7 +321,7 @@ export class HttpClient {
       }
 
       if (!response.ok) {
-        throw await this.parseError(response);
+        throw await this.failure(response);
       }
 
       if (response.status === 204) {
@@ -352,12 +385,8 @@ export class HttpClient {
       );
     }
 
-    if (response.status === 401) {
-      this.auth.markUnauthenticated();
-    }
-
     if (!response.ok) {
-      throw await this.parseError(response);
+      throw await this.failure(response);
     }
 
     return response;
@@ -398,12 +427,8 @@ export class HttpClient {
     }
     const response = await this.fetchWithTimeout(url, init);
 
-    if (response.status === 401) {
-      this.auth.markUnauthenticated();
-    }
-
     if (!response.ok) {
-      throw await this.parseError(response);
+      throw await this.failure(response);
     }
 
     return {

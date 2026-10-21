@@ -1,23 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime
-from functools import partial
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.modules.datastore.domain.errors import DatastoreValidationError
-from app.modules.datastore.domain.datastore_entities import DatastoreDataType
-from app.modules.datastore.domain.ports import (
-    DatastoreRecordRepositoryPort,
-    RecordEventFactory,
-)
+from app.modules.datastore.domain.ports import DatastoreRecordRepositoryPort
 from app.modules.datastore.domain.row_security import CONTACT_COLUMN, RowPrincipal
 from app.modules.datastore.services.authorization import (
     DatastoreAuthorization,
-    outside_writer,
 )
 from app.modules.datastore.infrastructure.record_bulk_delete import (
     bulk_delete_records as write_bulk_deletes,
@@ -27,16 +20,21 @@ from app.modules.datastore.infrastructure.record_bulk_update import (
 )
 from app.modules.datastore.services.record_validator import (
     RecordValidator,
-    convert_record,
 )
 from app.modules.datastore.services.sql_introspection import analyze_query
+from app.modules.datastore.services.record_idempotency import keyed_primary_key
 from app.modules.datastore.services.table_context import TableContext
 from app.modules.datastore.services.record_query_scope import resolve_query_row_scope
 
 if TYPE_CHECKING:
+    from app.modules.datastore.changes.capture import ChangeCapture
     from app.modules.datastore.services.table_service import TableService
-from app.modules.datastore.domain.events import DatastoreRecordOperation
-from app.modules.datastore.services.record_events import RecordEventCoordinator
+from app.modules.datastore.domain.write_intent import WriteIntent
+from app.modules.datastore.services.record_user_references import (
+    reject_unknown_user_references,
+    user_references,
+)
+from app.modules.datastore.services.record_change_log import RecordChangeLog
 from app.modules.identity.contracts import UserReader
 
 
@@ -44,7 +42,6 @@ class RecordService:
     def __init__(
         self,
         record_repository: DatastoreRecordRepositoryPort,
-        event_dispatcher: Callable[[], Awaitable[int]] | None = None,
         authorization_service: object | None = None,
         user_repository: UserReader | None = None,
     ):
@@ -56,14 +53,7 @@ class RecordService:
             else None
         )
         self.user_repository = user_repository
-        # The *platform* session, taken from the authorization service that
-        # already reads through it. Not the datastore session: those are two
-        # different databases, and it is the platform connection an API request
-        # holds open while the record write runs against the other pool.
-        self._platform_session = getattr(authorization_service, "session", None)
-        self.events = RecordEventCoordinator(
-            dispatcher=event_dispatcher, platform_session=self._platform_session
-        )
+        self.change_log = RecordChangeLog()
 
     async def _require_datastore_read(
         self,
@@ -91,9 +81,15 @@ class RecordService:
             self.authz.refuse_contact_scoped_records(ctx)
         await self.authz.require_record_write(user_id=user_id, ctx=ctx)
 
-    def _stamp_contact(self, ctx: TableContext, row: dict[str, Any]) -> dict[str, Any]:
-        """A new row made for a contact names them, whatever the caller sent."""
+    def _for_contact(self, ctx: TableContext) -> TableContext:
+        """``ctx`` for a create made for a contact, whose rows alone it may write."""
         contact_id = self.authz.contact_scope(ctx) if self.authz is not None else None
+        return ctx if contact_id is None else replace(ctx, for_contact=contact_id)
+
+    @staticmethod
+    def _stamp_contact(ctx: TableContext, row: dict[str, Any]) -> dict[str, Any]:
+        """A new row made for a contact names them, whatever the caller sent."""
+        contact_id = ctx.for_contact
         return row if contact_id is None else {**row, CONTACT_COLUMN: str(contact_id)}
 
     async def _should_enforce_user_scope(
@@ -118,66 +114,33 @@ class RecordService:
     def _user_references(
         self, ctx: TableContext, data: dict[str, Any]
     ) -> list[tuple[str, UUID]]:
-        """Every USER-typed value in one row, as ``(column, user id)``.
-
-        In the row's own column order, because that is the order the error
-        below reports in: the column a person is told about should be the first
-        one they would find reading their own file.
-
-        Empty when there is no user directory to check against. Collecting is
-        the half that costs something -- it converts the row -- and a caller
-        that cannot validate should not pay for it.
-        """
-        if self.user_repository is None:
-            return []
-        references: list[tuple[str, UUID]] = []
-        for key, value in convert_record(ctx.columns, data, skip_auto=False).items():
-            column = ctx.get_column(key)
-            if column is None or column.type != DatastoreDataType.USER or value is None:
-                continue
-            references.append(
-                (key, value if isinstance(value, UUID) else UUID(str(value)))
-            )
-        return references
+        return user_references(self.user_repository, ctx, data)
 
     async def _reject_unknown_user_references(
         self, references: list[tuple[str, UUID]]
     ) -> None:
-        """Confirm every collected reference names a real user, in one read.
-
-        A dedup set made this cheap for the batch that names one person over
-        and over, and left the batch that names a different person per row
-        exactly as expensive -- one round trip per distinct id, which for an
-        import is one per row. Asking which of the ids exist answers both in a
-        single statement.
-
-        Deactivated and deleted users still count as existing, as they did when
-        this was ``user_repository.get``: a USER column records who something
-        belongs to, and someone leaving must not make an old row unwritable.
-        """
-        if self.user_repository is None or not references:
-            return
-        existing = await self.user_repository.existing_ids(
-            {user_id for _, user_id in references}
-        )
-        for key, user_id in references:
-            if user_id not in existing:
-                raise DatastoreValidationError(
-                    f"User does not exist for column '{key}'"
-                )
+        await reject_unknown_user_references(self.user_repository, references)
 
     async def create_record(
         self,
         ctx: TableContext,
         data: dict[str, Any],
         user_id: UUID,
+        *,
+        intent: WriteIntent = WriteIntent.NORMAL,
+        idempotency_key: str | None = None,
     ):
+        """Insert one record; ``idempotency_key`` makes a repeat return the first
+        (``services/record_idempotency``)."""
         await self._require_record_write(user_id=user_id, ctx=ctx, creates=True)
+        ctx = self._for_contact(ctx)
 
         validator = RecordValidator(ctx)
         sanitized_data = self._stamp_contact(
             ctx, validator.strip_system_write_overrides(data)
         )
+        if idempotency_key is not None:
+            sanitized_data = keyed_primary_key(ctx, sanitized_data, idempotency_key)
 
         is_valid, errors, error_details = validator.validate(
             sanitized_data, is_creation=True
@@ -191,17 +154,15 @@ class RecordService:
         await self._reject_unknown_user_references(
             self._user_references(ctx, sanitized_data)
         )
-        event_factory = self._event_factory(
-            ctx, DatastoreRecordOperation.INSERT, user_id
-        )
+        changes = await self.change_log.capture(ctx, intent)
         record = await self.record_repository.create_record(
             ctx,
             sanitized_data,
             user_id,
-            event_factory=event_factory,
+            changes=changes,
+            existing_on_conflict=idempotency_key is not None,
         )
-        if event_factory is not None:
-            await self.events.dispatch()
+        await self.change_log.after_commit(changes)
         return record
 
     async def get_record(
@@ -322,6 +283,7 @@ class RecordService:
         *,
         admin_mode: bool = False,
         expected_updated_at: datetime | None = None,
+        intent: WriteIntent = WriteIntent.NORMAL,
     ):
         await self._require_record_write(user_id=user_id, ctx=ctx)
         enforce_user_scope = await self._should_enforce_user_scope(
@@ -329,6 +291,7 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
+        changes = await self.change_log.capture(ctx, intent)
         record = await self._write_update(
             ctx,
             record_id,
@@ -336,9 +299,9 @@ class RecordService:
             user_id,
             enforce_user_scope=enforce_user_scope,
             expected_updated_at=expected_updated_at,
+            changes=changes,
         )
-        if ctx.events_enabled:
-            await self.events.dispatch()
+        await self.change_log.after_commit(changes)
         return record
 
     async def _write_update(
@@ -349,6 +312,7 @@ class RecordService:
         user_id: UUID,
         *,
         enforce_user_scope: bool,
+        changes: ChangeCapture,
         expected_updated_at: datetime | None = None,
     ):
         """Validate and write one row, without the per-caller preamble.
@@ -363,16 +327,13 @@ class RecordService:
         await self._reject_unknown_user_references(
             self._user_references(ctx, sanitized_data)
         )
-        event_factory = self._event_factory(
-            ctx, DatastoreRecordOperation.UPDATE, user_id
-        )
         return await self.record_repository.update_record(
             ctx,
             record_id,
             sanitized_data,
             user_id,
+            changes=changes,
             enforce_user_scope=enforce_user_scope,
-            event_factory=event_factory,
             expected_updated_at=expected_updated_at,
         )
 
@@ -383,6 +344,7 @@ class RecordService:
         user_id: UUID,
         *,
         admin_mode: bool = False,
+        intent: WriteIntent = WriteIntent.NORMAL,
     ) -> bool:
         await self._require_record_write(user_id=user_id, ctx=ctx)
         enforce_user_scope = await self._should_enforce_user_scope(
@@ -390,17 +352,15 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
+        changes = await self.change_log.capture(ctx, intent)
         await self.record_repository.delete_record(
             ctx,
             record_id,
             user_id,
+            changes=changes,
             enforce_user_scope=enforce_user_scope,
-            event_factory=self._event_factory(
-                ctx, DatastoreRecordOperation.DELETE, user_id
-            ),
         )
-        if ctx.events_enabled:
-            await self.events.dispatch()
+        await self.change_log.after_commit(changes)
         return True
 
     async def bulk_create_records(
@@ -410,10 +370,12 @@ class RecordService:
         user_id: UUID,
         *,
         upsert: bool = False,
+        intent: WriteIntent = WriteIntent.BULK,
     ):
         await self._require_record_write(user_id=user_id, ctx=ctx, creates=not upsert)
         if not records:
             return 0
+        ctx = self._for_contact(ctx)
 
         validator = RecordValidator(ctx)
         sanitized_records = [
@@ -438,13 +400,10 @@ class RecordService:
             user_references.extend(self._user_references(ctx, record))
         await self._reject_unknown_user_references(user_references)
 
-        # One INSERT event per written row, built by the repository from the row
-        # it actually wrote — the same contract as a single create. Building
-        # them here from the submitted data would leave out the generated id and
-        # anything the database defaulted, which a match condition may test.
-        event_factory = self._event_factory(
-            ctx, DatastoreRecordOperation.INSERT, user_id
-        )
+        # One change per written row, appended by the statement that wrote it
+        # -- the same contract as a single create -- so the generated id and
+        # anything the database defaulted are in it.
+        changes = await self.change_log.capture(ctx, intent)
 
         write_records = (
             self.record_repository.bulk_upsert_records
@@ -455,12 +414,9 @@ class RecordService:
             ctx,
             sanitized_records,
             user_id,
-            event_factory=event_factory,
+            changes=changes,
         )
-
-        if event_factory is not None:
-            await self.events.dispatch()
-
+        await self.change_log.after_commit(changes)
         return written
 
     async def bulk_update_records(
@@ -470,6 +426,7 @@ class RecordService:
         user_id: UUID,
         *,
         admin_mode: bool = False,
+        intent: WriteIntent = WriteIntent.BULK,
     ) -> int:
         await self._require_record_write(user_id=user_id, ctx=ctx)
         if not updates:
@@ -508,48 +465,18 @@ class RecordService:
 
         await self._reject_unknown_user_references(user_references)
 
-        event_factory = self._event_factory(
-            ctx, DatastoreRecordOperation.UPDATE, user_id
-        )
+        changes = await self.change_log.capture(ctx, intent)
         count = await write_bulk_updates(
             self.record_repository,
             ctx,
             prepared,
             user_id,
+            changes=changes,
             enforce_user_scope=enforce_user_scope,
-            event_factory=event_factory,
         )
-
-        # One dispatch for the batch, not one per row. Each row still stages its
-        # own UPDATE event through the repository, so the event contract is
-        # unchanged -- only the number of flushes is.
-        if ctx.events_enabled:
-            await self.events.dispatch()
+        # One wake for the batch, not one per row.
+        await self.change_log.after_commit(changes)
         return count
-
-    def _event_factory(
-        self,
-        ctx: TableContext,
-        operation: DatastoreRecordOperation,
-        user_id: UUID,
-    ) -> RecordEventFactory | None:
-        """The builder every write path stages its rows' events through.
-
-        It names whoever outside the pod the write is for (``outside_writer``),
-        so a contact's function writing a row raises the same OUTSIDE event a
-        visitor's form row does, and a DATASTORE schedule treats the two alike.
-        """
-        if not ctx.events_enabled:
-            return None
-        writer = outside_writer(ctx)
-        if writer != ctx.outside_actor:
-            ctx = replace(ctx, outside_actor=writer)
-        return partial(
-            self.events.required_for_record,
-            ctx=ctx,
-            operation=operation,
-            user_id=user_id,
-        )
 
     async def bulk_delete_records(
         self,
@@ -558,6 +485,7 @@ class RecordService:
         user_id: UUID,
         *,
         admin_mode: bool = False,
+        intent: WriteIntent = WriteIntent.BULK,
     ) -> int:
         """Delete every named row, or none of them (`PS-DATA-013`).
 
@@ -574,18 +502,14 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
+        changes = await self.change_log.capture(ctx, intent)
         count = await write_bulk_deletes(
             self.record_repository,
             ctx,
             record_ids,
             user_id,
+            changes=changes,
             enforce_user_scope=enforce_user_scope,
-            event_factory=self._event_factory(
-                ctx, DatastoreRecordOperation.DELETE, user_id
-            ),
         )
-        # One dispatch for the batch, as with bulk update: the repository
-        # stages a DELETE event per row and flushes none of them.
-        if ctx.events_enabled:
-            await self.events.dispatch()
+        await self.change_log.after_commit(changes)
         return count

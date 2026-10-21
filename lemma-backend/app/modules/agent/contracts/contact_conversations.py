@@ -1,7 +1,7 @@
 """A contact's conversations, for the module that forgets and exports contacts.
 
-A contact's conversation is marked on its metadata (``domain/outsiders``), and
-that mark is how these find them. Deleting cascades to its runs, messages,
+A contact's conversation names them in its ``contact_id`` column
+(``domain/outsiders``), and that column is how these find them. Deleting cascades to its runs, messages,
 waits, approvals and routing links; notifications that pointed at it lose the
 pointer, which is why the caller redacts them first.
 """
@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import (
     ColumnElement,
     Select,
+    and_,
     delete,
     func,
     literal,
@@ -26,14 +27,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import aliased
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
-    CONTACT,
-    CONTACT_KEY,
-    HANDED_TO_KEY,
-    OUTSIDERS,
-    handed_to,
-)
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.value_objects import (
     MessageDraft,
@@ -45,6 +38,14 @@ from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
     MessageModel,
 )
+from app.modules.channels.contracts.backgrounds import current_words
+
+#: Where a member's follow-up names the line it marks.
+FOLLOW_UP_LINE_KEY = "line_id"
+
+#: A message copied from a conversation that lost its seat when its contact
+#: was merged into another: the conversation it came from.
+FOLDED_FROM_KEY = "folded_from"
 
 #: The message kinds a person outside the pod may have been shown. Thinking and
 #: tool traffic are the pod's working.
@@ -79,6 +80,8 @@ class VisibleMessage(ExportedMessage):
     """
 
     client_nonce: str | None = None
+    #: Written by a member of the pod, not the agent: a person answered.
+    from_person: bool = False
 
 
 class ExportedConversation(BaseModel):
@@ -106,29 +109,9 @@ class ConversationsPage:
 
 
 def _theirs(pod_id: UUID, contact_id: UUID) -> tuple[ColumnElement[bool], ...]:
-    # Containment, so the metadata's GIN index answers it.
     return (
         ConversationModel.pod_id == pod_id,
-        ConversationModel.conversation_metadata.contains(
-            {AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(contact_id)}
-        ),
-    )
-
-
-async def contact_conversation_ids(
-    uow: SqlAlchemyUnitOfWork,
-    *,
-    pod_id: UUID,
-    contact_id: UUID,
-    after: UUID | None = None,
-    limit: int = 500,
-) -> list[UUID]:
-    """A page of the conversations this pod had with this contact, by id."""
-    query = select(ConversationModel.id).where(*_theirs(pod_id, contact_id))
-    if after is not None:
-        query = query.where(ConversationModel.id > after)
-    return list(
-        await uow.session.scalars(query.order_by(ConversationModel.id).limit(limit))
+        ConversationModel.contact_id == contact_id,
     )
 
 
@@ -236,10 +219,20 @@ async def _messages_of(
         .where(numbered.c.place <= MAX_EXPORTED_MESSAGES)
         .order_by(numbered.c.conversation_id, numbered.c.sequence)
     )
+    # A folded copy was exported with the conversation it came from.
+    seen = [
+        row
+        for row, run_metadata in rows
+        if _was_seen(row, run_metadata)
+        and FOLDED_FROM_KEY not in (row.message_metadata or {})
+    ]
+    said = await _said(uow, seen)
     grouped: dict[UUID, list[ExportedMessage]] = {}
-    for row, run_metadata in rows:
-        if _was_seen(row, run_metadata):
-            grouped.setdefault(row.conversation_id, []).append(_exported(row))
+    for row in seen:
+        if row.id in said:
+            grouped.setdefault(row.conversation_id, []).append(
+                _exported(row, said[row.id])
+            )
     return {key: tuple(value) for key, value in grouped.items()}
 
 
@@ -261,23 +254,58 @@ async def visible_messages(
         .order_by(MessageModel.sequence)
         .limit(limit)
     )
+    seen = [
+        message for message, run_metadata in rows if _was_seen(message, run_metadata)
+    ]
+    said = await _said(uow, seen)
     return tuple(
         VisibleMessage(
             role=message.role,
-            text=message.text or "",
+            text=said[message.id],
             created_at=message.created_at,
             sequence=message.sequence,
             client_nonce=_client_nonce(message),
+            from_person=_follow_up_line(message) is not None,
         )
-        for message, run_metadata in rows
-        if _was_seen(message, run_metadata)
+        for message in seen
+        if message.id in said
     )
 
 
-def _exported(message: MessageModel) -> ExportedMessage:
+async def _said(
+    uow: SqlAlchemyUnitOfWork, messages: list[MessageModel]
+) -> dict[UUID, str]:
+    """What each message says, by its id: a member's follow-up says what its
+    line says now, and one whose line is deleted or gone is not there."""
+    lines = {
+        message.id: line_id
+        for message in messages
+        if (line_id := _follow_up_line(message)) is not None
+    }
+    words = await current_words(uow, list(lines.values())) if lines else {}
+    said: dict[UUID, str] = {}
+    for message in messages:
+        if message.id not in lines:
+            said[message.id] = message.text or ""
+        elif (text := words.get(lines[message.id])) is not None:
+            said[message.id] = text
+    return said
+
+
+def _follow_up_line(message: MessageModel) -> UUID | None:
+    metadata = message.message_metadata or {}
+    if not metadata.get("follow_up"):
+        return None
+    try:
+        return UUID(str(metadata.get(FOLLOW_UP_LINE_KEY)))
+    except ValueError:
+        return None
+
+
+def _exported(message: MessageModel, text: str) -> ExportedMessage:
     return ExportedMessage(
         role=message.role,
-        text=message.text or "",
+        text=text,
         created_at=message.created_at,
         sequence=message.sequence,
     )
@@ -307,25 +335,136 @@ def _was_said_to_them(message: MessageModel) -> bool:
     return bool(metadata.get("follow_up")) and metadata.get("delivered") is not False
 
 
-async def mark_conversation_contact(
+async def name_contact_on_conversation(
     uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, contact_id: UUID
 ) -> bool:
-    """Make an anonymous outsiders' conversation this contact's, in place.
+    """Make a conversation that answers nobody yet this contact's, in place.
 
-    Only a conversation already answering people outside the pod: a member's
-    conversation never becomes anybody else's. Returns whether it changed.
+    For a web visitor's chat opened before anything named them. A member's
+    conversation never becomes a contact's: only a conversation with no
+    contact, opened by a surface for somebody outside the pod, is changed --
+    which the caller vouches for by holding that conversation's visitor
+    session. Returns whether it changed.
     """
-    conversation = await uow.session.get(ConversationModel, conversation_id)
-    metadata = dict(conversation.conversation_metadata or {}) if conversation else {}
-    if conversation is None or metadata.get(AUDIENCE_KEY) != OUTSIDERS:
-        return False
-    metadata.update({AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(contact_id)})
-    await uow.session.execute(
+    result = await uow.session.execute(
         update(ConversationModel)
-        .where(ConversationModel.id == conversation_id)
-        .values(conversation_metadata=metadata)
+        .where(
+            ConversationModel.id == conversation_id,
+            ConversationModel.contact_id.is_(None),
+        )
+        .values(contact_id=contact_id)
     )
-    return True
+    return bool(result.rowcount)
+
+
+async def repoint_merged_contact(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, merged_id: UUID, survivor_id: UUID
+) -> int:
+    """Conversations with a contact since merged are the survivor's now.
+
+    A person has one live conversation per agent in a channel: where the
+    survivor already has one with the same agent in the same channel, it
+    keeps the seat, and the merged contact's loses it -- it leaves the
+    channel, as a surface expects of a conversation a merge unseated, and the
+    person's next message continues the one that kept it.
+    """
+    conversation, theirs = ConversationModel, aliased(ConversationModel)
+    unseated = await uow.session.execute(
+        select(conversation.id, theirs.id)
+        .join(
+            theirs,
+            and_(
+                _live_in_a_channel(theirs),
+                theirs.channel_id == conversation.channel_id,
+                _same_agent(theirs, conversation),
+                theirs.contact_id == survivor_id,
+            ),
+        )
+        .where(*_theirs(pod_id, merged_id), _live_in_a_channel(conversation))
+    )
+    pairs = [(row[0], row[1]) for row in unseated]
+    if pairs:
+        from app.modules.agent.contracts.folded_history import fold_history
+
+        await uow.session.execute(
+            update(conversation)
+            .where(conversation.id.in_([orphan for orphan, _ in pairs]))
+            .values(channel_id=None)
+            .execution_options(synchronize_session=False)
+        )
+        for orphan, seated in pairs:
+            await fold_history(uow, orphan, into=seated)
+    result = await uow.session.execute(
+        update(ConversationModel)
+        .where(*_theirs(pod_id, merged_id))
+        .values(contact_id=survivor_id)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount or 0
+
+
+async def move_channel_conversations(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    from_channel_id: UUID,
+    to_channel_id: UUID,
+) -> int:
+    """A channel folded into another: the conversations working in it work in
+    that one now, before the emptied channel is dropped and unplaces them.
+
+    Where the person already has a live conversation with the same agent
+    there, that one keeps the seat and this one stays behind, unseated when
+    the channel goes (``repoint_merged_contact``) -- what was said in it is
+    folded into the one that kept the seat (``folded_history``). Returns how
+    many moved.
+    """
+    conversation, theirs = ConversationModel, aliased(ConversationModel)
+    here = (
+        conversation.pod_id == pod_id,
+        conversation.channel_id == from_channel_id,
+    )
+    same_person_there = and_(
+        _live_in_a_channel(theirs),
+        theirs.channel_id == to_channel_id,
+        _same_agent(theirs, conversation),
+        func.coalesce(theirs.contact_id, theirs.user_id)
+        == func.coalesce(conversation.contact_id, conversation.user_id),
+    )
+    seated_there = select(theirs.id).where(same_person_there).exists()
+    staying = await uow.session.execute(
+        select(conversation.id, theirs.id)
+        .join(theirs, same_person_there)
+        .where(*here, _live_in_a_channel(conversation))
+    )
+    from app.modules.agent.contracts.folded_history import fold_history
+
+    for orphan, seated in [(row[0], row[1]) for row in staying]:
+        await fold_history(uow, orphan, into=seated)
+    result = await uow.session.execute(
+        update(conversation)
+        .where(*here, ~(_live_in_a_channel(conversation) & seated_there))
+        .values(channel_id=to_channel_id)
+        .execution_options(synchronize_session=False)
+    )
+    return int(result.rowcount or 0)
+
+
+def _live_in_a_channel(conversation: type[ConversationModel]) -> ColumnElement[bool]:
+    """What ``uq_agent_conversations_channel_person`` holds to one per person."""
+    return (
+        conversation.channel_id.is_not(None)
+        & conversation.parent_id.is_(None)
+        & conversation.is_archived.is_(False)
+    )
+
+
+def _same_agent(
+    one: type[ConversationModel], other: type[ConversationModel]
+) -> ColumnElement[bool]:
+    return func.coalesce(one.agent_id, one.pod_id) == func.coalesce(
+        other.agent_id, other.pod_id
+    )
 
 
 async def move_contact_conversation(
@@ -346,25 +485,11 @@ async def move_contact_conversation(
         update(ConversationModel)
         .where(
             ConversationModel.id == conversation_id,
-            ConversationModel.conversation_metadata.contains(
-                {AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(contact_id)}
-            ),
+            ConversationModel.contact_id == contact_id,
         )
         .values(user_id=to_user_id)
     )
     return bool(result.rowcount)
-
-
-async def conversation_handed_to(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, now: datetime
-) -> UUID | None:
-    """The member answering this conversation by hand right now, if one is."""
-    metadata = await uow.session.scalar(
-        select(ConversationModel.conversation_metadata).where(
-            ConversationModel.id == conversation_id
-        )
-    )
-    return handed_to(metadata, now=now)
 
 
 async def hold_outside_turn(
@@ -373,14 +498,12 @@ async def hold_outside_turn(
     conversation_id: UUID,
     text: str,
     metadata: dict[str, object],
-    hand_to: UUID,
-    until: datetime,
     reply: str | None,
 ) -> None:
-    """Keep what somebody outside the pod wrote, start no run, and hand it over.
+    """Keep what somebody outside the pod wrote, and start no run.
 
     Their message goes into the conversation as any message would, so the
-    member taking it over reads what was asked. ``reply``, when given, is what
+    member answering it reads what was asked. ``reply``, when given, is what
     they were told instead of an answer, written as the bot's so the thread
     shows it.
     """
@@ -394,13 +517,6 @@ async def hold_outside_turn(
         agent_run_id=None,
         draft=MessageDraft.of_text(text, role=MessageRole.USER, metadata=metadata),
     )
-    # The append above holds the row FOR UPDATE, so this read-modify-write
-    # cannot lose a concurrent writer's keys.
-    model = await uow.session.get(ConversationModel, conversation_id)
-    if model is not None:
-        stored = dict(model.conversation_metadata or {})
-        stored[HANDED_TO_KEY] = {"user_id": str(hand_to), "until": until.isoformat()}
-        model.conversation_metadata = stored
     if reply:
         await conversations.append_message(
             conversation_id=conversation_id,
@@ -414,29 +530,68 @@ async def append_follow_up(
     uow: SqlAlchemyUnitOfWork,
     *,
     conversation_id: UUID,
-    message: str,
+    line_id: UUID,
     sent_by_user_id: UUID,
     delivered: bool | None = None,
 ) -> None:
-    """Write a member's follow-up into a contact's conversation.
+    """Mark where a member's line to a contact falls in their conversation.
 
     Belongs to no run, like a notification: it is so the agent, and the
-    contact reading the thread, see what was sent and can answer it.
-    ``delivered`` is False for one the platform refused, so nothing reads it
-    as having reached them.
+    contact reading the thread, see what was sent and can answer it. It keeps
+    which line, never the line's words: those are read from the channel
+    whenever the conversation is (``_said``), so an edit reads as it says
+    now and a deleted line is gone. ``delivered`` is False for one the
+    platform refused, so nothing reads it as having reached them. One mark
+    per line: a retried send brings its ``delivered`` up to date rather than
+    adding a second.
     """
     from app.modules.agent.infrastructure.repositories.conversation_repository import (
         ConversationRepository,
     )
 
+    earlier = await notification_keyed(
+        uow, conversation_id, key=FOLLOW_UP_LINE_KEY, value=str(line_id)
+    )
+    if earlier is not None:
+        if delivered is not None:
+            earlier.message_metadata = {
+                **(earlier.message_metadata or {}),
+                "delivered": delivered,
+            }
+            await uow.session.flush()
+        return
     metadata: dict[str, object] = {
         "follow_up": True,
         "sent_by_user_id": str(sent_by_user_id),
+        FOLLOW_UP_LINE_KEY: str(line_id),
     }
     if delivered is not None:
         metadata["delivered"] = delivered
     await ConversationRepository(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,
-        draft=MessageDraft.of_notification(message, metadata=metadata),
+        draft=MessageDraft.of_notification("", metadata=metadata),
+    )
+
+
+async def notification_keyed(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, key: str, value: str
+) -> MessageModel | None:
+    """The conversation's notification whose metadata has ``key`` = ``value``,
+    read under the conversation's row lock -- the lock every append takes --
+    so two sends of one line cannot both find none and both append."""
+    await uow.session.execute(
+        select(ConversationModel.id)
+        .where(ConversationModel.id == conversation_id)
+        .with_for_update()
+    )
+    return await uow.session.scalar(
+        select(MessageModel)
+        .where(
+            MessageModel.conversation_id == conversation_id,
+            MessageModel.kind == MessageKind.NOTIFICATION.value,
+            MessageModel.message_metadata[key].astext == value,
+        )
+        .order_by(MessageModel.sequence.desc())
+        .limit(1)
     )

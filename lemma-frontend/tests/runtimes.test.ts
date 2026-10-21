@@ -5,12 +5,15 @@ import {
     agentUpdateCommand,
     computerStatus,
     agentOptions,
+    agentOptionSets,
     agentSettingsChanges,
     agentHealth,
     agentLabel,
     agentModels,
     chosenModel,
     describeChoice,
+    offeredSelections,
+    optionsFor,
     readChoice,
     readComputer,
     readLocalAgent,
@@ -27,7 +30,7 @@ import {
  *  it. Getting one wrong produces a page that looks finished and says nothing
  *  true. */
 
-test("a coding agent is HARNESS; which one it is comes from metadata", () => {
+test("a coding agent is HARNESS; which one it is comes from harness_key", () => {
     /* There is no kind per tool. Reading `kind` for "is this Codex" would
        make Codex and Claude Code the same row. */
     const runtime = readRuntime({
@@ -36,7 +39,7 @@ test("a coding agent is HARNESS; which one it is comes from metadata", () => {
         kind: "HARNESS",
         scope: "PERSONAL",
         harness_id: "h1",
-        metadata: { harness_key: "claude-code" },
+        harness_key: "claude-code",
         availability_status: "READY",
     });
     assert.equal(runtime?.kind, "agent");
@@ -247,8 +250,83 @@ test("a coding agent's settings send only what changed", () => {
     );
 });
 
+/* Claude Code's shape: an effort on one model and not another, said by the
+   host as a `lemma_options` set on the model's own entry. */
+const PER_MODEL = [
+    {
+        id: "model", category: "model", current_value: "sonnet",
+        options: [
+            { value: "sonnet", name: "Sonnet" },
+            { value: "opus", name: "Opus", lemma_options: [
+                { id: "effort", category: "thought_level", name: "Effort",
+                    options: [{ value: "high" }, { value: "max" }] },
+            ] },
+            { value: "haiku", name: "Haiku", lemma_options: [] },
+        ],
+    },
+    { id: "effort", category: "thought_level", name: "Effort", options: [{ value: "low" }, { value: "high" }] },
+    { id: "mode", category: "mode", options: [{ value: "default" }, { value: "plan" }] },
+];
+
+test("a model's own option set replaces the agent's, and its absence keeps it", () => {
+    const values = (model?: string) =>
+        agentOptions(PER_MODEL, model).map((option) => option.key + "=" + option.choices.map((one) => one.value).join("|"));
+    // Unpinned, and a model with no set of its own: the top-level options.
+    assert.deepEqual(values(), ["effort=low|high", "mode=default|plan"]);
+    assert.deepEqual(values("sonnet"), ["effort=low|high", "mode=default|plan"]);
+    // A set is the whole set, not a patch: Opus offers no mode.
+    assert.deepEqual(values("opus"), ["effort=high|max"]);
+    // An empty set is "nothing to choose", not "fall back".
+    assert.deepEqual(values("haiku"), []);
+    // A model the agent never named is unpinned as far as options go.
+    assert.deepEqual(values("gone"), ["effort=low|high", "mode=default|plan"]);
+});
+
+test("the per-model sets travel on the agent and on a profile read on its own", () => {
+    const agent = readLocalAgent({ id: "h1", harness_key: "claude-code", config_options: PER_MODEL });
+    assert.deepEqual(Object.keys(agent?.optionsByModel ?? {}).sort(), ["haiku", "opus"]);
+    assert.equal(agent?.options.length, 2);
+
+    // The list endpoint has no harness: absent, not empty.
+    assert.equal(readRuntime({ id: "p1", kind: "HARNESS" })?.options, undefined);
+    const detail = readRuntime({ id: "p1", kind: "HARNESS", harness: { config_options: PER_MODEL } });
+    assert.ok(detail?.options);
+    assert.deepEqual(optionsFor(detail.options, "opus").map((option) => option.key), ["effort"]);
+    assert.deepEqual(agentOptionSets(undefined), { options: [], byModel: {} });
+});
+
+test("a model change keeps only the selections the new model offers", () => {
+    const sets = agentOptionSets(PER_MODEL);
+    const held = { effort: "low", mode: "plan" };
+    assert.deepEqual(offeredSelections(optionsFor(sets, "sonnet"), held), held);
+    // Opus has no "low" and no mode at all.
+    assert.deepEqual(offeredSelections(optionsFor(sets, "opus"), held), {});
+    assert.deepEqual(offeredSelections(optionsFor(sets, "opus"), { effort: "max" }), { effort: "max" });
+    // "As the runtime has it" is no key at all.
+    assert.deepEqual(offeredSelections(optionsFor(sets, ""), { effort: "" }), {});
+});
+
+test("an agent nobody taught this app is named by its computer, then its key", () => {
+    assert.equal(readLocalAgent({ id: "h1", harness_key: "gemini-cli", display_name: "Gemini CLI" })?.name, "Gemini CLI");
+    assert.equal(readLocalAgent({ id: "h1", harness_key: "gemini-cli" })?.name, "gemini-cli");
+    // A profile with no name of its own: the catalogue, the harness, the key.
+    assert.equal(readRuntime({ id: "p1", kind: "HARNESS", harness_key: "codex" })?.name, "Codex");
+    assert.equal(
+        readRuntime({ id: "p1", kind: "HARNESS", harness_key: "gemini-cli", harness: { display_name: "Gemini CLI" } })?.name,
+        "Gemini CLI",
+    );
+    assert.equal(readRuntime({ id: "p1", kind: "HARNESS", harness_key: "gemini-cli" })?.name, "gemini-cli");
+    assert.equal(readRuntime({ id: "p1", name: "My agent", kind: "HARNESS", harness_key: "codex" })?.name, "My agent");
+});
+
 test("a stored choice is profile_id and model_name", () => {
     assert.deepEqual(readChoice({ profile_id: "p1", model_name: "sonnet" }), { runtimeId: "p1", model: "sonnet" });
+    // A coding agent's selections ride along; an empty map is no selections.
+    assert.deepEqual(
+        readChoice({ profile_id: "p1", model_name: "opus", config_selections: { effort: "max", odd: 3 } }),
+        { runtimeId: "p1", model: "opus", selections: { effort: "max" } },
+    );
+    assert.deepEqual(readChoice({ profile_id: "p1", config_selections: {} }), { runtimeId: "p1", model: "" });
     // The catalog's own default is a bare profile id — legal, and common.
     assert.deepEqual(readChoice({ profile_id: "system:lemma" }), { runtimeId: "system:lemma", model: "" });
     assert.equal(readChoice({ model_name: "sonnet" }), null);

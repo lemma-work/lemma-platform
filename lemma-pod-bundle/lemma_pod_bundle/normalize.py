@@ -303,6 +303,17 @@ def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
     app_name = str(telegram.get("app_name") or "").strip()
     if app_name:
         behavior_config["telegram"] = {"app_name": app_name}
+    # The approved template a closed 24-hour window is reopened with. Without
+    # it an imported WhatsApp surface refuses every message to a member who has
+    # not written in a day, where the exported one held it and asked them back.
+    whatsapp = config.get("whatsapp") or {}
+    template = str(whatsapp.get("reengage_template") or "").strip()
+    if template:
+        whatsapp_entry = {"reengage_template": template}
+        language = str(whatsapp.get("language") or "").strip()
+        if language:
+            whatsapp_entry["language"] = language
+        behavior_config["whatsapp"] = whatsapp_entry
 
     status = str(surface.get("status") or "").upper()
     # Prefer the surface's own pod-unique name so several surfaces of the same

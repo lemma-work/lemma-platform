@@ -4,7 +4,7 @@ export {
     CaretDown as ChevronDownIcon, CaretRight as ChevronRightIcon, CaretUp as ChevronUpIcon, CaretLeft as ChevronLeftIcon,
     ArrowUp as SendIcon, ArrowDown as ArrowDownIcon, ArrowUpRight as ExternalIcon, ArrowLeft as BackIcon,
     ArrowRight as ArrowRightIcon, Check as CheckIcon, Copy as CopyIcon,
-    EnvelopeSimple as EmailIcon, LinkSimple as LinkIcon, UserCircle as UserIcon,
+    EnvelopeSimple as EmailIcon, LinkSimple as LinkIcon, UserCircle as UserIcon, User as PersonIcon,
     SignOut as SignOutIcon, ArrowClockwise as RefreshIcon, ChatCircle as ChatIcon,
     IdentificationCard as ProfileIcon, ClockCounterClockwise as HistoryIcon,
     SquaresFour as AppsIcon, AppWindow as AppIcon, Folder as FolderIcon, Books as LibraryIcon, FileText as FileIcon, Table as TableIcon,
@@ -31,8 +31,8 @@ export {
     Eye as ShowIcon, EyeSlash as HideIcon,
     // The space's home, and the presentation starter on it.
     House as HomeIcon, PresentationChart as SlidesIcon, Play as PlayIcon,
-    // A space's group chats.
-    ChatsCircle as GroupsIcon,
+    // A space's channels, and the button that opens what is true about one.
+    ChatsCircle as GroupsIcon, Info as InfoIcon,
     // The people a space's bots answer who are not in it.
     AddressBook as ContactsIcon,
     // An empty Files list's way in, and the help menu's three doors: the

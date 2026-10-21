@@ -38,8 +38,11 @@ mod pre_approval;
 mod prompt;
 mod session_options;
 mod session_setup;
+mod shell_path;
+mod start_gate;
 mod steering;
 mod supervision;
+mod tolerance;
 
 pub(crate) use claude_settings::{claude_config_dir, claude_permission_rules, claude_sign_in};
 pub use driver::*;
@@ -50,8 +53,15 @@ pub(crate) use pre_approval::PreApprovals;
 pub use prompt::*;
 pub(crate) use session_options::*;
 pub(crate) use session_setup::*;
+pub(crate) use start_gate::{START_ATTEMPTS, StartPermit};
+pub use start_gate::{StartGates, is_transient_start_failure};
 pub use steering::*;
 pub(crate) use supervision::*;
+pub(crate) use tolerance::{STOP_REASONS, Tolerance, note_unknown};
+pub use tolerance::{
+    cancelled_permission, sanitize_permission_request, sanitize_session_update,
+    session_notification, whole_count,
+};
 
 #[cfg(test)]
 mod tests;

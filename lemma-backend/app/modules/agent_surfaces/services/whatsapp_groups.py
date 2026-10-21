@@ -197,8 +197,7 @@ class WhatsAppGroupOpener:
         async with self.uow_factory() as uow:
             group = await SurfaceGroupRepository(uow.session).create_pending(
                 pod_id=surface.pod_id,
-                surface_id=surface.id,
-                platform=surface.surface_type.value,
+                surface=surface,
                 title=name,
                 owner_user_id=owner_user_id,
                 request_id=request_id,

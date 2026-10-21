@@ -23,6 +23,13 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
 )
+from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts
+from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
+from app.modules.agent_surfaces.platforms.slack.line_changes import slack_line_changes
+from app.modules.agent_surfaces.platforms.slack.group_updates import (
+    slack_group_updates,
+)
 from app.modules.agent_surfaces.domain.decision_card import (
     CardRetirement,
     DecisionCardHandle,
@@ -89,8 +96,8 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await self._service(credentials).send_message(
+    ) -> str | None:
+        return await self._service(credentials).send_message(
             event=event,
             message=message,
             metadata=metadata,
@@ -190,6 +197,14 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
     ) -> None:
         await self._service(credentials).retire_decision_card(handle, reason)
 
+    def parse_group_updates(
+        self, payload: dict[str, object]
+    ) -> list[ParsedGroupUpdate]:
+        return slack_group_updates(payload)
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        return slack_line_changes(payload, self.parser)
+
     async def parse_inbound_lifecycle(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedSurfaceLifecycleEvent | None:
@@ -277,6 +292,14 @@ class SlackSurfaceAdapter(BaseSurfaceAdapter):
         self, *, credentials: SurfaceCredentials, channel_id: str
     ) -> str | None:
         return await self._home(credentials).channel_name(channel_id)
+
+    async def read_place_privacy(
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
+    ) -> PlaceFacts | None:
+        channel_id = event.external_channel_id
+        if not channel_id:
+            return None
+        return await self._home(credentials).place_facts(channel_id)
 
     async def set_thread_title(
         self,

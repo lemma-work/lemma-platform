@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import typer
+from rich.markup import escape
 from lemma_sdk.openapi_client.models.account_create_schema import AccountCreateSchema
 from lemma_sdk.openapi_client.models.auth_config_create_schema import (
     AuthConfigCreateSchema,
@@ -1250,7 +1251,10 @@ def _render_overview(rows: list[dict]) -> None:
     view.add_column("Accounts", overflow="fold")
     for row in sorted(rows, key=lambda r: (r["app"], r["kind"])):
         view.add_row(
-            row["app"], row["auth_config"], row["kind"], row["status"], row["accounts"]
+            *(
+                escape(str(row[key]))
+                for key in ("app", "auth_config", "kind", "status", "accounts")
+            )
         )
     console.print(view)
     console.print(

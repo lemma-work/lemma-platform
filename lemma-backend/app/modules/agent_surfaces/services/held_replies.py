@@ -4,24 +4,27 @@ WhatsApp takes free-form messages from a business only within 24 hours of the
 person's last one. Past that, a message to a member goes as an approved
 template asking them to reply (``member_reach``), and the message itself is
 held here -- in the conversation's metadata, so it outlives any one worker --
-until they do. Their reply reopens the window, and the next turn on that
-conversation delivers what was held before anything else is said.
+until they do. Their reply reopens the window: the transaction that writes it
+turns what was held into ``surface_deliveries`` rows, which the destination
+pump sends before anything else is said.
 
 Held for a week. A message nobody came back for in that time is dropped when
 they finally do, rather than delivered as if it were news.
+
+Adding and clearing are both conditional. Each write locks the conversation row
+and stamps a new ``version``; a delivery clears only the messages it sent, so a
+message held while the earlier ones were going out stays held for the next
+reply instead of being cleared unsent.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, ValidationError
-from redis.exceptions import RedisError
-from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversation_metadata_records as metadata_records,
@@ -29,13 +32,13 @@ from app.modules.agent.contracts import (
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
-from app.modules.agent_surfaces.caches import HELD_REPLY_CLAIMS, surface_caches
-from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
-from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.domain.deliveries import DeliveryContent
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
+)
+from app.modules.agent_surfaces.services.surface_deliveries import (
+    stage_conversation_message,
 )
 
 logger = get_logger(__name__)
@@ -62,14 +65,27 @@ class HeldReplies(BaseModel):
     #: set from a later one, so clearing it cannot clear a newer.
     asked_at: datetime
     replies: list[HeldReply] = Field(default_factory=list)
+    #: Stamped afresh on every write, so a set a hold has added to since it was
+    #: read is told from the one that was. None on a record written before
+    #: versions, which ``asked_at`` stands in for.
+    version: str | None = None
 
     def identity(self) -> dict[str, str | None]:
+        if self.version is not None:
+            return {"version": self.version}
         return {"asked_at": self.model_dump(mode="json")["asked_at"]}
 
+    def claim_token(self) -> str:
+        """What a delivery claims, so two deliveries of this set are one."""
+        token = self.identity()
+        return str(token.get("version") or token.get("asked_at"))
 
-async def _held(uow: SqlAlchemyUnitOfWork, conversation_id: UUID) -> HeldReplies | None:
+
+async def _held(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, for_update: bool = False
+) -> HeldReplies | None:
     stored = await metadata_records.conversation_metadata_record(
-        uow, conversation_id, HELD_REPLIES_KEY
+        uow, conversation_id, HELD_REPLIES_KEY, for_update=for_update
     )
     if stored is None:
         return None
@@ -108,9 +124,14 @@ async def hold_reply(
     now: datetime | None = None,
 ) -> None:
     """Hold ``message`` beside anything already held. ``asked``: a template
-    asking them to reply has just gone."""
+    asking them to reply has just gone.
+
+    The read is locked, so a hold racing another hold, or a delivery clearing
+    what it sent, waits for it rather than writing over it."""
     at = now or datetime.now(UTC)
-    held = await _held(uow, conversation_id) or HeldReplies(asked_at=at)
+    held = await _held(uow, conversation_id, for_update=True) or HeldReplies(
+        asked_at=at
+    )
     await agent_conversations.set_conversation_metadata_value(
         uow,
         conversation_id,
@@ -118,87 +139,62 @@ async def hold_reply(
         HeldReplies(
             asked_at=at if asked else held.asked_at,
             replies=[*held.replies, HeldReply(message=message, held_at=at)],
+            version=uuid4().hex,
         ),
     )
 
 
-async def deliver_held_replies(
+async def stage_held_replies(
+    uow: SqlAlchemyUnitOfWork,
     *,
-    adapter: SurfacePlatformAdapterPort,
-    credentials: SurfaceCredentials,
-    event: ParsedInboundSurfaceEvent,
     conversation_id: UUID,
-    uow_factory: UnitOfWorkFactory,
+    pod_id: UUID | None,
+    platform: SurfacePlatform | str,
     now: datetime | None = None,
-) -> None:
-    """Send what was held for the person who just wrote. Never raises.
+) -> int:
+    """Write what was held for the person who just wrote as deliveries.
 
-    Claimed in Redis first, so two of their messages arriving together do not
-    both deliver it; a send that fails gives the claim back and leaves the
-    messages held for their next one.
+    In the transaction that writes their message, so the held messages are on
+    record -- and cleared from the conversation -- exactly when the message
+    that reopened the window is, and the destination pump sends them at once
+    -- before the run answering that message has finished. Keyed by the set's version, so a
+    retried ingest writes them once. The read is locked, so a hold racing this
+    waits and stays held for the next reply rather than being cleared unsent.
 
     Only on a platform with a reply window: nothing is held anywhere else, and
     every inbound message would otherwise pay a read to find that out.
     """
-    capabilities = get_platform_capabilities(event.platform.value)
+    capabilities = get_platform_capabilities(
+        platform.value if isinstance(platform, SurfacePlatform) else str(platform)
+    )
     if capabilities is None or capabilities.reply_window_hours is None:
-        return
-    async with uow_factory() as uow:
-        held = await _held(uow, conversation_id)
+        return 0
+    held = await _held(uow, conversation_id, for_update=True)
     if held is None:
-        return
-    claims = surface_caches.get(HELD_REPLY_CLAIMS)
-    claim = f"{conversation_id}:{held.identity()['asked_at']}"
-    try:
-        if not await claims.set_raw_if_absent(claim, "delivering"):
-            return
-    except RedisError, OSError:
-        logger.warning(
-            "agent_surfaces.held_replies.claim_unavailable.degraded",
-            conversation_id=str(conversation_id),
-            exc_info=True,
-        )
-        return
+        return 0
     fresh_since = (now or datetime.now(UTC)) - HOLD_FOR
-    try:
-        for reply in held.replies:
-            if reply.held_at < fresh_since:
-                continue
-            await adapter.send_message(
-                credentials=credentials, event=event, message=reply.message
-            )
-    except PLATFORM_TRANSPORT_ERRORS:
-        logger.warning(
-            "agent_surfaces.held_replies.not_delivered.degraded",
-            conversation_id=str(conversation_id),
-            exc_info=True,
+    token = held.claim_token()
+    staged = 0
+    for index, reply in enumerate(held.replies):
+        if reply.held_at < fresh_since:
+            continue
+        await stage_conversation_message(
+            uow,
+            idempotency_key=f"held:{conversation_id}:{token}:{index}",
+            conversation_id=conversation_id,
+            pod_id=pod_id,
+            content=DeliveryContent(text=reply.message, plain=True, purpose="held"),
         )
-        await claims.delete(claim)
-        return
-    await _forget(held, conversation_id, uow_factory)
-
-
-async def _forget(
-    held: HeldReplies, conversation_id: UUID, uow_factory: UnitOfWorkFactory
-) -> None:
-    try:
-        async with uow_factory() as uow:
-            await metadata_records.forget_conversation_metadata_record(
-                uow, conversation_id, HELD_REPLIES_KEY, matching=held.identity()
-            )
-    except SQLAlchemyError:
-        # Delivered, and the claim stands for its lifetime; past that, the
-        # person's next message would deliver it again.
-        logger.warning(
-            "agent_surfaces.held_replies.not_forgotten.degraded",
-            conversation_id=str(conversation_id),
-            exc_info=True,
-        )
+        staged += 1
+    await metadata_records.forget_conversation_metadata_record(
+        uow, conversation_id, HELD_REPLIES_KEY, matching=held.identity()
+    )
+    return staged
 
 
 __all__ = [
     "HELD_REPLIES_KEY",
     "HeldReplies",
-    "deliver_held_replies",
+    "stage_held_replies",
     "hold_reply",
 ]

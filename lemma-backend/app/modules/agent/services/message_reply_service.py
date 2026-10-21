@@ -1,6 +1,6 @@
 """Bring an asking conversation back when the people it messaged answer.
 
-``message_user`` does not pause, and should not: a person takes hours, and an
+``channel_post`` does not pause, and should not: a person takes hours, and an
 execution suspended for hours is one that cannot be told anything in the
 meantime. The agent sends, finishes its turn, and the conversation goes quiet.
 
@@ -12,7 +12,7 @@ rule as a person typing, and the same one this module's own
 system-triggered run its prompt.
 
 Which is why an agent no longer has any reason to ``wait_for`` after
-``message_user``. Waiting is for work with a real gap in it — a build, a
+``channel_post``. Waiting is for work with a real gap in it — a build, a
 thing that needs to settle — and it stopped being this feature's business.
 """
 
@@ -42,14 +42,18 @@ REPLY_SOURCE = "message_replies"
 # Deliberately not the answers themselves. Batching them into this text needs a
 # marker for which round has already been delivered, and gets it wrong the first
 # time an agent asks a second question before the first is answered. The ids are
-# in the model's own history next to the `message_user` calls that produced them,
-# and `check_messages` already reads exactly the ones it is given.
+# in the model's own history next to the `channel_post` calls that produced them,
+# and `channel_read(asked_by_me=True)` reads exactly this conversation's.
 REPLIES_ARRIVED = (
-    "Everyone you messaged has now replied, or their time to reply has run "
-    "out. Read where each stands with `check_messages`, using the notification "
-    "ids from your earlier `message_user` calls, then carry on with what you "
-    "were doing."
+    "Everyone you asked has now answered, or can no longer. Read what they said "
+    "with `channel_read(asked_by_me=True)`, then carry on with what you were "
+    "doing."
 )
+
+
+def replies_client_id(batch_id: str | None) -> str | None:
+    """The news of one batch, named by it: delivered twice, it is one message."""
+    return f"replies:{batch_id}" if batch_id else None
 
 
 class MessageReplyService:
@@ -60,17 +64,27 @@ class MessageReplyService:
         self.conversations = ConversationRepository(uow)
         self.waits = AgentConversationWaitRepository(uow)
 
-    async def deliver(self, *, conversation_id: UUID, pod_id: UUID) -> bool:
+    async def deliver(
+        self, *, conversation_id: UUID, pod_id: UUID, batch_id: str | None = None
+    ) -> bool:
         """Start (or join) a turn carrying the news. False when there is none.
 
         Returns False for a conversation that has gone — the answers are still
         recorded on their rows, and a deleted conversation is not an error worth
-        raising at somebody who just answered a question.
+        raising at somebody who just answered a question — and for a batch whose
+        news this conversation already has: a batch wakes it once.
         """
         conversation = await self.conversations.get_conversation(
             conversation_id, include_runs=False
         )
         if conversation is None:
+            return False
+        client_id = replies_client_id(batch_id)
+        if client_id is not None and (
+            await self.conversations.find_user_message_by_client_id(
+                conversation_id=conversation_id, client_message_id=client_id
+            )
+        ):
             return False
 
         token = set_current_context(
@@ -96,6 +110,7 @@ class MessageReplyService:
                 content=REPLIES_ARRIVED,
                 agent_name=None,
                 message_metadata={"source": REPLY_SOURCE},
+                client_message_id=client_id,
                 supersede_pauses=False,
             )
         finally:

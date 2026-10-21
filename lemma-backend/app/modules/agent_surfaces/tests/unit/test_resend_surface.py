@@ -4,13 +4,17 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 
+from app.modules.agent_surfaces.tests.fakes import answer_json, platform_http
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     normalize_resend_inbound as _normalize_resend_inbound,
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
+    ConversationType,
+    ParsedInboundSurfaceEvent,
     SurfaceConfig,
     SurfaceCredentialMode,
     SurfacePlatform,
@@ -70,25 +74,7 @@ async def test_resend_send_email_builds_resend_api_payload():
             "from_name": "Lemma",
         }
     )
-    captured = {}
-
-    async def _fake_post(self, url, json, headers):  # noqa: ANN001
-        captured["url"] = url
-        captured["json"] = json
-        captured["headers"] = headers
-
-        class _Resp:
-            content = b"{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"id": "email-1"}
-
-        return _Resp()
-
-    with patch("httpx.AsyncClient.post", new=_fake_post):
+    with platform_http(answer_json({"id": "email-1"})) as http:
         result = await service._send_email(
             recipient_email="bob@example.com",
             subject="Hello",
@@ -100,9 +86,9 @@ async def test_resend_send_email_builds_resend_api_payload():
         )
 
     assert result == {"id": "email-1"}
-    assert captured["url"].endswith("/emails")
-    assert captured["headers"]["Authorization"] == "Bearer re_test"
-    body = captured["json"]
+    assert str(http.requests[-1].url).endswith("/emails")
+    assert http.requests[-1].headers["Authorization"] == "Bearer re_test"
+    body = http.json_of(http.requests[-1])
     assert body["from"] == "Lemma <pod-1@ops.lemma.work>"
     assert body["to"] == ["bob@example.com"]
     # Bold survives; the tag now carries inline styling, because a mail client
@@ -110,6 +96,57 @@ async def test_resend_send_email_builds_resend_api_payload():
     assert "<strong style=" in body["html"] and ">hi</strong>" in body["html"]
     assert body["headers"]["In-Reply-To"] == "<m1@example.com>"
     assert body["attachments"][0]["filename"] == "note.txt"
+    # The default body is a readable column, not the full window.
+    assert "max-width:640px" in body["html"]
+    assert "margin:0 auto" in body["html"]
+
+
+@pytest.mark.asyncio
+async def test_a_full_width_reply_reaches_the_send_uncapped():
+    """The renderer could always lift the width cap; nothing could ask it to.
+
+    The request rides the same metadata seam as the sender name and the
+    attachments, so a caller that knows this message wants the window can say
+    so without a new argument on every signature between here and there.
+    """
+    service = ResendPlatformService(
+        {"api_key": "re_test", "from_address": "pod-1@ops.lemma.work"}
+    )
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.RESEND,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="<root@example.com>",
+        message_text="the question",
+        reply_target={"recipient_email": "bob@example.com", "subject": "Standup"},
+    )
+
+    with platform_http(answer_json({"id": "email-1"})) as http:
+        await service.send_message(event, "hello", {"full_width": True})
+
+    html = http.json_of(http.requests[-1])["html"]
+    assert "max-width:none" in html
+    assert "max-width:640px" not in html
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asked", ["false", "true", 1, None])
+async def test_only_a_real_true_lifts_the_width_cap(asked):
+    """The metadata is untyped: a string "false" must not read as yes."""
+    service = ResendPlatformService(
+        {"api_key": "re_test", "from_address": "pod-1@ops.lemma.work"}
+    )
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.RESEND,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="<root@example.com>",
+        message_text="the question",
+        reply_target={"recipient_email": "bob@example.com", "subject": "Standup"},
+    )
+
+    with platform_http(answer_json({"id": "email-1"})) as http:
+        await service.send_message(event, "hello", {"full_width": asked})
+
+    assert "max-width:640px" in http.json_of(http.requests[-1])["html"]
 
 
 async def test_a_resend_surface_without_an_address_is_refused(monkeypatch):
@@ -480,24 +517,8 @@ async def test_a_cold_email_seeds_the_thread_and_is_not_a_reply():
             "from_name": "Lemma",
         }
     )
-    captured = {}
-
-    async def _fake_post(self, url, json, headers):  # noqa: ANN001
-        captured["json"] = json
-
-        class _Resp:
-            content = b"{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"id": "email-9"}
-
-        return _Resp()
-
     seed = "<lemma-notification-abc@ops.lemma.work>"
-    with patch("httpx.AsyncClient.post", new=_fake_post):
+    with platform_http(answer_json({"id": "email-9"})) as http:
         sent = await service.send_cold_email(
             recipient_email="bob@example.com",
             subject="Standup",
@@ -505,7 +526,7 @@ async def test_a_cold_email_seeds_the_thread_and_is_not_a_reply():
             thread_seed_id=seed,
         )
 
-    body = captured["json"]
+    body = http.json_of(http.requests[-1])
     assert body["subject"] == "Standup", "first contact must not be prefixed Re:"
     assert body["headers"]["References"] == seed
     assert "In-Reply-To" not in body["headers"], "a cold open replies to nothing"
@@ -1004,9 +1025,6 @@ async def test_an_attachment_is_downloaded_through_its_signed_url():
     the content comes from there. The adapter previously had no
     `download_attachment` at all, so inbound files were named and never fetched.
     """
-    import httpx
-    from unittest.mock import patch
-
     from app.modules.agent_surfaces.platforms.resend.adapter import (
         ResendSurfaceAdapter,
     )
@@ -1025,35 +1043,20 @@ async def test_an_attachment_is_downloaded_through_its_signed_url():
             )
         )
     )
-    seen: dict = {}
 
-    class _Resp:
-        def __init__(self, payload=None, content=b""):
-            self._payload, self.content = payload, content
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return self._payload
-
-    async def _fake_get(self, url, **kwargs):  # noqa: ANN001
-        seen.setdefault("urls", []).append(url)
-        seen.setdefault("auth", []).append(
-            (kwargs.get("headers") or {}).get("Authorization")
-        )
-        if "/attachments/" in url:
-            return _Resp(
-                {
+    def resend(request: httpx.Request) -> httpx.Response:
+        if "/attachments/" in str(request.url):
+            return httpx.Response(
+                200,
+                json={
                     "filename": "invoice.pdf",
                     "content_type": "application/pdf",
                     "download_url": "https://cdn.resend.test/signed",
                 },
-                b"{}",
             )
-        return _Resp(None, b"%PDF-1.4 real bytes")
+        return httpx.Response(200, content=b"%PDF-1.4 real bytes")
 
-    with patch.object(httpx.AsyncClient, "get", new=_fake_get):
+    with platform_http(resend) as http:
         downloaded = await ResendSurfaceAdapter().download_attachment(
             credentials={"api_key": "re_test"},
             event=event,
@@ -1065,8 +1068,10 @@ async def test_an_attachment_is_downloaded_through_its_signed_url():
     assert name == "invoice.pdf"
     assert mime == "application/pdf"
     # The API call is authenticated; the signed URL must not carry our key.
-    assert seen["auth"][0] == "Bearer re_test"
-    assert seen["auth"][1] is None
+    api_call, signed_download = http.requests
+    assert api_call.headers["Authorization"] == "Bearer re_test"
+    assert str(signed_download.url) == "https://cdn.resend.test/signed"
+    assert "Authorization" not in signed_download.headers
 
 
 # ------------------------------------- a body we already hold is never lost
@@ -1099,9 +1104,6 @@ async def test_a_restricted_api_key_does_not_lose_a_reply_we_can_already_read():
     dropped and retried eight times — while the webhook had handed us the body in
     full and the person who wrote it heard nothing back.
     """
-    import httpx
-    from unittest.mock import patch
-
     from app.modules.agent_surfaces.platforms.resend.adapter import (
         ResendSurfaceAdapter,
     )
@@ -1200,14 +1202,12 @@ def test_a_non_http_failure_still_reports_something_usable():
 
 
 @pytest.mark.asyncio
-async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
-    """The attribution has to survive an inbox list nobody has opened.
+async def test_the_from_header_names_the_sender_and_nothing_else():
+    """The sender column is narrow, and what it showed was three parts.
 
-    ``attribute()`` puts "On behalf of Deepak" in the body, which is the right
-    place for it and invisible until the message is opened. It does not name the
-    agent — the bot's own identity carries that on chat — so the sender column
-    is the only place "Priya" is ever shown, and it used to say "Lemma" for
-    every agent in every pod.
+    ``Lem (Ada Member) via Lemma``: the product, which the sending domain
+    already says; the person, who is in the body's "On behalf of" line, where a
+    full name fits; and the agent, buried between them. One name is left.
     """
     service = ResendPlatformService(
         {
@@ -1216,23 +1216,7 @@ async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
             "from_name": "Lemma",
         }
     )
-    captured = {}
-
-    async def _fake_post(self, url, json, headers):  # noqa: ANN001
-        captured["json"] = json
-
-        class _Resp:
-            content = b"{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"id": "email-1"}
-
-        return _Resp()
-
-    with patch("httpx.AsyncClient.post", new=_fake_post):
+    with platform_http(answer_json({"id": "email-1"})) as http:
         await service.send_cold_email(
             recipient_email="bob@example.com",
             subject="Standup",
@@ -1240,19 +1224,74 @@ async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
             thread_seed_id="<seed@ops.lemma.work>",
             metadata={
                 "agent_display_name": "Priya",
-                "actor_display_name": "Deepak Jha",
+                "actor_display_name": "Ada Member",
             },
         )
 
-    # Quoted, and the quotes are load-bearing rather than cosmetic: parentheses
-    # are RFC 5322 *comment* syntax, so the same header unquoted parses as the
-    # display name "Priya via Lemma" with "(Deepak Jha)" split off as a comment
-    # that most clients never render. Which is the second reason this send path
-    # had to move off an f-string, independent of the injection one below.
-    assert (
-        captured["json"]["from"]
-        == '"Priya (Deepak Jha) via Lemma" <priya.acme@ops.lemma.work>'
+    # The actor is in the metadata and deliberately not in the header: the body
+    # carries them under "On behalf of".
+    sent_from = http.json_of(http.requests[-1])["from"]
+    assert sent_from == "Priya <priya.acme@ops.lemma.work>"
+    assert "Ada" not in sent_from
+
+
+@pytest.mark.asyncio
+async def test_the_pods_mailbox_goes_out_as_the_pod_rather_than_as_lem():
+    """The reported header, end to end: "Lem (Ada Member) via Lemma".
+
+    The pod's own assistant has a display name of its own — ``Lem``, which is
+    the platform's word for whatever answers in a pod — and an email from it is
+    the pod writing. ``email_sender_name`` is the key that says so, set where
+    the sending agent is known to be the pod's (see ``group_names``); the chat
+    display name beside it stays ``Lem``, because that is the bot's username.
+    """
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "sales@ops.lemma.work",
+            "from_name": "Lemma",
+        }
     )
+    with platform_http(answer_json({"id": "email-1"})) as http:
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="What did you ship?",
+            thread_seed_id="<seed@ops.lemma.work>",
+            metadata={
+                "agent_display_name": "Lem",
+                "email_sender_name": "Sales",
+            },
+        )
+
+    assert http.json_of(http.requests[-1])["from"] == "Sales <sales@ops.lemma.work>"
+
+
+@pytest.mark.asyncio
+async def test_a_pod_name_that_did_not_resolve_falls_back_to_the_deployment():
+    """``email_sender_name: None`` is an answer, and ``Lem`` does not replace it.
+
+    The pod's row is gone, so nothing names this pod. The chat name beside it is
+    ``Lem``, the platform's word for whatever answers in a pod, which names no
+    pod either -- the header says the deployment, as ``sender_name_for`` means.
+    """
+    service = ResendPlatformService(
+        {
+            "api_key": "re_test",
+            "from_address": "sales@ops.lemma.work",
+            "from_name": "Lemma",
+        }
+    )
+    with platform_http(answer_json({"id": "email-1"})) as http:
+        await service.send_cold_email(
+            recipient_email="bob@example.com",
+            subject="Standup",
+            message="What did you ship?",
+            thread_seed_id="<seed@ops.lemma.work>",
+            metadata={"agent_display_name": "Lem", "email_sender_name": None},
+        )
+
+    assert http.json_of(http.requests[-1])["from"] == "Lemma <sales@ops.lemma.work>"
 
 
 @pytest.mark.asyncio
@@ -1273,23 +1312,7 @@ async def test_an_agent_name_cannot_inject_a_second_address_into_from():
             "from_name": "Lemma",
         }
     )
-    captured = {}
-
-    async def _fake_post(self, url, json, headers):  # noqa: ANN001
-        captured["json"] = json
-
-        class _Resp:
-            content = b"{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"id": "email-1"}
-
-        return _Resp()
-
-    with patch("httpx.AsyncClient.post", new=_fake_post):
+    with platform_http(answer_json({"id": "email-1"})) as http:
         await service.send_cold_email(
             recipient_email="bob@example.com",
             subject="Standup",
@@ -1298,7 +1321,7 @@ async def test_an_agent_name_cannot_inject_a_second_address_into_from():
             metadata={"agent_display_name": "Ops <evil@example.com>, Priya"},
         )
 
-    parsed = getaddresses([captured["json"]["from"]])
+    parsed = getaddresses([http.json_of(http.requests[-1])["from"]])
     assert len(parsed) == 1
     assert parsed[0][1] == "priya.acme@ops.lemma.work"
 
@@ -1313,23 +1336,7 @@ async def test_a_send_that_knows_no_agent_keeps_the_deployment_default():
             "from_name": "Lemma",
         }
     )
-    captured = {}
-
-    async def _fake_post(self, url, json, headers):  # noqa: ANN001
-        captured["json"] = json
-
-        class _Resp:
-            content = b"{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {"id": "email-1"}
-
-        return _Resp()
-
-    with patch("httpx.AsyncClient.post", new=_fake_post):
+    with platform_http(answer_json({"id": "email-1"})) as http:
         await service.send_cold_email(
             recipient_email="bob@example.com",
             subject="Standup",
@@ -1338,7 +1345,7 @@ async def test_a_send_that_knows_no_agent_keeps_the_deployment_default():
             metadata=None,
         )
 
-    assert captured["json"]["from"] == "Lemma <acme@ops.lemma.work>"
+    assert http.json_of(http.requests[-1])["from"] == "Lemma <acme@ops.lemma.work>"
 
 
 async def test_a_taken_name_advances_to_the_next_candidate(monkeypatch):
@@ -1428,6 +1435,51 @@ async def test_the_name_borrows_the_suffix_its_address_already_carries(monkeypat
     assert name == f"resend-assistant-{suffix}", (
         f"name {name!r} and address {address!r} carry different suffixes"
     )
+
+
+async def test_a_chosen_name_survives_a_taken_address(monkeypatch):
+    """Only the address is a candidate when the caller named the surface.
+
+    The plain address can be held elsewhere -- another pod on a deployment-wide
+    domain -- which the index reports as an IntegrityError. That retry used to
+    suffix the name too, so a caller who asked for `support` got
+    `support-p7k3`, and the bundle applier, keyed on the name, could not find
+    it on the next apply.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.modules.agent_surfaces.services import email_surface_provisioning
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
+
+    calls: list[tuple[str, str]] = []
+
+    async def create(**kwargs):
+        calls.append((kwargs["name"], kwargs["surface_identity_email"]))
+        if len(calls) == 1:
+            raise IntegrityError("INSERT", {}, Exception("address taken"))
+        return SimpleNamespace(id=uuid4(), name=kwargs["name"])
+
+    service = _minting_service()
+    service.create_surface = AsyncMock(side_effect=create)
+
+    surface = await email_surface_provisioning._insert_on_first_free_address(
+        service,
+        _minting_uow().session,
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        agent_name="Ops",
+        pod_name="Acme",
+        name="support",
+        name_is_chosen=True,
+        config=SurfaceConfig(),
+        credential_mode=SurfaceCredentialMode.SYSTEM,
+    )
+
+    assert surface is not None
+    assert [name for name, _ in calls] == ["support", "support"]
+    assert calls[1][1] != calls[0][1], "the address did not advance"
 
 
 async def test_a_database_failure_degrades_rather_than_killing_the_creation(

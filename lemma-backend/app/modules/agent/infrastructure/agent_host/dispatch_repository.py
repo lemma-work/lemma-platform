@@ -200,6 +200,7 @@ class AgentHostDispatchRepository:
                 command.kind == AgentHostCommandKind.START_RUN.value
                 and remaining_run_slots == 0
             ):
+                await self._keep_start_with_its_lease(command)
                 continue
             command.state = AgentHostCommandState.DELIVERED.value
             command.delivered_at = timestamp
@@ -453,6 +454,41 @@ class AgentHostDispatchRepository:
             ttl_seconds=DEFAULT_COMMAND_TTL_SECONDS,
             now=now,
             skip_if=_not_accepted_yet,
+        )
+
+    async def _keep_start_with_its_lease(self, command: AgentHostCommandModel) -> None:
+        """Let a START_RUN held back for a full host live as long as its lease.
+
+        This poll holds the command's row lock, so the busy-host hold, which
+        skips a locked command to keep the lock order, cannot renew it here.
+        Following the lease -- which only the hold extends, and never for a
+        stopped run -- keeps the command deliverable for exactly as long as
+        the run is still waiting, and never longer.
+        """
+        if (
+            command.state != AgentHostCommandState.QUEUED.value
+            or command.run_id is None
+        ):
+            return
+        lease_expires_at = await self.session.scalar(
+            select(AgentHostRunLeaseModel.lease_expires_at).where(
+                AgentHostRunLeaseModel.run_id == command.run_id,
+                AgentHostRunLeaseModel.state == AgentHostRunState.QUEUED_FOR_HOST.value,
+                AgentHostRunLeaseModel.lease_epoch == command.lease_epoch,
+            )
+        )
+        if lease_expires_at is not None and lease_expires_at > command.expires_at:
+            command.expires_at = lease_expires_at
+
+    async def hold_for_busy_host(
+        self,
+        *,
+        run_id: UUID,
+        wait_seconds: int,
+        now: datetime | None = None,
+    ) -> recovery.BusyHost | None:
+        return await recovery.hold_for_busy_host(
+            self.session, run_id=run_id, wait_seconds=wait_seconds, now=now
         )
 
     async def expire_unaccepted_run(

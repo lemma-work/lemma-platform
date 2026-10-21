@@ -96,6 +96,26 @@ def public_web_switched_on(monkeypatch):
     monkeypatch.setattr(public_web_settings, "public_web_altcha_enabled", False)
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def a_fresh_visitor_address():
+    """Every request in a shard comes from one test client address, so the
+    per-address window on starting web chats -- an abuse limit for one
+    browser, which no journey here is about -- would be spent by whichever
+    tests ran first and refuse the next. Each test starts it afresh; the
+    limiter's own unit tests cover the window."""
+    from redis.exceptions import RedisError
+
+    from app.core.infrastructure.redis.client import get_redis
+
+    try:
+        client = get_redis()
+        async for key in client.scan_iter(match="web:sessions:addr:*"):
+            await client.delete(key)
+    except RedisError:
+        pass
+    yield
+
+
 # Set before anything imports settings, so every reader sees it — including the
 # worker, which serves these tests from its own task and picked up an attribute
 # patched onto one Settings instance too late to matter. The fixture below says
@@ -240,11 +260,16 @@ async def fake_composio_server():
         await server.stop()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="module")
 async def worker(
     e2e_settings, sandbox_reachable_backend, fake_composio_server, request
 ):
     """Surface shard's production worker with a hermetic Composio transport.
+
+    Module-scoped: a worker runs every due work item in the session's
+    database, so one left running after its module would race the in-process
+    tests that come after it for their ingest and delivery items -- sending a
+    reply twice, or taking a pump item a test is driving by hand.
 
     Default e2e mode uses the deterministic FunctionModel token source. When
     ``E2E_LLM_MODE=real`` is set, the existing system:lemma helper gates on the

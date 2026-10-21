@@ -7,9 +7,12 @@ from typing import Optional
 from app.core.authorization.cache import invalidate_role_snapshot_cache
 from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.permissions import Permissions
+from app.core.domain.runtime import AgentRuntimeConfig
+from app.core.infrastructure.work import facts
 from app.core.ports.plan_limits import PlanLimits
 from app.modules.identity.contracts import OrganizationJoinPolicy, OrganizationRole
 from app.modules.icon.contracts import IconCleanupPort
+from app.modules.pod.contracts.trigger_settings import PodTriggerDefaultsChanged
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
     PodLimitReachedError,
@@ -76,6 +79,12 @@ class PodService:
         entity.name = self._normalize_name(entity.name)
         await self._refuse_past_pod_allowance(
             owner_user_id=entity.user_id, organization_id=entity.organization_id
+        )
+
+        await self._check_default_runtime_selections(
+            entity.config.default_runtime,
+            organization_id=entity.organization_id,
+            user_id=creator_user_id,
         )
 
         # Aggregate method registers pod.created event.
@@ -189,6 +198,32 @@ class PodService:
 
         return pod
 
+    async def _check_default_runtime_selections(
+        self,
+        runtime: AgentRuntimeConfig | None,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+    ) -> None:
+        """Refuse a default runtime whose coding-agent selections are not offered.
+
+        Only the selections: the pod default's profile and model were never
+        checked on save, and a pod is not the place to start. ``_uow`` is
+        absent only where a caller built the service without one.
+        """
+        if self._uow is None or runtime is None or not runtime.config_selections:
+            return
+        from app.modules.agent.contracts.runtime_selections import (
+            check_pod_default_runtime_selections,
+        )
+
+        await check_pod_default_runtime_selections(
+            self._uow,
+            runtime,
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+
     async def update_pod(
         self,
         pod_id: UUID,
@@ -223,6 +258,14 @@ class PodService:
             if isinstance(default_runtime, dict) and default_runtime.get("profile_id"):
                 merged_config["default_profile_id"] = default_runtime["profile_id"]
             update_data["config"] = merged_config
+            if data.config is not None and "default_runtime" in (
+                data.config.model_fields_set
+            ):
+                await self._check_default_runtime_selections(
+                    data.config.default_runtime,
+                    organization_id=pod_entity.organization_id,
+                    user_id=requester_user_id,
+                )
             await self._require_join_policy_authority(
                 ctx=ctx,
                 pod=pod_entity,
@@ -232,6 +275,7 @@ class PodService:
 
         updated_entity = PodEntity(**merged_dict)
         updated = await self.pod_repository.update(updated_entity)
+        await self._announce_trigger_defaults_change(pod_entity, updated)
 
         if (
             self.icon_service
@@ -241,6 +285,15 @@ class PodService:
             await self.icon_service.delete_by_url(pod_entity.icon_url)
 
         return updated
+
+    async def _announce_trigger_defaults_change(
+        self, before: PodEntity, after: PodEntity
+    ) -> None:
+        """Resync the pod's triggers when its trigger defaults changed."""
+        if self._uow is not None and _trigger_defaults(before) != _trigger_defaults(
+            after
+        ):
+            await facts.emit(self._uow, PodTriggerDefaultsChanged(pod_id=after.id))
 
     async def _require_join_policy_authority(
         self,
@@ -417,3 +470,7 @@ class PodService:
         suffix = token_hex(4)
         deleted_name = f"deleted-{suffix}-{name}"
         return deleted_name[:255]
+
+
+def _trigger_defaults(pod: PodEntity) -> object:
+    return (pod.model_dump().get("config") or {}).get("triggers")

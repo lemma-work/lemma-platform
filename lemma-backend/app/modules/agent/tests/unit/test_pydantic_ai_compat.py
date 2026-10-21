@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from app.modules.agent.infrastructure import pydantic_ai_compat
+from app.modules.test_support import source_tree
 
 pytestmark = pytest.mark.unit
 
@@ -61,12 +62,12 @@ def test_only_the_compat_module_imports_pydantic_ai_internals() -> None:
     module_root = Path(pydantic_ai_compat.__file__).resolve().parents[1]
     offenders = [
         str(path.relative_to(module_root))
-        for path in module_root.rglob("*.py")
+        for path in source_tree.python_files(module_root)
         if "tests" not in path.relative_to(module_root).parts
         and path.name != "pydantic_ai_compat.py"
         and any(
             name.startswith("pydantic_ai._")
-            for name in _imported_modules(ast.parse(path.read_text()))
+            for name in _imported_modules(source_tree.tree(path))
         )
     ]
 

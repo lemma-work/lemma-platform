@@ -190,28 +190,31 @@ async def test_an_assistant_asks_another_pod_as_the_person(world, run, two_pods)
     await priya.adds_record(
         {"title": code_word}, to_table=table["name"], in_pod=answering
     )
-    agent = await priya.creates_an_agent(
-        in_pod=asking,
-        toolsets=["MESSAGING"],
-        instruction=(
-            "You cannot read other pods yourself. When somebody asks about "
-            "another pod, ask that pod with your ask_teammate tool, then tell "
-            "them exactly what it answered."
-        ),
-    )
-
+    # Only the pod's own assistant may ask another pod; a named agent is
+    # refused. So this talks to the assistant, as a person in Lemma would.
     conversation = await priya.starts_a_conversation(
         watching=False,
         in_pod=asking,
-        with_agent=agent["name"],
         saying=(
             f"Ask the pod {answering['name']!r} what title is written in its "
-            f"table {table['name']!r}, and tell me."
+            f"table {table['name']!r}, and tell me exactly what it answered."
         ),
     )
     # The first ask to a pod in a conversation waits for her OK.
     asked = await priya.answers_every_approval(conversation, allow=True, in_pod=asking)
-    assert asked >= 1, "the assistant asked another pod without asking priya first"
+    # Without the call itself, no approval could mean the ask was refused or
+    # never attempted -- neither of which is "asked without permission".
+    messages = await priya.messages_in(conversation, in_pod=asking)
+    asks = [message for message in messages if message.get("tool_name") == "ask_teammate"]
+    assert asks, (
+        "the assistant never tried to ask the other pod: "
+        f"{[message.get('tool_name') for message in messages]}"
+    )
+    # A refused ask also stops nobody for approval; its result says why.
+    assert asked >= 1, (
+        "the assistant asked another pod without asking priya first: "
+        f"{[message.get('tool_result') for message in asks]}"
+    )
 
     await eventually(
         lambda: priya.transcript_of(conversation, in_pod=asking),

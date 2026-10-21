@@ -1,7 +1,7 @@
-"""RunResumeService failure transitions for machine waits."""
+"""RunResumeService: an AGENT wait at its ceiling -- resumed, failed, or re-armed."""
 
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 
@@ -12,6 +12,11 @@ from app.modules.workflow.domain.wait import (
 from app.modules.workflow.services.run_resume_service import RunResumeService
 
 pytestmark = pytest.mark.asyncio
+
+
+def _ref(label: str) -> str:
+    """A conversation id, named for what the test is about."""
+    return str(uuid5(NAMESPACE_URL, label))
 
 
 def _wait(
@@ -27,11 +32,21 @@ def _wait(
     )
 
 
+class FakeAdapter:
+    def __init__(self):
+        self.status: dict = {"status": "RUNNING"}
+
+    async def get_conversation_status(self, conversation_id):
+        del conversation_id
+        return self.status
+
+
 class FakeEngine:
     def __init__(self):
         self.uow = None
         self.failures: list[dict] = []
         self.stopped: list[object] = []
+        self.agent_adapter = FakeAdapter()
 
     async def stop_underlying_work(self, wait):
         self.stopped.append(wait)
@@ -48,6 +63,13 @@ class FakeEngine:
 
     async def fail_for_wait(self, wait, *, error, output=None):
         await self.fail_internal(wait.wait_type, wait.external_ref, error, output)
+
+
+async def _expire(service, wait, *, now, status=None) -> bool:
+    """True when the wait was acted on; False when it was re-armed for later."""
+    if status is not None:
+        service._engine.agent_adapter.status = status
+    return await service.expire_agent_wait(wait, now=now) is None
 
 
 async def test_failed_agent_status_fails_workflow_with_adapter_error(monkeypatch):
@@ -76,124 +98,6 @@ async def test_failed_agent_status_fails_workflow_with_adapter_error(monkeypatch
     ]
 
 
-async def test_failed_function_status_fails_workflow():
-    engine = FakeEngine()
-    service = RunResumeService(engine)
-    wait = _wait(WorkflowRunWaitType.FUNCTION, "function-run-1")
-
-    handled = await service._apply_function_status(
-        wait,
-        {"status": "FAILED", "error": "Function exploded"},
-    )
-
-    assert handled is True
-    assert engine.failures == [
-        {
-            "wait_type": WorkflowRunWaitType.FUNCTION,
-            "external_ref": "function-run-1",
-            "error": "Function exploded",
-            "output": None,
-        }
-    ]
-
-
-class _FakeWaitRepo:
-    def __init__(self, wait):
-        self._wait = wait
-
-    async def find_active_by_external_ref(self, wait_type, external_ref):
-        return self._wait
-
-
-class _ResumeEngine:
-    def __init__(self, wait):
-        self.uow = None
-        self.wait_repo = _FakeWaitRepo(wait)
-        self.resumed: list[dict] = []
-        self.failures: list[dict] = []
-        self.adapter_calls = 0
-        outer = self
-
-        class _Adapter:
-            async def get_run_status(self, run_id):
-                outer.adapter_calls += 1
-                return {"status": "COMPLETED", "output_data": {"from": "adapter"}}
-
-        self.function_adapter = _Adapter()
-
-    async def resume_internal(self, wait_type, external_ref, output, ctx=None):
-        self.resumed.append(
-            {"wait_type": wait_type, "external_ref": external_ref, "output": output}
-        )
-
-    async def fail_internal(self, wait_type, external_ref, error, output=None):
-        self.failures.append(
-            {"wait_type": wait_type, "external_ref": external_ref, "error": error}
-        )
-
-
-async def _no_ctx(wait):
-    return None
-
-
-async def test_resume_for_function_run_trusts_event_output(monkeypatch):
-    fr_id = str(uuid4())
-    engine = _ResumeEngine(_wait(WorkflowRunWaitType.FUNCTION, fr_id))
-    service = RunResumeService(engine)
-    monkeypatch.setattr(service, "_run_context_for_wait", _no_ctx)
-
-    handled = await service.resume_for_function_run(
-        function_run_id=fr_id, run_status="COMPLETED", output={"x": 1}
-    )
-
-    assert handled is True
-    # Output came from the event, so the adapter is never consulted.
-    assert engine.adapter_calls == 0
-    assert engine.resumed == [
-        {
-            "wait_type": WorkflowRunWaitType.FUNCTION,
-            "external_ref": fr_id,
-            "output": {"x": 1},
-        }
-    ]
-
-
-async def test_resume_for_function_run_falls_back_to_adapter_when_output_none(
-    monkeypatch,
-):
-    fr_id = str(uuid4())
-    engine = _ResumeEngine(_wait(WorkflowRunWaitType.FUNCTION, fr_id))
-    service = RunResumeService(engine)
-    monkeypatch.setattr(service, "_run_context_for_wait", _no_ctx)
-
-    handled = await service.resume_for_function_run(
-        function_run_id=fr_id, run_status="COMPLETED", output=None
-    )
-
-    assert handled is True
-    assert engine.adapter_calls == 1
-    assert engine.resumed == [
-        {
-            "wait_type": WorkflowRunWaitType.FUNCTION,
-            "external_ref": fr_id,
-            "output": {"from": "adapter"},
-        }
-    ]
-
-
-async def test_resume_for_function_run_no_active_wait_is_noop():
-    engine = _ResumeEngine(None)
-    service = RunResumeService(engine)
-
-    handled = await service.resume_for_function_run(
-        function_run_id=str(uuid4()), run_status="COMPLETED", output={"x": 1}
-    )
-
-    assert handled is False
-    assert engine.resumed == []
-    assert engine.failures == []
-
-
 async def test_overdue_agent_wait_is_expired_rather_than_left_running():
     """A wait past the configured ceiling fails the run.
 
@@ -204,18 +108,14 @@ async def test_overdue_agent_wait_is_expired_rather_than_left_running():
     engine = FakeEngine()
     service = RunResumeService(engine)
 
-    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-overdue")
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-overdue"))
     wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
 
-    handled = await service._expire_overdue_wait(
-        wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
-        now=datetime.now(timezone.utc),
-    )
+    handled = await _expire(service, wait, now=datetime.now(timezone.utc))
 
     assert handled is True
     assert len(engine.failures) == 1
-    assert engine.failures[0]["external_ref"] == "conversation-overdue"
+    assert engine.failures[0]["external_ref"] == _ref("conversation-overdue")
     assert "did not finish within" in engine.failures[0]["error"]
 
 
@@ -231,14 +131,14 @@ async def test_overdue_agent_wait_is_left_alone_while_the_agent_is_waiting():
     engine = FakeEngine()
     service = RunResumeService(engine)
 
-    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-snoozed")
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-snoozed"))
     wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
 
-    handled = await service._expire_overdue_wait(
+    handled = await _expire(
+        service,
         wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
         now=datetime.now(timezone.utc),
-        agent_status={"status": "WAITING", "wait_reason": "WAIT"},
+        status={"status": "WAITING", "wait_reason": "WAIT"},
     )
 
     assert handled is False
@@ -256,14 +156,14 @@ async def test_a_human_blocked_wait_gets_a_much_larger_ceiling():
     engine = FakeEngine()
     service = RunResumeService(engine)
 
-    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-blocked")
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-blocked"))
     wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
 
-    handled = await service._expire_overdue_wait(
+    handled = await _expire(
+        service,
         wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
         now=datetime.now(timezone.utc),
-        agent_status={"status": "WAITING", "wait_reason": "HUMAN"},
+        status={"status": "WAITING", "wait_reason": "HUMAN"},
     )
 
     assert handled is False
@@ -275,14 +175,14 @@ async def test_a_human_blocked_wait_still_expires_eventually():
     engine = FakeEngine()
     service = RunResumeService(engine)
 
-    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-abandoned")
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-abandoned"))
     wait.created_at = datetime.now(timezone.utc) - timedelta(days=30)
 
-    handled = await service._expire_overdue_wait(
+    handled = await _expire(
+        service,
         wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
         now=datetime.now(timezone.utc),
-        agent_status={"status": "WAITING", "wait_reason": "HUMAN"},
+        status={"status": "WAITING", "wait_reason": "HUMAN"},
     )
 
     assert handled is True
@@ -299,14 +199,14 @@ async def test_an_unknown_wait_reason_is_not_exempt():
     engine = FakeEngine()
     service = RunResumeService(engine)
 
-    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-unknown-reason")
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-unknown-reason"))
     wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
 
-    handled = await service._expire_overdue_wait(
+    handled = await _expire(
+        service,
         wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
         now=datetime.now(timezone.utc),
-        agent_status={"status": "WAITING", "wait_reason": "SOMETHING_NEW"},
+        status={"status": "WAITING", "wait_reason": "SOMETHING_NEW"},
     )
 
     assert handled is True
@@ -321,34 +221,13 @@ async def test_expiry_stops_the_work_it_is_failing_the_run_for():
     engine = FakeEngine()
     service = RunResumeService(engine)
 
-    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-overdue")
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-overdue"))
     wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
 
-    handled = await service._expire_overdue_wait(
-        wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
-        now=datetime.now(timezone.utc),
-    )
+    handled = await _expire(service, wait, now=datetime.now(timezone.utc))
 
     assert handled is True
     assert engine.stopped == [wait]
-
-
-async def test_wait_within_the_ceiling_is_left_alone():
-    engine = FakeEngine()
-    service = RunResumeService(engine)
-
-    wait = _wait(WorkflowRunWaitType.FUNCTION, "run-recent")
-    wait.created_at = datetime.now(timezone.utc) - timedelta(minutes=20)
-
-    handled = await service._expire_overdue_wait(
-        wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
-        now=datetime.now(timezone.utc),
-    )
-
-    assert handled is False
-    assert engine.failures == []
 
 
 async def test_an_agent_step_with_its_own_timeout_is_stopped_at_it():
@@ -357,13 +236,11 @@ async def test_an_agent_step_with_its_own_timeout_is_stopped_at_it():
     engine = FakeEngine()
     service = RunResumeService(engine)
     now = datetime.now(timezone.utc)
-    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-bounded")
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-bounded"))
     wait.payload = {"agent_name": "triage", "timeout_seconds": 1200}
     wait.created_at = now - timedelta(minutes=30)
 
-    handled = await service._expire_overdue_wait(
-        wait, now - timedelta(hours=6), now=now
-    )
+    handled = await _expire(service, wait, now=now)
 
     assert handled is True
     assert "did not finish within 20 min" in engine.failures[0]["error"]
@@ -373,112 +250,49 @@ async def test_an_agent_step_given_longer_than_the_ceiling_keeps_running():
     engine = FakeEngine()
     service = RunResumeService(engine)
     now = datetime.now(timezone.utc)
-    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-long")
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-long"))
     wait.payload = {"agent_name": "triage", "timeout_seconds": 24 * 3600}
     wait.created_at = now - timedelta(hours=10)
 
-    handled = await service._expire_overdue_wait(
-        wait, now - timedelta(hours=6), now=now
-    )
+    handled = await _expire(service, wait, now=now)
 
     assert handled is False
     assert engine.failures == []
 
 
-async def test_time_waits_are_exempt_from_the_ceiling():
-    """A wait-until node is supposed to sit for as long as it was told to."""
+async def test_a_finished_conversation_resumes_rather_than_expires(monkeypatch):
+    """A completion that reached nobody (the cutover's backlog) is applied."""
     engine = FakeEngine()
+    resumed: list[tuple] = []
+
+    async def resume_internal(wait_type, external_ref, output, ctx=None):
+        resumed.append((wait_type, external_ref, output))
+
+    engine.resume_internal = resume_internal
+    engine.agent_adapter.status = {"status": "COMPLETED", "output_data": {"a": 1}}
     service = RunResumeService(engine)
 
-    wait = _wait(WorkflowRunWaitType.TIME, "timer-1")
-    wait.created_at = datetime.now(timezone.utc) - timedelta(days=30)
+    async def no_auth_context(wait):
+        return None
 
-    handled = await service._expire_overdue_wait(
-        wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
-        now=datetime.now(timezone.utc),
-    )
+    monkeypatch.setattr(service, "_run_context_for_wait", no_auth_context)
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-done"))
 
-    assert handled is False
+    again = await service.expire_agent_wait(wait, now=datetime.now(timezone.utc))
+
+    assert again is None
+    assert resumed == [(WorkflowRunWaitType.AGENT, _ref("conversation-done"), {"a": 1})]
     assert engine.failures == []
 
 
-async def test_a_form_wait_gets_the_human_ceiling_not_the_machine_one():
-    """A form is answered by a person, so the machine ceiling must not apply.
-
-    The reason it needs saying: the human ceiling used to be reachable only
-    through an *agent conversation's* `wait_reason`, never through the wait
-    type a FORM node creates.
-    """
+async def test_a_wait_not_due_yet_is_checked_again_at_its_ceiling():
     engine = FakeEngine()
     service = RunResumeService(engine)
+    now = datetime.now(timezone.utc)
+    wait = _wait(WorkflowRunWaitType.AGENT, _ref("conversation-young"))
+    wait.payload = {"agent_name": "triage", "timeout_seconds": 1200}
+    wait.created_at = now - timedelta(minutes=5)
 
-    wait = _wait(WorkflowRunWaitType.HUMAN, None)
-    wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+    again = await service.expire_agent_wait(wait, now=now)
 
-    handled = await service._expire_overdue_wait(
-        wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
-        now=datetime.now(timezone.utc),
-    )
-
-    assert handled is False, "a form waiting two days is ordinary, not a fault"
-    assert engine.failures == []
-
-
-async def test_an_abandoned_form_wait_is_eventually_resolved():
-    """PS-FLOW-011: resolve a stuck run rather than leaving it waiting forever.
-
-    A form assigned to someone who leaves used to hold its run WAITING with no
-    ceiling at all — and the inbox notification expires at 72h, so the only
-    visible trace of it disappeared while the run stayed open.
-    """
-    engine = FakeEngine()
-    service = RunResumeService(engine)
-
-    wait = _wait(WorkflowRunWaitType.HUMAN, None)
-    wait.created_at = datetime.now(timezone.utc) - timedelta(days=90)
-
-    handled = await service._expire_overdue_wait(
-        wait,
-        datetime.now(timezone.utc) - timedelta(hours=6),
-        now=datetime.now(timezone.utc),
-    )
-
-    assert handled is True
-    assert len(engine.failures) == 1
-    assert "Nobody answered" in engine.failures[0]["error"]
-
-
-async def test_the_sweep_asks_for_human_waits_and_polls_nothing_for_them():
-    """The batch must include HUMAN, and must not try to reconcile one.
-
-    There is no source of truth to ask: a form is resolved by somebody
-    answering it. Selecting the type without this would send a form wait into
-    the function adapter with a null external ref.
-    """
-    engine = FakeEngine()
-    requested: list[list] = []
-
-    class _WaitRepo:
-        async def list_active_older_than(
-            self, *, wait_types, created_before, limit, after, **_filters
-        ):
-            requested.append(list(wait_types))
-            wait = _wait(WorkflowRunWaitType.HUMAN, None)
-            wait.created_at = datetime.now(timezone.utc) - timedelta(hours=1)
-            return [wait]
-
-    class _NeverCalled:
-        async def get_run_status(self, run_id):
-            raise AssertionError("a form wait has nothing to poll")
-
-    engine.wait_repo = _WaitRepo()
-    engine.function_adapter = _NeverCalled()
-    engine.agent_adapter = _NeverCalled()
-
-    acted = await RunResumeService(engine).reconcile_stale_waits()
-
-    assert acted == 0
-    assert WorkflowRunWaitType.HUMAN in requested[0]
-    assert engine.failures == []
+    assert again == wait.created_at + timedelta(seconds=1200)

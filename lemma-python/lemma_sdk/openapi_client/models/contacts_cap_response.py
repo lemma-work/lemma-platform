@@ -20,15 +20,20 @@ class ContactsCapResponse:
         organization_id (UUID):
         spent_this_month_usd (float): Spent this calendar month (UTC) answering contacts and people outside the pod in
             groups, on models Lemma provides.
+        answered_contacts (int | Unset): How many contacts its bots have answered so far. Default: 0.
         is_default (bool | Unset): Nobody in the organization set a cap, so the deployment's default applies. Default:
             False.
+        max_contacts (int | None | Unset): How many contacts the organization's bots may answer at all. Absent for no
+            limit.
         monthly_limit_usd (float | None | Unset): The cap that applies this month. Absent when an owner removed it: no
             limit.
     """
 
     organization_id: UUID
     spent_this_month_usd: float
+    answered_contacts: int | Unset = 0
     is_default: bool | Unset = False
+    max_contacts: int | None | Unset = UNSET
     monthly_limit_usd: float | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -37,7 +42,15 @@ class ContactsCapResponse:
 
         spent_this_month_usd = self.spent_this_month_usd
 
+        answered_contacts = self.answered_contacts
+
         is_default = self.is_default
+
+        max_contacts: int | None | Unset
+        if isinstance(self.max_contacts, Unset):
+            max_contacts = UNSET
+        else:
+            max_contacts = self.max_contacts
 
         monthly_limit_usd: float | None | Unset
         if isinstance(self.monthly_limit_usd, Unset):
@@ -53,8 +66,12 @@ class ContactsCapResponse:
                 "spent_this_month_usd": spent_this_month_usd,
             }
         )
+        if answered_contacts is not UNSET:
+            field_dict["answered_contacts"] = answered_contacts
         if is_default is not UNSET:
             field_dict["is_default"] = is_default
+        if max_contacts is not UNSET:
+            field_dict["max_contacts"] = max_contacts
         if monthly_limit_usd is not UNSET:
             field_dict["monthly_limit_usd"] = monthly_limit_usd
 
@@ -67,7 +84,18 @@ class ContactsCapResponse:
 
         spent_this_month_usd = d.pop("spent_this_month_usd")
 
+        answered_contacts = d.pop("answered_contacts", UNSET)
+
         is_default = d.pop("is_default", UNSET)
+
+        def _parse_max_contacts(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        max_contacts = _parse_max_contacts(d.pop("max_contacts", UNSET))
 
         def _parse_monthly_limit_usd(data: object) -> float | None | Unset:
             if data is None:
@@ -81,7 +109,9 @@ class ContactsCapResponse:
         contacts_cap_response = cls(
             organization_id=organization_id,
             spent_this_month_usd=spent_this_month_usd,
+            answered_contacts=answered_contacts,
             is_default=is_default,
+            max_contacts=max_contacts,
             monthly_limit_usd=monthly_limit_usd,
         )
 

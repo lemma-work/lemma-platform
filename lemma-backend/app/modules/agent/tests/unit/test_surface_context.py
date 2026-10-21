@@ -1,6 +1,6 @@
 """Reading a surface off a conversation, including when the metadata is wrong.
 
-`surface_context_from_conversation` narrows six metadata values to `str`. That
+`surface_context_for_run` narrows six metadata values to `str`. That
 narrowing is deliberate: a stored value of another type used to travel into
 `ConversationContext` and fail pydantic there, taking the whole run down, and a
 run that cannot start is a worse answer than a reply missing one field.
@@ -18,9 +18,8 @@ import pytest
 
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import ConversationType
-from app.modules.agent.services.surface_context import (
-    surface_context_from_conversation,
-)
+from app.modules.agent.domain.private_notes import ASKED_IN_LEMMA_KEY
+from app.modules.agent.services.surface_context import surface_context_for_run
 
 pytestmark = pytest.mark.unit
 
@@ -35,8 +34,13 @@ def _conversation(metadata: dict | None) -> Conversation:
     )
 
 
+def _ordinary_run(conversation: Conversation):
+    """A run a surface or a person in the conversation itself started."""
+    return surface_context_for_run(conversation, {"source": "user_message"})
+
+
 def test_a_conversation_with_no_surface_reads_as_all_nulls() -> None:
-    context = surface_context_from_conversation(_conversation(None))
+    context = _ordinary_run(_conversation(None))
 
     assert set(context) == {
         "surface_id",
@@ -55,7 +59,7 @@ def test_a_conversation_with_no_surface_reads_as_all_nulls() -> None:
 def test_stored_strings_are_passed_through() -> None:
     surface_id = uuid4()
 
-    context = surface_context_from_conversation(
+    context = _ordinary_run(
         _conversation(
             {
                 "surface_id": str(surface_id),
@@ -79,7 +83,7 @@ def test_a_value_of_the_wrong_type_is_dropped_rather_than_raised(caplog) -> None
     one ever arrives unconverted the run still starts, minus that field.
     """
     with caplog.at_level("WARNING"):
-        context = surface_context_from_conversation(
+        context = _ordinary_run(
             _conversation({"external_channel_id": -100123, "external_user_id": "42"})
         )
 
@@ -89,9 +93,7 @@ def test_a_value_of_the_wrong_type_is_dropped_rather_than_raised(caplog) -> None
 
 def test_the_dropped_field_is_named_in_a_warning(caplog) -> None:
     with caplog.at_level("WARNING"):
-        surface_context_from_conversation(
-            _conversation({"external_channel_id": -100123})
-        )
+        _ordinary_run(_conversation({"external_channel_id": -100123}))
 
     assert "non_text_metadata_dropped" in caplog.text
     assert "external_channel_id" in caplog.text
@@ -99,9 +101,7 @@ def test_the_dropped_field_is_named_in_a_warning(caplog) -> None:
 
 def test_well_formed_metadata_says_nothing(caplog) -> None:
     with caplog.at_level("WARNING"):
-        surface_context_from_conversation(
-            _conversation({"external_channel_id": "-100123"})
-        )
+        _ordinary_run(_conversation({"external_channel_id": "-100123"}))
 
     assert "non_text_metadata_dropped" not in caplog.text
 
@@ -109,6 +109,27 @@ def test_well_formed_metadata_says_nothing(caplog) -> None:
 def test_a_field_that_is_absent_is_not_a_dropped_field(caplog) -> None:
     """Missing and wrong are different. Only wrong is worth a line."""
     with caplog.at_level("WARNING"):
-        surface_context_from_conversation(_conversation({"surface_platform": "SLACK"}))
+        _ordinary_run(_conversation({"surface_platform": "SLACK"}))
 
     assert "non_text_metadata_dropped" not in caplog.text
+
+
+def test_a_run_asked_in_lemma_talks_over_no_platform() -> None:
+    """One conversation serves a member across Lemma and WhatsApp: the
+    platform it was last heard on is not where a line in Lemma was asked."""
+    heard_on_whatsapp = _conversation(
+        {
+            "surface_id": str(uuid4()),
+            "surface_platform": "WHATSAPP",
+            "external_channel_id": "15556295168",
+            "external_user_id": "919800000000",
+            "conversation_kind": "DM",
+        }
+    )
+
+    asked_in_lemma = surface_context_for_run(
+        heard_on_whatsapp, {"source": "user_message", ASKED_IN_LEMMA_KEY: True}
+    )
+
+    assert all(value is None for value in asked_in_lemma.values())
+    assert _ordinary_run(heard_on_whatsapp)["surface_platform"] == "WHATSAPP"

@@ -1,6 +1,5 @@
 """Company signup stays private and waits for access to the installation org."""
 
-from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -8,11 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.handlers import _context_for_delivery
+from app.modules.agent_surfaces.events.ingest_work import (
+    context_for_delivery as _context_for_delivery,
+)
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
     VerifiedSurfaceIdentity,
@@ -20,7 +20,7 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 from app.modules.agent_surfaces.services.chat_onboarding import (
     ChatOnboardingCoordinator,
 )
-from app.modules.agent_surfaces.services.onboarding_replay import replay_onboarding
+from app.modules.agent_surfaces.services.onboarding_replay import hand_off_onboarding
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
     _ensure_connector_account,
@@ -211,11 +211,7 @@ async def test_channel_signup_waits_for_admin_and_resumes_in_installation_org(
                 PendingChatOnboarding.user_id == user_id
             )
         )
-    await replay_onboarding(
-        pending_id,
-        uow_factory=factory,
-        job_queue=AsyncMock(spec=SharedStreaqJobQueue),
-    )
+    await hand_off_onboarding(factory, pending_id)
 
     # From here the personal route answers instead of `prepare_ingress`, which
     # is where the delivery claim otherwise lives -- so this is the one

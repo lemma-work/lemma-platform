@@ -26,9 +26,15 @@ from app.modules.datastore.domain.ports import (
     DocumentProcessorPort,
 )
 from app.modules.datastore.infrastructure.storage_paths import (
-    build_datastore_child_page_key,
+    FileKeys,
+    readable_keys,
 )
-from app.modules.datastore.services.files.projection import datastore_storage_key
+from app.modules.datastore.services.files.projection import read_stored
+
+
+def _original(keys: FileKeys) -> str:
+    return keys.original
+
 
 logger = get_logger(__name__)
 
@@ -102,9 +108,7 @@ class FilePageRenderer:
         results: dict[int, RenderedPage] = {}
         missing: list[int] = []
         for page_number in page_numbers:
-            key = build_datastore_child_page_key(
-                entity.pod_id, entity.path, page_number
-            )
+            key = readable_keys(entity).page(page_number)
             cached = await self._load_cached(key)
             if cached is not None:
                 results[page_number] = RenderedPage(page_number, cached, True, key)
@@ -114,9 +118,7 @@ class FilePageRenderer:
         if missing:
             rendered = await self._render_missing(entity, missing)
             for page_number, jpeg in rendered.items():
-                key = build_datastore_child_page_key(
-                    entity.pod_id, entity.path, page_number
-                )
+                key = readable_keys(entity).page(page_number)
                 await self._store_cached(key, jpeg, entity.path, page_number)
                 results[page_number] = RenderedPage(page_number, jpeg, False, key)
 
@@ -150,8 +152,7 @@ class FilePageRenderer:
     async def _render_missing(
         self, entity: DatastoreFileEntity, page_numbers: list[int]
     ) -> dict[int, bytes]:
-        source_key = datastore_storage_key(entity)
-        pdf_content = await self.storage.download_file(source_key)
+        pdf_content = await read_stored(self.storage, entity, _original)
         return await self.document_processor.render_pages(
             pdf_content,
             page_numbers,

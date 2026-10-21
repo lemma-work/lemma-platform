@@ -142,46 +142,6 @@ class Settings(BaseSettings):
             "``DB_CONNECTION_SCOPE_STRICT``."
         ),
     )
-    worker_concurrency: int = Field(
-        default=50,
-        description=(
-            "Maximum concurrent streaq tasks on the INTERACTIVE lane per worker "
-            "process. This is a MEMORY and CPU budget, not a database one: a "
-            "task holds a pooled connection only for each unit of work, so "
-            "concurrency no longer has to fit inside ``db_pool_size``. Size it "
-            "from the pod's RAM against the peak footprint of one agent run "
-            "(conversation history plus tool results), and from how much "
-            "event-loop time the tasks need. The bulk lane is budgeted "
-            "separately via ``worker_bulk_concurrency``."
-        ),
-    )
-    worker_lanes: str = Field(
-        default="",
-        description=(
-            "Comma-separated streaq lanes this worker process consumes: "
-            "'interactive', 'bulk', or both. Empty (the default) runs every "
-            "lane, which keeps single-process deployments — the local stack, "
-            "desktop, and today's cloud worker — behaving exactly as before. "
-            "Split deployments set WORKER_LANES=interactive on the latency-"
-            "sensitive worker and WORKER_LANES=bulk on the ingestion worker so "
-            "a large upload can never occupy slots that agent runs need. The "
-            "interactive lane owns process-wide startup and must always be "
-            "present in at least one process. Env: ``WORKER_LANES``."
-        ),
-    )
-    worker_bulk_concurrency: int = Field(
-        default=2,
-        description=(
-            "Maximum concurrent tasks on the BULK lane (document extraction, "
-            "pod import/export) per worker process. This is the real cap on "
-            "concurrent document extractions and therefore the primary lever on "
-            "worker peak RAM during ingestion: each extraction holds the source "
-            "document plus the extractor's response in memory. It replaces the "
-            "old in-task semaphore, which throttled extractions only after they "
-            "had already occupied a worker slot — so bursts blocked unrelated "
-            "work while waiting. Env: ``WORKER_BULK_CONCURRENCY``."
-        ),
-    )
     # --- Thread-offload pool (app.core.concurrency.offload) ---
     # Blocking work (CPU-bound, sync SDKs, KMS) runs in worker threads via
     # run_blocking(). These partition the pool by workload class so one class
@@ -320,30 +280,6 @@ class Settings(BaseSettings):
             "freshness check on this file — a wedged loop stops updating it and "
             "the pod is restarted. Set empty to disable heartbeat writes. Env: "
             "``WORKER_HEARTBEAT_PATH``."
-        ),
-    )
-    worker_shutdown_grace_period_seconds: int = Field(
-        default=10,
-        description=(
-            "Seconds the streaq worker waits for in-flight tasks on SIGTERM "
-            "(streaq grace_period). It stops claiming new work the moment it "
-            "sees the signal, so this is the drain window, not a delay before "
-            "one: enough for an interrupted agent run to finalize its status "
-            "rather than stick in RUNNING. Keep below the orchestrator's "
-            "termination grace period (Kubernetes defaults to 30s) — past that "
-            "the platform SIGKILLs regardless. A longer task is not saved by a "
-            "bigger number here; the job heartbeat recovers it in ~90s."
-        ),
-    )
-    worker_queue_name: str = Field(
-        default="default",
-        description=(
-            "streaq queue (Redis key namespace) this worker process consumes "
-            "from. Production uses the shared 'default' queue, which is also the "
-            "default enqueue target. Overridable so an isolated worker can own a "
-            "dedicated queue and never compete with the shared worker for jobs — "
-            "used by the e2e cancellation test, which SIGTERMs its own worker "
-            "mid-run and must be the sole consumer of the run it dispatches."
         ),
     )
     redis_url: str = Field(
@@ -1009,17 +945,6 @@ class Settings(BaseSettings):
             "take precedence; missing or empty legacy selection means traces-only."
         ),
     )
-    backlog_gauge_interval_seconds: float = Field(
-        default=60.0,
-        ge=0.0,
-        description=(
-            "How often the worker samples queue depth and pending event-table "
-            "rows for the backlog gauges. Matching the metric export interval "
-            "is the useful floor -- sampling faster only costs queries, since "
-            "the exporter reports the latest reading either way. Zero disables "
-            "the sampler. Env: ``BACKLOG_GAUGE_INTERVAL_SECONDS``."
-        ),
-    )
     observability_metrics_export_interval_millis: int = Field(
         default=60000,
         ge=1000,
@@ -1142,21 +1067,18 @@ class Settings(BaseSettings):
         ),
     )
     # Stays in core, alone among the workflow settings, because two modules
-    # read it: `mod:workflow` for its own sweep and `mod:agent_surfaces` to size
-    # a human-wait ceiling from the same number.
+    # read it: `mod:workflow` for its waits' ceilings and `mod:agent_surfaces`
+    # to size a human-wait ceiling from the same number.
     #
-    # An earlier version of this comment said the alternative was "a dependency
-    # the architecture gate refuses". That was wrong and is corrected here:
-    # `check_architecture.py` permits `app.modules.<x>.contracts` imports, and
-    # `schedule/module.py` already imports `workflow.contracts.timers`, so a
+    # `check_architecture.py` permits `app.modules.<x>.contracts` imports, so a
     # contracts-exposed accessor would be legal. The reason is cohesion, not
     # the gate -- one number meaning "how long we wait on a person" should not
     # become a cross-module call to read.
     workflow_wait_max_age_seconds: float = Field(
         default=6 * 60 * 60.0,
         description=(
-            "Longest a workflow run may stay suspended on a single agent or "
-            "function wait before the reconciliation sweep fails it. Without a "
+            "Longest a workflow run may stay suspended on a single agent, "
+            "function or decision wait before it is failed. Without a "
             "ceiling a hung agent holds its run open forever, which reads as a "
             "run that is still going rather than one that broke. This is the "
             "*machine* ceiling; a wait blocked on a person is multiplied by "

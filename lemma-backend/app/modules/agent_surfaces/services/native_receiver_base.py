@@ -1,17 +1,15 @@
 """Shared primitives for native surface receivers (pollers / socket clients).
 
-Kept apart from ``event_receiver_service`` so a per-platform runner module can
-depend on the candidate shape and the receiver key without importing the
-coordinator — which imports the runners, so the reverse would be a cycle.
+Kept apart from the ``surface.receiver`` work handler so a per-platform runner
+module can depend on the candidate shape, the receiver key and the inbox
+without importing the handler -- which imports the runners, so the reverse
+would be a cycle.
 """
 
 from __future__ import annotations
 
 from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 
-from app.core.infrastructure.events.inbox import stable_event_id
-from app.core.infrastructure.events.publisher import EventPublisher
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.domain.source_event_ids import native_source_event_id
 
 import hashlib
@@ -31,8 +29,8 @@ logger = get_logger(__name__)
 class NativeReceiverConflict(RuntimeError):
     """Another consumer already owns this upstream credential.
 
-    The lease this service takes is a Redis key, so it only orders the workers
-    of *one* deployment. Nothing stops a Desktop installation and Lemma Cloud
+    The receiver's work-item lease only orders the workers of *one*
+    deployment. Nothing stops a Desktop installation and Lemma Cloud
     from being configured with the same Telegram bot or Resend inbox, and each
     then takes its own lease from its own Redis and starts consuming.
 
@@ -115,7 +113,9 @@ class ReceiverRunner(Protocol):
         """Run the receiver until it is cancelled."""
 
 
-ReceiverRunnerFactory = Callable[["NativeReceiverCandidate"], ReceiverRunner]
+ReceiverRunnerFactory = Callable[
+    ["NativeReceiverCandidate", "ReceiverInbox"], ReceiverRunner
+]
 
 
 @dataclass(frozen=True)
@@ -125,6 +125,13 @@ class NativeReceiverCandidate:
     surface_ids: tuple[UUID, ...]
     credential_label: str
     credentials: SurfaceCredentials
+    #: The pods the served surfaces belong to; one pod makes the receiver's
+    #: work that pod's.
+    pod_ids: tuple[UUID, ...] = ()
+
+    @property
+    def pod_id(self) -> UUID | None:
+        return self.pod_ids[0] if len(set(self.pod_ids)) == 1 else None
 
 
 def receiver_key(platform: str, label: str, secret: str) -> str:
@@ -143,27 +150,113 @@ def receiver_key(platform: str, label: str, secret: str) -> str:
     return f"{platform}:{label}:{digest}"
 
 
-async def _publish_native_receiver_event(
-    *,
-    source: str,
-    payload: dict[str, Any],
-    receiver_key: str | None,
-    surface_ids: "tuple[UUID, ...] | None" = None,
-) -> None:
-    headers = {"x-lemma-surface-event-mode": "native_receiver"}
-    if receiver_key:
-        headers["x-lemma-surface-receiver-key"] = receiver_key
-    # The receiver is part of the identity, because a provider's id is only
-    # unique within one.
-    source_event_id = native_source_event_id(source, payload, receiver_key=receiver_key)
-    event = SurfaceWebhookReceivedEvent(
-        event_id=stable_event_id({"event_id": source_event_id}),
-        source=source,
-        payload=payload,
-        headers=headers,
-        source_event_id=source_event_id,
-        # Scope downstream ingress to the surfaces this bot actually serves, so a
-        # custom bot's update can't be mis-attributed to another bot's surface.
-        receiver_surface_ids=list(surface_ids) if surface_ids else None,
-    )
-    await EventPublisher.publish(event.stream_name(), event)
+class ReceiverInbox:
+    """Where a native receiver puts what it read, and keeps its place.
+
+    Each upstream message goes through the same acceptor as a webhook
+    (``InboundAcceptor``): classified, answered if it is a tap, stored as a
+    ``surface_inbound_messages`` row with its ``surface.ingest`` item if it is a
+    message. The receiver's cursor (a Telegram offset, a Resend email id) is
+    written in that same transaction, so a crash can neither skip a message
+    nor -- thanks to the row's unique key -- store one twice.
+    """
+
+    def __init__(
+        self,
+        candidate: NativeReceiverCandidate,
+        *,
+        uow_factory: Any | None = None,
+    ) -> None:
+        from app.core.infrastructure.db.session import async_session_maker
+        from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+
+        self.candidate = candidate
+        self.uow_factory = uow_factory or SessionUnitOfWorkFactory(async_session_maker)
+
+    async def load_cursor(self, legacy: Callable[[], Any] | None = None) -> str | None:
+        """The stored cursor; on first run, the one Redis held before (once)."""
+        from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repository import (  # noqa: E501
+            ReceiverStateRepository,
+        )
+
+        async with self.uow_factory() as uow:
+            repository = ReceiverStateRepository(uow.session)
+            if await repository.exists(self.candidate.key):
+                return await repository.load(self.candidate.key)
+        if legacy is None:
+            return None
+        cursor = await legacy()
+        if cursor is not None:
+            await self.store_cursor(str(cursor))
+            logger.info(
+                "agent_surfaces.native_receiver.cursor_converted.observed",
+                platform=self.candidate.platform.value,
+                credential_label=self.candidate.credential_label,
+            )
+        return None if cursor is None else str(cursor)
+
+    async def store_cursor(self, cursor: str | None) -> None:
+        from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repository import (  # noqa: E501
+            ReceiverStateRepository,
+        )
+
+        async with self.uow_factory() as uow:
+            await ReceiverStateRepository(uow.session).store(self.candidate.key, cursor)
+
+    async def accept(
+        self,
+        *,
+        source: str,
+        payload: dict[str, Any],
+        cursor: str | None = None,
+        surface_id: UUID | None = None,
+        source_event_id: str | None = None,
+        receiver_scope: str | None = None,
+    ) -> Any:
+        from app.modules.agent_surfaces.domain.ingress_request import (
+            SurfaceDirectWebhookIngress,
+            SurfacePlatformWebhookIngress,
+        )
+        from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repository import (  # noqa: E501
+            ReceiverStateRepository,
+        )
+        from app.modules.agent_surfaces.services.inbound_acceptor import (
+            InboundAcceptor,
+            InboundDelivery,
+        )
+
+        headers = {
+            "x-lemma-surface-event-mode": "native_receiver",
+            "x-lemma-surface-receiver-key": self.candidate.key,
+        }
+        request = (
+            SurfaceDirectWebhookIngress(
+                surface_id=surface_id, payload=payload, headers=headers
+            )
+            if surface_id is not None
+            else SurfacePlatformWebhookIngress(
+                source=source,
+                payload=payload,
+                headers=headers,
+                # Scoped to the surfaces this bot serves, so a custom bot's
+                # update can't be attributed to another bot's surface.
+                receiver_surface_ids=list(self.candidate.surface_ids) or None,
+            )
+        )
+        key = self.candidate.key
+
+        async def keep_place(uow: Any) -> None:
+            if cursor is not None:
+                await ReceiverStateRepository(uow.session).store(key, cursor)
+
+        return await InboundAcceptor(self.uow_factory).accept(
+            InboundDelivery(
+                request=request,
+                receiver_scope=receiver_scope or key,
+                source_event_id=source_event_id
+                or native_source_event_id(source, payload, receiver_key=key),
+                platform=SurfacePlatform.from_source(source),
+                pod_id=self.candidate.pod_id,
+            ),
+            after_store=keep_place,
+        )

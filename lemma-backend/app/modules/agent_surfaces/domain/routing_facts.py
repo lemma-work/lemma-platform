@@ -42,7 +42,7 @@ class InboundRoutingFacts:
     #: The platform's own event type, where it has several (Slack's
     #: ``app_mention`` against a plain ``message``).
     event_type: str | None = None
-    #: Slack's conversation type (``mpim`` is a group DM).
+    #: The conversation's type (Slack ``mpim``, Teams ``groupChat``: a group DM).
     channel_type: str | None = None
     #: Platform user ids @-mentioned in the message.
     mentioned_user_ids: frozenset[str] = frozenset()

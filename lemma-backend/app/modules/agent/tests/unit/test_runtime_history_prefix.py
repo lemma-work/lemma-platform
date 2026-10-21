@@ -16,13 +16,16 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.modules.agent.domain.entities import AgentRun, Message
+from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
 from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
     AgentRuntimeConfig,
     MessageKind,
     MessageRole,
 )
 from app.modules.agent.services.runtime_history import (
     ELISION_BLOCK_RUNS,
+    STOPPED_BY_MEMBER,
     bound_runtime_history,
     select_runtime_history,
 )
@@ -96,3 +99,25 @@ def test_the_history_is_rewritten_only_at_block_boundaries() -> None:
 
     assert rewritten
     assert all((run_count + 1) % ELISION_BLOCK_RUNS == 0 for run_count in rewritten)
+
+
+def test_a_stopped_run_is_closed_before_what_was_said_after_stop() -> None:
+    """A line typed after Stop rides on the stopped run and is what the next
+    run answers, so the stop is said between the work and that line."""
+    [run] = _conversation(1)
+    run.status = AgentRunStatus.STOPPED
+    run.metadata = {STOP_REQUESTED_AFTER_SEQUENCE: 5}
+    run.messages.append(
+        Message(
+            conversation_id=run.conversation_id,
+            sequence=6,
+            agent_run_id=run.id,
+            role=MessageRole.USER,
+            kind=MessageKind.TEXT,
+            text="what is 2+2?",
+        )
+    )
+
+    texts = [message.text for message in select_runtime_history([run])]
+
+    assert texts[-3:] == ["run 0 message 5", STOPPED_BY_MEMBER, "what is 2+2?"]

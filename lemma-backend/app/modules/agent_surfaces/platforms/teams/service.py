@@ -6,13 +6,16 @@ import mimetypes
 from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 
-import aiohttp
 from pydantic_ai.tools import RunContext
 
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TeamsSurfaceEventMetadata,
+)
+from app.modules.agent_surfaces.platforms.outbound_http import (
+    TimedHttp,
+    outbound_http,
 )
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.channel_history import (
@@ -42,6 +45,8 @@ logger = get_logger(__name__)
 # Graph answers `/content` with a redirect to a pre-signed URL, so redirects have
 # to be followed -- but never with the credential still attached.
 _MAX_DOWNLOAD_REDIRECTS = 5
+#: Per request; the download used to share one 60-second session.
+_DOWNLOAD_TIMEOUT = 60.0
 
 
 class TeamsPlatformService(TeamsChannelHistoryMixin):
@@ -69,11 +74,9 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
             return None
         content_type = str(attachment.get("content_type") or "").strip()
         tenant_id = self.credentials.tenant_id
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=60)
-        ) as session:
+        async with outbound_http(_DOWNLOAD_TIMEOUT) as http:
             plan = await self._resolve_download_plan(
-                session=session,
+                http=http,
                 tenant_id=tenant_id,
                 download_url=download_url,
                 content_type=content_type,
@@ -81,7 +84,7 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
             if plan is None:
                 return None
             content = await self._fetch_content(
-                session=session,
+                http=http,
                 url=plan["url"],
                 headers=plan["headers"],
                 mode=str(plan["mode"]),
@@ -112,7 +115,7 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
     async def _resolve_download_plan(
         self,
         *,
-        session: aiohttp.ClientSession,
+        http: TimedHttp,
         tenant_id: str | None,
         download_url: str,
         content_type: str,
@@ -153,7 +156,7 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
         if is_sharepoint_url(normalized_url):
             # Resolve SharePoint browser/share URLs via Graph shares first.
             shared_item = await _resolve_shared_item_content_request(
-                session=session,
+                http=http,
                 token=graph_token,
                 url=normalized_url,
             )
@@ -162,7 +165,7 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
 
             if is_raw_sharepoint_document_url(normalized_url):
                 content_url = await _resolve_sharepoint_file_content_url(
-                    session=session,
+                    http=http,
                     token=graph_token,
                     url=normalized_url,
                 )
@@ -179,7 +182,7 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
             return None
 
         shared_item = await _resolve_shared_item_content_request(
-            session=session,
+            http=http,
             token=graph_token,
             url=normalized_url,
         )
@@ -195,7 +198,7 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
     async def _fetch_content(
         self,
         *,
-        session: aiohttp.ClientSession,
+        http: TimedHttp,
         url: str,
         headers: dict[str, str],
         mode: str,
@@ -210,33 +213,32 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
         current_url = url
         current_headers = headers
         for _ in range(_MAX_DOWNLOAD_REDIRECTS + 1):
-            async with session.get(
-                current_url, headers=current_headers, allow_redirects=False
+            async with http.stream(
+                "GET", current_url, headers=current_headers
             ) as response:
-                if response.status in {301, 302, 303, 307, 308}:
+                if response.status_code in {301, 302, 303, 307, 308}:
                     location = response.headers.get("Location")
                     if not location:
                         return None
                     current_url = urljoin(current_url, location)
                     current_headers = {}
                     continue
-                if response.status >= 400:
-                    await response.text()
+                if response.status_code >= 400:
                     logger.debug(
                         "agent_surfaces.service.teams_download_file_s_fetch.diagnostic",
-                        status=response.status,
+                        status=response.status_code,
                     )
                     return None
-                # aiohttp's chunk iterator, same cap as the httpx platforms.
-                chunks = response.content.iter_chunked(64 * 1024)
-                return await read_capped(chunks, max_bytes=INBOUND_ATTACHMENT_BYTE_CAP)
+                return await read_capped(
+                    response.aiter_bytes(), max_bytes=INBOUND_ATTACHMENT_BYTE_CAP
+                )
         logger.debug("agent_surfaces.service.teams_download_file_redirects.diagnostic")
         return None
 
 
 async def _resolve_shared_item_content_request(
     *,
-    session: aiohttp.ClientSession,
+    http: TimedHttp,
     token: str,
     url: str,
 ) -> dict[str, Any] | None:
@@ -244,15 +246,14 @@ async def _resolve_shared_item_content_request(
     endpoint = f"{GRAPH_BASE}/shares/{quote(share_token)}/driveItem"
     headers = client.auth_headers(token)
     headers["Prefer"] = "redeemSharingLinkIfNecessary"
-    async with session.get(endpoint, headers=headers) as response:
-        if response.status >= 400:
-            await response.text()
-            logger.debug(
-                "agent_surfaces.service.teams_download_file_could_not.diagnostic",
-                status=response.status,
-            )
-            return None
-        data = await response.json()
+    response = await http.get(endpoint, headers=headers, follow_redirects=True)
+    if response.status_code >= 400:
+        logger.debug(
+            "agent_surfaces.service.teams_download_file_could_not.diagnostic",
+            status=response.status_code,
+        )
+        return None
+    data = response.json()
 
     direct_url = data.get("@microsoft.graph.downloadUrl")
     if direct_url:
@@ -271,7 +272,7 @@ async def _resolve_shared_item_content_request(
 
 async def _resolve_sharepoint_file_content_url(
     *,
-    session: aiohttp.ClientSession,
+    http: TimedHttp,
     token: str,
     url: str,
 ) -> str | None:
@@ -288,7 +289,7 @@ async def _resolve_sharepoint_file_content_url(
         return None
 
     site_id = await _resolve_sharepoint_site_id(
-        session=session,
+        http=http,
         token=token,
         hostname=hostname,
         site_path=site_path,
@@ -304,7 +305,7 @@ async def _resolve_sharepoint_file_content_url(
 
 async def _resolve_sharepoint_site_id(
     *,
-    session: aiohttp.ClientSession,
+    http: TimedHttp,
     token: str,
     hostname: str,
     site_path: str,
@@ -314,14 +315,15 @@ async def _resolve_sharepoint_site_id(
         if site_path == "/"
         else f"{GRAPH_BASE}/sites/{hostname}:{quote(site_path, safe='/')}"
     )
-    async with session.get(endpoint, headers=client.auth_headers(token)) as response:
-        if response.status >= 400:
-            await response.text()
-            logger.debug(
-                "agent_surfaces.service.teams_download_file_could_not.diagnostic",
-                status=response.status,
-            )
-            return None
-        data = await response.json()
+    response = await http.get(
+        endpoint, headers=client.auth_headers(token), follow_redirects=True
+    )
+    if response.status_code >= 400:
+        logger.debug(
+            "agent_surfaces.service.teams_download_file_could_not.diagnostic",
+            status=response.status_code,
+        )
+        return None
+    data = response.json()
     site_id = data.get("id")
     return str(site_id) if site_id else None

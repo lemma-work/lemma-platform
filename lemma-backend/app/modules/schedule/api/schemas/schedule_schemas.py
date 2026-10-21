@@ -1,6 +1,7 @@
 """Schedule API schemas."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -22,7 +23,11 @@ _CONFIG = (
     "TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for "
     "DATASTORE. Any type may set `max_concurrent_runs`: at most that many of "
     "the schedule's runs in flight at once, from 1 to 1000; a fire that finds "
-    "it full is skipped and recorded as skipped, not queued."
+    "it full is skipped and recorded as skipped, not queued. DATASTORE may set "
+    "`bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk "
+    "write or an import does to the trigger. Both default to `skip` (the "
+    "changes are recorded as skipped, aggregated); the pod setting "
+    "`triggers.bulk_writes_default` changes the default for `bulk_writes`."
 )
 
 _INCLUDE_OUTSIDE_ROWS = (
@@ -206,6 +211,16 @@ class ScheduleResponse(BaseModel):
     last_fire_status: ScheduleFireStatus | None = None
     last_error: str | None = None
     consecutive_failures: int = 0
+    paused_reason: str | None = Field(
+        default=None,
+        description=(
+            "Why the platform paused this schedule: `fire_cap` (it fired more "
+            "than its daily ceiling), `consecutive_failures`, `fire_failed` "
+            "(a scheduled run could not be started), or another system "
+            "reason. Absent while it runs, or when a person paused it. "
+            "Reactivating clears it."
+        ),
+    )
     created_at: datetime
     updated_at: datetime
     listening: ListeningResponse | None = Field(
@@ -282,6 +297,44 @@ class ScheduleRunResponse(BaseModel):
 class ScheduleRunListResponse(BaseModel):
     items: list[ScheduleRunResponse]
     limit: int
+
+
+class TriggerSkipReason(StrEnum):
+    BULK_WRITE = "bulk_write"
+    IMPORT_WRITE = "import_write"
+    FIRE_CAP = "fire_cap"
+    LAG_EXCEEDED = "lag_exceeded"
+    CONDITION_NOT_MET = "condition_not_met"
+    OUTSIDE_ROW = "outside_row"
+
+
+class TriggerSkipResponse(BaseModel):
+    """Changes or fires the trigger let pass without firing, aggregated.
+
+    One row stands for every change of one delivered page skipped for one
+    reason: a bulk write of thousands of rows is a handful of rows here.
+    """
+
+    id: UUID
+    reason: TriggerSkipReason = Field(
+        description=(
+            "`bulk_write` / `import_write`: the trigger's write mode for that "
+            "intent is `skip`. `fire_cap`: the trigger reached its daily fire "
+            "ceiling and paused. `lag_exceeded`: the trigger fell further "
+            "behind its table than the change log waits for a subscriber "
+            "(24 hours by default), and these changes were passed over."
+        )
+    )
+    first: str = Field(description="Position of the first skipped change or fire.")
+    last: str = Field(description="Position of the last skipped change or fire.")
+    count: int = Field(description="How many changes or fires this row stands for.")
+    at: datetime
+
+
+class TriggerSkipListResponse(BaseModel):
+    items: list[TriggerSkipResponse]
+    limit: int
+    next_page_token: str | None = None
 
 
 class MessageResponse(BaseModel):

@@ -43,6 +43,7 @@ from app.modules.agent.domain.agent_host_link import (
     AGENT_HOST_LINK_HEARTBEAT_MS,
     AGENT_HOST_LINK_MISSED_HEARTBEATS,
     REVOKED_OR_MISSING_REASON,
+    CommandsBody,
     ControlBody,
     ControlOkBody,
     EventsOkBody,
@@ -67,7 +68,14 @@ from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostProtocolViolation,
     AgentHostRepositoryError,
 )
+from app.modules.agent.infrastructure.agent_host.transfers import (
+    AgentHostTransferStore,
+)
 from app.modules.agent.services.agent_host_link_ops import LinkOpRelay
+from app.modules.agent.services.agent_host_link_outbound import (
+    OutboundStager,
+    command_frames,
+)
 from app.modules.agent.services.agent_host_link_mcp import AgentHostLinkMcp
 from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
 from app.modules.agent.services.agent_host_link_ownership import LinkOwnership
@@ -84,7 +92,9 @@ from app.modules.agent.services.agent_host_link_wire import (
     LinkRequestError,
     LinkSocket,
     LinkWriter,
+    OutboundFrameTooLarge,
     SentCommands,
+    TRANSIENT_ERRORS,
     bearer_secret,
     event_error,
     log_host_reported_error,
@@ -133,6 +143,7 @@ class AgentHostLinkSession:
         resend_after_seconds: float | None = None,
         max_in_flight: int | None = None,
         max_waits: int | None = None,
+        transfers: AgentHostTransferStore | None = None,
     ) -> None:
         # The tunables are read here rather than bound as defaults, so a test
         # that shortens the module's floor reaches the session the route builds.
@@ -155,7 +166,10 @@ class AgentHostLinkSession:
         )
         self._stopped = asyncio.Event()
         self._writer = LinkWriter(socket, on_lost=self._stopped.set)
-        self.ops = LinkOpRelay(writer=self._writer, channels=channels)
+        self._transfers = transfers or AgentHostTransferStore()
+        self.ops = LinkOpRelay(
+            writer=self._writer, channels=channels, transfers=self._transfers
+        )
         self._finished = asyncio.Event()
         self._tasks: set[asyncio.Task[None]] = set()
         self._close_code: int | None = None
@@ -165,6 +179,9 @@ class AgentHostLinkSession:
             store=store, channels=channels, connection_id=self.connection_id
         )
         self._hello: HostHello | None = None
+        #: What is too large for this host's link is staged by this; set by
+        #: ``hello``, which says whether the host can fetch it.
+        self._stager: OutboundStager | None = None
         self._capacity = AgentHostCapacity()
         self._sent = SentCommands(
             RESEND_AFTER_SECONDS
@@ -404,6 +421,15 @@ class AgentHostLinkSession:
             raise LinkClose(LinkCloseCode.UPGRADE_REQUIRED, "upgrade required")
         self._host, self._hello, self._capacity = host, body.hello, body.capacity
         self._ownership.generation = host.link_generation
+        self._writer.host_id = host.host_id
+        self._stager = OutboundStager(
+            host_id=host.host_id,
+            host_fetches_staged=body.staged_bodies,
+            store=self._transfers,
+        )
+        self.ops.host_moves_transfers = bool(
+            body.host_execution and body.host_execution.transfers
+        )
         await self._writer.send_frame(
             ServerFrameType.WELCOME,
             WelcomeBody(
@@ -432,6 +458,7 @@ class AgentHostLinkSession:
                 push_floor_seconds=self._push_floor_seconds,
                 available_runs=lambda: self._capacity.available_runs,
                 stop=self.stop,
+                stager=self._stager,
             ).push_loop(host.host_id)
         )
         self._tasks.add(pusher)
@@ -459,11 +486,32 @@ class AgentHostLinkSession:
             ) from None
         self._capacity = updates.capacity
         self._sent.acknowledged(updates.acknowledged_command_ids)
+        fresh = self._sent.unsent(commands)
+        try:
+            frames = await command_frames(self._stager, fresh, host_id=host.host_id)
+        except TRANSIENT_ERRORS:
+            # The heartbeat is answered regardless: commands whose payload
+            # could not be staged go out on a later push.
+            self._sent.forget([command.command_id for command in fresh])
+            logger.warning(
+                "agent.agent_host_link.push_skipped.degraded",
+                host_id=str(host.host_id),
+                exc_info=True,
+            )
+            frames = []
         await self._writer.send_frame(
             ServerFrameType.CONTROL_OK,
-            ControlOkBody(commands=self._sent.unsent(commands), refused=refused),
+            ControlOkBody(commands=frames[0] if frames else [], refused=refused),
             re=frame.id,
         )
+        # What did not fit beside the answer follows it, a frame at a time.
+        for more in frames[1:]:
+            try:
+                await self._writer.send_frame(
+                    ServerFrameType.COMMANDS, CommandsBody(commands=more)
+                )
+            except OutboundFrameTooLarge:
+                continue  # Logged by the writer; see ``LinkPusher``.
 
     async def _events(self, frame: LinkFrame) -> None:
         host, _ = self._linked()
@@ -479,6 +527,16 @@ class AgentHostLinkSession:
     async def _harnesses(self, frame: LinkFrame) -> None:
         host, _ = self._linked()
         body = HarnessesBody.model_validate(frame.body)
+        for snapshot in body.harnesses:
+            # An option the agent added that this build cannot offer. Named by
+            # its type, never by its content; the rest of the harness stands.
+            if snapshot.skipped_config_options:
+                logger.info(
+                    "agent.agent_host_link.config_options_skipped",
+                    host_id=str(host.host_id),
+                    harness_key=snapshot.harness_key,
+                    skipped=sorted(set(snapshot.skipped_config_options)),
+                )
         try:
             items = await self._store.publish_harnesses(
                 host_id=host.host_id, snapshots=body.harnesses
@@ -508,6 +566,8 @@ class AgentHostLinkSession:
         result = await self._mcp.relay_request(
             McpBody.model_validate(frame.body), host=self._relaying_host()
         )
+        if self._stager is not None:
+            result = await self._stager.tool_result(result)
         await self._writer.send_frame(
             ServerFrameType.MCP_OK, McpOkBody(result=result), re=frame.id
         )

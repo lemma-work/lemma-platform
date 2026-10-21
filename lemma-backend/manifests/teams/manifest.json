@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
   "manifestVersion": "1.17",
-  "version": "1.0.5",
+  "version": "1.2.0",
   "id": "9a826168-a747-4d7d-9c8a-42d9cedf5a06",
   "name": {
     "short": "Lemma",
@@ -54,5 +54,27 @@
   ],
   "validDomains": [
     "lemma.work"
-  ]
+  ],
+  "webApplicationInfo": {
+    "id": "c3e201f2-a8ef-4026-bef4-d3da0153b191",
+    "resource": "https://RscBasedStoreApp"
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "ChannelMessage.Read.Group",
+          "type": "Application"
+        },
+        {
+          "name": "ChatMessage.Read.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "ChannelSettings.Read.Group",
+          "type": "Application"
+        }
+      ]
+    }
+  }
 }

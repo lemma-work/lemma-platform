@@ -1,7 +1,10 @@
 //! Getting a run's events to the workspace, and retrying when they do not
 //! land.
 
+use crate::link::transfer::TransferClient;
 use crate::link::{LinkError, LinkHandle, LinkSlot};
+
+use super::event_payloads::prepare_batch;
 
 use super::{
     Arc, EVENT_LINGER, EVENT_RETRY_MAX, EVENT_RETRY_QUIET, HashMap, HashSet, Journal,
@@ -54,6 +57,9 @@ pub(crate) struct EventFlusher {
     /// Runs whose event batches Lemma has rejected, and how often. Kept per
     /// run so one unhappy run cannot stop delivery for every other.
     pub(crate) rejections: HashMap<Uuid, u32>,
+    /// Where an event's attachments are uploaded before it is sent; see
+    /// `event_payloads`. Without one they stay inline, cut if they must be.
+    pub(crate) blobs: Option<TransferClient>,
 }
 
 /// Most events one delivery pass reads from the journal.
@@ -87,7 +93,7 @@ impl EventFlusher {
         let batches = self.journal.pending_events(target_id, FLUSH_LIMIT)?;
         let read: usize = batches.iter().map(|batch| batch.events.len()).sum();
         flushed.more = read >= FLUSH_LIMIT;
-        for batch in batches {
+        for mut batch in batches {
             let Some(first) = batch.events.first() else {
                 continue;
             };
@@ -110,6 +116,9 @@ impl EventFlusher {
                 );
                 continue;
             }
+            // A transient upload failure is a delivery failure like a link
+            // failure: this pass ends, and the journal is read again later.
+            prepare_batch(&mut batch, self.blobs.as_ref()).await?;
             match link.append_events(&batch).await {
                 Ok(ack) => {
                     self.rejections.remove(&run_id);

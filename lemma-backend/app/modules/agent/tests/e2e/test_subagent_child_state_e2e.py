@@ -19,9 +19,7 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     create_uow_from_session_maker,
 )
-from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
-    AgentRunStatus,
     ConversationStatus,
     MessageKind,
 )
@@ -30,14 +28,12 @@ from app.modules.agent.domain.wait import (
     AgentWaitType,
     AgentWaitWakeReason,
 )
-from app.modules.agent.events.subagent_waits import (
-    resolve_parent_wait_for_finished_child,
-)
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
 from app.modules.agent.services.subagent_service import SubAgentError, SubAgentService
 from app.modules.agent.services.wait_targets import read_target
+from app.modules.agent.services.wait_wake_service import AgentWaitService
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     finish,
@@ -164,14 +160,12 @@ async def test_a_waiting_parent_is_woken_to_the_question_not_a_result(scenario) 
         )
         await uow.commit()
 
-    await resolve_parent_wait_for_finished_child(
-        AgentRunCompletedEvent(
-            conversation_id=child.conversation_id,
-            agent_run_id=asked,
-            status=AgentRunStatus.COMPLETED,
-        ),
-        uow_factory=uow_factory(),
-    )
+    # What the child's `agent.wait.resolve_child` item does when it runs.
+    async with uow_factory()() as uow:
+        await AgentWaitService(uow).resolve_child(
+            child_run_id=asked, child_conversation_id=child.conversation_id
+        )
+        await uow.commit()
 
     (woke,) = [
         m

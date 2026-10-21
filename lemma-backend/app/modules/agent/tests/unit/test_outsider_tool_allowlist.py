@@ -29,9 +29,7 @@ from app.modules.agent.capabilities.outsider_gate import (
     OutsiderToolGateCapability,
 )
 from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
     OUTSIDER_TOOLSETS,
-    OUTSIDERS,
     OutsiderRunRefused,
     refuse_owner_workspace,
 )
@@ -118,7 +116,7 @@ def _stranger_deps(**overrides) -> BaseAgentContext:
         org_id=uuid4(),
         conversation_id=uuid4(),
         is_pod_default_agent=True,
-        audience=Audience.outsiders(),
+        audience=Audience.contact(uuid4()),
         **overrides,
     )
 
@@ -132,7 +130,8 @@ async def test_an_assembled_strangers_run_is_offered_only_the_allow_list(monkeyp
     deps = _stranger_deps()
     conversation = SimpleNamespace(
         id=deps.conversation_id,
-        metadata={AUDIENCE_KEY: OUTSIDERS},
+        metadata={},
+        contact_id=deps.audience.contact_id,
         is_pod_assistant=True,
         type=None,
         parent_id=None,
@@ -159,7 +158,42 @@ async def test_an_assembled_strangers_run_is_offered_only_the_allow_list(monkeyp
     assert offered, "the run was offered nothing at all"
     assert offered <= OUTSIDER_TOOL_NAMES, sorted(offered - OUTSIDER_TOOL_NAMES)
     assert "web_fetch" not in offered
-    assert "message_user" in offered
+    assert "ask_a_person" in offered
+
+
+def _tool_names(toolsets) -> set[str]:
+    return {name for toolset in toolsets for name in getattr(toolset, "tools", {})}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("conversation_kind", "offered"),
+    [("DM", True), ("EMAIL", True), ("CHANNEL", False)],
+    ids=["private-chat", "email-thread", "group"],
+)
+async def test_a_contact_is_offered_their_own_rows_only_where_they_alone_read_it(
+    conversation_kind, offered
+):
+    """In a group, everybody in it would read what the agent quoted back."""
+    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+
+    deps = _stranger_deps()
+    conversation = SimpleNamespace(
+        id=deps.conversation_id,
+        metadata={"conversation_kind": conversation_kind},
+        contact_id=deps.audience.contact_id,
+        is_pod_assistant=True,
+        type=None,
+        parent_id=None,
+    )
+
+    toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
+        agent=None, conversation=conversation
+    )
+
+    names = _tool_names(toolsets)
+    assert ("contact_records" in names) is offered
+    assert ("contact_function" in names) is offered
 
 
 @pytest.mark.anyio

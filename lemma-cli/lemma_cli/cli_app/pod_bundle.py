@@ -101,6 +101,7 @@ from lemma_pod_bundle.portability import (
 from lemma_pod_bundle.apply_fields import (
     SCHEDULE_APPLY_FIELDS,
     SURFACE_APPLY_FIELDS,
+    is_past_one_time_schedule,
     without_time_schedule_filter,
 )
 
@@ -478,7 +479,7 @@ def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int
         return 0
     # Upsert so re-importing an edited data.csv updates existing rows (matched on
     # the table's primary key) instead of failing — idempotent re-seeding.
-    pod_sdk.records.bulk_create(table_name, rows, upsert=True)
+    pod_sdk.records.bulk_create(table_name, rows, upsert=True, intent="import")
     return len(rows)
 
 
@@ -2818,6 +2819,12 @@ def import_pod_bundle(
                 f"[yellow]schedule[/yellow] {schedule_name}: a time schedule's "
                 "filter was left out, because nothing would ever ask it"
             )
+        if is_past_one_time_schedule(payload):
+            console.print(
+                f"[yellow]schedule[/yellow] {schedule_name}: runs once, at a "
+                "time that has passed; not imported"
+            )
+            continue
         payload.setdefault("name", schedule_name)
         existing = existing_schedules.get(schedule_name)
         existing_id = str(existing.get("id") or "") if existing else ""

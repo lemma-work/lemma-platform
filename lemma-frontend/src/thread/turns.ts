@@ -159,6 +159,11 @@ export interface Turn {
      *  notes silently, and this is the platform saying that it did. */
     noted?: Noted[];
     notice?: string;
+    /** What the agent's runtime said about this turn's run while it went —
+     *  a model it no longer offers, a session it lost and restarted. Not in
+     *  the transcript: these arrive on the stream only, so they are held by
+     *  the conversation and laid onto its turns (`withRuntimeNotes`). */
+    runtimeNotes?: string[];
     /** First and last assistant activity, for "Worked for 2m 14s". */
     startedAtMs?: number;
     endedAtMs?: number;
@@ -307,6 +312,9 @@ export interface Streaming {
      *  agent's `comment`, which is the only thing that can say what this step
      *  is *for* while it is still happening. */
     tool: { toolName: string; toolCallId?: string; args?: Record<string, unknown> } | null;
+    /** What the run is waiting on before it can start, in the server's words:
+     *  "Waiting for a free slot on My Mac: 2 runs already going". */
+    waiting?: string | null;
 }
 
 /** What the run is doing right now, as one more step rather than a row of its
@@ -345,6 +353,9 @@ export function liveNote(streaming: Streaming, landed: Note[] = []): Note[] {
         }];
     }
     if (streaming.thinking) return [{ kind: "thought", label: "Thought", detail: streaming.thinking }];
+    /* A run queued behind others on the person's computer has done nothing
+       yet, and "Working" alone over minutes of that reads as stuck. */
+    if (streaming.waiting) return [{ kind: "tool", label: streaming.waiting, detail: "" }];
     return [];
 }
 
@@ -721,4 +732,35 @@ export interface OpenSignIn {
     id: string;
     toolCallId?: string;
     card: SignInAsk;
+}
+
+/** A runtime notice, and the turn that was last when it arrived. */
+export interface RuntimeNote {
+    text: string;
+    /** The id of the turn it belongs to; see `Turn.id`. */
+    turnId: string;
+}
+
+/** The turns with each runtime notice laid onto the turn it arrived during.
+ *
+ *  Anchored by turn id, which survives a pending message being replaced by
+ *  the server's copy. A notice whose turn is no longer drawn — the transcript
+ *  reloaded around it — goes onto the last turn rather than nowhere: the
+ *  sentence is about the run that just went, and dropping it is the bug this
+ *  is here to fix. Turns it does not touch come back as they were. */
+export function withRuntimeNotes(turns: Turn[], notes: readonly RuntimeNote[]): Turn[] {
+    if (notes.length === 0 || turns.length === 0) return turns;
+    const ids = new Set(turns.map((turn) => turn.id));
+    const last = turns[turns.length - 1].id;
+    const byTurn = new Map<string, string[]>();
+    for (const note of notes) {
+        const id = ids.has(note.turnId) ? note.turnId : last;
+        const held = byTurn.get(id) ?? [];
+        if (!held.includes(note.text)) held.push(note.text);
+        byTurn.set(id, held);
+    }
+    return turns.map((turn) => {
+        const held = byTurn.get(turn.id);
+        return held ? { ...turn, runtimeNotes: [...(turn.runtimeNotes ?? []), ...held] } : turn;
+    });
 }

@@ -71,11 +71,6 @@ EXPECTED = [
         False,
     ),
     (
-        "surface_dm_conversation_reset_after_hours",
-        "SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS",
-        24,
-    ),
-    (
         "surface_outsider_turns_per_person_per_10_minutes",
         "SURFACE_OUTSIDER_TURNS_PER_PERSON_PER_10_MINUTES",
         10,
@@ -115,11 +110,6 @@ EXPECTED = [
         "surface_new_contacts_per_surface_per_day",
         "SURFACE_NEW_CONTACTS_PER_SURFACE_PER_DAY",
         200,
-    ),
-    (
-        "surface_contact_follow_ups_per_contact_per_day",
-        "SURFACE_CONTACT_FOLLOW_UPS_PER_CONTACT_PER_DAY",
-        10,
     ),
     (
         "surface_parked_mail_notes_per_surface_per_hour",

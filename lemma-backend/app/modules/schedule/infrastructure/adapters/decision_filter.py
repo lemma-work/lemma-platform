@@ -29,10 +29,6 @@ from app.modules.decisions.contracts import (
 from app.modules.pod.contracts.detached_reads import pod_organization_id_detached
 from app.modules.schedule.domain.interfaces import FilterVerdict
 from app.modules.schedule.domain.schedule import ScheduleEntity
-from app.modules.schedule.infrastructure.adapters.schedule_event_publisher import (
-    DurableScheduleEventPublisher,
-)
-from app.modules.schedule.services.schedule_processor import ScheduleProcessor
 
 logger = get_logger(__name__)
 
@@ -189,11 +185,4 @@ def _instruction(filter_instruction: str) -> str:
         "A schedule's work starts only for the events its filter lets through. "
         "Judge this event against the filter.\n\n"
         f"Filter: {filter_instruction}"
-    )
-
-
-def create_schedule_processor() -> ScheduleProcessor:
-    return ScheduleProcessor(
-        filter_service=DecisionScheduleFilter(),
-        event_publisher=DurableScheduleEventPublisher(),
     )

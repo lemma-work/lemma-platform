@@ -31,7 +31,6 @@ class FakeUnitOfWork(IUnitOfWork):
         self.committed = False
         self.rolled_back = False
         self.collected_events: list[object] = []
-        self._message_bus = None
 
     async def commit(self) -> None:
         self.committed = True
@@ -56,8 +55,22 @@ class FakeUnitOfWork(IUnitOfWork):
         if events:
             self.collected_events.extend(events)
 
-    def set_message_bus(self, message_bus) -> None:
-        self._message_bus = message_bus
+
+class _EmptyResult:
+    def scalar_one_or_none(self) -> None:
+        return None
+
+
+class EmptyResultSession:
+    """A session whose every query finds no row.
+
+    For a unit test whose subject makes an incidental read it is not about --
+    a turn reading the pod's own default runtime, say -- where finding nothing
+    is the ordinary case. Anything that needs a row belongs in an e2e test.
+    """
+
+    async def execute(self, _statement: object) -> _EmptyResult:
+        return _EmptyResult()
 
 
 E = TypeVar("E")

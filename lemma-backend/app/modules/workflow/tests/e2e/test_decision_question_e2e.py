@@ -5,29 +5,28 @@ value; what these tests prove is everything around it -- the run waits on a
 DECISION wait, the answer's route is the branch taken, and a cancelled run is
 not resumed by its answer. No sandbox: every node here is a decision or an end.
 
-The job is driven in-process (`ask_waiting_decision` with the real waits and
-the real decision maker) rather than left to a worker, so the test does not
-depend on which session-scoped fixtures happen to be running. A worker that
-does pick the job up first leaves the in-process call nothing to do, and the
-run ends the same way.
+The ``workflow.decide`` item the suspension wrote is run in-process on the work
+runtime (the real handler and the real decision maker) rather than left to a
+worker, so the test does not depend on which session-scoped fixtures happen to
+be running. A worker that does pick the item up first leaves the in-process
+round nothing to do, and the run ends the same way.
 """
 
 from __future__ import annotations
 
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.decisions.contracts.decide import decision_maker
+from app.core.infrastructure.work import WorkClass, WorkRegistry
+from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.test_support.e2e.waiters import eventually
-from app.modules.workflow.api.dependencies import build_workflow_engine
-from app.modules.workflow.events.decision_task import UnitOfWorkDecisionWaits
+from app.modules.workflow.events.run_work import register_run_work
+from app.modules.workflow.events.step_jobs import register_step_jobs
 from app.modules.workflow.infrastructure.models import WorkflowRunWaitModel
-from app.modules.workflow.services.decision_step import ask_waiting_decision
 
 pytestmark = [pytest.mark.e2e]
 
@@ -98,26 +97,9 @@ async def _workflow(client: AsyncClient, pod_id: str, nodes: list[dict]) -> dict
     return graph.json()
 
 
-class _HoldsTheJob:
-    """A decision port that queues nothing, so no worker can answer first."""
-
-    def __init__(self) -> None:
-        self.asked: list[str] = []
-
-    def ask_once_committed(self, external_ref: str) -> None:
-        self.asked.append(external_ref)
-
-
-async def _start_unqueued(workflow_id: str, user_id: str) -> tuple[str, str]:
-    """Start a run whose decision job is held back: its ref, and the run's id."""
-    held = _HoldsTheJob()
-    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        engine = build_workflow_engine(uow)
-        engine.decision_adapter = held
-        run = await engine.start_run(UUID(workflow_id), UUID(user_id))
-    assert run.status.value == "RUNNING", run
-    [external_ref] = held.asked
-    return external_ref, str(run.id)
+_DECISIONS = WorkRegistry()
+register_step_jobs(_DECISIONS)
+register_run_work(_DECISIONS)
 
 
 async def _start(client: AsyncClient, pod_id: str, name: str) -> dict:
@@ -132,15 +114,16 @@ async def _get(client: AsyncClient, pod_id: str, run_id: str) -> dict:
     return response.json()
 
 
-async def _answer(external_ref: str) -> None:
-    await ask_waiting_decision(
-        external_ref,
-        attempt=1,
-        waits=UnitOfWorkDecisionWaits(SessionUnitOfWorkFactory(async_session_maker)),
-        maker=decision_maker(),
+async def _answer() -> None:
+    """Run the ``workflow.decide`` items the runs' suspensions wrote."""
+    await run_until_idle(
+        async_session_maker,
+        registry=_DECISIONS,
+        classes=[WorkClass.AUTOMATION, WorkClass.EVENTS],
     )
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_a_run_waits_on_its_question_then_takes_the_answers_branch(
     authenticated_client: AsyncClient, fixed_test_org
@@ -156,7 +139,7 @@ async def test_a_run_waits_on_its_question_then_takes_the_answers_branch(
     assert wait["node_id"] == "triage"
     assert wait["payload"]["evidence"]["subject"] == "Charged twice"
 
-    await _answer(wait["external_ref"])
+    await _answer()
     finished = await eventually(
         label="the run to finish once its question is answered",
         probe=lambda: _get(authenticated_client, pod_id, run["id"]),
@@ -179,13 +162,15 @@ async def test_a_run_waits_on_its_question_then_takes_the_answers_branch(
     assert taken == ["triage", expected], taken
 
 
+@pytest.mark.drives_work
 @pytest.mark.asyncio
 async def test_a_cancelled_run_is_not_resumed_by_its_answer(
     authenticated_client: AsyncClient, fixed_test_org, fixed_test_user, db_session
 ):
     pod_id = await _pod(authenticated_client, fixed_test_org["id"])
     workflow = await _workflow(authenticated_client, pod_id, _triage())
-    external_ref, run_id = await _start_unqueued(workflow["id"], fixed_test_user["id"])
+    run = await _start(authenticated_client, pod_id, workflow["name"])
+    run_id, external_ref = run["id"], run["active_wait"]["external_ref"]
 
     cancel = await authenticated_client.post(
         f"/pods/{pod_id}/workflow-runs/{run_id}/cancel"
@@ -193,7 +178,7 @@ async def test_a_cancelled_run_is_not_resumed_by_its_answer(
     assert cancel.status_code == 200, cancel.text
     assert cancel.json()["status"] == "CANCELLED"
 
-    await _answer(external_ref)
+    await _answer()
 
     after = await _get(authenticated_client, pod_id, run_id)
     assert after["status"] == "CANCELLED", after

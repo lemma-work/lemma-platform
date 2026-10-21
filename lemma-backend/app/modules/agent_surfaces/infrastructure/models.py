@@ -12,12 +12,19 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (  # noq
 from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (  # noqa: F401
     WhatsAppNumber,
 )
-from app.modules.agent_surfaces.infrastructure.group_models import (  # noqa: F401
-    AgentSurfaceGroupMessageModel,
-    AgentSurfaceGroupModel,
+from app.modules.agent_surfaces.infrastructure.inbound_delivery_models import (  # noqa: F401
+    SurfaceDeliveryModel,
+    SurfaceInboundMessageModel,
+    SurfaceMessageClaimModel,
+    SurfaceReceiverStateModel,
 )
-from app.modules.agent_surfaces.infrastructure.notification_models import (  # noqa: F401
-    NotificationModel,
+from app.modules.agent_surfaces.infrastructure.slack_configuration_models import (  # noqa: F401
+    SlackConfigurationTokenModel,
+)
+from app.modules.agent_surfaces.infrastructure.slack_manager_models import (  # noqa: F401
+    SlackManagerInstallModel,
+    SlackPendingAppBindingModel,
+    SlackWorkspacePersonModel,
 )
 
 from datetime import datetime
@@ -41,7 +48,6 @@ from app.core.crypto import get_secret_cipher
 from app.core.log.log import get_logger
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     AgentSurfaceStatus,
     ExternalSurfaceUserEntity,
@@ -357,104 +363,3 @@ class AgentSurfaceExternalUser(UUIDAuditBase):
 
     def to_entity(self) -> ExternalSurfaceUserEntity:
         return ExternalSurfaceUserEntity.model_validate(self)
-
-
-class AgentSurfaceConversationLinkModel(UUIDAuditBase):
-    __tablename__ = "agent_surface_conversation_links"
-    __table_args__ = (
-        Index(
-            "ix_agent_surface_link_external_thread",
-            "surface_id",
-            "platform",
-            "external_channel_id",
-            "external_thread_id",
-            "external_user_id",
-            unique=True,
-        ),
-        Index("ix_agent_surface_link_conversation", "conversation_id"),
-        # `find_surface_id_for_external_thread`: the continuity lookup that runs
-        # on *every* inbound message, and the one read here that is not scoped
-        # to a surface -- it exists to find which surface a returning chat
-        # already lives on. Without this it matched the standalone `platform`
-        # index and then filtered and sorted a table that grows per thread.
-        # Column order is the query's; `updated_at DESC` is its `ORDER BY ...
-        # LIMIT 1`.
-        Index(
-            "ix_agent_surface_link_thread_continuity",
-            "platform",
-            "external_thread_id",
-            "external_channel_id",
-            "external_user_id",
-            text("updated_at DESC"),
-        ),
-        # `latest_links_by_surface_and_external_users`: the fan-in read, one row
-        # per person via DISTINCT ON. The pair is the lookup; `last_inbound_at`
-        # is carried because the recency it sorts by is
-        # `coalesce(last_inbound_at, updated_at)`, so this covers the common
-        # case without claiming to serve the coalesce itself. Also
-        # `find_latest_dm_link_for_person`, which is always handed a surface list
-        # so that "this person's earlier private chat" is a lookup on this index
-        # rather than a scan of the platform.
-        Index(
-            "ix_agent_surface_link_surface_member",
-            "surface_id",
-            "external_user_id",
-            text("last_inbound_at DESC"),
-        ),
-    )
-
-    # No index of its own: leading column of `ix_agent_surface_link_external_thread`,
-    # and paired with the member in `ix_agent_surface_link_surface_member`.
-    surface_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_surfaces.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    # `index=True` removed, not the index: it produced a second, identical index
-    # beside `ix_agent_surface_link_conversation` above. Both existed, both were
-    # maintained on every write, and one of them could ever be chosen.
-    conversation_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    # No index of its own: leading column of the continuity index above, which
-    # is the only read that starts from the platform.
-    platform: Mapped[str] = mapped_column(String(50), nullable=False)
-    external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    external_thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # Never filtered on: it records which agent answered this thread and is read
-    # off a row already found. Same for `route_key` below.
-    routed_agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
-    )
-    conversation_kind: Mapped[str] = mapped_column(
-        String(50), default="DM", server_default="DM", nullable=False
-    )
-    route_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    last_event: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    last_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # Nullable, and it stays nullable: the backfill sets it from ``updated_at``
-    # for existing rows, but a row created by an older worker mid-deploy would
-    # still arrive NULL. ``inbound_activity_at`` on the entity is the reader.
-    last_inbound_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    def to_entity(self) -> AgentSurfaceConversationLink:
-        return AgentSurfaceConversationLink(
-            id=self.id,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            surface_id=self.surface_id,
-            conversation_id=self.conversation_id,
-            platform=self.platform,
-            external_channel_id=self.external_channel_id,
-            external_thread_id=self.external_thread_id,
-            external_user_id=self.external_user_id,
-            routed_agent_id=self.routed_agent_id,
-            conversation_kind=self.conversation_kind or "DM",
-            route_key=self.route_key,
-            last_event=self.last_event or {},
-            last_message_id=self.last_message_id,
-            last_inbound_at=self.last_inbound_at,
-        )

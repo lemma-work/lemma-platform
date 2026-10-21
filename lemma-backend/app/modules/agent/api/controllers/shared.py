@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from typing import Annotated
 from uuid import UUID
 
@@ -144,8 +144,15 @@ async def with_keepalive(
     chunks: AsyncGenerator[str, None],
     *,
     interval_seconds: float = STREAM_KEEPALIVE_SECONDS,
+    on_idle: Callable[[], Awaitable[str | None]] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Re-yield ``chunks``, sending a comment frame through a long silence.
+
+    ``on_idle`` is asked once per silent interval; a frame it returns is sent
+    and ends the stream. A run's ending is published once, over Pub/Sub, and a
+    message published while the subscription was reconnecting (a Redis blip)
+    is gone -- without this the client got keepalives forever for a run that
+    had already finished.
 
     The pending pull is held across a timeout rather than cancelled. Cancelling
     an async generator's ``__anext__`` closes the generator, so the naive
@@ -159,6 +166,10 @@ async def with_keepalive(
                 pending = asyncio.ensure_future(anext(chunks))
             done, _ = await asyncio.wait({pending}, timeout=interval_seconds)
             if not done:
+                ending = await on_idle() if on_idle is not None else None
+                if ending is not None:
+                    yield ending
+                    return
                 yield KEEPALIVE_FRAME
                 continue
             try:

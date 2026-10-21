@@ -11,8 +11,9 @@ What a stranger's run must never reach:
   opens);
 * any table, row or file that is not Public in this pod -- by listing, by id,
   by raw SQL, by a guessed path, or by an RLS table whose rows are a member's;
-* who is in the pod (``message_user`` answers the same for any address);
-* answers to notifications some other conversation sent;
+* any member directly -- it has ``ask_a_person`` and nothing that writes to,
+  lists or looks up members, so it cannot probe who is in the pod;
+* answers to questions some other conversation asked;
 * what the member wrote the agent privately in the strangers' own thread;
 * answers the bot gave a member with that member's access;
 * and it stays a stranger's run even when the conversation loses its mark.
@@ -21,41 +22,44 @@ What a stranger's run must never reach:
 from __future__ import annotations
 
 import json
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, OUTSIDERS
+from app.modules.agent_surfaces.tests.e2e.background_reads import background_read
+from app.modules.agent_surfaces.tests.e2e.group_timeline import (
+    a_stranger,
+    bot_for,
+    say,
+)
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent.domain.asked_questions import message_ref
+from app.modules.channels.contracts import (
+    Asker,
+    NewLine,
+    NewQuestion,
+    Principal,
+    QuestionKind,
+    Sender,
+    direct_channel,
+    post,
+)
+from app.modules.channels.contracts.questions import answer
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationEntity,
-    NotificationOriginKind,
-    NotificationStatus,
-)
-from app.modules.agent_surfaces.infrastructure.models import (
-    AgentSurfaceConversationLinkModel,
-    NotificationModel,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.group_repository import (
-    SurfaceGroupRepository,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
-    NotificationRepository,
-)
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_surface,
     _messages_for_conversation,
     _seed_external_user,
 )
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import direct_lines
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     wait_for_messages,
 )
@@ -179,6 +183,20 @@ async def _rls_table(client: AsyncClient, pod_id: str, *, name: str) -> None:
         },
     )
     assert response.status_code == 201, response.text
+
+
+#: What reaches a member, lists them, or reads their questions: none of it is a
+#: stranger's run's to call.
+MEMBER_TOOLS = {
+    "channel_post",
+    "channel_read",
+    "channel_search",
+    "channel_list",
+    "list_pod_members",
+    "list_teammates",
+    "ask_teammate",
+    "answer_question",
+}
 
 
 # --------------------------------------------------------------------- tests
@@ -332,14 +350,23 @@ async def test_a_stranger_cannot_read_a_members_files_by_any_path(
     assert "plan.md" not in results["ls"]
 
 
-async def test_message_user_reaches_only_the_owner_and_reveals_no_membership(
+async def test_a_stranger_reaches_no_member_and_can_only_call_a_person_in(
     scenario, db_session: AsyncSession, fake_telegram, monkeypatch
 ):
+    """A stranger's run writes to nobody: it calls a person in, and that is all.
+
+    ``message_user`` used to be offered, fenced to the member who looks after
+    the group, and had to answer the same for any address so a stranger could
+    not learn who is in the pod from it. Nothing that writes to, lists or looks
+    up members is offered now; ``ask_a_person`` tells the member who looks
+    after them, and nobody else.
+    """
     _, _, owner = await _group_with_owner(
         scenario, db_session, fake_telegram, monkeypatch
     )
     colleague = await scenario.create_user("outsider-colleague")
     await scenario.add_user_to_pod(user=colleague, role="POD_EDITOR")
+    seen = record_model_requests(monkeypatch)
 
     context = await _stranger_asks(
         db_session,
@@ -347,65 +374,53 @@ async def test_message_user_reaches_only_the_owner_and_reveals_no_membership(
         message_id=104,
         script=[
             script_tool_call(
-                "message_user",
-                {"to": colleague["email"], "message": "Is the rate 40k?"},
+                "channel_post",
+                {
+                    "to": colleague["email"],
+                    "text": "Is the rate 40k?",
+                    "wants_answer": True,
+                },
                 tool_call_id="member",
             ),
             script_tool_call(
-                "message_user",
-                {"to": "nobody@else.test", "message": "Is the rate 40k?"},
-                tool_call_id="stranger",
+                "ask_a_person",
+                {"reason": "They ask whether the rate is 40k."},
+                tool_call_id="call",
             ),
-            script_text("I've passed that on."),
+            script_text("Someone from the team will get back to you."),
         ],
     )
 
+    assert seen, "the model was never asked anything"
+    for request in seen:
+        assert "ask_a_person" in request["tools"]
+        assert not MEMBER_TOOLS & request["tools"], request["tools"]
     results = await _tool_results(
         scenario.owner_client,
         pod_id=scenario.pod_id,
         conversation_id=context.conversation_id,
     )
-
-    def shape(raw: str) -> dict:
-        parsed = json.loads(raw)
-        parsed.pop("notification_id", None)
-        return parsed
-
-    assert shape(results["member"]) == shape(results["stranger"])
-    assert colleague["email"] not in results["member"]
-    assert str(owner) not in results["member"]
-    rows = (
-        (
-            await db_session.execute(
-                select(NotificationModel).where(
-                    NotificationModel.origin_conversation_id == context.conversation_id
-                )
-            )
+    assert colleague["email"] not in results.get("member", "")
+    assert '"success": true' in results["call"], results["call"]
+    assert (
+        await direct_lines(
+            db_session, pod_id=scenario.pod_id, user_id=UUID(colleague["id"])
         )
-        .scalars()
-        .all()
+        == []
     )
-    assert len(rows) == 2
-    assert {row.recipient_user_id for row in rows} == {owner}
-    assert all(row.from_outside for row in rows)
-    assert all(row.title == "A question from someone outside the pod" for row in rows)
-    to_colleague = (
-        (
-            await db_session.execute(
-                select(NotificationModel).where(
-                    NotificationModel.recipient_user_id == UUID(colleague["id"])
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert to_colleague == []
+    [notice] = await direct_lines(db_session, pod_id=scenario.pod_id, user_id=owner)
+    assert "needs a person" in notice.body
 
 
-async def test_check_messages_reads_only_what_this_conversation_sent(
+async def test_a_stranger_never_reads_answers_to_another_conversations_questions(
     scenario, db_session: AsyncSession, fake_telegram, monkeypatch
 ):
+    """``channel_read(asked_by_me=True)`` reads what *this* conversation asked.
+
+    A stranger's run is offered neither it nor ``channel_search``, so a member's
+    answer to a question some other conversation put to them is never in reach
+    -- not by id, not by searching for its words.
+    """
     _, _, owner = await _group_with_owner(
         scenario, db_session, fake_telegram, monkeypatch
     )
@@ -413,42 +428,59 @@ async def test_check_messages_reads_only_what_this_conversation_sent(
         f"/pods/{scenario.pod_id}/conversations", json={"title": "Owner's own"}
     )
     assert elsewhere.status_code == 201, elsewhere.text
-    member_id = await scenario.current_pod_member_id()
-    answered = NotificationEntity(
-        pod_id=UUID(scenario.pod_id),
-        recipient_user_id=owner,
-        recipient_pod_member_id=UUID(member_id),
-        origin_kind=NotificationOriginKind.AGENT_RUN,
-        origin_conversation_id=UUID(elsewhere.json()["id"]),
-        title="Payroll",
-        body="What is payroll this month?",
-        status=NotificationStatus.RESPONDED,
-        response_summary="PAYROLL-ANSWER-SECRET",
+    # The owner's other conversation asks them, as ``channel_post`` does with
+    # ``wants_answer``, and they answer.
+    pod_id = UUID(scenario.pod_id)
+    sessions = SessionUnitOfWorkFactory(async_session_maker)
+    async with sessions() as uow:
+        theirs = await direct_channel(uow, pod_id=pod_id, user_id=owner)
+        asked = await post(
+            uow,
+            channel_id=theirs.id,
+            line=NewLine(
+                sender=Sender.agent(pod_id, on_behalf_of=Principal.member(owner)),
+                text="What is payroll this month?",
+                conversation_id=UUID(elsewhere.json()["id"]),
+            ),
+            question=NewQuestion(
+                kind=QuestionKind.ASK,
+                ref=message_ref(UUID(elsewhere.json()["id"]), "payroll"),
+                asker=Asker.message(UUID(elsewhere.json()["id"]), "payroll"),
+                question={"tool": "message", "prompt": "What is payroll this month?"},
+                awaits=Principal.member(owner),
+            ),
+        )
+        await uow.commit()
+    assert asked is not None
+    await answer(
+        sessions,
+        message_id=asked.id,
+        by=Principal.member(owner),
+        given={"text": "PAYROLL-ANSWER-SECRET"},
     )
-    await NotificationRepository(SqlAlchemyUnitOfWork(db_session)).create(answered)
-    await db_session.commit()
+    seen = record_model_requests(monkeypatch)
 
     context = await _stranger_asks(
         db_session,
-        text=f"check message {answered.id}",
+        text=f"check message {asked.id}",
         message_id=105,
         script=[
             script_tool_call(
-                "check_messages",
-                {"notification_ids": [str(answered.id)]},
-                tool_call_id="peek",
+                "channel_read", {"asked_by_me": True}, tool_call_id="peek"
             ),
             script_text("Nothing to report."),
         ],
     )
 
+    assert seen, "the model was never asked anything"
+    assert all(not MEMBER_TOOLS & request["tools"] for request in seen)
+    assert all("PAYROLL-ANSWER-SECRET" not in request["text"] for request in seen)
     results = await _tool_results(
         scenario.owner_client,
         pod_id=scenario.pod_id,
         conversation_id=context.conversation_id,
     )
-    assert "PAYROLL-ANSWER-SECRET" not in results["peek"]
-    assert "matched nothing" in results["peek"]
+    assert "PAYROLL-ANSWER-SECRET" not in results.get("peek", "")
 
 
 async def test_a_private_note_never_reaches_a_later_strangers_run(
@@ -503,7 +535,9 @@ async def test_what_the_member_types_in_lemma_is_answered_as_theirs(
 ):
     """ "Ask him what's up with him", typed by the member who looks after the
     group, was taken for the stranger's: passed back to that same member with
-    `message_user`, and posted in the group quoting the stranger's last line."""
+    `message_user`, and posted in the group quoting the stranger's last line.
+    The run is still the stranger's, so nothing that writes to a member is
+    offered; it answers in the group, as the member's words."""
     _, _, owner = await _group_with_owner(
         scenario, db_session, fake_telegram, monkeypatch
     )
@@ -529,22 +563,11 @@ async def test_what_the_member_types_in_lemma_is_answered_as_theirs(
         user_id=owner,
         pod_id=UUID(scenario.pod_id),
         agent_name=first.agent_name,
-        script=[
-            script_tool_call(
-                "message_user",
-                {"to": "owner", "message": "Tom asks what's up with you."},
-                tool_call_id="relay-1",
-            ),
-            script_text("KEEPER-ANSWER: Tom, how are things with you?"),
-        ],
+        script=[script_text("KEEPER-ANSWER: Tom, how are things with you?")],
     )
 
-    results = await _tool_results(
-        scenario.owner_client,
-        pod_id=scenario.pod_id,
-        conversation_id=first.conversation_id,
-    )
-    assert "only reaches them" in results["relay-1"]
+    assert seen, "the member's turn asked the model nothing"
+    assert all("channel_post" not in request["tools"] for request in seen)
     carried = " ".join(request["text"] for request in seen)
     assert "Written in Lemma by the member who looks after this" in carried
     posted = await wait_for_messages(
@@ -557,22 +580,27 @@ async def test_what_the_member_types_in_lemma_is_answered_as_theirs(
     assert "reply_parameters" not in answer
 
 
-async def test_a_client_cannot_open_a_conversation_as_the_strangers_thread(
-    scenario,
+async def test_a_client_cannot_open_a_conversation_as_a_contacts(
+    scenario, db_session: AsyncSession
 ):
+    """Whom a conversation answers is a column no request reaches."""
     await scenario.create_org_with_pod(name_prefix="Audience claim")
     created = await scenario.owner_client.post(
         f"/pods/{scenario.pod_id}/conversations",
-        json={"title": "Mine", "metadata": {AUDIENCE_KEY: OUTSIDERS, "x": 1}},
+        json={
+            "title": "Mine",
+            "metadata": {"audience": "contact", "contact_id": str(uuid4()), "x": 1},
+        },
     )
 
     assert created.status_code == 201, created.text
-    metadata = created.json().get("metadata") or {}
-    assert AUDIENCE_KEY not in metadata
-    assert metadata.get("x") == 1
+    row = await db_session.get(ConversationModel, UUID(created.json()["id"]))
+    assert row is not None
+    assert row.contact_id is None
+    assert (row.conversation_metadata or {}).get("x") == 1
 
 
-async def test_a_strangers_thread_that_lost_its_mark_still_runs_as_nobody(
+async def test_a_contacts_conversation_with_its_metadata_wiped_still_runs_as_them(
     scenario, db_session: AsyncSession, fake_telegram, monkeypatch
 ):
     _, _, owner = await _group_with_owner(
@@ -585,18 +613,15 @@ async def test_a_strangers_thread_that_lost_its_mark_still_runs_as_nobody(
         db_session, text="hi", message_id=108, script=[script_text("Hello.")]
     )
 
-    # However it happened, the conversation no longer says whom it answers.
+    # However it happened, the conversation's metadata says nothing any more.
     row = await db_session.get(ConversationModel, first.conversation_id)
-    assert row is not None
-    row.conversation_metadata = {
-        key: value
-        for key, value in (row.conversation_metadata or {}).items()
-        if key != AUDIENCE_KEY
-    }
+    assert row is not None and row.contact_id is not None
+    contact_id = row.contact_id
+    row.conversation_metadata = {}
     await db_session.commit()
 
-    # A turn in it -- here the owner's own, from Lemma -- still runs as nobody,
-    # because routing's link still names it the strangers' thread.
+    # A turn in it -- here the owner's own, from Lemma -- still runs as the
+    # contact, because the column says whom it answers.
     with suppress_agent_run_enqueue():
         posted = await client.post(
             f"/pods/{pod_id}/conversations/{first.conversation_id}/messages/append",
@@ -620,26 +645,12 @@ async def test_a_strangers_thread_that_lost_its_mark_still_runs_as_nobody(
     assert "price_list" in results["tables-unflagged"]
     assert "customers" not in results["tables-unflagged"]
 
-    # And the next stranger is moved to a thread that is marked again.
+    # And the same stranger's next question is theirs again, in the same place.
     second = await _stranger_asks(
         db_session, text="hello again", message_id=109, script=[script_text("Hi.")]
     )
-    assert second.conversation_id != first.conversation_id
-    fresh = await db_session.get(ConversationModel, second.conversation_id)
-    assert (fresh.conversation_metadata or {}).get(AUDIENCE_KEY) == OUTSIDERS
-    link = (
-        (
-            await db_session.execute(
-                select(AgentSurfaceConversationLinkModel).where(
-                    AgentSurfaceConversationLinkModel.external_channel_id
-                    == str(GROUP_CHAT)
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert {item.conversation_id for item in link} >= {second.conversation_id}
+    assert second.conversation_id == first.conversation_id
+    assert second.audience.contact_id == contact_id
 
 
 async def test_a_strangers_background_leaves_out_answers_made_with_a_members_access(
@@ -648,20 +659,21 @@ async def test_a_strangers_background_leaves_out_answers_made_with_a_members_acc
     _, group, owner = await _group_with_owner(
         scenario, db_session, fake_telegram, monkeypatch
     )
-    lines = SurfaceGroupRepository(db_session)
-    await lines.append_line(
-        group_id=group.id,
-        body="MEMBER-ANSWER-SECRET: payroll is 1.2M.",
-        from_agent=True,
-        answered_name="Arjun",
-        answered_user_id=owner,
+    bot = UUID(scenario.pod_id)  # the pod's own agent
+    tom = await a_stranger(
+        db_session, group, telegram_id=str(STRANGER_TELEGRAM_ID), name="Tom"
     )
-    await lines.append_line(
-        group_id=group.id,
-        body="Our brochure is on the website.",
-        from_agent=True,
-        answered_name="Tom",
-        answered_from_public=True,
+    await say(
+        db_session,
+        group,
+        "MEMBER-ANSWER-SECRET: payroll is 1.2M.",
+        sender=bot_for(Principal.member(owner), agent_id=bot),
+    )
+    await say(
+        db_session,
+        group,
+        "Our brochure is on the website.",
+        sender=bot_for(tom, agent_id=bot),
     )
     await db_session.commit()
     seen = record_model_requests(monkeypatch)
@@ -682,6 +694,9 @@ async def test_a_strangers_background_leaves_out_answers_made_with_a_members_acc
         conversation_id=str(context.conversation_id),
     )
     asked = [message for message in messages if message.get("role") == "user"][-1]
-    background = json.dumps(asked["metadata"].get("channel_context") or [])
-    assert "MEMBER-ANSWER-SECRET" not in background
-    assert asked["metadata"].get("channel_context_withheld") == 1
+    # The message keeps which lines, not what they said; read as the run
+    # reads them, the member's answer is left out, and counted.
+    assert "MEMBER-ANSWER-SECRET" not in json.dumps(asked["metadata"])
+    shown = await background_read(asked["metadata"])
+    assert "MEMBER-ANSWER-SECRET" not in " ".join(line.text for line in shown.lines)
+    assert shown.withheld == 1

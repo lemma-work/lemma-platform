@@ -155,8 +155,12 @@ class WorkflowRunModel(UUIDAuditBase):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     failed_node_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    started_at: Mapped[datetime | None] = mapped_column(nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     flow: Mapped["WorkflowModel"] = relationship("WorkflowModel", back_populates="runs")
 

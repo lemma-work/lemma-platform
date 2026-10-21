@@ -20,6 +20,40 @@ use crate::protocol::{
 /// Where the link lives, under the workspace's API root.
 pub const LINK_PATH: &str = "agent-host/link";
 
+/// The largest websocket message Lemma's API reads (`WS_MAX_BYTES`). A frame
+/// past it closes the link with 1009, and every run's frames with it, so
+/// this host never sends one: see `LinkHandle::request`.
+pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+
+/// The most one `events` frame carries, encoded: half the message ceiling, so
+/// a batch is never the frame that reaches it. See `Journal::pending_events`.
+pub const EVENT_BATCH_MAX_BYTES: usize = 512 * 1024;
+
+/// The most one event carries once its attachments are uploaded. A bigger one
+/// has its longest strings cut, rather than the run's transcript lost.
+pub const EVENT_MAX_BYTES: usize = EVENT_BATCH_MAX_BYTES - 4 * 1024;
+
+/// The most one transfer carries: one `file.read` or `file.write` chunk.
+pub const TRANSFER_MAX_BYTES: usize = 1024 * 1024;
+
+/// The most one blob carries: the ceiling an event's image had inline.
+pub const BLOB_MAX_BYTES: usize = 5 * 1024 * 1024;
+
+/// The header a transfer's or blob's SHA-256 travels in, as lowercase hex.
+pub const DIGEST_HEADER: &str = "x-lemma-sha256";
+
+/// The key an event's content block names an uploaded blob under, in place
+/// of its inline `data` (or a resource's `blob`).
+pub const BLOB_FIELD: &str = "lemma_blob";
+
+/// The key a part of a frame Lemma staged instead of sending is replaced by
+/// -- a large tool result, a large command payload. See
+/// `TransferClient::resolve_staged`.
+pub const STAGED_FIELD: &str = "lemma_staged";
+
+/// The most one staged body carries.
+pub const STAGED_BODY_MAX_BYTES: usize = 32 * 1024 * 1024;
+
 /// One message on the link.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Frame {
@@ -117,6 +151,10 @@ pub struct HelloBody {
     /// rather than the next reconnect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_execution: Option<HostExecutionStatus>,
+    /// This host fetches a part of a frame Lemma staged rather than sent
+    /// (`STAGED_FIELD`). `connect_with` sets it: the link it opens can.
+    #[serde(default)]
+    pub staged_bodies: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -340,6 +378,43 @@ mod tests {
         assert_eq!(
             contract["link"]["path"].as_str(),
             Some(format!("/{LINK_PATH}").as_str())
+        );
+    }
+
+    /// Both sides bound what rides the link, and agree on where the rest goes.
+    #[test]
+    fn the_bulk_byte_bounds_and_routes_match_the_contract() {
+        let contract = contract();
+        let bulk = &contract["bulk_bytes"];
+        assert_eq!(bulk["max_message_bytes"], MAX_MESSAGE_BYTES);
+        assert_eq!(bulk["event_batch_max_bytes"], EVENT_BATCH_MAX_BYTES);
+        assert_eq!(
+            bulk["inline_data_bytes"],
+            crate::host_exec::wire::INLINE_DATA_BYTES
+        );
+        assert_eq!(bulk["transfer_max_bytes"], TRANSFER_MAX_BYTES);
+        assert_eq!(
+            bulk["transfer_max_bytes"],
+            crate::host_exec::wire::OP_MAX_DATA_BYTES
+        );
+        assert_eq!(bulk["blob_max_bytes"], BLOB_MAX_BYTES);
+        assert_eq!(bulk["digest_header"], DIGEST_HEADER);
+        assert_eq!(bulk["blob_field"], BLOB_FIELD);
+        assert_eq!(bulk["staged_field"], STAGED_FIELD);
+        assert_eq!(bulk["staged_body_max_bytes"], STAGED_BODY_MAX_BYTES);
+        assert_eq!(bulk["hello_flag"], "staged_bodies");
+        let hello = serde_json::to_value(HelloBody {
+            hello: crate::protocol::HostHello::current("i"),
+            capacity: crate::protocol::HostCapacity::default(),
+            host_execution: None,
+            staged_bodies: true,
+        })
+        .unwrap();
+        assert_eq!(hello["staged_bodies"], true);
+        assert_eq!(bulk["transfer_path"], "/agent-host/transfers/{transfer_id}");
+        assert_eq!(
+            bulk["blob_path"],
+            "/agent-host/runs/{run_id}/blobs/{sha256}"
         );
     }
 

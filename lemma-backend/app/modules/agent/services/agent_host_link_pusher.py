@@ -35,11 +35,16 @@ from app.modules.agent.infrastructure.agent_host.channels import (
 )
 from app.modules.agent.services.agent_host_link_mcp import notice_stream
 from app.modules.agent.services.agent_host_link_ops import LinkOpRelay
+from app.modules.agent.services.agent_host_link_outbound import (
+    OutboundStager,
+    command_frames,
+)
 from app.modules.agent.services.agent_host_link_ownership import LinkOwnership
 from app.modules.agent.services.agent_host_link_store import AgentHostLinkStore
 from app.modules.agent.services.agent_host_link_wire import (
     TRANSIENT_ERRORS,
     LinkWriter,
+    OutboundFrameTooLarge,
     SentCommands,
 )
 
@@ -63,6 +68,7 @@ class LinkPusher:
         push_floor_seconds: float,
         available_runs: Callable[[], int],
         stop: Callable[[int, str], None],
+        stager: OutboundStager | None = None,
     ) -> None:
         self._store = store
         self._channels = channels
@@ -74,6 +80,7 @@ class LinkPusher:
         self._push_floor_seconds = push_floor_seconds
         self._available_runs = available_runs
         self._stop = stop
+        self._stager = stager
 
     async def push_loop(self, host_id: UUID) -> None:
         """Push commands on every poke and every floor tick; obey notices."""
@@ -150,10 +157,26 @@ class LinkPusher:
             )
             return
         fresh = self._sent.unsent(commands)
-        if fresh:
-            await self._writer.send_frame(
-                ServerFrameType.COMMANDS, CommandsBody(commands=fresh)
+        try:
+            frames = await command_frames(self._stager, fresh, host_id=host_id)
+        except TRANSIENT_ERRORS:
+            # Staging a payload needs Redis; the next push tries again.
+            self._sent.forget([command.command_id for command in fresh])
+            logger.warning(
+                "agent.agent_host_link.push_skipped.degraded",
+                host_id=str(host_id),
+                exc_info=True,
             )
+            return
+        for frame in frames:
+            try:
+                await self._writer.send_frame(
+                    ServerFrameType.COMMANDS, CommandsBody(commands=frame)
+                )
+            except OutboundFrameTooLarge:
+                # Logged by the writer. Packing keeps every frame under the
+                # ceiling, so this is a command no host can be sent.
+                continue
 
 
 __all__ = ["LinkPusher"]

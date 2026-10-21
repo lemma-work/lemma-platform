@@ -30,6 +30,9 @@ from app.modules.agent.services.conversation_resume_return import (
 
 logger = get_logger(__name__)
 
+#: On the DENY recorded for a pause somebody moved past: nobody decided it.
+SUPERSEDED_KEY = "superseded_by_new_message"
+
 
 async def supersede_stale_pending_interactions(
     *,
@@ -105,7 +108,7 @@ async def _deny_stale_pending_interaction(
         if tool_name == "ask_user"
         else str(tool_args.get("tool_name") or "request_approval")
     )
-    response: JsonObject = {"superseded_by_new_message": True}
+    response: JsonObject = {SUPERSEDED_KEY: True}
     recorded = await repository.record_approval_decision(
         conversation_id=conversation.id,
         approval_id=tool_call_id,

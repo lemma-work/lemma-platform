@@ -23,7 +23,7 @@ from app.modules.agent_surfaces.domain.source_event_ids import (
 from app.modules.agent_surfaces.platforms.resend.inbound import (
     normalize_resend_inbound,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.services.inbound_acceptor import InboundDelivery
 from app.modules.identity.config import identity_settings
 
 
@@ -140,10 +140,10 @@ class _CountingUowFactory:
     """A factory that records how many scopes the route opened.
 
     The webhook routes take no request-scoped session: they open one short
-    scope per lookup and hold nothing across a signature check or a Redis
-    publish. `scopes` is what a test asserts on to keep that true — a route
-    that goes back to a route-lifetime session opens one scope and never
-    closes it before the publish, and `open_scopes` catches that.
+    scope per lookup and hold nothing across a signature check or a provider
+    call. `scopes` is what a test asserts on to keep that true — a route that
+    goes back to a route-lifetime session opens one scope and never closes it
+    before the accept, and `open_scopes` catches that.
     """
 
     def __init__(self) -> None:
@@ -161,39 +161,38 @@ class _CountingUowFactory:
 
 
 @pytest.mark.asyncio
-async def test_platform_webhook_verifies_and_publishes_versioned_event():
+async def test_platform_webhook_verifies_and_accepts_the_delivery():
     body = json.dumps({"update_id": 99, "message": {"text": "hello"}}).encode()
     security = SimpleNamespace(
         assert_platform_request_allowed=Mock(),
         verify_platform_request=AsyncMock(),
     )
+    accept = AsyncMock()
 
-    with patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "EventPublisher.publish",
-        new=AsyncMock(),
-    ) as publish:
-        result = await handle_platform_webhook(
-            "telegram", _request(body), security, uow_factory=_CountingUowFactory()
-        )
+    result = await handle_platform_webhook(
+        "telegram",
+        _request(body),
+        security,
+        uow_factory=_CountingUowFactory(),
+        accept=accept,
+    )
 
     assert result == {"message": "Webhook received"}
     security.assert_platform_request_allowed.assert_called_once_with("TELEGRAM")
     security.verify_platform_request.assert_awaited_once()
-    event = publish.await_args.args[1]
-    assert event.source_event_id == "telegram:shared:99"
-    assert event.source == "telegram"
+    delivery: InboundDelivery = accept.await_args.args[0]
+    assert delivery.source_event_id == "telegram:shared:99"
+    assert delivery.receiver_scope == "shared"
+    assert delivery.request.source == "telegram"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform", ["whatsapp", "WhatsApp", "WHATSAPP"])
-async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
+async def test_signed_reserved_whatsapp_message_queues_only_its_verification(
     monkeypatch, platform
 ):
+    from app.modules.agent_surfaces.api.controllers import webhook_ingest
     from app.modules.agent_surfaces.config import surface_settings
-    from app.modules.identity.domain.events import (
-        WhatsAppMobileVerificationReceivedEvent,
-    )
 
     monkeypatch.setattr(
         identity_settings, "auth_whatsapp_mobile_verification_enabled", True
@@ -208,28 +207,27 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
         assert_platform_request_allowed=Mock(),
         verify_platform_request=AsyncMock(),
     )
+    enqueue = AsyncMock()
+    monkeypatch.setattr(webhook_ingest, "add_whatsapp_verification_work", enqueue)
 
-    with patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "EventPublisher.publish",
-        new=AsyncMock(),
-    ) as publish:
-        result = await handle_platform_webhook(
-            platform,
-            _request(body),
-            security,
-            uow_factory=_CountingUowFactory(),
-        )
+    publish = AsyncMock()
+    result = await handle_platform_webhook(
+        platform,
+        _request(body),
+        security,
+        uow_factory=_CountingUowFactory(),
+        accept=publish,
+    )
 
     # Any spelling of the path reaches the verification-code branch; it used to
     # be compared case-sensitively after a case-insensitive allow-list.
     assert result == {"message": "Verification message received"}
     security.verify_platform_request.assert_awaited_once()
-    publish.assert_awaited_once()
-    event = publish.await_args.args[1]
-    assert isinstance(event, WhatsAppMobileVerificationReceivedEvent)
-    assert event.sender_wa_id == "14155552671"
-    assert event.whatsapp_message_id == "wamid.verify-1"
+    publish.assert_not_awaited()
+    enqueue.assert_awaited_once()
+    queued = enqueue.await_args.args[1]
+    assert queued.sender_wa_id == "14155552671"
+    assert queued.whatsapp_message_id == "wamid.verify-1"
 
 
 @pytest.mark.asyncio
@@ -248,26 +246,23 @@ async def test_reserved_whatsapp_text_routes_normally_when_verification_is_disab
         verify_platform_request=AsyncMock(),
     )
 
-    with patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "EventPublisher.publish",
-        new=AsyncMock(),
-    ) as publish:
-        result = await handle_platform_webhook(
-            "whatsapp",
-            _request(_reserved_whatsapp_message()),
-            security,
-            uow_factory=_CountingUowFactory(),
-        )
+    accept = AsyncMock()
+    result = await handle_platform_webhook(
+        "whatsapp",
+        _request(_reserved_whatsapp_message()),
+        security,
+        uow_factory=_CountingUowFactory(),
+        accept=accept,
+    )
 
     assert result == {"message": "Webhook received"}
-    publish.assert_awaited_once()
-    assert isinstance(publish.await_args.args[1], SurfaceWebhookReceivedEvent)
+    accept.assert_awaited_once()
+    assert isinstance(accept.await_args.args[0], InboundDelivery)
 
 
 @pytest.mark.asyncio
-async def test_resend_webhook_resolves_surface_before_publishing():
-    surface = SimpleNamespace(id=uuid4())
+async def test_resend_webhook_resolves_surface_before_accepting():
+    surface = SimpleNamespace(id=uuid4(), pod_id=uuid4())
     repository = SimpleNamespace(get_active_by_address=AsyncMock(return_value=surface))
     service = SimpleNamespace(surface_repository=repository)
     security = SimpleNamespace(verify_resend_request=AsyncMock())
@@ -282,66 +277,57 @@ async def test_resend_webhook_resolves_surface_before_publishing():
     ).encode()
 
     factory = _CountingUowFactory()
-    with (
-        patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
-            "EventPublisher.publish",
-            new=AsyncMock(),
-        ) as publish,
-        patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_ingest."
-            "get_surface_service",
-            return_value=service,
-        ),
+    accept = AsyncMock()
+    with patch(
+        "app.modules.agent_surfaces.api.controllers.webhook_ingest.get_surface_service",
+        return_value=service,
     ):
         result = await handle_platform_webhook(
-            "resend", _request(body), security, uow_factory=factory
+            "resend", _request(body), security, uow_factory=factory, accept=accept
         )
 
     assert result == {"message": "Webhook received"}
-    # The address lookup opened and closed its own scope; the publish that
+    # The address lookup opened and closed its own scope; the accept that
     # follows holds nothing.
     assert (factory.scopes, factory.open_scopes) == (1, 0)
     security.verify_resend_request.assert_awaited_once()
     repository.get_active_by_address.assert_awaited_once_with(
         platform="RESEND", address="pod@ops.lemma.work"
     )
-    event = publish.await_args.args[1]
-    assert event.surface_id == surface.id
-    assert event.source_event_id == f"resend:{surface.id}:email-1"
+    delivery: InboundDelivery = accept.await_args.args[0]
+    assert delivery.request.surface_id == surface.id
+    assert delivery.receiver_scope == str(surface.id)
+    assert delivery.source_event_id == f"resend:{surface.id}:email-1"
 
 
 @pytest.mark.asyncio
-async def test_surface_webhook_verifies_binding_and_publishes_surface_id():
-    surface = SimpleNamespace(id=uuid4(), surface_type=SurfacePlatform.WHATSAPP)
+async def test_surface_webhook_verifies_binding_and_accepts_for_the_surface():
+    surface = SimpleNamespace(
+        id=uuid4(), surface_type=SurfacePlatform.WHATSAPP, pod_id=uuid4()
+    )
     service = SimpleNamespace(get_surface=AsyncMock(return_value=surface))
     security = SimpleNamespace(verify_surface_request=AsyncMock())
     body = json.dumps({"id": "provider-event-1"}).encode()
 
     factory = _CountingUowFactory()
-    with (
-        patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
-            "EventPublisher.publish",
-            new=AsyncMock(),
-        ) as publish,
-        patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
-            "get_surface_service",
-            return_value=service,
-        ),
+    accept = AsyncMock()
+    with patch(
+        "app.modules.agent_surfaces.api.controllers.webhook_controller."
+        "get_surface_service",
+        return_value=service,
     ):
         result = await handle_surface_webhook(
-            surface.id, _request(body), security, uow_factory=factory
+            surface.id, _request(body), security, uow_factory=factory, accept=accept
         )
 
     assert result == {"message": "Webhook received"}
     assert (factory.scopes, factory.open_scopes) == (1, 0)
     service.get_surface.assert_awaited_once_with(surface.id)
     security.verify_surface_request.assert_awaited_once()
-    event = publish.await_args.args[1]
-    assert event.surface_id == surface.id
-    assert event.source_event_id == f"whatsapp:{surface.id}:provider-event-1"
+    delivery: InboundDelivery = accept.await_args.args[0]
+    assert delivery.request.surface_id == surface.id
+    assert delivery.pod_id == surface.pod_id
+    assert delivery.source_event_id == f"whatsapp:{surface.id}:provider-event-1"
 
 
 def test_the_resend_webhook_and_the_resend_poller_mint_one_id_for_one_email():

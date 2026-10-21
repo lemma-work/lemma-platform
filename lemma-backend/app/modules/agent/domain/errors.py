@@ -99,8 +99,8 @@ class RuntimeProfileConflictError(AgentModuleError):
     def __init__(
         self,
         message: str = (
-            "This model was changed by someone else while you were editing it; "
-            "reload and try again"
+            "These provider settings were changed by someone else while you "
+            "were editing them; reload and try again"
         ),
     ):
         super().__init__(message, code="RUNTIME_PROFILE_CONFLICT", status_code=409)

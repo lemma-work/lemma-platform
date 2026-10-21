@@ -866,7 +866,7 @@ def _with_run_context(*sections: str) -> BaseAgentContext:
 
 
 def test_what_is_owed_rides_in_the_turn_not_the_system_prompt() -> None:
-    """Open notifications change the moment somebody answers, and the system
+    """Open questions change the moment somebody answers, and the system
     prompt is delivered once per provider session -- so they go with the turn,
     ahead of its history."""
     payload = run_start_payload(
@@ -874,15 +874,15 @@ def test_what_is_owed_rides_in_the_turn_not_the_system_prompt() -> None:
         conversation=_conversation(),
         messages=_transcript(),
         ctx=_with_run_context(
-            "# Open notifications\nAnswer with `respond_to_notification`."
+            "## Waiting on this person\nAnswer with `answer_question`."
         ),
         agent_run_id=uuid7(),
         runtime_instructions="",
         carries_history=True,
     )
     prompt = payload["prompt"]
-    assert "respond_to_notification" in str(prompt["user_prompt"])
-    assert "respond_to_notification" not in str(prompt["system_prompt"])
+    assert "answer_question" in str(prompt["user_prompt"])
+    assert "answer_question" not in str(prompt["system_prompt"])
 
 
 def test_a_task_list_change_does_not_re_deliver_the_instructions() -> None:

@@ -21,9 +21,9 @@ from lemma_cli.cli_core.chat import (
     ChatRenderer,
     StreamEvent,
     extract_final_result,
-    iter_sse_events,
     render_chat_stream,
 )
+from lemma_cli.cli_core.sse import iter_sse_events
 
 
 _TRANSCRIPT = (

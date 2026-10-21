@@ -48,7 +48,7 @@ _NOT_A_CONTACT = "This conversation is not with a contact."
 _STILL_RUNNING = (
     "That is taking longer than expected and has not finished. It may still "
     "have gone through, so do not tell them it failed and do not try it again; "
-    "tell them it is in hand, and pass it on with message_user if it matters."
+    "tell them it is in hand, and call ask_a_person if it matters."
 )
 
 _JSON_SCALARS = (str, int, float, bool, list, dict)
@@ -107,8 +107,9 @@ class ContactFunctionRequest(BaseModel):
     input: JsonObject = Field(
         default_factory=dict,
         description=(
-            "The function's input. Who is asking is added for you; never put "
-            "an id for them here."
+            "The function's input. Who is asking, and the email addresses and "
+            "phone numbers they have proved, are added for you; never put an "
+            "id, email or phone number for them here."
         ),
     )
 
@@ -176,8 +177,8 @@ def build_contact_toolset(
             return {
                 "success": False,
                 "error": (
-                    "That did not go through. Tell them plainly, and pass it on "
-                    "with message_user if it matters."
+                    "That did not go through. Tell them plainly, and call "
+                    "ask_a_person if it matters."
                 ),
             }
         return {

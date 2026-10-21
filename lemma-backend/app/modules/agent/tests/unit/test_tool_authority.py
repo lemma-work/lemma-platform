@@ -16,6 +16,7 @@ import pytest
 
 from app.modules.agent.domain.context import AgentContext, ApprovedExecution
 from app.modules.agent.tools.authority import workload_actor_id, workspace_principal
+from app.modules.test_support import source_tree
 
 pytestmark = pytest.mark.unit
 
@@ -54,10 +55,10 @@ def test_no_agent_module_builds_its_own_delegated_context() -> None:
     again: it would not know about `ApprovedExecution`.
     """
     offenders = []
-    for path in _AGENT_MODULE.rglob("*.py"):
+    for path in source_tree.python_files(_AGENT_MODULE):
         if "tests" in path.parts or path == _THE_ONE_PLACE:
             continue
-        for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+        for node in ast.walk(source_tree.tree(path)):
             if (
                 isinstance(node, ast.Attribute)
                 and node.attr == "build_delegated_workload_context"

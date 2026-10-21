@@ -172,40 +172,44 @@ Memory folders are found by walking down from ones that exist (`/`, then
 `/memory`, then `agents`…; `/me` for private notes). Listing a folder nobody
 created is a 400, not an empty list, so paths are never asked for blind.
 
-## Groups
+## Channels
 
-A space's group chats are a place in it: `/t/{pod}/groups`, and one group at
-`/t/{pod}/group/{id}`. Every WhatsApp group, Telegram group and Slack channel
-any of its bots is in, from `podGroups`.
+A space's channels are a place in it: `/t/{pod}/channels`, and one channel at
+`/t/{pod}/channel/{id}`, behind the flag Groups had (`groups`). A channel is one
+shared timeline, fed by outside places — a WhatsApp or Telegram group, a Slack
+channel, an email thread, a web chat — or by none. `/groups` and `/group/{id}`
+still open the list. Styles in `src/styles/channels.css`; words and readers in
+`src/channels/model.ts`, `sources.ts` and `mentions.ts`.
 
-- A row says the platform, the agent when it is not the space's own, who has
-  spoken there, who answers people outside the space, and when it last moved.
-  Questions waiting on you sit above the list; their count is the sidebar's
-  badge beside Groups.
-- New group offers only what the space can do. A platform its own bot is not
-  connected to is offered as connecting it, never as a dead option. Each
-  platform lets the bot in its own way — WhatsApp's number makes the group
-  and you share the link, Telegram adds it through a one-use link, Slack is
-  `/invite` — and each sheet waits, visibly, for the group to arrive.
-- A group's page answers what is waiting through the notification it came
-  as, and the bot relays the answer. People are In the space, Not in it (a
-  Lemma account; Invite opens Share), or Not recognised — which offers
-  nothing, because linking somebody else's chat account would hand them its
-  owner's access. Slack keeps its own history, so its page links there.
-- Every member reads every group, except what the bot said to one member
-  with that member's own access: the others see whom it answered, never what
-  it said.
-- Only the member who answers for a group's outsiders, or an admin of the
-  space, switches the group or takes it over; anybody else is told who can,
-  in place of the controls. An admin's change is told to that member. A bot
-  also has its own switch, "Answer people outside {space}", in its channel
-  settings; off, it closes every group the bot is in, and a group's page says
-  so and links there.
-- The composer in a conversation that lives on a chat platform starts on
-  Reply in the person's own DM or email thread, and on Note anywhere others
-  read along. The last choice is kept per conversation, in this browser.
-- Only the sample's Marketing has groups; every other sample space opens on
-  the first run.
+- The list is cut three ways: your own channel with the space (another
+  member's is never listed), the groups, and — for an editor — each contact's.
+  A row says where it is fed from, its last line, and what is new for you:
+  a count, an @ for a mention, a dot for a question only you can answer. A
+  contact asking for a person says "Needs a person". The sidebar's badge is
+  the inbox's: questions first, then mentions, then channels with news.
+- New channel makes one in Lemma with people of the space. Add to a group
+  offers only what the space can do. A platform its own bot is not connected
+  to is offered as connecting it. WhatsApp's number makes the group and you
+  share the link, Telegram adds the bot through a one-use link, Slack is
+  `/invite` — and each sheet waits, visibly, for the group's channel to arrive.
+- A channel's page reads oldest to newest and keeps your place while you read
+  back. A line says who said it — an agent's says whom it acted for, "Lem,
+  for Priya" — where, and when. A note to members is set apart; an answer
+  made with another member's access says whom it answered and that only they
+  can read it; a deleted line keeps its place, empty. A question waiting on
+  you is answered on the line, as the bell answers it; anyone else's says
+  whom it waits on.
+- An agent answers when @mentioned; in your own channel the space answers
+  every line. Where something outside hears the channel, a line can be a
+  note to members only; where several places do, it can go to one of them.
+- About this channel: what it is, how you hear of it, who is in it, and its
+  places. A group's places carry their settings — who answers people outside
+  the space, from what is Public, and the invite link. Only the member who
+  answers for its outsiders, or an admin of the space, switches it or takes
+  it over; anybody else is told who can. A contact's channel offers who it
+  is assigned to, its status, when it is handed back to the agent, and an
+  "Agent answers" switch.
+- The sample answers from `SAMPLE_CHANNELS`, one of each thing a page draws.
 
 ## Contacts
 

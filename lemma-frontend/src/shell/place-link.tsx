@@ -3,9 +3,9 @@
 import type { AnchorHTMLAttributes, MouseEvent } from "react";
 import { NOWHERE, writeAddress } from "./address";
 
-/** The address of one group's page. */
-export function groupHref(podId: string, groupId: string): string {
-    return writeAddress({ ...NOWHERE, podId, tabId: "group:" + groupId });
+/** The address of one channel. */
+export function channelHref(podId: string, channelId: string): string {
+    return writeAddress({ ...NOWHERE, podId, tabId: "channel:" + channelId });
 }
 
 /** Somewhere in the workspace, from a component the shell hands no callback

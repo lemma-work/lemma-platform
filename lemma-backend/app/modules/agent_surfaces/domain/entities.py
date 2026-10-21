@@ -137,12 +137,19 @@ def platform_value_for_source(source: str) -> str | None:
 _GROUPS_NEED_NO_ROUTE = frozenset({SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP})
 
 
-def is_slack_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
-    """A Slack conversation between several people and the bot (an ``mpim``)."""
-    return (
-        event.platform is SurfacePlatform.SLACK
-        and InboundRoutingFacts.of(event).channel_type == "mpim"
-    )
+#: What each workspace platform calls a chat of several people and the bot.
+_GROUP_DM_TYPES = {
+    SurfacePlatform.SLACK: "mpim",
+    SurfacePlatform.TEAMS: "groupchat",
+}
+
+
+def is_group_dm(event: ParsedInboundSurfaceEvent) -> bool:
+    """A chat between several people and the bot, outside any channel: a Slack
+    ``mpim`` or a Teams group chat. Somebody started it with the bot in it."""
+    kind = _GROUP_DM_TYPES.get(event.platform)
+    channel_type = InboundRoutingFacts.of(event).channel_type
+    return kind is not None and (channel_type or "").lower() == kind
 
 
 class ExternalSurfaceUserEntity(Entity):
@@ -196,6 +203,12 @@ class SurfaceLifecycleKind(StrEnum):
     JOINED_CHANNEL = "JOINED_CHANNEL"
     # Someone opened the app's own surface (Slack's App Home / agent DM tab).
     HOME_OPENED = "HOME_OPENED"
+    # The app lost its tokens here: uninstalled, or its bot token revoked. Names
+    # no person and is answered by no one -- the token to answer with is gone.
+    # The one kind with no actor, so the one not authorized by who caused it:
+    # the request's signature is the authority, and its verified receivers are
+    # the scope (``services/app_uninstall``).
+    UNINSTALLED = "UNINSTALLED"
 
 
 class ParsedSurfaceLifecycleEvent(BaseModel):
@@ -203,8 +216,9 @@ class ParsedSurfaceLifecycleEvent(BaseModel):
 
     A message becomes a conversation; an interaction resumes a paused run. These
     do neither — nothing here reaches an agent. They are the platform telling us
-    the app's own situation changed, and the only correct response is to
-    configure something or to offer to.
+    the app's own situation changed, and the response is to configure
+    something or to offer to -- or, for UNINSTALLED, to stand down what ran on
+    the app, which nobody is asked about because nobody can answer.
 
     Kept a separate contract on purpose: folding them into the message parser
     would mean every consumer of ``ParsedInboundSurfaceEvent`` grows a branch for
@@ -216,9 +230,14 @@ class ParsedSurfaceLifecycleEvent(BaseModel):
     tenant_id: str | None = None
     external_channel_id: str | None = None
     # Who caused it: the inviter for JOINED_CHANNEL, the viewer for HOME_OPENED.
+    # None for UNINSTALLED: Slack names nobody, and the event is not authorized
+    # by an actor but by the signature of the app it is about.
     actor_external_user_id: str | None = None
     # The group's own name, where the event carries it (Telegram's does).
     channel_title: str | None = None
+    # UNINSTALLED only: the bot users whose tokens went. None means all of the
+    # app's -- an uninstall takes every one, a revocation names the ones it took.
+    revoked_identity_ids: list[str] | None = None
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -260,6 +279,11 @@ class ResolvedSurfaceUser(BaseModel):
     email: str | None = None
     phone: str | None = None
     display_name: str | None = None
+    #: Whether Slack calls them a guest (``is_restricted`` or
+    #: ``is_ultra_restricted``): in the workspace, let in from outside it.
+    #: ``None`` where Slack said neither -- no profile, another platform -- and
+    #: then they are not known *not* to be one.
+    is_guest: bool | None = None
 
 
 class AgentSurfaceStatus(StrEnum):
@@ -455,14 +479,6 @@ class AgentSurfaceEntity(AggregateRoot):
         expected = tenant_key(self)
         return bool(expected) and bool(tenant_id) and expected == tenant_id
 
-    def should_ignore_sender(self, sender_external_user_id: str | None) -> bool:
-        if self.surface_type is SurfacePlatform.SLACK:
-            return bool(
-                sender_external_user_id
-                and self.surface_identity_id == sender_external_user_id
-            )
-        return False
-
     def matches_channel(self, channel_id: str | None) -> bool:
         if not channel_id:
             return False
@@ -514,14 +530,14 @@ class AgentSurfaceEntity(AggregateRoot):
         # groups have no allow-list — being added to the group is the
         # authorization — so any group is accepted (the @mention gate below, plus
         # the pod-membership check on the sender, still apply).
-        # A Slack group DM is the Telegram case too: somebody started it with
-        # the bot in it, so there is no channel to allow-list and no setup
+        # A Slack or Teams group DM is the Telegram case too: somebody started
+        # it with the bot in it, so there is no channel to allow-list and no setup
         # prompt to answer -- being in it is the authorization. A WhatsApp
         # group is one the bot created at a member's request, and ingress has
         # already narrowed it to the surface that created it.
         if (
             self.surface_type not in _GROUPS_NEED_NO_ROUTE
-            and not is_slack_group_dm(event)
+            and not is_group_dm(event)
             and not self.matches_channel(event.external_channel_id)
         ):
             return False
@@ -551,36 +567,3 @@ _TENANT_KEY: dict[SurfacePlatform, Callable[[AgentSurfaceEntity], str | None]] =
     SurfacePlatform.TEAMS: lambda surface: surface.external_tenant_id,
     SurfacePlatform.SLACK: lambda surface: surface.external_workspace_id,
 }
-
-
-class AgentSurfaceConversationLink(Entity):
-    surface_id: UUID
-    conversation_id: UUID
-    platform: str
-    external_channel_id: str | None = None
-    external_thread_id: str
-    external_user_id: str | None = None
-    routed_agent_id: UUID | None = None
-    conversation_kind: str = "DM"
-    route_key: str | None = None
-    last_event: dict[str, Any] = Field(default_factory=dict)
-    last_message_id: str | None = None
-    # When this person last wrote to us. Distinct from ``updated_at``, which an
-    # outbound notification also bumps — keying the DM reset off ``updated_at``
-    # means a proactive message silently suppresses the reset and leaks
-    # yesterday's context into today. Also the ranking key when choosing which of
-    # someone's channels to reach them on: freshest inbound is the best available
-    # guess at where they are actually looking.
-    last_inbound_at: datetime | None = None
-
-    @property
-    def inbound_activity_at(self) -> datetime:
-        """Last inbound time, falling back to ``updated_at`` for legacy rows.
-
-        Rows written before ``last_inbound_at`` existed have NULL there, and for
-        those ``updated_at`` *was* the last inbound time, because until then only
-        inbound events wrote this row. The fallback is correct by definition, and
-        it has to survive in code as well as in the backfill: a row the backfill
-        touched can still be NULL if it was created by an older worker mid-deploy.
-        """
-        return self.last_inbound_at or self.updated_at

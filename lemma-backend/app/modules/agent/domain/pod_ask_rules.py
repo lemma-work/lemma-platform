@@ -134,6 +134,14 @@ def open_modes(run: AskingRun) -> OpenModes:
     )
 
 
+def closed_reason(run: AskingRun) -> str | None:
+    """Why this run can ask no pod at all, by either way -- so an empty list of
+    pods says that, not "there is no other pod", which sends the agent and the
+    person looking for a pod that would not help."""
+    refusal = _audience_refusal(run) or _handed_back_refusal(run)
+    return refusal.message if refusal is not None else None
+
+
 def _raise(refusal: AskRefused | None) -> None:
     if refusal is not None:
         raise refusal
@@ -154,8 +162,8 @@ def _audience_refusal(run: AskingRun) -> AskRefused | None:
     if run.answers_outsider:
         return AskRefused(
             "This conversation answers people outside the pod, and another "
-            "pod's answer would reach them. Pass the question to a member with "
-            "message_user instead."
+            "pod's answer would reach them. Call ask_a_person to bring a member "
+            "in instead."
         )
     kind = (run.surface_conversation_kind or "").upper() or None
     if kind is not None and kind not in _PRIVATE_SURFACE_KINDS:

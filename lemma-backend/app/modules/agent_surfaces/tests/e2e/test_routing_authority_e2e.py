@@ -18,7 +18,9 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.handlers import _context_for_delivery
+from app.modules.agent_surfaces.events.ingest_work import (
+    context_for_delivery as _context_for_delivery,
+)
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )

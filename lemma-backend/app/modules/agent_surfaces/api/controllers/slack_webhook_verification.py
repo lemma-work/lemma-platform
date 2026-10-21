@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.core.config import reveal_secret
+from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.services.surface_service import AgentSurfaceService
 from app.modules.agent_surfaces.services.webhook_security_service import (
@@ -25,7 +27,11 @@ def slack_api_app_id(payload: dict) -> str | None:
 
 
 async def slack_candidates_for_workspace(
-    *, service: AgentSurfaceService, team_id: str | None
+    *,
+    service: AgentSurfaceService,
+    team_id: str | None,
+    is_managed: bool = False,
+    also_paused: bool = False,
 ) -> list[SlackWebhookVerificationCandidate]:
     # No resolver, no credentials to verify a signature against -- the same
     # reading `list_channels` gives it, and the reason this is `| None` at all.
@@ -39,8 +45,13 @@ async def slack_candidates_for_workspace(
     # "verify every inbound message before acting on it". The credential resolve
     # below was in the same loop, so it ran per surface that happened to match
     # rather than per surface that could.
+    # `also_paused` (every status, not only paused) only for an app's removal:
+    # a surface that is not answering hears nothing else, but must hear that,
+    # or bringing it back reads a dead app as fine.
     surfaces = await service.surface_repository.list_active_for_routing(
-        SurfacePlatform.SLACK.value, external_workspace_id=team_id
+        SurfacePlatform.SLACK.value,
+        external_workspace_id=team_id,
+        also_paused=also_paused,
     )
     grouped: dict[tuple[str, str], list[UUID]] = {}
     for surface in surfaces:
@@ -50,6 +61,13 @@ async def slack_candidates_for_workspace(
         grouped.setdefault((credentials.app_id, credentials.signing_secret), []).append(
             surface.id
         )
+    # Lemma's own app as this workspace's manager: a candidate even with no
+    # teammate answering through it, so its Home and its invites verify. Where
+    # Lemma's app is still a pod's bot, that pod's surface is already in the
+    # group, and the delivery goes to it as before.
+    manager = _manager_candidate() if is_managed else None
+    if manager is not None:
+        grouped.setdefault(manager, [])
     return [
         SlackWebhookVerificationCandidate(
             app_id=app_id,
@@ -58,3 +76,12 @@ async def slack_candidates_for_workspace(
         )
         for (app_id, signing_secret), surface_ids in grouped.items()
     ]
+
+
+def _manager_candidate() -> tuple[str, str] | None:
+    """``(app_id, signing_secret)`` of Lemma's own app, for a workspace it manages."""
+    app_id = surface_settings.slack_app_id
+    secret = reveal_secret(surface_settings.slack_signing_secret)
+    if not app_id or not secret:
+        return None
+    return app_id, secret

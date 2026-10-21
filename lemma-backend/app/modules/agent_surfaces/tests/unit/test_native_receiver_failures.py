@@ -2,24 +2,26 @@
 
 Pollers and socket receivers logged every failure at debug, which
 `LOG_LEVEL=INFO` drops before formatting: a revoked bot token looped every five
-seconds forever, an email that always failed held the Resend cursor back for
-good, and both looked like a bot that had simply gone quiet.
+seconds forever, and it looked like a bot that had simply gone quiet. A
+credential upstream refuses stands the receiver's work item down for the
+cooldown (``Defer``), not a crash loop.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.services import resend_polling_receiver
-from app.modules.agent_surfaces.services.event_receiver_service import (
-    NativeSurfaceReceiverCoordinator,
-    _conflict_key,
+from app.core.infrastructure.work import Defer
+from app.modules.agent_surfaces.events.receiver_work import (
+    CONFLICT_COOLDOWN,
+    supervise,
 )
 from app.modules.agent_surfaces.services.native_receiver_base import (
     NativeReceiverCandidate,
@@ -36,6 +38,22 @@ from app.modules.agent_surfaces.services.telegram_polling_runner import (
 pytestmark = pytest.mark.asyncio
 
 
+class _Inbox:
+    """The receiver inbox, in memory: what was stored, and the cursor kept."""
+
+    def __init__(self) -> None:
+        self.cursors: list[str | None] = []
+        self.accepted: list[dict] = []
+        self.load_cursor = AsyncMock(return_value=None)
+
+    async def store_cursor(self, cursor):
+        self.cursors.append(cursor)
+
+    async def accept(self, **kwargs):
+        self.accepted.append(kwargs)
+        self.cursors.append(kwargs.get("cursor"))
+
+
 def _telegram_runner() -> TelegramPollingReceiverRunner:
     return TelegramPollingReceiverRunner(
         NativeReceiverCandidate(
@@ -44,7 +62,8 @@ def _telegram_runner() -> TelegramPollingReceiverRunner:
             surface_ids=(),
             credential_label="system",
             credentials={"bot_token": "token-1"},
-        )
+        ),
+        _Inbox(),  # type: ignore[arg-type]
     )
 
 
@@ -126,29 +145,6 @@ async def test_a_failure_streak_reminds_after_its_interval_and_resets_on_success
     assert streak.failures == 1
 
 
-class _CursorRedis:
-    """Records the cursors stored, through the shared client `get_redis` reads."""
-
-    def __init__(self) -> None:
-        self.stored: list[str] = []
-
-    async def get(self, *_):
-        return None
-
-    async def set(self, _key, value, *_args, **_kwargs):
-        self.stored.append(value)
-
-
-def _install_cursor_redis(monkeypatch) -> _CursorRedis:
-    from app.core.config import settings
-    from app.core.infrastructure.redis import client as redis_client
-
-    redis = _CursorRedis()
-    key = (settings.redis_url, True, settings.redis_read_timeout_seconds or None)
-    monkeypatch.setitem(redis_client._clients, key, redis)
-    return redis
-
-
 class _FakeResendService:
     def __init__(self, page: list[dict[str, str]]) -> None:
         self._page = page
@@ -157,7 +153,7 @@ class _FakeResendService:
         return {"data": list(self._page), "has_more": False}
 
 
-def _resend_runner(ingest) -> ResendPollingReceiverRunner:
+def _resend_runner(ingest, inbox: _Inbox) -> ResendPollingReceiverRunner:
     return ResendPollingReceiverRunner(
         NativeReceiverCandidate(
             key="resend:system:abc",
@@ -166,110 +162,62 @@ def _resend_runner(ingest) -> ResendPollingReceiverRunner:
             credential_label="system",
             credentials={"api_key": "re_test"},
         ),
+        inbox,  # type: ignore[arg-type]
         ingest=ingest,
     )
 
 
-async def test_an_email_that_always_fails_is_skipped_on_the_record_and_the_cursor_moves(
-    monkeypatch, caplog
+async def test_an_email_that_could_not_be_stored_holds_the_cursor_and_is_retried(
+    caplog,
 ):
-    stored = _install_cursor_redis(monkeypatch).stored
-    ingested: list[str] = []
+    """Storing is a row insert: a failure there is retried, never skipped.
+
+    Whatever goes wrong *processing* an email is the ingest item's to retry and
+    record; it no longer holds the cursor, so there is no poison counter.
+    """
+    inbox = _Inbox()
+    stored: list[str] = []
+    failing = {"middle"}
 
     async def ingest(item):
-        if item["id"] == "poison":
-            raise ValueError("cannot route this one")
-        ingested.append(item["id"])
+        if item["id"] in failing:
+            raise ConnectionError("database blip")
+        stored.append(item["id"])
+        await inbox.store_cursor(item["id"])
 
-    runner = _resend_runner(ingest)
+    runner = _resend_runner(ingest, inbox)
     # Newest first, as Resend lists them.
-    service = _FakeResendService([{"id": "after"}, {"id": "poison"}, {"id": "before"}])
+    service = _FakeResendService([{"id": "after"}, {"id": "middle"}, {"id": "before"}])
 
     with caplog.at_level(logging.WARNING):
-        cursor = "seed"
-        for _ in range(resend_polling_receiver._RESEND_POISON_EMAIL_ATTEMPTS - 1):
-            cursor = await runner.poll_once(service, cursor)
-            # Held just short of the failing email, which is retried next time.
-            assert cursor == "before"
-        cursor = await runner.poll_once(service, cursor)
+        cursor = await runner.poll_once(service, "seed")
+    assert cursor == "before"
+    assert inbox.cursors[-1] == "before"
+    assert "email_ingest_failed" in caplog.text
 
+    failing.clear()
+    cursor = await runner.poll_once(service, cursor)
     assert cursor == "after"
-    assert stored[-1] == "after"
-    assert ingested == ["before", "after"], "the email before it is not re-read"
-    skipped = [r for r in caplog.records if "poison_email_skipped" in r.getMessage()]
-    assert len(skipped) == 1
-    assert skipped[0].levelno == logging.WARNING
+    assert stored == ["before", "middle", "after"], "nothing re-read, nothing skipped"
 
 
-async def test_an_email_that_recovers_is_ingested_and_not_skipped(monkeypatch):
-    _install_cursor_redis(monkeypatch)
-    attempts: list[str] = []
+async def test_a_rejected_credential_stands_the_receiver_down_with_a_warning(caplog):
+    async def rejected() -> None:
+        raise NativeReceiverCredentialsRejected("token revoked")
 
-    async def ingest(item):
-        attempts.append(item["id"])
-        if len(attempts) == 1:
-            raise ConnectionError("blip")
+    ctx = SimpleNamespace(until_stopping=lambda: asyncio.sleep(3600))
 
-    runner = _resend_runner(ingest)
-    service = _FakeResendService([{"id": "e1"}])
-
-    assert await runner.poll_once(service, "seed") == "seed"
-    assert await runner.poll_once(service, "seed") == "e1"
-    assert attempts == ["e1", "e1"]
-
-
-class _Redis:
-    def __init__(self) -> None:
-        self.values: dict[str, str] = {}
-
-    async def set(self, key, value, nx=False, ex=None):
-        if nx and key in self.values:
-            return None
-        self.values[key] = value
+    async def wanted() -> bool:
         return True
 
-    async def exists(self, key):
-        return 1 if key in self.values else 0
+    with caplog.at_level(logging.WARNING), pytest.raises(Defer) as deferred:
+        await supervise(
+            ctx,  # type: ignore[arg-type]
+            rejected(),
+            still_wanted=wanted,
+            label="system",
+            platform="TELEGRAM",
+        )
 
-    async def get(self, key):
-        return self.values.get(key)
-
-    async def expire(self, key, ttl):
-        return key in self.values
-
-    async def eval(self, script, numkeys, key, owner):
-        if self.values.get(key) == owner:
-            self.values.pop(key, None)
-        return 1
-
-
-async def test_a_rejected_credential_stands_the_receiver_down_with_a_warning(
-    monkeypatch, caplog
-):
-    class _RejectedRunner:
-        def __init__(self, candidate):
-            self._candidate = candidate
-
-        async def run(self):
-            raise NativeReceiverCredentialsRejected("token revoked")
-
-    coordinator = NativeSurfaceReceiverCoordinator(
-        uow_factory=lambda: None,
-        scan_interval_seconds=1,
-        redis_url="redis://unused",
-        runner_factories={SurfacePlatform.TELEGRAM: _RejectedRunner},
-    )
-    coordinator._redis = _Redis()
-    candidate = _telegram_runner()._candidate
-    monkeypatch.setattr(
-        coordinator, "_load_candidates", AsyncMock(return_value=[candidate])
-    )
-
-    with caplog.at_level(logging.WARNING):
-        await coordinator.reconcile()
-        task = coordinator._tasks.get(candidate.key)
-        if task is not None:
-            await asyncio.gather(task, return_exceptions=True)
-
-    assert _conflict_key(candidate.key) in coordinator._redis.values
+    assert deferred.value.delay == CONFLICT_COOLDOWN
     assert "native_receiver_credentials_rejected" in caplog.text

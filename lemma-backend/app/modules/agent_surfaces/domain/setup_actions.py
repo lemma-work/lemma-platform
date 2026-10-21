@@ -12,6 +12,10 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.domain.surface_representation import (
+    SurfaceConnection,
+    SurfaceConnectionOwner,
+)
 
 
 class SurfaceSetupActionField(BaseModel):
@@ -57,6 +61,7 @@ def build_surface_setup_actions(
     slack_signing_secret_missing: bool = False,
     slack_app_id_missing: bool = False,
     slack_repair_url: str | None = None,
+    slack_retired_connection: SurfaceConnection | None = None,
     whatsapp_verify_token: str | None = None,
 ) -> list[SurfaceSetupAction]:
     """The manual steps a user must complete for this surface — usually none.
@@ -68,7 +73,19 @@ def build_surface_setup_actions(
     (auto-registers its webhook) and email never need manual webhook setup.
     Teams admin consent is handled separately because it applies to both system
     and custom apps.
+
+    ``slack_retired_connection`` -- the connection a Slack surface runs on,
+    when Slack removed its app (``services/app_uninstall``) -- is the exception
+    to "system apps need nothing": Slack removing the app takes Lemma's own
+    with it, and only a person can put it back. Which person is the point of
+    the step, because a connection is its owner's alone to repair.
     """
+    if platform is SurfacePlatform.SLACK and slack_retired_connection is not None:
+        return [
+            _slack_reinstall_action(
+                slack_repair_url, owner=slack_retired_connection.connected_by
+            )
+        ]
     if not is_custom_app:
         return []
 
@@ -85,6 +102,76 @@ def build_surface_setup_actions(
     if platform is SurfacePlatform.WHATSAPP:
         return _whatsapp_actions(webhook_url, whatsapp_verify_token)
     return []
+
+
+# Not only "removed": an account is marked for re-authorization for other
+# reasons too (its install changed), and the repair is the same reconnect.
+_SLACK_REMOVED = (
+    "Slack no longer accepts the token this surface runs on -- the app was "
+    "removed from the workspace, its bot token was revoked, or its connection "
+    "has to be approved again -- so nothing said there reaches Lemma and "
+    "nothing is answered."
+)
+_INVITE_BACK = (
+    "If the app was removed, invite it back to each channel it answered in: "
+    "its channel in Lemma was archived with the app, and comes back as it is."
+)
+
+
+def _slack_reinstall_action(
+    repair_url: str | None, *, owner: SurfaceConnectionOwner | None
+) -> SurfaceSetupAction:
+    """Reinstalling is reconnecting the Slack account the surface runs on, and
+    only its owner can: reconnecting repairs *their* account in place. Anyone
+    else connecting Slack makes an account of their own, which the surface
+    does not move to until somebody switches it."""
+    if owner is not None and owner.is_you:
+        return SurfaceSetupAction(
+            key="slack_reinstall",
+            title="Install it in Slack again",
+            description=(
+                f"{_SLACK_REMOVED} It runs on your Slack connection: reconnecting "
+                "it installs the app again, and this surface keeps its channels "
+                "and settings."
+            ),
+            link=repair_url,
+            link_label="Reconnect Slack",
+            steps=[
+                "Open Connectors and find this Slack connection.",
+                "Reconnect it, and allow the app when Slack asks.",
+                _INVITE_BACK,
+            ],
+        )
+    name = (owner.name or owner.email) if owner is not None else None
+    name = name or "the person who connected it"
+    if owner is not None and not owner.is_pod_member:
+        description = (
+            f"{_SLACK_REMOVED} It ran on {name}'s Slack connection, and they are "
+            "no longer in this pod, so it needs a connection of your own."
+        )
+        steps = [
+            "Connect your own Slack account in Connectors, and allow the app.",
+            "Switch this surface to your account.",
+            _INVITE_BACK,
+        ]
+    else:
+        description = (
+            f"{_SLACK_REMOVED} It runs on {name}'s Slack connection, and only "
+            "they can reconnect it."
+        )
+        steps = [
+            f"Ask {name} to reconnect Slack from their Connectors.",
+            "Or connect your own Slack account there, and switch this surface to it.",
+            _INVITE_BACK,
+        ]
+    return SurfaceSetupAction(
+        key="slack_reinstall",
+        title="Install it in Slack again",
+        description=description,
+        link=repair_url,
+        link_label="Open Connectors",
+        steps=steps,
+    )
 
 
 def _slack_actions(

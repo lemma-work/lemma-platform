@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.modules.agent_surfaces.platforms.common import (
     payload_section,
     payload_text,
@@ -101,6 +103,17 @@ def _split_all(payload: dict[str, Any], entries: object) -> list[dict[str, Any]]
     # the parser, which answers None for it. Returning [] here would be a
     # different behaviour, not a smaller one.
     return parts or [payload]
+
+
+def _is_our_own_number(sender_wa_id: object, value: dict[str, Any]) -> bool:
+    """Whether a message names the business's own number as its sender."""
+    ours = re.sub(
+        r"\D",
+        "",
+        str(payload_section(value, "metadata").get("display_phone_number") or ""),
+    )
+    theirs = re.sub(r"\D", "", str(sender_wa_id or ""))
+    return bool(ours) and ours == theirs
 
 
 def _is_undeliverable(msg: dict[str, Any]) -> bool:
@@ -372,6 +385,10 @@ class WhatsAppMessageParser:
                 text=message_text,
                 attachments=attachments,
             )
+        if _is_our_own_number(sender_wa_id, value):
+            # Our own number writing to itself: an echo, never a person. An
+            # answer would be the bot talking to itself.
+            return None
 
         return ParsedInboundSurfaceEvent(
             platform=self.platform,

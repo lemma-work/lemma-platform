@@ -314,33 +314,52 @@ pub(crate) fn diagnostic_logs(
             ));
         }
     };
-    let metadata = file.metadata().map_err(|error| error.to_string())?;
-    let length = metadata.len();
-    let identity = diagnostic_file_identity(&file);
-    let start = cursor
-        .as_deref()
-        .and_then(parse_diagnostic_cursor)
-        .filter(|(cursor_identity, offset)| cursor_identity == &identity && *offset <= length)
-        .map(|(_, offset)| offset)
-        .unwrap_or_else(|| length.saturating_sub(MAX_DIAGNOSTIC_LOG_READ));
-    file.seek(SeekFrom::Start(start))
-        .map_err(|error| error.to_string())?;
-    let mut bytes = Vec::new();
-    file.take(MAX_DIAGNOSTIC_LOG_READ)
-        .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
-    let next_cursor = format!("v1:{identity}:{}", start.saturating_add(bytes.len() as u64));
-    let mut entries = String::from_utf8_lossy(&bytes).into_owned();
-    if start > 0 {
-        if let Some(newline) = entries.find('\n') {
-            entries.drain(..=newline);
-        }
-    }
-    entries = redact_diagnostic_text(entries);
+    let (entries, next_cursor) = read_log_window(&mut file, cursor.as_deref())?;
+    let entries = redact_diagnostic_text(entries);
     Ok(DiagnosticLogSnapshot {
         sources: public_sources,
         source: selected.into(),
         entries,
         next_cursor,
     })
+}
+
+/// The lines of `file` after `cursor`, or its tail when the cursor is absent or
+/// names another file, and the cursor to resume from. Pure over the file, so
+/// the line accounting is tested without a window.
+pub(crate) fn read_log_window(
+    file: &mut std::fs::File,
+    cursor: Option<&str>,
+) -> Result<(String, String), String> {
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let length = metadata.len();
+    let identity = diagnostic_file_identity(file);
+    let resumed = cursor
+        .and_then(parse_diagnostic_cursor)
+        .filter(|(cursor_identity, offset)| cursor_identity == &identity && *offset <= length)
+        .map(|(_, offset)| offset);
+    let start = resumed.unwrap_or_else(|| length.saturating_sub(MAX_DIAGNOSTIC_LOG_READ));
+    file.seek(SeekFrom::Start(start))
+        .map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_DIAGNOSTIC_LOG_READ)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    // A cursor always sits on a line boundary: a read that stops mid-line
+    // leaves the partial line for the next poll rather than showing half of
+    // it now and dropping the rest then.
+    if let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') {
+        bytes.truncate(last_newline + 1);
+    }
+    let next_cursor = format!("v1:{identity}:{}", start.saturating_add(bytes.len() as u64));
+    let mut entries = String::from_utf8_lossy(&bytes).into_owned();
+    // Only a tail read can start inside a line. A resumed read starts where
+    // the last one ended, on a boundary; trimming it here lost one line on
+    // every poll that had anything new.
+    if resumed.is_none() && start > 0 {
+        if let Some(newline) = entries.find('\n') {
+            entries.drain(..=newline);
+        }
+    }
+    Ok((entries, next_cursor))
 }

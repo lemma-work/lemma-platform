@@ -24,11 +24,6 @@ EXPECTED = [
     ),
     ("datastore_cell_max_bytes", "DATASTORE_CELL_MAX_BYTES", 256 * 1024),
     ("datastore_row_max_bytes", "DATASTORE_ROW_MAX_BYTES", 1024 * 1024),
-    (
-        "datastore_event_payload_max_bytes",
-        "DATASTORE_EVENT_PAYLOAD_MAX_BYTES",
-        32 * 1024,
-    ),
     ("datastore_query_role", "DATASTORE_QUERY_ROLE", "lemma_datastore_query"),
     (
         "datastore_query_statement_timeout_ms",
@@ -43,21 +38,49 @@ EXPECTED = [
         "DATASTORE_SEARCH_READABLE_ID_PUSHDOWN_LIMIT",
         5_000,
     ),
+    (
+        "datastore_search_scope_timeout_ms",
+        "DATASTORE_SEARCH_SCOPE_TIMEOUT_MS",
+        3_000,
+    ),
     ("document_processing_max_concurrency", "DOCUMENT_PROCESSING_MAX_CONCURRENCY", 2),
+    # Seconds, not minutes: until a replaced document's new revision is
+    # indexed, search still answers with the old one (factory QA AC-PR979-3).
     (
         "document_processing_debounce_seconds",
         "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS",
-        300,
+        10,
     ),
-    ("recovery_enqueue_batch_size", "RECOVERY_ENQUEUE_BATCH_SIZE", 10),
     (
         "document_processing_extractor_max_threads",
         "DOCUMENT_PROCESSING_EXTRACTOR_MAX_THREADS",
         4,
     ),
-    ("datastore_per_pod_max_inflight", "DATASTORE_PER_POD_MAX_INFLIGHT", 4),
-    ("datastore_dispatch_global_batch", "DATASTORE_DISPATCH_GLOBAL_BATCH", 50),
-    ("datastore_recovery_max_attempts", "DATASTORE_RECOVERY_MAX_ATTEMPTS", 3),
+    ("document_processing_max_attempts", "DOCUMENT_PROCESSING_MAX_ATTEMPTS", 3),
+    (
+        "document_processing_unavailable_budget_seconds",
+        "DOCUMENT_PROCESSING_UNAVAILABLE_BUDGET_SECONDS",
+        86_400,
+    ),
+    ("document_processing_max_pages", "DOCUMENT_PROCESSING_MAX_PAGES", 2_000),
+    ("document_processing_max_ocr_pages", "DOCUMENT_PROCESSING_MAX_OCR_PAGES", 500),
+    ("document_processing_max_chunks", "DOCUMENT_PROCESSING_MAX_CHUNKS", 20_000),
+    (
+        "document_processing_retry_cooldown_seconds",
+        "DOCUMENT_PROCESSING_RETRY_COOLDOWN_SECONDS",
+        60,
+    ),
+    (
+        "datastore_search_scope_cache_ttl_seconds",
+        "DATASTORE_SEARCH_SCOPE_CACHE_TTL_SECONDS",
+        120,
+    ),
+    (
+        "datastore_search_scope_cache_max_ids",
+        "DATASTORE_SEARCH_SCOPE_CACHE_MAX_IDS",
+        20_000,
+    ),
+    ("kreuzberg_health_timeout_seconds", "KREUZBERG_HEALTH_TIMEOUT_SECONDS", 5.0),
     (
         "document_processing_max_file_bytes",
         "DOCUMENT_PROCESSING_MAX_FILE_BYTES",
@@ -135,6 +158,13 @@ EXPECTED = [
 # Non-numeric fields (bool / Literal) that the "env=7" parametrization below
 # cannot exercise — validated with dedicated tests instead.
 EXTRA_FIELDS = [
+    ("datastore_change_retention_seconds", "DATASTORE_CHANGE_RETENTION_SECONDS", 3600),
+    ("datastore_change_max_lag_seconds", "DATASTORE_CHANGE_MAX_LAG_SECONDS", 86400),
+    (
+        "datastore_change_handoff_poll_seconds",
+        "DATASTORE_CHANGE_HANDOFF_POLL_SECONDS",
+        1.0,
+    ),
     ("document_processing_ocr_enabled", "DOCUMENT_PROCESSING_OCR_ENABLED", False),
     ("document_processing_layout_enabled", "DOCUMENT_PROCESSING_LAYOUT_ENABLED", True),
     ("document_processor", "DOCUMENT_PROCESSOR", "auto"),
@@ -144,6 +174,11 @@ EXTRA_FIELDS = [
         "auto",
     ),
     ("document_processing_table_model", "DOCUMENT_PROCESSING_TABLE_MODEL", "tatr"),
+    (
+        "datastore_object_storage_layout",
+        "DATASTORE_OBJECT_STORAGE_LAYOUT",
+        False,
+    ),
 ]
 
 

@@ -6,10 +6,9 @@ from unittest.mock import ANY, AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from redis.asyncio import Redis
+import fakeredis
 from sqlalchemy.exc import IntegrityError
 
-from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
@@ -575,85 +574,78 @@ async def test_target_is_reserved_while_setup_is_active():
 
 @pytest.mark.asyncio
 async def test_redis_store_enforces_atomic_state_and_claims():
-    store = TelegramManagedBotSetupStore(ttl_seconds=60)
+    # In-memory, with Lua: the claims are scripts, and a stand-in that did not
+    # run them would prove only itself.
+    store = TelegramManagedBotSetupStore(
+        redis=fakeredis.FakeAsyncRedis(decode_responses=True),
+        ttl_seconds=60,
+    )
     service = _service(store)  # type: ignore[arg-type]
     setup = await _start(service)
     telegram_user_id = setup.request_id + 3_000_000_000
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
 
-    try:
-        with pytest.raises(TelegramManagedBotSetupAlreadyInProgressError):
-            await _start(service, pod_id=setup.pod_id)
-        assert await store.get(setup.setup_id) is not None
-        reserved = await store.get_by_target(setup.pod_id, setup.surface_name)
-        assert reserved is not None
-        assert reserved.setup_id == setup.setup_id
-        assert await store.bind_telegram_user(
+    with pytest.raises(TelegramManagedBotSetupAlreadyInProgressError):
+        await _start(service, pod_id=setup.pod_id)
+    assert await store.get(setup.setup_id) is not None
+    reserved = await store.get_by_target(setup.pod_id, setup.surface_name)
+    assert reserved is not None
+    assert reserved.setup_id == setup.setup_id
+    assert await store.bind_telegram_user(
+        setup_id=setup.setup_id,
+        telegram_user_id=telegram_user_id,
+    )
+    setup.telegram_user_id = telegram_user_id
+    setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
+    assert await store.save_if_status(
+        setup,
+        expected={TelegramManagedBotSetupStatus.PENDING},
+    )
+    assert not await store.save_if_status(
+        setup,
+        expected={TelegramManagedBotSetupStatus.PENDING},
+    )
+
+    assert (
+        await store.claim_provisioning(
             setup_id=setup.setup_id,
-            telegram_user_id=telegram_user_id,
+            bot_id=1234,
+            owner="owner-a",
         )
-        setup.telegram_user_id = telegram_user_id
-        setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
-        assert await store.save_if_status(
-            setup,
-            expected={TelegramManagedBotSetupStatus.PENDING},
-        )
-        assert not await store.save_if_status(
-            setup,
-            expected={TelegramManagedBotSetupStatus.PENDING},
-        )
-
-        assert (
-            await store.claim_provisioning(
-                setup_id=setup.setup_id,
-                bot_id=1234,
-                owner="owner-a",
-            )
-            is TelegramManagedBotProvisioningClaim.ACQUIRED
-        )
-        assert (
-            await store.claim_provisioning(
-                setup_id=setup.setup_id,
-                bot_id=1234,
-                owner="owner-b",
-            )
-            is TelegramManagedBotProvisioningClaim.IN_PROGRESS
-        )
-        assert (
-            await store.claim_provisioning(
-                setup_id=setup.setup_id,
-                bot_id=9999,
-                owner="owner-c",
-            )
-            is TelegramManagedBotProvisioningClaim.BOT_CONFLICT
-        )
-        setup.status = TelegramManagedBotSetupStatus.PROVISIONING
-        assert not await store.save_if_status(
-            setup,
-            expected={TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM},
+        is TelegramManagedBotProvisioningClaim.ACQUIRED
+    )
+    assert (
+        await store.claim_provisioning(
+            setup_id=setup.setup_id,
+            bot_id=1234,
             owner="owner-b",
         )
-        assert await store.save_if_status(
-            setup,
-            expected={TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM},
-            owner="owner-a",
-        )
-        await store.release_provisioning_lease(
+        is TelegramManagedBotProvisioningClaim.IN_PROGRESS
+    )
+    assert (
+        await store.claim_provisioning(
             setup_id=setup.setup_id,
-            owner="owner-a",
+            bot_id=9999,
+            owner="owner-c",
         )
-        await store.release_reservations(setup)
-        assert await store.get_by_telegram_user_id(telegram_user_id) is None
-    finally:
-        await redis.delete(
-            store._setup_key(setup.setup_id),
-            store._request_key(setup.request_id),
-            store._target_key(setup.pod_id, setup.surface_name),
-            store._telegram_user_key(telegram_user_id),
-            store._bot_key(setup.setup_id),
-            store._provisioning_key(setup.setup_id),
-        )
-        await redis.aclose()
+        is TelegramManagedBotProvisioningClaim.BOT_CONFLICT
+    )
+    setup.status = TelegramManagedBotSetupStatus.PROVISIONING
+    assert not await store.save_if_status(
+        setup,
+        expected={TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM},
+        owner="owner-b",
+    )
+    assert await store.save_if_status(
+        setup,
+        expected={TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM},
+        owner="owner-a",
+    )
+    await store.release_provisioning_lease(
+        setup_id=setup.setup_id,
+        owner="owner-a",
+    )
+    await store.release_reservations(setup)
+    assert await store.get_by_telegram_user_id(telegram_user_id) is None
 
 
 @pytest.mark.asyncio

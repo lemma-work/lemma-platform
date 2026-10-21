@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from sqlalchemy import text
 
+from app.modules.datastore.infrastructure import pod_schema_memo
 from app.modules.datastore.infrastructure.query_role import (
     POD_SCHEMA_RE,
     schema_access_statements,
@@ -82,3 +83,4 @@ class PodSchemaCatalog:
             raise ValueError(f"not a pod schema: {schema_name!r}")
         async with self._engine.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
+        pod_schema_memo.forget(schema_name)

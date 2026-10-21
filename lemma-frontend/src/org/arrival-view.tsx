@@ -10,6 +10,7 @@ import { AI_MATES, ORG } from "@/copy";
 import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, personalNameFor } from "./arrival";
 import { isLocalDeployment } from "@/site/config";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
+import { ResumeInstall } from "@/site/import/resume-install";
 
 /** The first morning.
  *
@@ -96,6 +97,7 @@ export function ArrivalView({
                 do something on. */}
             <header className="arrival-page__bar"><LemmaLogo /></header>
             <div className="arrival">
+                <ResumeInstall />
                 {waiting ? (
                     <LoadingRows label="Loading organizations" />
                 ) : (

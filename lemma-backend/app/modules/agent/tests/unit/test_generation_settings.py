@@ -183,9 +183,12 @@ class TestReasoningGate:
 
         assert settings.model_settings == {}
 
-    def test_a_title_asks_for_no_effort_only_from_a_reasoning_model(self):
-        assert title_model_settings(_resolved()) == {"openai_reasoning_effort": "none"}
-        assert title_model_settings(_resolved(capabilities=_PLAIN)) == {}
+    def test_a_title_asks_every_model_for_no_effort_unless_told_not_to(self):
+        none = {"openai_reasoning_effort": "none"}
+        assert title_model_settings(_resolved()) == none
+        # An undeclared reasoning model is the one that would think at length.
+        assert title_model_settings(_resolved(capabilities=_PLAIN)) == none
+        assert title_model_settings(_resolved(), ask_no_reasoning=False) == {}
 
 
 class TestValidation:

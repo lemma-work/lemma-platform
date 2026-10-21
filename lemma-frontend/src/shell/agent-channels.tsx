@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Surface } from "@/data";
 import { surfacesForAgent, surfaceStatus } from "@/data/surface-settings";
-import { groupsSupported } from "@/data/surface-groups";
+import { groupsSupported } from "@/channels/sources";
 import { useSurfaces } from "./surfaces";
 import { channelName } from "./channels";
 import { Modal } from "./modal";
@@ -33,7 +33,7 @@ export function AgentChannels({ podId, name, label }: { podId: string; name: str
                 {surface.handle && <span>{surface.handle}</span>}
                 <span className="reachrow__note">{surfaceStatus(surface.status, surface.active)}</span>
                 {groupsSupported(surface.platform) && pod.data && (
-                    <SurfaceGroups podId={podId} surface={surface} bot={label} space={pod.data.name} members={pod.data.members} />
+                    <SurfaceGroups podId={podId} surface={surface} bot={label} space={pod.data.name} />
                 )}
             </div>
             <button className="btn" onClick={() => setSelected(surface)}>Manage</button>

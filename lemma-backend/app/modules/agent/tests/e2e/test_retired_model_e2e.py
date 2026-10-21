@@ -68,6 +68,18 @@ async def test_saving_a_teammate_on_a_model_the_provider_does_not_offer_is_refus
     )
     assert unknown.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, unknown.text
     assert unknown.json()["code"] == "model_unavailable"
+    # "never" was never offered, so nothing says it went away.
+    assert "does not offer a model named never" in unknown.json()["message"]
+    assert "no longer" not in unknown.json()["message"]
+    assert "this teammate" in unknown.json()["message"]
+
+    for_a_conversation = await authenticated_client.post(
+        f"/pods/{pod_id}/conversations",
+        json={"agent_runtime": {"profile_id": provider["id"], "model_name": "never"}},
+    )
+    assert for_a_conversation.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert "this conversation" in for_a_conversation.json()["message"]
+    assert "teammate" not in for_a_conversation.json()["message"]
 
     missing_profile = await authenticated_client.post(
         f"/pods/{pod_id}/conversations",

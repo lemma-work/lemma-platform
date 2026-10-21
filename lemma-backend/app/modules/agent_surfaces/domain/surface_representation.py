@@ -163,9 +163,9 @@ class SurfaceBehaviorConfigInput(BaseModel):
         default=None,
         deprecated=True,
         description=(
-            "Ignored. The DM reset window is a deployment-wide setting "
-            "(SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so "
-            "existing pod bundles and clients keep working."
+            "Ignored. A private chat is one conversation per agent and person, "
+            "however long it goes quiet. Still accepted so existing pod bundles "
+            "and clients keep working."
         ),
     )
     send_policy: SurfaceSendPolicyConfig = Field(
@@ -357,5 +357,8 @@ class AgentSurfaceResponse(BaseModel):
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
     #: Set while nobody in the space looks after the contacts this bot answers.
     contacts_warning: str | None = None
+    #: Why the surface cannot do its work: the platform refused its webhook
+    #: (``ERROR``) or its credentials. Absent while it works.
+    problem: str | None = None
 
     model_config = ConfigDict(from_attributes=True)

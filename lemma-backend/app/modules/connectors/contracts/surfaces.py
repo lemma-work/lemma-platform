@@ -33,7 +33,6 @@ from uuid import UUID
 from sqlalchemy import select
 
 from app.core.crypto import get_secret_cipher
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.connectors.api.dependencies import get_connector_service
 from app.modules.connectors.domain.account import AccountEntity, GenericCredentials
 from app.modules.connectors.domain.auth_config import (
@@ -236,10 +235,7 @@ async def upsert_bot_token_account(
     owns the transaction it is also writing its own rows in.
     """
     encryption = get_secret_cipher()
-    message_bus = get_message_bus()
-    auth_configs = AuthConfigRepository(
-        uow=uow, encryption=encryption, message_bus=message_bus
-    )
+    auth_configs = AuthConfigRepository(uow=uow, encryption=encryption)
     install = await auth_configs.get_active_by_org_and_app(
         organization_id, connector_id
     )
@@ -257,9 +253,7 @@ async def upsert_bot_token_account(
                 updated_by_user_id=user_id,
             )
         )
-    accounts = AccountRepository(
-        uow=uow, encryption=encryption, message_bus=message_bus
-    )
+    accounts = AccountRepository(uow=uow, encryption=encryption)
     credentials = GenericCredentials.model_validate({"bot_token": bot_token})
     existing = await accounts.get_by_user_auth_config_and_provider_account(
         user_id, install.id, provider_account_id

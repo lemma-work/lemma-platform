@@ -19,6 +19,7 @@ from collections.abc import Callable
 
 from app.core.text.thinking_tags import (
     ThinkingStreamSplitter,
+    strip_context_echo,
     strip_thinking_tokens as core_strip_thinking_tokens,
 )
 
@@ -254,7 +255,7 @@ def sanitize_user_visible_text(text: str | None) -> str:
     updates, questions, approvals, captions, final answers. Safe on
     ``None``/empty input.
     """
-    return core_strip_thinking_tokens(text or "")
+    return strip_context_echo(core_strip_thinking_tokens(text or ""))
 
 
 class ThinkingStreamFilter:

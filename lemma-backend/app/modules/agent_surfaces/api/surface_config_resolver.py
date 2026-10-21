@@ -8,6 +8,9 @@ from fastapi import HTTPException
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.permissions import Permissions
+from app.modules.agent_surfaces.services.surface_connection_resolver import (
+    SurfaceConnectionResolver,
+)
 from app.modules.connectors.contracts import AccountNotFoundError
 
 # Asserts that this person owns this account, raising ``AccountNotFoundError``
@@ -64,7 +67,13 @@ async def may_perform_surface_agent_action(
 
 
 async def surface_setup_for_reader(
-    *, service, ctx, pod_id: UUID, surface_name: str
+    *,
+    service,
+    ctx,
+    connection_resolver: SurfaceConnectionResolver,
+    pod_id: UUID,
+    surface_name: str,
+    viewer_user_id: UUID,
 ) -> dict[str, object]:
     """This surface's setup state, with only what this reader may be shown.
 
@@ -84,6 +93,9 @@ async def surface_setup_for_reader(
             pod_id=pod_id,
             agent_id=surface.agent_id,
             action=Permissions.AGENT_UPDATE,
+        ),
+        connection=await connection_resolver.for_surface(
+            surface, pod_id=pod_id, viewer_user_id=viewer_user_id
         ),
     )
 

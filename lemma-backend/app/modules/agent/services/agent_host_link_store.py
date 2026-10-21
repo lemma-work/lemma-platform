@@ -48,6 +48,9 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
 from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
+from app.modules.agent.services.agent_host_profile_refresh import (
+    refresh_harness_profiles,
+)
 from app.modules.agent.services.agent_host_auth import (
     generate_host_secret,
     host_secret_hash,
@@ -281,6 +284,9 @@ class AgentHostLinkStore:
                 host_id=host_id,
                 reported_keys={snapshot.harness_key for snapshot in snapshots},
             )
+            # Only the profiles of the harnesses just reported, through the
+            # `harness_id` index; see `agent_host_profile_refresh`.
+            await refresh_harness_profiles(uow.session, published)
             records = [
                 AgentHostHarnessRecord.model_validate(harness) for harness in published
             ]

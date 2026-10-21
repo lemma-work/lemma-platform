@@ -182,7 +182,7 @@ about it when it eventually cannot.
   for the pod, and shall say why.
 - The system shall never deactivate a schedule silently.
 
-**Contracts:** `schedule.get`, `schedule.list`, `notification.send`
+**Contracts:** `schedule.get`, `schedule.list`
 
 ### PS-SCHED-024 — A schedule can be held to a number of runs at once
 **Status:** covered

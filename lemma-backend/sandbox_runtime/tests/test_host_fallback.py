@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from sandbox_runtime import host_fallback
-from sandbox_runtime.host_fallback import open_relay, open_upstream, serve
+from sandbox_runtime.host_fallback import listen, open_relay, open_upstream
 
 
 class _Server(socketserver.ThreadingTCPServer):
@@ -69,6 +69,36 @@ def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+@pytest.fixture
+def proxy(free_port) -> Iterator[int]:
+    """The fall-through proxy, serving on a port no test server can have.
+
+    Asked for any port on `127.0.0.1`, the kernel may hand back a number a
+    test server holds only on `::1` -- the Mac's address. A proxy there probes
+    `127.0.0.1` for that port, finds itself as "the sandbox", and answers its
+    own forwarded request with a 400. So it never takes `free_port`, and it
+    holds its number on `::1` too, so no port probed after it can be it.
+    """
+    while True:
+        server = listen(0)
+        port = server.server_address[1]
+        hold = socket.socket(socket.AF_INET6)
+        try:
+            if port != free_port:
+                hold.bind(("::1", port))
+                break
+        except OSError:
+            pass
+        hold.close()
+        server.server_close()
+    _running(server)
+    try:
+        yield port
+    finally:
+        _stop(server)
+        hold.close()
 
 
 class FakeRelay:
@@ -247,7 +277,7 @@ def test_bytes_behind_the_relays_answer_are_kept(free_port, relay) -> None:
         _stop(host)
 
 
-def test_the_proxy_serves_a_fall_through_over_http(free_port, relay) -> None:
+def test_the_proxy_serves_a_fall_through_over_http(free_port, relay, proxy) -> None:
     """End to end, through the proxy a browser would actually be pointed at.
 
     `--proxy-server` plus `--proxy-bypass-list=<-loopback>` is what makes
@@ -256,34 +286,14 @@ def test_the_proxy_serves_a_fall_through_over_http(free_port, relay) -> None:
     nothing.
     """
     host = _running(_Server6(("::1", free_port), _say("the host")))
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        proxy_port = probe.getsockname()[1]
-    ready = threading.Event()
-    threading.Thread(
-        target=serve, args=(proxy_port,), kwargs={"ready": ready}, daemon=True
-    ).start()
-    assert ready.wait(5), "the fall-through proxy did not start"
     try:
         opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{proxy_port}"})
+            urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{proxy}"})
         )
         with opener.open(f"http://localhost:{free_port}/", timeout=10) as answer:
             assert answer.read() == b"the host"
     finally:
         _stop(host)
-
-
-def _proxy() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        proxy_port = probe.getsockname()[1]
-    ready = threading.Event()
-    threading.Thread(
-        target=serve, args=(proxy_port,), kwargs={"ready": ready}, daemon=True
-    ).start()
-    assert ready.wait(5), "the fall-through proxy did not start"
-    return proxy_port
 
 
 def _read_all(connection: socket.socket) -> bytes:
@@ -297,7 +307,7 @@ def _read_all(connection: socket.socket) -> bytes:
 
 
 def test_a_kept_alive_proxy_connection_carries_one_request_only(
-    free_port, relay
+    free_port, relay, proxy
 ) -> None:
     """A browser sends its next request, for any host, down the proxy
     connection it already has. It used to be spliced straight to whichever
@@ -309,7 +319,7 @@ def test_a_kept_alive_proxy_connection_carries_one_request_only(
         mac_port = probe.getsockname()[1]
     mac = _running(_Server6(("::1", mac_port), _say("the mac")))
     try:
-        connection = socket.create_connection(("127.0.0.1", _proxy()))
+        connection = socket.create_connection(("127.0.0.1", proxy))
         connection.sendall(
             f"GET http://localhost:{free_port}/ HTTP/1.1\r\n"
             f"Host: localhost:{free_port}\r\nProxy-Connection: keep-alive\r\n\r\n"
@@ -324,7 +334,7 @@ def test_a_kept_alive_proxy_connection_carries_one_request_only(
         _stop(sandbox, mac)
 
 
-def test_a_request_body_is_forwarded_whole_and_alone(free_port, relay) -> None:
+def test_a_request_body_is_forwarded_whole_and_alone(free_port, relay, proxy) -> None:
     seen: list[bytes] = []
 
     class Echo(http.server.BaseHTTPRequestHandler):
@@ -343,7 +353,7 @@ def test_a_request_body_is_forwarded_whole_and_alone(free_port, relay) -> None:
 
     sandbox = _running(_Server(("127.0.0.1", free_port), Echo))
     try:
-        connection = socket.create_connection(("127.0.0.1", _proxy()))
+        connection = socket.create_connection(("127.0.0.1", proxy))
         connection.sendall(
             f"POST http://127.0.0.1:{free_port}/ HTTP/1.1\r\n"
             f"Host: 127.0.0.1:{free_port}\r\nContent-Length: 5\r\n\r\n"
@@ -389,14 +399,15 @@ def test_a_subdomain_of_localhost_falls_through_to_the_mac(free_port, relay) -> 
         _stop(host)
 
 
-def test_a_public_page_cannot_reach_the_mac_through_the_proxy(free_port, relay) -> None:
+def test_a_public_page_cannot_reach_the_mac_through_the_proxy(
+    free_port, relay, proxy
+) -> None:
     """Chrome's protection for localhost goes by the address a request
     resolves to, which it cannot see through a proxy. So a request for the Mac
     that another site started -- a cross-site link, a fetch with a public
     Origin -- is refused here; the agent's own navigation and a loopback page
     calling its API still go through."""
     mac = _running(_Server6(("::1", free_port), _say("the mac")))
-    proxy = _proxy()
 
     def ask(*headers: str) -> bytes:
         connection = socket.create_connection(("127.0.0.1", proxy))

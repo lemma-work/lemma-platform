@@ -270,13 +270,17 @@ def _map_connector_error(
     status = (
         upstream if isinstance(upstream, int) else getattr(exc, "status_code", None)
     )
+    # A refused credential is the one the connector deliberately does not
+    # report as 401, which this API's clients take for their own session
+    # ending. With no provider status recorded, its code is what says so.
+    credential_refused = exc.code == "OPERATION_EXECUTION_UNAUTHORIZED"
     if status == 404:
         return GithubImportError(
             f"Repository {owner}/{repo} was not found.",
             code="GITHUB_REPOSITORY_NOT_FOUND",
             status_code=404,
         )
-    if status in {401, 403}:
+    if status in {401, 403} or credential_refused:
         return GithubImportError(
             f"GitHub did not authorize access to {owner}/{repo}.",
             code="GITHUB_IMPORT_UNAUTHORIZED",

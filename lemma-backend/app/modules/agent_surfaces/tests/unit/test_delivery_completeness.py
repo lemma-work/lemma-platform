@@ -68,6 +68,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
 from app.modules.agent_surfaces.platforms.whatsapp.service import (
     WhatsAppPlatformService,
 )
+from app.modules.agent_surfaces.tests.fakes import PlatformHandler, platform_http
 
 pytestmark = pytest.mark.asyncio
 
@@ -926,45 +927,24 @@ async def test_a_teams_chunk_that_fails_says_how_far_it_got(caplog):
 # --- Resend -------------------------------------------------------------------
 
 
-class _FakeHttpClient:
-    """Scripted ``httpx.AsyncClient`` that records how it was built and called."""
+def _scripted(outcomes: list[object]) -> PlatformHandler:
+    """Answers each request with the next outcome, raising the exceptions."""
+    remaining = list(outcomes)
 
-    instances: list["_FakeHttpClient"] = []
-    outcomes: list[object] = []
-
-    def __init__(self, *args, **kwargs) -> None:
-        self.timeout = kwargs.get("timeout")
-        self.calls: list[dict] = []
-        type(self).instances.append(self)
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return None
-
-    async def post(self, url, *, json, headers):
-        self.calls.append({"url": url, "json": json, "headers": headers})
-        outcome = type(self).outcomes.pop(0)
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        outcome = remaining.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
+        assert isinstance(outcome, httpx.Response)
         return outcome
 
-
-def _http_response(status: int, body: dict | None = None) -> httpx.Response:
-    return httpx.Response(
-        status,
-        json=body or {},
-        request=httpx.Request("POST", "https://api.resend.com/emails"),
-    )
+    return handler
 
 
-async def _resend_send(monkeypatch, outcomes: list[object]):
+async def _send_email() -> dict:
     from app.modules.agent_surfaces.platforms.resend import service as resend_service
 
-    _FakeHttpClient.instances = []
-    _FakeHttpClient.outcomes = list(outcomes)
-    monkeypatch.setattr(httpx, "AsyncClient", _FakeHttpClient)
     service = resend_service.ResendPlatformService(
         {"api_key": "re_test", "from_address": "a@ops.test"}
     )
@@ -980,43 +960,41 @@ async def _resend_send(monkeypatch, outcomes: list[object]):
     )
 
 
-async def test_an_email_send_is_given_time_to_upload_its_attachments(monkeypatch):
+def _http_response(status: int, body: dict | None = None) -> httpx.Response:
+    return httpx.Response(status, json=body or {})
+
+
+async def test_an_email_send_is_given_time_to_upload_its_attachments():
     """httpx's default is five seconds; attachments can be ~37 MB encoded."""
-    result = await _resend_send(monkeypatch, [_http_response(200, {"id": "e1"})])
+    with platform_http(_scripted([_http_response(200, {"id": "e1"})])) as http:
+        result = await _send_email()
 
     assert result == {"id": "e1"}
-    timeout = _FakeHttpClient.instances[0].timeout
-    assert isinstance(timeout, httpx.Timeout)
-    assert timeout.read >= 60
+    (sent,) = http.requests
+    assert sent.extensions["timeout"]["read"] >= 60
 
 
-async def test_an_email_send_retries_a_transient_failure_with_one_idempotency_key(
-    monkeypatch,
-):
-    result = await _resend_send(
-        monkeypatch,
-        [
-            httpx.ConnectTimeout("no route"),
-            _http_response(503),
-            _http_response(200, {"id": "e1"}),
-        ],
-    )
+async def test_an_email_send_retries_a_transient_failure_with_one_idempotency_key():
+    outcomes: list[object] = [
+        httpx.ConnectTimeout("no route"),
+        _http_response(503),
+        _http_response(200, {"id": "e1"}),
+    ]
+    with platform_http(_scripted(outcomes)) as http:
+        result = await _send_email()
 
     assert result == {"id": "e1"}
-    keys = {
-        call["headers"]["Idempotency-Key"]
-        for client in _FakeHttpClient.instances
-        for call in client.calls
-    }
-    assert len(_FakeHttpClient.instances) == 3
+    keys = {request.headers["Idempotency-Key"] for request in http.requests}
+    assert len(http.requests) == 3
     assert len(keys) == 1, "a retry of an accepted request must not be a second email"
 
 
-async def test_an_email_send_does_not_retry_a_rejection(monkeypatch):
-    with pytest.raises(httpx.HTTPStatusError):
-        await _resend_send(monkeypatch, [_http_response(422)])
+async def test_an_email_send_does_not_retry_a_rejection():
+    with platform_http(_scripted([_http_response(422)])) as http:
+        with pytest.raises(httpx.HTTPStatusError):
+            await _send_email()
 
-    assert len(_FakeHttpClient.instances) == 1
+    assert len(http.requests) == 1
 
 
 # --- code fences across chunks -----------------------------------------------

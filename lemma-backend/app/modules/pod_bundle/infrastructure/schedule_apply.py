@@ -13,6 +13,7 @@ from uuid import UUID
 
 from lemma_pod_bundle.apply_fields import (
     SCHEDULE_APPLY_FIELDS,
+    is_past_one_time_schedule,
     without_time_schedule_filter,
 )
 
@@ -50,6 +51,15 @@ async def apply_schedule(
             f"Schedule '{step.name}' is a time schedule; its filter was left "
             "out, because nothing would ever ask it."
         )
+    if is_past_one_time_schedule(payload):
+        # It fired (or was missed) in the pod it came from and can never fire
+        # again; creating it is refused, and failing here would leave the
+        # import half applied.
+        warnings.append(
+            f"Schedule '{step.name}' runs once, at a time that has passed; it "
+            "was not imported."
+        )
+        return
     existing = await get_schedule_by_name(uow, pod_id=pod_id, name=step.name, ctx=ctx)
     if existing is not None:
         # Create-once by name. The plan says SKIP for this case, so reaching

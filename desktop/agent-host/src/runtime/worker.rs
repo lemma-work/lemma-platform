@@ -107,11 +107,22 @@ pub(crate) struct TargetWorker {
     /// within moments of opening: two hosts sharing one credential, each
     /// taking the link from the other. Each one waits longer before trying.
     pub(crate) superseded_streak: u32,
+    /// Whether the last read of this pairing's settings failed, so a broken
+    /// `config.json` is reported once rather than on every read.
+    pub(crate) local_controls_unreadable: bool,
+    /// Runs whose task ended without ending the run, each with whether it had
+    /// been asked to stop. Kept until the journal takes their terminal state,
+    /// so a journal that refuses that write once does not leave the run
+    /// heartbeating for ever. See `reap_finished_now`.
+    pub(crate) orphaned_runs: HashMap<Uuid, bool>,
     /// Answers Lemma's `op` requests. `None` where host execution cannot
     /// work at all, in which case every op is answered
     /// `exec_server_unavailable` by the link itself.
     #[cfg(unix)]
     pub(crate) exec_relay: Option<Arc<crate::host_exec::relay::ExecRelay>>,
+    /// HTTP to this workspace as this host: what Lemma staged rather than
+    /// sent -- a command's large payload -- is fetched with it.
+    pub(crate) transfers: Option<crate::link::transfer::TransferClient>,
 }
 
 /// One run in flight, and the two ways it can be stopped.
@@ -210,10 +221,19 @@ impl TargetWorker {
         // Paused for another person's session counts as draining here: no new
         // runs, and the ones in flight finish.
         let draining = !target.takes_work();
+        // Bulk bytes -- an op's file data, an event's image -- go over HTTP
+        // beside the link, as this host, never on it.
+        let transfers =
+            crate::link::transfer::TransferClient::new(&target.base_url, &target.host_secret)
+                .inspect_err(|error| {
+                    tracing::warn!(%error, "no HTTP client for file data; it stays off the link");
+                })
+                .ok();
         let flusher = Arc::new(tokio::sync::Mutex::new(EventFlusher {
             target_id: target.target_id,
             journal: journal.clone(),
             rejections: HashMap::new(),
+            blobs: transfers.clone(),
         }));
         let (slot_owner, link) = LinkSlotOwner::new();
         // The exec-server is this same binary, as the MCP bridge is. Only the
@@ -235,7 +255,11 @@ impl TargetWorker {
                 .ok()
             })
             .flatten()
-            .map(|relay_paths| {
+            .map(|mut relay_paths| {
+                // After the bundled CLI, one this host downloaded, if it has.
+                relay_paths.bundled_cli.push(
+                    crate::lemma_cli::download::Downloader::shared(&paths.root).installed_dir(),
+                );
                 crate::host_exec::relay::ExecRelay::new(
                     Arc::new(crate::host_exec::relay::ProcessLauncher {
                         executable: mcp_bridge_executable.clone(),
@@ -243,6 +267,7 @@ impl TargetWorker {
                         sandboxed: true,
                     }),
                     relay_paths,
+                    transfers.clone(),
                 )
             });
         Ok(Self {
@@ -278,8 +303,11 @@ impl TargetWorker {
             host_execution: false,
             clock_offset: chrono::Duration::zero(),
             superseded_streak: 0,
+            local_controls_unreadable: false,
+            orphaned_runs: HashMap::new(),
             #[cfg(unix)]
             exec_relay,
+            transfers,
         })
     }
 
@@ -338,10 +366,15 @@ impl TargetWorker {
                 .exec_relay
                 .as_ref()
                 .is_some_and(|relay| relay.available());
+            status.transfers &= self
+                .exec_relay
+                .as_ref()
+                .is_some_and(|relay| relay.moves_data_by_transfer());
         }
         #[cfg(not(unix))]
         {
             status.available = false;
+            status.transfers = false;
         }
         status
     }
@@ -369,7 +402,7 @@ impl TargetWorker {
             if self.shutting_down() {
                 return self.graceful_shutdown(None).await;
             }
-            self.housekeeping()?;
+            self.housekeeping();
             let connected = tokio::select! {
                 connected = link::connect_with(
                     &self.target.base_url,
@@ -378,6 +411,7 @@ impl TargetWorker {
                         hello: HostHello::current(&self.installation_id),
                         capacity: self.capacity(),
                         host_execution: Some(self.host_execution_status()),
+                        staged_bodies: true,
                     },
                     self.op_handler(),
                 ) => connected,
@@ -390,8 +424,7 @@ impl TargetWorker {
                     // any refusals before it were the transient kind.
                     self.revoked_refusals = 0;
                     self.note_lemma_time(connected.welcome.server_time);
-                    self.journal
-                        .update_target_state(self.target.target_id, "ONLINE", None)?;
+                    self.note_target_state("ONLINE", None);
                     let opened = std::time::Instant::now();
                     match self.session(connected).await? {
                         SessionEnd::Shutdown => return Ok(()),
@@ -415,7 +448,7 @@ impl TargetWorker {
                             });
                             let after = after.or_else(|| self.superseded_wait(&error, opened));
                             if let Some(after) = after {
-                                self.note_offline(&error.to_string())?;
+                                self.note_offline(&error.to_string());
                                 self.wait_retry(after).await;
                                 continue;
                             }
@@ -426,7 +459,7 @@ impl TargetWorker {
                 Err(error) => error,
             };
             if error.is_upgrade_required() {
-                self.note_offline("this Lemma needs a newer Agent Host")?;
+                self.note_offline("this Lemma needs a newer Agent Host");
                 anyhow::bail!("target requires a newer Agent Host protocol");
             }
             if error.is_revoked_or_missing() {
@@ -458,7 +491,7 @@ impl TargetWorker {
             // backoff like any other refusal Lemma may recover from: giving
             // up for good on it disabled a pairing that a restarted or
             // restored Lemma would have accepted again.
-            self.note_offline(&error.to_string())?;
+            self.note_offline(&error.to_string());
             self.wait_retry(retry).await;
             retry = (retry * 2).min(RETRY_MAX);
         }
@@ -575,7 +608,13 @@ impl TargetWorker {
                 }
                 push = pushes.recv() => match push {
                     Some(Push::Commands(commands)) => {
-                        self.handle_commands(commands).await?;
+                        // As in `send_control`: a journal that could not take
+                        // one batch is no reason to end the worker -- that
+                        // ends every agent this pairing is running with it.
+                        // Lemma redelivers a command nobody acknowledged.
+                        if let Err(error) = self.handle_commands(commands).await {
+                            tracing::error!(%error, "could not take the commands Lemma pushed");
+                        }
                         if let Err(error) = self.send_control(&handle).await {
                             return Ok(SessionEnd::Lost { error, after: reconnect_after });
                         }
@@ -605,9 +644,9 @@ impl TargetWorker {
                     // the next scheduled refresh.
                     self.refresh_due = std::time::Instant::now();
                     self.force_probe = true;
-                    self.housekeeping()?;
+                    self.housekeeping();
                 }
-                _ = housekeeping.tick() => self.housekeeping()?,
+                _ = housekeeping.tick() => self.housekeeping(),
                 error = handle.closed() => {
                     return Ok(SessionEnd::Lost { error, after: reconnect_after });
                 }
@@ -616,12 +655,35 @@ impl TargetWorker {
     }
 
     /// Everything the loop does on its own clock rather than on a signal.
-    pub(crate) fn housekeeping(&mut self) -> anyhow::Result<()> {
-        self.enforce_cancellations()?;
+    ///
+    /// Nothing here can end the worker. It used to: a journal busy for one
+    /// write, or a `config.json` caught half-written, returned out of the link
+    /// loop, and the worker's end aborted every run on this pairing -- each
+    /// agent killed mid-turn for a bookkeeping pass the next tick would have
+    /// managed. Each step logs and is tried again a second later.
+    pub(crate) fn housekeeping(&mut self) {
+        if let Err(error) = self.enforce_cancellations() {
+            tracing::error!(%error, "could not enforce run cancellations; trying again");
+        }
         self.reap_finished_now();
         if self.controls_due <= std::time::Instant::now() {
             self.controls_due = std::time::Instant::now() + LOCAL_CONTROL_INTERVAL;
-            self.apply_local_controls()?;
+            match self.apply_local_controls() {
+                Ok(()) => self.local_controls_unreadable = false,
+                // The settings last read stay in force, as `HostRuntime::serve`
+                // keeps its last good config. Said once, not every five
+                // seconds for as long as the file stays broken.
+                Err(error) => {
+                    if !self.local_controls_unreadable {
+                        self.local_controls_unreadable = true;
+                        tracing::error!(
+                            target = %self.target.name,
+                            %error,
+                            "could not read this pairing's settings; keeping the last ones read"
+                        );
+                    }
+                }
+            }
         }
         self.drain_published();
         if self.reprobe_requested.swap(false, Ordering::SeqCst) {
@@ -632,7 +694,6 @@ impl TargetWorker {
             self.refresh_harnesses();
             self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
         }
-        Ok(())
     }
 
     /// Take a batch of commands, judging each against the harnesses this host
@@ -649,6 +710,7 @@ impl TargetWorker {
         // channel, or no publish at all yet. Both are corrected before any
         // command is judged against a harness.
         self.sync_harnesses_for_commands().await;
+        let commands = self.resolve_staged_payloads(commands).await;
         for command in commands {
             if let Err(error) = self.handle_command(&command) {
                 if let Some(rejection) = command_rejection(&command, &error) {
@@ -663,6 +725,49 @@ impl TargetWorker {
             }
         }
         Ok(())
+    }
+
+    /// Commands with any payload Lemma staged fetched and put back.
+    ///
+    /// One whose fetch may pass later is left for Lemma to send again -- it
+    /// was not acknowledged -- rather than failed. One that cannot is passed
+    /// on as it is, and refused as a payload this host cannot read.
+    pub(crate) async fn resolve_staged_payloads(
+        &self,
+        commands: Vec<crate::protocol::Command>,
+    ) -> Vec<crate::protocol::Command> {
+        let mut resolved = Vec::with_capacity(commands.len());
+        for mut command in commands {
+            if crate::link::transfer::is_staged(&command.payload) {
+                let Some(client) = &self.transfers else {
+                    resolved.push(command);
+                    continue;
+                };
+                match client
+                    .resolve_staged(std::mem::take(&mut command.payload))
+                    .await
+                {
+                    Ok(payload) => command.payload = payload,
+                    Err(error) if error.is_transient() => {
+                        tracing::warn!(
+                            command_id = %command.command_id,
+                            %error,
+                            "could not fetch a command's payload yet; Lemma will send it again"
+                        );
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            command_id = %command.command_id,
+                            %error,
+                            "could not fetch a command's payload"
+                        );
+                    }
+                }
+            }
+            resolved.push(command);
+        }
+        resolved
     }
 
     /// Send what the journal owes Lemma, and take whatever it hands back.
@@ -805,13 +910,20 @@ impl TargetWorker {
         }
     }
 
-    pub(crate) fn note_offline(&self, error: &str) -> anyhow::Result<()> {
-        self.journal.update_target_state(
-            self.target.target_id,
-            "OFFLINE",
-            Some(&redact_error(error)),
-        )?;
-        Ok(())
+    pub(crate) fn note_offline(&self, error: &str) {
+        self.note_target_state("OFFLINE", Some(&redact_error(error)));
+    }
+
+    /// Record the link's state for the status page. Only that reads it, so a
+    /// journal that cannot take the write is logged, not fatal: ending the
+    /// worker over it would kill every run on the pairing.
+    pub(crate) fn note_target_state(&self, state: &str, error: Option<&str>) {
+        if let Err(write) = self
+            .journal
+            .update_target_state(self.target.target_id, state, error)
+        {
+            tracing::error!(error = %write, state, "could not record this pairing's link state");
+        }
     }
 
     pub(crate) fn shutting_down(&self) -> bool {

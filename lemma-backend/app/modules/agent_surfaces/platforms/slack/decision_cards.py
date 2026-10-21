@@ -9,15 +9,17 @@ line saying why the buttons went.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
-from slack_sdk.web.async_client import AsyncWebClient
 
 from app.modules.agent_surfaces.domain.decision_card import (
     CardRetirement,
     DecisionCardHandle,
 )
 from app.modules.agent_surfaces.platforms.decision_cards import remember_decision_card
+
+if TYPE_CHECKING:
+    from slack_sdk.web.async_client import AsyncWebClient
 
 #: Block types a person acts on. A retired card keeps everything else.
 _CONTROL_BLOCK_TYPES = frozenset({"actions", "input"})

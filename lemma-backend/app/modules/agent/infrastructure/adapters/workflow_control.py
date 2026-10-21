@@ -23,12 +23,8 @@ from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.errors import AgentNotFoundError
-from app.modules.agent.domain.events import (
-    AgentRunStartedEvent,
-    AgentRunStopRequestedEvent,
-)
+from app.modules.agent.contracts.turns import AgentTurnStart, stage_agent_turn
 from app.modules.agent.domain.value_objects import (
-    AgentRunStatus,
     ConversationStatus,
     ConversationType,
     MessageDraft,
@@ -44,6 +40,7 @@ from app.modules.agent.infrastructure.conversation_idempotency_store import (
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
+from app.modules.agent.services.run_stop import stop_run
 from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
@@ -205,16 +202,16 @@ class AgentControlAdapter(AgentPort):
                 },
             ),
         )
-        self.conversation_repo.collect_events(
-            [
-                AgentRunStartedEvent(
-                    conversation_id=conversation.id,
-                    agent_run_id=run.id,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    agent_name=agent_name,
-                )
-            ]
+        await stage_agent_turn(
+            self.uow,
+            AgentTurnStart(
+                conversation_id=conversation.id,
+                run_id=run.id,
+                pod_id=pod_id,
+                user_id=user_id,
+                agent_name=agent_name,
+                origin="schedule" if started_by_schedule else "workflow",
+            ),
         )
         return conversation.id
 
@@ -304,19 +301,20 @@ class AgentControlAdapter(AgentPort):
         )
         if active_run is None:
             return
-        await self.conversation_repo.finish_agent_run(
-            agent_run_id=active_run.id,
-            status=AgentRunStatus.STOP_REQUESTED,
+        del user_id  # the engine already authorized the cancel
+        await stop_run(
+            self.uow,
+            self.conversation_repo,
+            pod_id=await self._conversation_pod(conversation_id),
+            conversation_id=conversation_id,
+            run_id=active_run.id,
         )
-        self.conversation_repo.collect_events(
-            [
-                AgentRunStopRequestedEvent(
-                    conversation_id=conversation_id,
-                    agent_run_id=active_run.id,
-                    user_id=user_id,
-                )
-            ]
-        )
+
+    async def _conversation_pod(self, conversation_id: UUID) -> UUID:
+        conversation = await self.conversation_repo.get_conversation(conversation_id)
+        if conversation is None:
+            raise AgentNotFoundError("Workflow agent conversation was not found")
+        return conversation.pod_id
 
     async def _default_agent_runtime_for_pod(
         self, *, pod_id: UUID

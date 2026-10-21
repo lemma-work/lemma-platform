@@ -1,7 +1,8 @@
 """Holding a Slack app's Socket Mode connection, for a runtime with no public URL.
 
-Split from the receiver coordinator, which leases and supervises receivers of
-every platform; this is the Slack one, beside its Telegram and Resend peers.
+Run by the app's ``surface.receiver`` work item, whose lease makes it the one
+connection in the deployment; this is the Slack one, beside its Telegram and
+Resend peers.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.credentials import SlackCredentials
 from app.modules.agent_surfaces.services.native_receiver_base import (
     NativeReceiverCandidate,
-    _publish_native_receiver_event,
+    ReceiverInbox,
 )
 
 if TYPE_CHECKING:
@@ -34,34 +35,31 @@ _PUBLISHED_ENVELOPE_TYPES = frozenset({"events_api", "interactive"})
 
 
 class SlackSocketReceiverRunner:
-    def __init__(self, candidate: NativeReceiverCandidate) -> None:
+    def __init__(
+        self, candidate: NativeReceiverCandidate, inbox: ReceiverInbox | None = None
+    ) -> None:
         self._candidate = candidate
+        self._inbox = inbox or ReceiverInbox(candidate)
 
     async def _handle_envelope(
         self, socket_client: AsyncBaseSocketModeClient, req: SocketModeRequest
     ) -> None:
-        """Publish what this envelope carries, and only then acknowledge it.
+        """Accept what this envelope carries, and only then acknowledge it.
 
-        Two things were wrong with the listener this replaces. It answered Slack
-        first and published second, so a Redis failure between the two lost the
-        event for good -- Slack had been told it arrived. And it dropped every
-        envelope that was not an Events API event, so on Socket Mode a button or
-        a modal never did anything at all.
+        Accepting is the webhook's own path: a tap or a modal is decided here,
+        synchronously, and a message is stored with its ingest item. Answering
+        Slack first would lose the event for good on a failure between the two
+        -- Slack had been told it arrived.
 
         Unacknowledged is the right state for an envelope that could not be
-        published: Slack redelivers it, which is the only retry there is.
+        stored: Slack redelivers it, which is the only retry there is.
         """
         from slack_sdk.socket_mode.response import SocketModeResponse
 
         if req.type in _PUBLISHED_ENVELOPE_TYPES:
             published = False
             try:
-                await _publish_native_receiver_event(
-                    source="slack",
-                    payload=req.payload,
-                    receiver_key=self._candidate.key,
-                    surface_ids=self._candidate.surface_ids,
-                )
+                await self._inbox.accept(source="slack", payload=req.payload)
                 published = True
             finally:
                 # The failure propagates -- Slack's client logs it and leaves

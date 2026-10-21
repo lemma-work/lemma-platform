@@ -79,13 +79,15 @@ BASELINE_COMMENT = (
 # `BaseSettings` instance that code reads configuration from.
 SETTINGS_SOURCES = {
     "app.core.config": ("settings",),
-    "app.core.infrastructure.events.config": ("event_transport_settings",),
+    "app.core.infrastructure.work.config": ("work_settings",),
+    "app.core.live.config": ("live_settings",),
     "app.core.exposure": ("exposure_settings",),
     "app.core.public_web": ("public_web_settings",),
     "app.modules.agent.config": ("agent_settings",),
     "app.modules.agent_surfaces.config": ("surface_settings",),
     "app.modules.apps.config": ("apps_settings",),
     "app.modules.connectors.config": ("connector_settings",),
+    "app.modules.contacts.config": ("contacts_settings",),
     "app.modules.datastore.config": ("datastore_settings",),
     "app.modules.decisions.config": ("decisions_settings",),
     "app.modules.function.config": ("function_settings", "revision_settings"),

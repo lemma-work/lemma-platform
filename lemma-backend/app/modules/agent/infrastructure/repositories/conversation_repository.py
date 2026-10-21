@@ -54,6 +54,7 @@ from app.modules.agent.infrastructure.repositories.conversation_list_page import
 )
 from app.modules.agent.infrastructure.repositories.conversation_run_lifecycle import (
     finish_agent_run as _finish_agent_run,
+    lock_conversation_row as _lock_conversation_row,
     update_conversation_status as _write_conversation_status,
 )
 from app.modules.agent.domain.subagent_spawn import SPAWN_KEY
@@ -287,8 +288,10 @@ class ConversationRepository(
         search: str | None = None,
         cursor: ConversationListCursor | None = None,
         limit: int = 20,
+        in_channel: bool | None = None,
     ) -> tuple[list[ConversationEntity], ConversationListCursor | None]:
         stmt = list_statement(
+            in_channel=in_channel,
             user_id=user_id,
             pod_id=pod_id,
             agent_selection=agent_selection,
@@ -312,11 +315,7 @@ class ConversationRepository(
         )
 
     async def lock_conversation(self, conversation_id: UUID) -> None:
-        await self.session.execute(
-            select(ConversationModel.id)
-            .where(ConversationModel.id == conversation_id)
-            .with_for_update()
-        )
+        await _lock_conversation_row(self.session, conversation_id=conversation_id)
 
     async def find_spawned_child(
         self, *, parent_id: UUID, parent_run_id: UUID, spawn_key: str
@@ -338,6 +337,26 @@ class ConversationRepository(
             .limit(1)
         )
         return model.to_entity() if model is not None else None
+
+    async def find_child_by_spawn_call(
+        self, *, parent_id: UUID, spawn_call: str
+    ) -> ConversationEntity | None:
+        """The child the spawning call ``spawn_call`` created, if it did."""
+        model = await self.session.scalar(
+            select(ConversationModel).where(
+                ConversationModel.parent_id == parent_id,
+                ConversationModel.spawn_tool_call_id == spawn_call,
+            )
+        )
+        return model.to_entity() if model is not None else None
+
+    async def set_spawn_call(self, conversation_id: UUID, spawn_call: str) -> None:
+        """Record the call that spawned ``conversation_id``; unique per parent."""
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .values(spawn_tool_call_id=spawn_call)
+        )
 
     async def list_children(
         self,

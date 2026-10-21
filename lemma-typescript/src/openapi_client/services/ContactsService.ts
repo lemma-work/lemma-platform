@@ -6,25 +6,26 @@ import type { ContactExportResponse } from '../models/ContactExportResponse.js';
 import type { ContactListResponse } from '../models/ContactListResponse.js';
 import type { ContactResponse } from '../models/ContactResponse.js';
 import type { ContactUpdateRequest } from '../models/ContactUpdateRequest.js';
-import type { FollowUpRequest } from '../models/FollowUpRequest.js';
-import type { FollowUpResponse } from '../models/FollowUpResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class ContactsService {
     /**
      * List Contacts
-     * The pod's contacts, newest first.
+     * The pod's contacts, newest first. Follow `next_cursor` until it is
+     * absent.
      * @param podId
      * @param limit
-     * @param before
+     * @param cursor
+     * @param q Only contacts whose name, email address or number holds this.
      * @returns ContactListResponse Successful Response
      * @throws ApiError
      */
     public static contactList(
         podId: string,
         limit: number = 50,
-        before?: (string | null),
+        cursor?: (string | null),
+        q?: (string | null),
     ): CancelablePromise<ContactListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -34,7 +35,8 @@ export class ContactsService {
             },
             query: {
                 'limit': limit,
-                'before': before,
+                'cursor': cursor,
+                'q': q,
             },
             errors: {
                 422: `Validation Error`,
@@ -145,43 +147,6 @@ export class ContactsService {
             query: {
                 'cursor': cursor,
             },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Follow Up Contact
-     * Write to a contact in their most recent conversation, where the channel allows.
-     *
-     * With ``channel: email``, to their verified email address instead, which
-     * reaches a web chat contact who is not on the page.
-     *
-     * Refused (409) when they unsubscribed there, when WhatsApp's 24-hour window
-     * has closed, when they have never written to the pod, or, for email, when
-     * they have no verified address or the pod no email address answering
-     * contacts; 429 past the day's follow-ups for this contact; 502 when the
-     * platform did not take it, which the conversation then shows as not sent.
-     * @param podId
-     * @param contactId
-     * @param requestBody
-     * @returns FollowUpResponse Successful Response
-     * @throws ApiError
-     */
-    public static contactFollowUp(
-        podId: string,
-        contactId: string,
-        requestBody: FollowUpRequest,
-    ): CancelablePromise<FollowUpResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/pods/{pod_id}/contacts/{contact_id}/messages',
-            path: {
-                'pod_id': podId,
-                'contact_id': contactId,
-            },
-            body: requestBody,
-            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

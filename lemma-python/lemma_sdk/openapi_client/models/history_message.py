@@ -19,12 +19,14 @@ class HistoryMessage:
         sequence (int):
         text (str):
         client_nonce (None | str | Unset):
+        from_person (bool | Unset): A person on the team wrote it, not the bot. Default: False.
     """
 
     role: str
     sequence: int
     text: str
     client_nonce: None | str | Unset = UNSET
+    from_person: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -40,6 +42,8 @@ class HistoryMessage:
         else:
             client_nonce = self.client_nonce
 
+        from_person = self.from_person
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -51,6 +55,8 @@ class HistoryMessage:
         )
         if client_nonce is not UNSET:
             field_dict["client_nonce"] = client_nonce
+        if from_person is not UNSET:
+            field_dict["from_person"] = from_person
 
         return field_dict
 
@@ -72,11 +78,14 @@ class HistoryMessage:
 
         client_nonce = _parse_client_nonce(d.pop("client_nonce", UNSET))
 
+        from_person = d.pop("from_person", UNSET)
+
         history_message = cls(
             role=role,
             sequence=sequence,
             text=text,
             client_nonce=client_nonce,
+            from_person=from_person,
         )
 
         history_message.additional_properties = d

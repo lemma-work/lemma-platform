@@ -22,7 +22,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     SurfaceChannelRoute,
-    is_slack_group_dm,
+    is_group_dm,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
@@ -59,7 +59,7 @@ def _channel_route_key(
     ):
         # Surface bound directly to one channel without explicit routes.
         route = SurfaceChannelRoute(channel_id=surface.external_channel_id)
-    if route is None and is_slack_group_dm(parsed) and parsed.external_channel_id:
+    if route is None and is_group_dm(parsed) and parsed.external_channel_id:
         # A group DM needs no route: being in it is the authorization.
         route = SurfaceChannelRoute(channel_id=parsed.external_channel_id)
     if route is None or not _addressed(parsed):

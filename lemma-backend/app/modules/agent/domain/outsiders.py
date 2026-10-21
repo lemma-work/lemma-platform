@@ -1,41 +1,33 @@
 """A conversation that answers somebody outside the pod.
 
-A pod's bot can sit in a group chat alongside people who are not in the pod --
-a vendor in a WhatsApp group, a client in a Telegram group. When one of them
-asks it something, the run that answers is *the pod's*, acting toward a
-stranger, and three things about it differ from every other run:
+Everybody outside the pod the bot talks to is a **contact**: a customer on
+WhatsApp, a client in a Telegram group, a vendor by email, a visitor on a web
+page nobody has vouched for yet. The run that answers one is *the pod's*,
+acting toward them, and three things about it differ from every other run:
 
-* **Authority is anonymous.** There is nobody to delegate from, so the run may
-  read what the pod has marked Public and nothing else (see
-  ``app.core.authorization.anonymous``).
+* **Authority is the contact's.** There is nobody to delegate from, so the run
+  may read what the pod has marked Public and the rows the contact owns, and
+  nothing else (see ``app.core.authorization.anonymous``).
 * **The toolset is cut down** to what that authority can use safely -- see
   ``toolset_selection``. A tool that acts as the conversation's owner rather than
-  through the authorizer would otherwise hand the stranger the owner's reach.
+  through the authorizer would otherwise hand the contact the owner's reach.
 * **The brief says so**, and says who looks after the conversation, instead of
   describing the owner as the person the agent is talking to.
 
-The fact lives on the conversation, not the run: such a conversation holds only
-outsiders' turns, and every consumer that decides what a run may do -- the
-runner, the MCP bridge, the approval executor -- already reads the conversation.
-
-**A contact is somebody outside the pod too.** A contact's conversation -- a
-private chat with a person the pod knows by a vouched-for handle -- carries the
-``contact`` audience and the contact's id, and its ``Audience`` answers
-outsiders: every rule above holds for a contact's run exactly as for a
-stranger's in a group. What the contact adds is a name, and a private chat
-rather than a group.
+Whom a conversation answers is a column, ``contact_id``, written by the server
+when it opens the conversation and by nothing a client sends. Every consumer
+that decides what a run may do -- the runner, the MCP bridge, the approval
+executor -- already reads the conversation, so it reads one answer.
 
 **Another pod asking over a link is somebody outside the pod too.** Its
 conversation is the one the ask opened (``pod_asks``), and its ``Audience`` is
 ``pod``: every rule above holds, and the one difference is whose authority the
 tools check -- the asking pod's grants here (``authorization.pod_principal``)
-instead of nobody's.
+instead of a contact's.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from datetime import datetime
 from enum import StrEnum
 from typing import Self
 from uuid import UUID
@@ -47,22 +39,6 @@ from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pod_asks import linked_asker_in
 from app.modules.agent.domain.value_objects import AgentToolset
 
-#: The metadata key, and its values. ``outsiders`` is a group's people from
-#: outside the pod, all in one conversation; ``contact`` is one contact, in a
-#: private chat, named by ``CONTACT_KEY``.
-AUDIENCE_KEY = "audience"
-OUTSIDERS = "outsiders"
-CONTACT = "contact"
-CONTACT_KEY = "contact_id"
-
-#: A conversation with people outside the pod that a member answers by hand
-#: for now, so the agent stays quiet in it: ``{"user_id", "until"}``. Not a
-#: protected key -- a member who drops it from the conversation's metadata has
-#: handed the conversation back.
-HANDED_TO_KEY = "handed_to"
-
-#: Keys only routing may write, and that no client may drop or forge.
-_PROTECTED_KEYS = (AUDIENCE_KEY, CONTACT_KEY)
 
 #: The toolsets a stranger's run keeps, when its agent has them. A first cut:
 #: inside them, only the tools named in ``tools/outsider_tools`` survive.
@@ -71,8 +47,7 @@ _PROTECTED_KEYS = (AUDIENCE_KEY, CONTACT_KEY)
 #:               anonymous, so what reaches the stranger is what is Public.
 #: WEB_SEARCH -- for ``web_search`` alone. Its ``web_fetch`` opens the
 #:               conversation owner's sandbox and is withheld by name.
-#: MESSAGING  -- fenced to the member who looks after the conversation (see
-#:               ``message_user``), so the agent can pass a question on.
+#: MESSAGING  -- fenced to ``ask_a_person``: calling a member in to answer.
 #:
 #: Everything else acts as the conversation's owner rather than through the
 #: authorizer -- a sandbox session, a browser, a connector account, sub-agents
@@ -89,36 +64,26 @@ OUTSIDER_TOOLSETS = frozenset(
 )
 
 
-#: The tool that records a member's answer to a question passed on to them. On a
-#: question from outside the pod it runs only as an approved call, and each
-#: approval covers exactly one answer -- never "for the rest of the session".
-OUTSIDE_ANSWER_TOOL = "respond_to_notification"
-
-
 class AudienceKind(StrEnum):
-    """Whom a conversation answers. The values are what ``AUDIENCE_KEY`` stores."""
+    """Whom a conversation answers."""
 
     MEMBER = "member"
-    OUTSIDERS = OUTSIDERS
-    CONTACT = CONTACT
-    #: Another pod, asking over a link. Never stored under ``AUDIENCE_KEY``:
-    #: read off the conversation's ``ask``, which only the server writes.
+    #: One contact, named by the conversation's ``contact_id``.
+    CONTACT = "contact"
+    #: Another pod, asking over a link: read off the conversation's ``ask``,
+    #: which only the server writes.
     POD = "pod"
 
 
 class Audience(BaseModel):
     """Whom one run answers, decided once and carried on everything the run builds.
 
-    Read off the conversation by :meth:`from_conversation_metadata` and nowhere
-    else, so the authorizer, the toolset, the brief, the private-note labels and
-    the metering scope cannot each reach a different answer from the same row --
-    a contact's run that one reader took for a group's stranger, say, and
-    another for nobody outside at all.
+    Read off the conversation by :meth:`of` and nowhere else, so the
+    authorizer, the toolset, the brief, the private-note labels and the
+    metering scope cannot each reach a different answer from the same row.
 
-    ``contact_id`` is set exactly when ``kind`` is ``CONTACT``. A conversation
-    that says ``contact`` without an id it can parse is still somebody outside
-    the pod: it reads as ``OUTSIDERS``, never as a member's. ``asking_pod_id``
-    is set exactly when ``kind`` is ``POD``.
+    ``contact_id`` is set exactly when ``kind`` is ``CONTACT``, and
+    ``asking_pod_id`` exactly when it is ``POD``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -140,10 +105,6 @@ class Audience(BaseModel):
         return cls()
 
     @classmethod
-    def outsiders(cls) -> Audience:
-        return cls(kind=AudienceKind.OUTSIDERS)
-
-    @classmethod
     def contact(cls, contact_id: UUID) -> Audience:
         return cls(kind=AudienceKind.CONTACT, contact_id=contact_id)
 
@@ -152,35 +113,26 @@ class Audience(BaseModel):
         return cls(kind=AudienceKind.POD, asking_pod_id=asking_pod_id)
 
     @classmethod
-    def from_conversation_metadata(
-        cls, metadata: Mapping[str, object] | None
-    ) -> Audience:
-        """The audience a conversation's metadata records."""
-        if not isinstance(metadata, Mapping):
-            return cls.member()
-        recorded = metadata.get(AUDIENCE_KEY)
-        if recorded == CONTACT:
-            try:
-                return cls.contact(UUID(str(metadata.get(CONTACT_KEY))))
-            except ValueError:
-                return cls.outsiders()
-        if recorded == OUTSIDERS:
-            return cls.outsiders()
-        asking_pod = linked_asker_in(metadata)
+    def of(cls, conversation: Conversation | None) -> Audience:
+        """The audience ``conversation`` answers; a member's when there is none.
+
+        Read with ``getattr``: the readers that decide what a run may do are
+        handed things shaped like a conversation -- a surface's view of one, a
+        stored row -- and a shape without the column answers a member's.
+        """
+        contact_id = getattr(conversation, "contact_id", None)
+        if isinstance(contact_id, UUID):
+            return cls.contact(contact_id)
+        asking_pod = linked_asker_in(getattr(conversation, "metadata", None))
         if asking_pod is not None:
             return cls.pod(asking_pod)
         return cls.member()
 
-    @classmethod
-    def of(cls, conversation: Conversation | None) -> Audience:
-        """The audience ``conversation`` answers; a member's when there is none."""
-        return cls.from_conversation_metadata(getattr(conversation, "metadata", None))
-
     @property
     def answers_outsiders(self) -> bool:
-        """True for a group's outsiders, a contact and a linked pod alike: none
-        is a member, and every rule about what such a run may do holds for all
-        three. Only the authority its tools check differs (``tools/authority``)."""
+        """True for a contact and a linked pod alike: neither is a member, and
+        every rule about what such a run may do holds for both. Only the
+        authority its tools check differs (``tools/authority``)."""
         return self.kind is not AudienceKind.MEMBER
 
     @property
@@ -191,15 +143,6 @@ class Audience(BaseModel):
     def is_linked_pod(self) -> bool:
         return self.kind is AudienceKind.POD
 
-    def to_metadata(self) -> dict[str, object]:
-        """The keys a conversation records this audience under."""
-        if self.kind is AudienceKind.CONTACT:
-            return {AUDIENCE_KEY: CONTACT, CONTACT_KEY: str(self.contact_id)}
-        if self.kind is AudienceKind.OUTSIDERS:
-            return {AUDIENCE_KEY: OUTSIDERS}
-        # A linked pod lives in the conversation's ``ask``, written with it.
-        return {}
-
 
 def run_audience(deps: object) -> Audience:
     """The audience a run's context carries, or a member's when it carries none.
@@ -209,65 +152,6 @@ def run_audience(deps: object) -> Audience:
     """
     audience = getattr(deps, "audience", None)
     return audience if isinstance(audience, Audience) else Audience.member()
-
-
-def handed_to(metadata: dict[str, object] | None, *, now: datetime) -> UUID | None:
-    """The member answering this conversation by hand, while that lasts.
-
-    A hand-off ends by itself at ``until``: one made because the contacts cap
-    was reached lasts the month the cap counts, and the bot answering again
-    when the budget renews is the hand-back nobody has to remember.
-    """
-    raw = (metadata or {}).get(HANDED_TO_KEY)
-    if not isinstance(raw, dict):
-        return None
-    try:
-        member = UUID(str(raw.get("user_id")))
-        until = datetime.fromisoformat(str(raw.get("until")))
-    except ValueError:
-        return None
-    if until.tzinfo is None:
-        return None
-    return member if until > now else None
-
-
-def with_audience_kept(
-    existing: dict[str, object] | None, incoming: dict[str, object] | None
-) -> dict[str, object] | None:
-    """``incoming`` metadata, with whom the conversation answers kept as stored.
-
-    The audience is written once, by the surface that opened the conversation,
-    and it is what makes every run in it authorize as nobody. A client that
-    replaces the metadata wholesale -- or anything holding the owner's token,
-    the owner's own agent talked into it included -- must not be able to drop
-    it, and have the next stranger's turn run with the owner's authority.
-    Metadata cleared where there is no audience to keep stays cleared.
-    """
-    previous = {
-        key: (existing or {})[key]
-        for key in _PROTECTED_KEYS
-        if (existing or {}).get(key) is not None
-    }
-    if incoming is None and not previous:
-        return None
-    kept = {
-        key: value
-        for key, value in (incoming or {}).items()
-        if key not in _PROTECTED_KEYS
-    }
-    kept.update(previous)
-    return kept
-
-
-def without_audience(metadata: dict[str, object] | None) -> dict[str, object] | None:
-    """Client-supplied metadata, minus any claim about whom the conversation answers.
-
-    Only routing opens a conversation for people outside the pod
-    (``open_surface_conversation``); a conversation a client creates is its own.
-    """
-    if not metadata or not any(key in metadata for key in _PROTECTED_KEYS):
-        return metadata
-    return {key: value for key, value in metadata.items() if key not in _PROTECTED_KEYS}
 
 
 class OutsiderRunRefused(DomainError):

@@ -327,9 +327,22 @@ def import_records(
         None, "--format", help="csv | jsonl | json (default: from file extension)."
     ),
     limit: int = typer.Option(0, "--limit", help="Import at most N rows (0 = all)."),
+    intent: str = typer.Option(
+        "import",
+        "--intent",
+        help=(
+            "How DATASTORE triggers see these rows: import (default) or bulk "
+            "-- each trigger decides by its settings, by default skipping and "
+            "recording them -- or normal, to fire triggers as single writes do."
+        ),
+    ),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
     """Bulk-seed records into a table from a CSV/JSONL/JSON file."""
+    if intent not in ("import", "bulk", "normal"):
+        raise typer.BadParameter(
+            "must be import, bulk or normal", param_hint="--intent"
+        )
     rows = read_record_rows(file, fmt)
     if limit:
         rows = rows[:limit]
@@ -339,7 +352,9 @@ def import_records(
 
     count = run_with_client(
         ctx,
-        lambda client, s: pod_client(client, s, pod).records.bulk_create(table, rows),
+        lambda client, s: pod_client(client, s, pod).records.bulk_create(
+            table, rows, intent=intent
+        ),
     )
     if count is not None:
         typer.echo(f"Imported {count} record(s) into {table}.")

@@ -18,22 +18,16 @@ from app.modules.agent.contracts.contact_conversations import (
 )
 from app.modules.agent.contracts.conversations_for_surfaces import SurfaceConversation
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
-from app.modules.agent_surfaces.domain.notification import (
-    NotificationDeliveryStatus,
-    NotificationEntity,
-    NotificationOriginKind,
-)
 from app.modules.agent_surfaces.domain.surface_config import ContactAnswer
 from app.modules.agent_surfaces.domain.web_widgets import WidgetAnswer
-from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (  # noqa: E501
-    NotificationRepository,
-)
+from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.web_widget_repository import (  # noqa: E501
     WebWidgetRepository,
 )
+from app.modules.contacts.contracts import contact_by_id
 from app.modules.pod.contracts.members import pod_administrators, pod_member_id
 
 logger = get_logger(__name__)
@@ -91,25 +85,18 @@ async def tell_admins_a_keeper_left(
         for admin in await pod_administrators(uow, pod_id)
         if admin.user_id != user_id
     ]
-    notes = NotificationRepository(uow)
     for admin in admins:
-        await notes.create(
-            NotificationEntity(
-                pod_id=pod_id,
-                recipient_user_id=admin.user_id,
-                recipient_pod_member_id=admin.pod_member_id,
-                origin_kind=NotificationOriginKind.API,
-                title="Nobody is looking after contacts",
-                body=(
-                    "The member who looked after contacts on "
-                    + ", ".join(sorted(names))
-                    + " has left the space, so those bots have stopped answering "
-                    "contacts. Choose someone else to look after them in each "
-                    "bot's settings."
-                ),
-                expects_response=False,
-                delivery_status=NotificationDeliveryStatus.UNDELIVERABLE,
-            )
+        await tell_member(
+            uow,
+            pod_id=pod_id,
+            user_id=admin.user_id,
+            text=(
+                "The member who looked after contacts on "
+                + ", ".join(sorted(names))
+                + " has left the space, so those bots have stopped answering "
+                "contacts. Choose someone else to look after them in each "
+                "bot's settings."
+            ),
         )
     logger.info(
         "agent_surfaces.contact_keepers.keeper_left.observed",
@@ -118,6 +105,23 @@ async def tell_admins_a_keeper_left(
         admins_told=len(admins),
     )
     return len(admins)
+
+
+async def answers(
+    uow: SqlAlchemyUnitOfWork,
+    conversation: SurfaceConversation,
+    contact_id: UUID | None,
+) -> bool:
+    """Whether the conversation answers this person: for a contact, the one
+    it names -- or the one that contact was merged into, before the merge's
+    work has moved the conversation over -- and for a member, nobody."""
+    stored = conversation.audience.contact_id
+    if stored == contact_id:
+        return True
+    if stored is None or contact_id is None:
+        return False
+    became = await contact_by_id(uow, pod_id=conversation.pod_id, contact_id=stored)
+    return became is not None and became.id == contact_id
 
 
 async def owned_or_moved(
@@ -129,19 +133,27 @@ async def owned_or_moved(
 ) -> bool:
     """Whether ``user_id`` owns the conversation, once a contact's has moved.
 
-    A contact's conversation is found by its ``~contact:`` link and is the
+    A contact's conversation is found in the contact's channel and is the
     contact's, whoever looks after contacts now: when that member changes, it
     moves to the new one with its history rather than being left behind for a
     fresh one. Every other conversation is only ever its owner's.
+
+    Whom it answers comes first: a contact's turn continues only a
+    conversation naming that contact, and a member's only one naming nobody.
+    Found by a key alone, a conversation answering someone else would hand
+    this turn their authority.
     """
+    if not await answers(uow, conversation, contact_id):
+        return False
     if conversation.user_id == user_id:
         return True
-    if contact_id is None or conversation.audience.contact_id != contact_id:
+    stored = conversation.audience.contact_id
+    if stored is None:
         return False
     moved = await move_contact_conversation(
         uow,
         conversation_id=conversation.id,
-        contact_id=contact_id,
+        contact_id=stored,
         to_user_id=user_id,
     )
     if moved:

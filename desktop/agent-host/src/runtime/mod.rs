@@ -37,6 +37,7 @@ mod callbacks;
 mod commands;
 mod control;
 pub(crate) mod credentials;
+mod event_payloads;
 mod events;
 mod failures;
 mod harnesses;

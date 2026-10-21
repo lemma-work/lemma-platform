@@ -3,8 +3,9 @@
 In the thread where the bot answers people outside the pod, the member who looks
 after the group typed "ask him what's up with him". The line carried no sender
 label, the brief said everyone writing was a stranger, and the model read it as
-the stranger's -- so it passed the question on with ``message_user``, which only
-reaches that same member, and told the group it had. These pin each place that
+the stranger's -- so it passed the question on to the member it came from, and
+told the group it had. (Then with ``message_user``; a contact's run now calls a
+person in with ``ask_a_person``, which tells that same member.) These pin each place that
 now says otherwise: the server's stamp, the history's label, the run's mark, the
 refused tool call, the brief, and the group section of the prompt.
 """
@@ -18,8 +19,10 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
+
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, OUTSIDERS, Audience
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.private_notes import (
     IN_GROUP,
     IN_OUTSIDERS_THREAD,
@@ -48,39 +51,32 @@ from app.modules.agent.infrastructure.harnesses.user_turn_text import (
 from app.modules.agent.services import conversation_turns as turns
 from app.modules.agent.services.outsider_brief import render_outsider_brief
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.messaging.models import MessageUserRequest
-from app.modules.agent.tools.messaging.pydantic_adapter import message_user
+from app.modules.agent.tools.messaging.models import AskAPersonRequest
+from app.modules.agent.tools.messaging.pydantic_adapter import ask_a_person
 
 pytestmark = pytest.mark.unit
 
-_OUTSIDERS_THREAD = {
-    AUDIENCE_KEY: OUTSIDERS,
-    "surface_platform": "TELEGRAM",
-    "conversation_kind": "CHANNEL",
-}
+#: A contact's conversation in a group: somebody outside the pod asking there.
+_OUTSIDERS_THREAD = {"surface_platform": "TELEGRAM", "conversation_kind": "CHANNEL"}
 _MEMBERS_GROUP = {"surface_platform": "TELEGRAM", "conversation_kind": "CHANNEL"}
 _DIRECT_CHAT = {"surface_platform": "TELEGRAM", "conversation_kind": "DM"}
 #: A contact's private chat: a DM on the platform, with somebody outside the pod.
-_CONTACT_CHAT = {
-    **Audience.contact(uuid4()).to_metadata(),
-    "surface_platform": "WHATSAPP",
-    "conversation_kind": "DM",
-}
+_CONTACT_CHAT = {"surface_platform": "WHATSAPP", "conversation_kind": "DM"}
 
 
 # ------------------------------------------------------------------ the stamp
 
 
 @pytest.mark.parametrize(
-    ("conversation_metadata", "expected"),
+    ("conversation_metadata", "contacts", "expected"),
     [
-        (_OUTSIDERS_THREAD, IN_OUTSIDERS_THREAD),
-        (_MEMBERS_GROUP, IN_GROUP),
-        (_DIRECT_CHAT, None),
-        (_CONTACT_CHAT, IN_OUTSIDERS_THREAD),
-        ({"surface_platform": "RESEND", "conversation_kind": "EMAIL"}, None),
-        ({}, None),
-        (None, None),
+        (_OUTSIDERS_THREAD, True, IN_OUTSIDERS_THREAD),
+        (_MEMBERS_GROUP, False, IN_GROUP),
+        (_DIRECT_CHAT, False, None),
+        (_CONTACT_CHAT, True, IN_OUTSIDERS_THREAD),
+        ({"surface_platform": "RESEND", "conversation_kind": "EMAIL"}, False, None),
+        ({}, False, None),
+        (None, False, None),
     ],
     ids=[
         "outsiders",
@@ -93,9 +89,13 @@ _CONTACT_CHAT = {
     ],
 )
 def test_only_a_groups_conversation_marks_what_is_typed_into_it(
-    conversation_metadata, expected
+    conversation_metadata, contacts, expected
 ):
-    assert written_in_lemma_into(conversation_metadata) == expected
+    conversation = SimpleNamespace(
+        metadata=conversation_metadata, contact_id=uuid4() if contacts else None
+    )
+
+    assert written_in_lemma_into(conversation) == expected
 
 
 def _runtime() -> AgentRuntimeConfig:
@@ -136,7 +136,11 @@ def _coordinator(conversation: Conversation):
         )
     )
     uow = SimpleNamespace(
-        collect_events=MagicMock(), commit=AsyncMock(), after_commit=MagicMock()
+        collect_events=MagicMock(),
+        commit=AsyncMock(),
+        after_commit=MagicMock(),
+        # The pod names no default runtime of its own.
+        session=RecordingWorkSession(),
     )
     coordinator = turns.TurnCoordinator(
         uow,
@@ -156,10 +160,11 @@ async def _runtime_is_available(*_args: object, **_kwargs: object) -> None:
     """These tests are about the message's stamp, not the model it runs on."""
 
 
-def _conversation(metadata: dict) -> Conversation:
+def _conversation(metadata: dict, *, contacts: bool = False) -> Conversation:
     return Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
+        contact_id=uuid4() if contacts else None,
         organization_id=uuid4(),
         agent_id=uuid4(),
         agent_runtime=_runtime(),
@@ -185,7 +190,7 @@ async def _start(conversation, *, metadata, typed_in_lemma):
 
 async def test_the_keepers_message_and_its_run_are_marked_by_the_server():
     saved, run = await _start(
-        _conversation(dict(_OUTSIDERS_THREAD)),
+        _conversation(dict(_OUTSIDERS_THREAD), contacts=True),
         metadata=None,
         typed_in_lemma=True,
     )
@@ -197,7 +202,7 @@ async def test_the_keepers_message_and_its_run_are_marked_by_the_server():
 async def test_a_chat_platform_cannot_claim_its_line_was_typed_in_lemma():
     """A stranger's line taken for the member's would be answered as theirs."""
     saved, run = await _start(
-        _conversation(dict(_OUTSIDERS_THREAD)),
+        _conversation(dict(_OUTSIDERS_THREAD), contacts=True),
         metadata={
             "surface_platform": "TELEGRAM",
             "sender_display_name": "P C",
@@ -238,7 +243,7 @@ async def test_a_note_in_a_contacts_dm_is_the_keepers_never_the_contacts():
     Lemma was labelled as theirs -- "by the person in this chat" -- so the
     model took the keeper's private words as the contact's own."""
     saved, run = await _start(
-        _conversation(dict(_CONTACT_CHAT)),
+        _conversation(dict(_CONTACT_CHAT), contacts=True),
         metadata={PRIVATE_NOTE_KEY: True},
         typed_in_lemma=True,
     )
@@ -251,7 +256,7 @@ async def test_a_note_in_a_contacts_dm_is_the_keepers_never_the_contacts():
 
 async def test_a_plain_message_typed_into_a_contacts_dm_is_the_keepers():
     saved, run = await _start(
-        _conversation(dict(_CONTACT_CHAT)),
+        _conversation(dict(_CONTACT_CHAT), contacts=True),
         metadata=None,
         typed_in_lemma=True,
     )
@@ -329,7 +334,7 @@ def test_the_keepers_line_reads_as_theirs_beside_a_strangers():
     assert "member who looks after this conversation" in keepers
 
 
-# ------------------------------------------------------------- message_user
+# ------------------------------------------------------------- ask_a_person
 
 
 def _deps(*, keeper_asking: bool) -> BaseAgentContext:
@@ -338,19 +343,54 @@ def _deps(*, keeper_asking: bool) -> BaseAgentContext:
         org_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),
-        audience=Audience.outsiders(),
+        audience=Audience.contact(uuid4()),
         keeper_asking=keeper_asking,
     )
 
 
-async def test_the_keepers_own_question_is_never_passed_back_to_them():
-    result = await message_user(
+async def test_the_keepers_own_question_is_never_passed_back_to_them(monkeypatch):
+    """The member who typed it is the person `ask_a_person` would call in.
+    Flagging the channel and telling them a contact needs a person reports
+    their own words back to them as a stranger's, while the group is told
+    somebody will get back to it."""
+    flagged: list[dict] = []
+
+    async def _ask(**kwargs):
+        flagged.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
+    )
+
+    result = await ask_a_person(
         SimpleNamespace(deps=_deps(keeper_asking=True), tool_call_id="call-1"),
-        MessageUserRequest(to="Deepak", message="P C asks what's up with you"),
+        AskAPersonRequest(reason="P C asks what's up with you"),
     )
 
     assert result.success is False
-    assert "Answer in your reply" in (result.error or "")
+    assert flagged == []
+
+
+async def test_a_strangers_run_still_calls_the_keeper_in(monkeypatch):
+    """The refusal above is about who typed the line, not about the tool."""
+    flagged: list[dict] = []
+
+    async def _ask(**kwargs):
+        flagged.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
+    )
+
+    result = await ask_a_person(
+        SimpleNamespace(deps=_deps(keeper_asking=False), tool_call_id="call-1"),
+        AskAPersonRequest(reason="Wants the price list."),
+    )
+
+    assert result.success is True
+    assert len(flagged) == 1
 
 
 # ---------------------------------------------------------------- the brief
@@ -360,7 +400,7 @@ def test_the_strangers_brief_says_a_lemma_line_is_the_keepers():
     brief = render_outsider_brief(pod_name="Sales", owner_display_name="Priya")
 
     assert "written in Lemma is from Priya" in brief
-    assert "never pass it on to them" in brief
+    assert "Answer it here" in brief
 
 
 # ---------------------------------------------------------------- the group

@@ -4,7 +4,7 @@ One operation, for the case where somebody replies in prose -- over email
 especially, where "yes, 40 units, PO-8812" is the whole message and nothing
 about it is shaped like a JSON object. No new model does the extraction: the
 agent handling their reply already is one. What it needs is the *schema*
-(rendered into its instructions by `open_notifications`) and a way to submit
+(rendered into its instructions by `open_questions`) and a way to submit
 that refuses a bad guess.
 
 `WorkflowEngine.submit_form` is that way -- it re-checks the assignee, merges

@@ -25,6 +25,20 @@ class FakeDocumentProcessorServer:
         self._docling_tasks: dict[str, str] = {}
         self._docling_polls: Counter[str] = Counter()
         self._runner: web.AppRunner | None = None
+        #: What ``/health`` answers. False is "Kreuzberg is down" as its
+        #: health check reports it, while ``/extract`` still accepts requests.
+        self.healthy = True
+        #: While set, ``hang-*`` documents get no answer until the hang is
+        #: released: an extraction running when its worker is killed.
+        self.hang = False
+        #: Released by ``forget_traffic`` and ``stop``. A hung handler outlives
+        #: the worker that asked, and aiohttp's cleanup waits its full 60s
+        #: shutdown timeout for every handler still running.
+        self._hung: set[asyncio.Event] = set()
+        #: While set, every extraction returns a chunk Postgres cannot store.
+        self.nul_chunks = False
+        #: The last bytes uploaded under each filename (``echo-*`` returns them).
+        self.bodies: dict[str, bytes] = {}
 
     def forget_traffic(self) -> None:
         """Drop what this server has been asked, keeping it running.
@@ -37,11 +51,22 @@ class FakeDocumentProcessorServer:
         product that did nothing wrong.
         """
         self.requests.clear()
+        self.bodies.clear()
         self._docling_tasks.clear()
         self._docling_polls.clear()
+        self.healthy = True
+        self.hang = False
+        self.nul_chunks = False
+        self._release_hung()
+
+    def _release_hung(self) -> None:
+        for released in self._hung:
+            released.set()
+        self._hung.clear()
 
     async def start(self) -> None:
         app = web.Application()
+        app.router.add_get("/health", self._kreuzberg_health)
         app.router.add_post("/extract", self._kreuzberg_extract)
         app.router.add_post("/chunk", self._kreuzberg_chunk)
         app.router.add_post("/v1/convert/file/async", self._docling_submit)
@@ -56,6 +81,7 @@ class FakeDocumentProcessorServer:
         self.base_url = f"http://127.0.0.1:{sockets[0].getsockname()[1]}"
 
     async def stop(self) -> None:
+        self._release_hung()
         if self._runner is not None:
             await self._runner.cleanup()
 
@@ -63,15 +89,39 @@ class FakeDocumentProcessorServer:
         reader = await request.multipart()
         filename = "document.bin"
         async for part in reader:
+            body = await part.read(decode=False)
             if part.name == "files" and part.filename:
                 filename = part.filename
-            await part.read(decode=False)
+                self.bodies[filename] = bytes(body)
         return filename
+
+    async def _kreuzberg_health(self, request: web.Request) -> web.Response:
+        del request
+        self.requests["kreuzberg:health"] += 1
+        if self.healthy:
+            return web.json_response({"status": "healthy"})
+        return web.json_response({"status": "unhealthy"}, status=503)
 
     async def _kreuzberg_extract(self, request: web.Request) -> web.StreamResponse:
         filename = await self._multipart_filename(request)
         self.requests[f"kreuzberg:{filename}"] += 1
         attempt = self.requests[f"kreuzberg:{filename}"]
+
+        if filename.startswith("poison"):
+            # What a deterministic extractor panic on one document looks like:
+            # a 500 in milliseconds, every time, while everything else works.
+            return web.Response(
+                status=500,
+                text=(
+                    "thread 'tokio-rt-worker' panicked: assertion failed: "
+                    "Invalid buffer length"
+                ),
+            )
+        if filename.startswith("hang") and self.hang:
+            released = asyncio.Event()
+            self._hung.add(released)
+            await released.wait()
+            return web.Response(status=503)
 
         if filename.startswith("connection-retry") and attempt == 1:
             transport = request.transport
@@ -93,6 +143,14 @@ class FakeDocumentProcessorServer:
             await asyncio.sleep(0.4)
 
         needle = f"Deterministic extracted content for {filename}"
+        if filename.startswith("echo-"):
+            # The words a revision actually carries, so a test can tell two
+            # revisions of one file apart in search.
+            needle = self.bodies.get(filename, b"").decode(errors="replace")
+        if self.nul_chunks:
+            # Postgres refuses a NUL in text, so indexing this fails inside the
+            # transaction that replaces the file's chunks.
+            needle = f"{needle} \u0000"
         content = (
             ""
             if filename.startswith("pages-only")

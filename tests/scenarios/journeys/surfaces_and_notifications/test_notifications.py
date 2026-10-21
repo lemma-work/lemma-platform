@@ -1,11 +1,16 @@
-"""Surfaces and notifications → being told when something needs you."""
+"""Surfaces and notifications → being told when something needs you.
+
+What needs a person in a pod is in one place: their inbox -- the channels with
+something new for them, the lines that name them, and every question waiting
+on them. A line for them alone is in their own channel with the pod.
+"""
 
 from __future__ import annotations
 
 import pytest
 
-
 from harness import capability, covers, journey, proves, scenario
+from harness.waiting import UNTIL_A_RUN_SETTLES, eventually
 
 pytestmark = [
     journey("Surfaces and notifications"),
@@ -22,163 +27,207 @@ async def team(world, run):
     return alice, bob, pod
 
 
+async def _names(alice, person, *, pod, run, text: str):
+    """Alice names ``person`` in a channel of her own: it is new to them."""
+    channel = await alice.opens_a_channel(in_pod=pod, titled=run.name("launch"))
+    await alice.writes_in(channel, text, in_pod=pod, naming=(person,))
+    return channel
+
+
+async def _a_question_for(alice, bob, *, pod):
+    """A workflow that stops on Bob: its form waits on him in his inbox."""
+    membership = await alice.membership_of(bob, in_pod=pod)
+    workflow = await alice.creates_a_workflow(in_pod=pod)
+    await alice.gives_workflow_a_graph(
+        workflow["name"],
+        nodes=[
+            {
+                "id": "approve",
+                "type": "FORM",
+                "config": {
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"approved": {"type": "boolean"}},
+                        "required": ["approved"],
+                    },
+                    "assignee_pod_member_id": membership["pod_member_id"],
+                },
+            },
+            {"id": "done", "type": "END"},
+        ],
+        edges=[{"id": "approve_to_done", "source": "approve", "target": "done"}],
+        in_pod=pod,
+    )
+    run = await alice.runs_workflow(workflow["name"], in_pod=pod)
+    inbox = await eventually(
+        lambda: bob.inbox_in(pod),
+        lambda inbox: any(
+            (item["message"].get("question") or {}).get("question", {}).get("run_id")
+            == str(run["id"])
+            for item in inbox["waiting"]
+        ),
+        describe="the form to wait on bob in his inbox",
+        timeout=UNTIL_A_RUN_SETTLES,
+    )
+    [waiting] = [
+        item
+        for item in inbox["waiting"]
+        if item["message"]["question"]["question"].get("run_id") == str(run["id"])
+    ]
+    return run, waiting
+
+
 @scenario("A person has one place to see what needs them")
 @proves("PS-SURF-030")
-@covers("notification.send", "notification.list", "notification.unread_count")
-async def test_a_notification_arrives_in_the_inbox(team):
+@covers(
+    "channel.create",
+    "channel.message.post",
+    "channel.inbox.get",
+    "channel.list",
+)
+async def test_what_names_a_person_arrives_in_their_inbox(team, run):
+    alice, bob, pod = team
+    before = (await bob.inbox_in(pod))["totals"]
+
+    channel = await _names(alice, bob, pod=pod, run=run, text="@sofia review Q3?")
+
+    totals = (await bob.inbox_in(pod))["totals"]
+    assert totals["mentions"] == before["mentions"] + 1, totals
+    assert totals["channels"] == before["channels"] + 1, totals
+    seen = await bob.channel_seen_by_me(channel, in_pod=pod)
+    assert seen["unread"]["lines"] == 1 and seen["unread"]["mentions"] == 1, seen
+    assert seen["last_line"]["text"] == "@sofia review Q3?"
+
+
+@scenario("What one person is told is a line in their own channel")
+@proves("PS-SURF-030")
+@covers("agent.notice.send", "channel.list", "channel.message.list")
+async def test_a_line_for_one_person_is_in_their_own_channel(team):
     alice, bob, pod = team
 
-    await alice.notifies(bob, in_pod=pod, title="Review the Q3 numbers")
+    told = await alice.tells(bob, in_pod=pod, text="The Q3 numbers are in.")
 
-    inbox = await bob.notifications_in(pod)
-    assert any(n["title"] == "Review the Q3 numbers" for n in inbox), inbox
-    assert await bob.unread_count_in(pod) >= 1
+    own = await bob.own_channel_in(pod)
+    assert str(own["id"]) == str(told["channel_id"])
+    lines = await bob.lines_in(own, in_pod=pod)
+    assert any(line["text"] == "The Q3 numbers are in." for line in lines), lines
+    assert all(
+        line["text"] != "The Q3 numbers are in."
+        for line in await alice.lines_in(await alice.own_channel_in(pod), in_pod=pod)
+    ), "a line for bob turned up in alice's own channel"
 
 
-@scenario("Reading a notification clears it from the unread count")
+@scenario("Reading a channel clears it from what is new")
 @proves("PS-SURF-031")
-@covers("notification.mark_read", "notification.unread_count")
-async def test_reading_clears_the_unread_count(team):
+@covers("channel.read", "channel.inbox.get", "channel.list")
+async def test_reading_clears_what_is_new(team, run):
     alice, bob, pod = team
-    await alice.notifies(bob, in_pod=pod, title="Please look")
-    notification = (await bob.notifications_in(pod))[0]
-    before = await bob.unread_count_in(pod)
+    channel = await _names(alice, bob, pod=pod, run=run, text="@sofia please look")
+    before = (await bob.inbox_in(pod))["totals"]
 
-    await bob.reads(notification, in_pod=pod)
+    await bob.reads_channel(channel, in_pod=pod)
 
-    assert await bob.unread_count_in(pod) == before - 1
-
-
-@scenario("Marking everything read clears the whole inbox")
-@proves("PS-SURF-031")
-@covers("notification.mark_all_read", "notification.unread_count")
-async def test_read_all_clears_everything(team):
-    alice, bob, pod = team
-    for n in range(3):
-        await alice.notifies(bob, in_pod=pod, title=f"Item {n}")
-
-    await bob.reads_everything_in(pod)
-
-    assert await bob.unread_count_in(pod) == 0
+    seen = await bob.channel_seen_by_me(channel, in_pod=pod)
+    unread = seen["unread"]
+    assert (unread["lines"], unread["mentions"], unread["waiting"]) == (0, 0, 0), seen
+    after = (await bob.inbox_in(pod))["totals"]
+    assert after["mentions"] == before["mentions"] - 1, after
+    assert after["channels"] == before["channels"] - 1, after
 
 
 @scenario("Read state is per person, not shared")
 @proves("PS-SURF-031")
-@covers("notification.mark_all_read", "notification.unread_count")
-async def test_read_state_is_personal(world, team):
+@covers("channel.read", "channel.list")
+async def test_read_state_is_personal(world, team, run):
     alice, bob, pod = team
     carol = await world.person("wei")
     await alice.adds(carol, to_pod=pod, as_role="POD_USER")
-
-    await alice.notifies(bob, in_pod=pod, title="For Bob")
-    await alice.notifies(carol, in_pod=pod, title="For Carol")
-
-    await bob.reads_everything_in(pod)
-
-    assert await bob.unread_count_in(pod) == 0
-    assert await carol.unread_count_in(pod) >= 1, (
-        "one person clearing their inbox must not clear another's"
+    channel = await alice.opens_a_channel(in_pod=pod, titled=run.name("launch"))
+    await alice.writes_in(
+        channel, "@sofia @wei kickoff at 3", in_pod=pod, naming=(bob, carol)
     )
 
+    await bob.reads_channel(channel, in_pod=pod)
 
-@scenario("A person answers a notification that asked them something")
+    assert (await bob.channel_seen_by_me(channel, in_pod=pod))["unread"]["lines"] == 0
+    assert (await carol.channel_seen_by_me(channel, in_pod=pod))["unread"][
+        "lines"
+    ] == 1, "one person reading a channel must not clear it for another"
+
+
+@scenario("A person answers a question waiting on them, and it stops asking")
 @proves("PS-SURF-032")
-@covers("notification.respond", "notification.list")
-async def test_a_notification_can_be_answered(team):
+@covers("channel.inbox.get", "channel.message.answer")
+async def test_a_question_is_answered_from_the_inbox(team):
     alice, bob, pod = team
-    await alice.notifies(
-        bob, in_pod=pod, title="Approve the spend?", expects_response=True
+    run, waiting = await _a_question_for(alice, bob, pod=pod)
+
+    answered = await bob.answers_question(waiting, saying={"approved": True}, in_pod=pod)
+
+    assert answered["question"]["state"] == "ANSWERED", answered
+    still = (await bob.inbox_in(pod))["waiting"]
+    assert all(item["message"]["id"] != waiting["message"]["id"] for item in still)
+    # The answer went where it was waiting: the run carries on.
+    finished = await eventually(
+        lambda: alice.opens_run(run, in_pod=pod),
+        lambda state: str(state.get("status")).upper() == "COMPLETED",
+        describe="the run to carry on once bob answered",
+        timeout=UNTIL_A_RUN_SETTLES,
     )
-    notification = (await bob.notifications_in(pod))[0]
-
-    await bob.answers(notification, saying="Approved", in_pod=pod)
-
-    answered = await bob.notifications_in(pod)
-    assert any(str(n["id"]) == str(notification["id"]) for n in answered)
+    assert str(finished["status"]).upper() == "COMPLETED"
 
 
-@scenario("A person acknowledges a notification and it stops asking")
+@scenario("A question already answered is not answered again")
 @proves("PS-SURF-032")
-@covers("notification.acknowledge")
-async def test_a_notification_can_be_acknowledged(team):
-    """The scenario is named for the stopping, which is the half nothing read.
-
-    Acknowledging used to be the whole test: the call was made and its answer
-    thrown away, so the only thing that could fail was the request itself. A
-    notification that came back still asking would have passed.
-    """
+@covers("channel.message.answer")
+async def test_an_answered_question_refuses_a_second_answer(team):
     alice, bob, pod = team
-    await alice.notifies(bob, in_pod=pod, title="Heads up")
-    notification = (await bob.notifications_in(pod))[0]
+    _run, waiting = await _a_question_for(alice, bob, pod=pod)
+    await bob.answers_question(waiting, saying={"approved": True}, in_pod=pod)
 
-    await bob.acknowledges(notification, in_pod=pod)
-
-    after = next(
-        item
-        for item in await bob.notifications_in(pod)
-        if str(item["id"]) == str(notification["id"])
-    )
-    assert str(after.get("status")) == "ACKNOWLEDGED", (
-        f"a notification that was acknowledged still reads as "
-        f"{after.get('status')!r}, so it goes on asking"
+    refused = await bob.is_refused_answering_question(
+        waiting, saying={"approved": False}, in_pod=pod
     )
 
+    assert refused == 409, f"a second answer was refused with {refused}, not 409"
 
-@scenario("Someone outside the pod sees none of its notifications")
+
+@scenario("Someone outside the pod sees none of its inbox")
 @proves("PS-SURF-030")
-@covers("notification.list")
-async def test_an_outsider_sees_no_notifications(world, team):
+@covers("channel.inbox.get")
+async def test_an_outsider_sees_no_inbox(world, team, run):
     alice, bob, pod = team
-    await alice.notifies(bob, in_pod=pod, title="Internal")
+    await _names(alice, bob, pod=pod, run=run, text="@sofia internal")
 
     outsider = await world.person("hannah")
 
-    response = await outsider.api.call("GET", f"/pods/{pod['id']}/notifications")
-    assert response.status_code == 403, (
-        f"an outsider read pod notifications ({response.status_code})"
-    )
+    assert await outsider.is_refused_inbox(pod) == 403
 
 
-@scenario("A removed member cannot act on the notifications they still hold")
+@scenario("A removed member cannot act on what was waiting on them")
 @proves("PS-SURF-030")
-@covers("notification.respond", "notification.acknowledge", "notification.mark_read")
-async def test_removal_closes_the_inbox_it_left_behind(world, team):
-    """Reading was gated; answering was not, and answering is the louder half.
-
-    A notification is how an agent asks a person something, so responding to
-    one steers the run that asked. Gating the two read routes and leaving
-    respond/acknowledge/mark_read open closed the window and left the door.
-    Same rule as PS-POD-040: membership is the precondition, for reading and
-    for acting alike.
-    """
+@covers("channel.message.answer", "channel.read", "channel.inbox.get")
+async def test_removal_closes_the_inbox_it_left_behind(team, run):
+    """Reading was gated; answering must be too, and answering is the louder
+    half: a question waiting on a person steers whatever asked it. Same rule
+    as PS-POD-040: membership is the precondition, for reading and for acting
+    alike."""
     alice, bob, pod = team
-    await alice.notifies(bob, in_pod=pod, title="Ship it?")
-    notification = (await bob.notifications_in(pod))[0]
+    channel = await _names(alice, bob, pod=pod, run=run, text="@sofia ship it?")
+    _run, waiting = await _a_question_for(alice, bob, pod=pod)
 
     await alice.removes_member(await alice.membership_of(bob, in_pod=pod), from_pod=pod)
 
-    answered = await bob.api.call(
-        "POST",
-        f"/pods/{pod['id']}/notifications/{notification['id']}/respond",
-        json={"summary": "Yes, ship it."},
+    # All three reported together: which of them is still open says how much
+    # of the inbox a removed person keeps, and stopping at the first would hide it.
+    refusals = (
+        await bob.is_refused_answering_question(
+            waiting, saying={"approved": True}, in_pod=pod
+        ),
+        await bob.is_refused_reading_channel(channel, in_pod=pod),
+        await bob.is_refused_inbox(pod),
     )
-    dismissed = await bob.api.call(
-        "POST",
-        f"/pods/{pod['id']}/notifications/{notification['id']}/acknowledge",
-    )
-    read = await bob.api.call(
-        "POST",
-        f"/pods/{pod['id']}/notifications/{notification['id']}/read",
-    )
-
-    # All three reported together: which of them is still open says how much of
-    # the inbox a removed person keeps, and stopping at the first would hide it.
-    assert (answered.status_code, dismissed.status_code, read.status_code) == (
-        403,
-        403,
-        403,
-    ), (
-        f"a removed member could still act on their old notifications: "
-        f"respond={answered.status_code} acknowledge={dismissed.status_code} "
-        f"mark_read={read.status_code}"
+    assert refusals == (403, 403, 403), (
+        f"a removed member could still act on what was waiting on them: "
+        f"answer={refusals[0]} read={refusals[1]} inbox={refusals[2]}"
     )

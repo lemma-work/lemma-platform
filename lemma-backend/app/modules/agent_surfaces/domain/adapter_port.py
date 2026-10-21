@@ -46,6 +46,8 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, SurfaceEnvelope
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
+from app.modules.agent_surfaces.domain.place_privacy import PlaceFacts
 from app.modules.agent_surfaces.domain.surface_config import ReengageTemplate
 from app.modules.agent_surfaces.domain.models import (
     ColdEmailSendResult,
@@ -60,6 +62,10 @@ from app.modules.agent_surfaces.domain.models import (
 # shape until the platform's own parser or sender reads them.
 Payload = dict[str, Any]
 OutboundMetadata = dict[str, Any]
+
+#: Outbound metadata naming the send, for a platform that dedupes on a key
+#: (Resend): every try of one delivery is then the same message.
+IDEMPOTENCY_KEY = "idempotency_key"
 
 
 class InboundParser(Protocol):
@@ -91,6 +97,10 @@ class InboundParser(Protocol):
         self, payload: dict[str, object]
     ) -> list[ParsedGroupUpdate]:
         """What happened to groups themselves; empty on a bot that creates none."""
+        ...
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        """Messages heard that the platform says were edited or deleted."""
         ...
 
     def mention_is_provisional(self, event: ParsedInboundSurfaceEvent) -> bool:
@@ -191,9 +201,11 @@ class OutboundDelivery(Protocol):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: OutboundMetadata | None = None,
-    ) -> None:
+    ) -> str | None:
         """The text primitive `deliver` degrades onto, and the only way to say
-        something before a conversation exists."""
+        something before a conversation exists. The platform's id for what it
+        sent (the first message of a long one), when it names one: what a
+        later status report about it, or a reply in its thread, refers to."""
         ...
 
     async def add_processing_indicator(
@@ -387,6 +399,22 @@ class ReplyWindowReopener(Protocol):
         ...
 
 
+class PlacePrivacyReader(Protocol):
+    """Asking the platform whether a place is kept to its members. Optional;
+    Slack (``conversations.info``) and Teams (Graph's ``membershipType``),
+    whose events do not always say.
+
+    Checked with `place_privacy_reader`, like `InChatSetup`.
+    """
+
+    async def read_place_privacy(
+        self, *, credentials: SurfaceCredentials, event: ParsedInboundSurfaceEvent
+    ) -> PlaceFacts | None:
+        """What the platform says about the place ``event`` was said in, or
+        None when it would not say -- which the caller reads as private."""
+        ...
+
+
 class SurfacePlatformAdapterPort(
     InboundParser, InboundReader, OutboundDelivery, Protocol
 ):
@@ -423,13 +451,24 @@ def reply_window_reopener(adapter: object) -> ReplyWindowReopener | None:
     return adapter if _reopens_reply_window(adapter) else None
 
 
+def _reads_place_privacy(adapter: object) -> TypeIs[PlacePrivacyReader]:
+    return callable(getattr(adapter, "read_place_privacy", None))
+
+
+def place_privacy_reader(adapter: object) -> PlacePrivacyReader | None:
+    """The adapter's privacy lookup, or None where its platform has none."""
+    return adapter if _reads_place_privacy(adapter) else None
+
+
 __all__ = [
     "InChatSetup",
+    "PlacePrivacyReader",
     "InboundParser",
     "InboundReader",
     "OutboundDelivery",
     "ReplyWindowReopener",
     "SurfacePlatformAdapterPort",
     "in_chat_setup",
+    "place_privacy_reader",
     "reply_window_reopener",
 ]

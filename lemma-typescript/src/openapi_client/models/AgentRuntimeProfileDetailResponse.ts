@@ -26,13 +26,14 @@ export type AgentRuntimeProfileDetailResponse = {
     description?: (string | null);
     harness?: (AgentHostHarnessResponse | null);
     harness_id?: (string | null);
+    harness_key?: (string | null);
     has_credentials?: boolean;
     host_status?: (AgentHostStatus | null);
     id: string;
     kind: RuntimeProfileKind;
-    metadata?: Record<string, any>;
     model_catalog?: Array<RuntimeModelCatalogEntry>;
     name: string;
+    organization_default?: boolean;
     organization_id?: (string | null);
     protocol: RuntimeProfileProtocol;
     scope: RuntimeProfileScope;

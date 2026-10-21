@@ -1,459 +1,503 @@
-"""Messaging toolset: reach a person who is not in this conversation.
+"""Messaging toolset: the pod's channels, and reaching a person outside this
+conversation.
 
 The distinction that matters, and the one the docstrings spend their words on:
 
-  ``ask_user``      pauses this turn and resumes it with the answer — but only
-                    for the person already here, on the surface already in use.
-  ``message_user``  reaches somebody else and returns immediately. Nothing
-                    pauses. Their reply is handled by *their* agent, in *their*
-                    thread, under *their* permissions, guided by the
-                    ``background_instruction`` you write.
+  ``ask_user``      pauses this turn and resumes it with the answer -- but only
+                    for the person already here.
+  ``channel_post``  reaches somebody else, or a channel, and returns at once.
+                    Nothing pauses. With ``wants_answer`` it is a question
+                    waiting on them in their inbox; once everyone this run
+                    asked has answered, the conversation gets a fresh turn, and
+                    ``channel_read(asked_by_me=True)`` shows what they said.
 
-Because nothing pauses, an agent that needs answers fires all its messages and
-then simply ends its turn. It does not sleep, and it does not poll. Once the
-*last* of those asks is answered, `agent_surfaces` raises
-``NotificationSettledEvent`` and this module's event handler starts the next
-turn in the asking conversation, where the agent reads the answers with
-``check_messages``.
+Ending the turn is the whole trick, and it is why posting is safe to make
+non-blocking: a person takes hours, and a finished turn holds nothing.
 
-Waiting for the last one rather than the first is what keeps a four-person
-standup to one turn instead of four full conversation replays.
-
-Ending the turn is the whole trick, and it is why this tool is safe to make
-non-blocking. A person takes hours; an execution suspended for hours is one
-nobody can tell anything, holding a pause that has to be swept if it is ever
-abandoned. A finished turn holds nothing.
+Every read goes through the channels' visibility rule as the run's member
+(``viewer_of``): an agent sees exactly the channels its member could open.
+Telling a member something is a line in their own channel; channels decides
+how they hear of it.
 """
 
 from __future__ import annotations
 
-from uuid import UUID
+from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.authorization.delegation import agent_display_name, effective_agent_id
-from app.modules.agent_surfaces.contracts import notifications as surfaces
-from app.modules.agent_surfaces.contracts.notifications import (
-    check_notifications,
-    resolve_recipient,
-    send_notification,
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent.domain.asked_questions import (
+    batch_of,
+    line_client_id,
+    message_ref,
 )
-from app.core.log.log import get_logger
 from app.modules.agent.domain.outsiders import run_audience
+from app.modules.agent.domain.private_notes import defuse_lemma_labels
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.pod.contracts import directory as pod_directory
-from app.modules.agent.tools.messaging.teammates import ask_teammate, list_teammates
 from app.modules.agent.tools.messaging.models import (
-    MAX_OUTSIDER_MESSAGE_CHARS,
-    MAX_TITLE_LENGTH,
-    OUTSIDE_QUESTION_TITLE,
-    CheckMessagesRequest,
-    CheckMessagesResponse,
-    ListPodMembersRequest,
-    ListPodMembersResponse,
-    MessageChannel,
-    MessageUserRequest,
-    MessageUserResponse,
-    NotificationStatusReport,
-    PodMemberSummary,
+    ChannelListRequest,
+    ChannelListResponse,
+    ChannelPostRequest,
+    ChannelPostResponse,
+    ChannelReadRequest,
+    ChannelReadResponse,
+    ChannelSearchRequest,
+    ChannelSearchResponse,
+    ChannelSummary,
+    LineSummary,
 )
+from app.modules.agent.tools.messaging.people import ask_a_person, list_pod_members
+from app.modules.agent.tools.messaging.teammates import ask_teammate, list_teammates
+from app.modules.agent_surfaces.contracts import direct_messages
+from app.modules.channels.contracts import (
+    Asker,
+    ChannelKind,
+    ChannelMessage,
+    NewLine,
+    NewQuestion,
+    Principal,
+    Question,
+    QuestionAsker,
+    QuestionKind,
+    QuestionState,
+    Sender,
+    SenderKind,
+    Viewer,
+    direct_channel,
+    post,
+    withheld_from,
+)
+from app.modules.channels.contracts import lines as channel_reads
+from app.modules.channels.contracts import questions as channel_questions
 
-logger = get_logger(__name__)
-
-
-MESSAGE_USER_TOOL_NAME = "message_user"
-
-
-def _passes_a_question_on(deps: BaseAgentContext) -> bool:
-    """Whether this run's messages are questions it is owed an answer to.
-
-    On a run answering somebody outside the pod, the only message it can send
-    is to the member who looks after the conversation, passing on something it
-    could not answer -- and that answer is what it relays back.
-    """
-    return run_audience(deps).answers_outsiders
-
-
-def _instruction_for_reply(
-    deps: BaseAgentContext, request: MessageUserRequest
-) -> str | None:
-    """What the run handling the reply is told to do with it, unseen by the person.
-
-    Never from a run answering somebody outside the pod. Its words are the
-    stranger's to steer, and the instruction lands in the member's own run --
-    which acts with all of the member's access -- without the member ever
-    reading it. Their answer still comes back without one: it is recorded on the
-    notification, and the stranger's conversation relays it.
-    """
-    return None if deps.audience.answers_outsiders else request.background_instruction
+CHANNEL_POST_TOOL_NAME = "channel_post"
+#: How long a question put to a member waits on them.
+ASK_EXPIRES_AFTER = timedelta(hours=72)
 
 
-def _title_for(deps: BaseAgentContext, request: MessageUserRequest) -> str:
-    if deps.audience.answers_outsiders:
-        # The inbox label and email subject are the server's, not words a
-        # stranger steered.
-        return OUTSIDE_QUESTION_TITLE
-    if request.title:
-        return request.title.strip()
-    first_line = request.message.strip().splitlines()[0]
-    if len(first_line) <= MAX_TITLE_LENGTH:
-        return first_line
-    return first_line[: MAX_TITLE_LENGTH - 1].rstrip() + "…"
+def _uow() -> SqlAlchemyUnitOfWork:
+    return SessionUnitOfWorkFactory(async_session_maker)()
 
 
-def _outcome(result: dict, *, requested: MessageChannel | None) -> str:
-    """What the model is told happened, in the terms it asked in.
-
-    A refused channel gets its own wording. The generic "no chat app or mailbox
-    could carry this" is true of a routing failure and false of this: something
-    could have carried it, and the agent needs to see that its own choice is
-    what stopped the send — otherwise it retries the same call and reads the
-    same sentence.
-    """
-    reason = result["undeliverable_reason"] or ""
-    status = result["delivery_status"]
-    if status == "DELIVERED":
+def _refused_to_outsiders(deps: BaseAgentContext) -> str | None:
+    if run_audience(deps).answers_outsiders:
         return (
-            f"Sent on {result['delivered_via']}. They have not answered yet. "
-            "Once you have sent everything you need, end your turn — you get a "
-            "fresh one as soon as everyone you asked has replied."
+            "You are answering somebody outside the pod. When they need a "
+            "person, use `ask_a_person`."
         )
-    if status == "UNDELIVERABLE" and requested is not None:
-        return (
-            f"Not sent: you asked for {requested.value}. {reason} It is in "
-            "their Lemma inbox."
-        ).strip()
-    if status == "UNDELIVERABLE":
-        return (
-            "No chat app or mailbox could carry this, so it is in their Lemma "
-            f"inbox only. {reason}"
-        ).strip()
-    return (
-        "Delivery failed, but the notification exists and is in their Lemma "
-        f"inbox. {reason}"
-    ).strip()
+    return None
 
 
-async def message_user(
-    ctx: RunContext[BaseAgentContext], request: MessageUserRequest
-) -> MessageUserResponse:
-    """Message a pod member who is not in this conversation.
+def line_sender_name(line: ChannelMessage) -> str:
+    """Who said a line, as the agent reads it."""
+    sender = line.sender
+    if sender.display_name:
+        return sender.display_name
+    return {
+        SenderKind.MEMBER: "a member",
+        SenderKind.CONTACT: "a contact",
+        SenderKind.AGENT: "an agent",
+    }[sender.kind]
 
-    Reaches them on the chat app they last used, or by email, and always leaves
-    a copy in their Lemma inbox.
 
-    It does **not** pause your turn, and their reply never comes back as a tool
-    result. Send every message you need, give each a `background_instruction`,
-    then **finish your turn and stop**. Do not sleep on it and do not poll: you
-    get a fresh turn in this conversation as soon as the last person answers,
-    and you read what they said with `check_messages` then.
+def quoted_from_outside(text: str) -> str:
+    """A contact's words as the agent reads them: quoted, and with anything
+    that opens like one of Lemma's own labels marked as theirs -- data about
+    what they asked, which an agent reading the channel must not take as its
+    instructions."""
+    return "\n".join(f"> {said}" for said in defuse_lemma_labels(text).split("\n"))
 
-    Say what you have done and who you are waiting on before you stop. That is
-    the last thing whoever asked you sees until the answers land.
 
-    Leave `channel` unset unless you have a reason to pick one — the default is
-    already the app they last spoke to you on. When you do name one it is
-    honoured or refused, never swapped, so read `reachable_on` from
-    `list_pod_members` before choosing.
+def _summary(
+    line: ChannelMessage,
+    *,
+    reader_id: UUID,
+    in_direct: bool,
+    question: Question | None = None,
+) -> LineSummary:
+    hidden = withheld_from(line, user_id=reader_id, in_their_direct=in_direct)
+    asked = question or line.question
+    outside = line.sender.kind is SenderKind.CONTACT
+    text = None if hidden or line.is_deleted else line.text
+    return LineSummary(
+        id=line.id,
+        sender=line_sender_name(line),
+        sender_kind=line.sender.kind.value,
+        outside_pod=outside,
+        text=quoted_from_outside(text) if outside and text is not None else text,
+        at=line.created_at.isoformat(),
+        question_kind=asked.kind.value if asked else None,
+        question_state=asked.state.value if asked else None,
+        answer=dict(asked.answer) if asked and asked.answer else None,
+        awaits=(
+            str(asked.awaits.user_id or asked.awaits.contact_id) if asked else None
+        ),
+    )
 
-    To answer the person you are already talking to, just reply — don't use this.
 
-    When you are answering someone outside the pod, this reaches the person who
-    looks after the conversation and nobody else; `to` and `channel` are ignored.
+def _sender(deps: BaseAgentContext) -> Sender:
+    """The run's agent, speaking for the run's member."""
+    return Sender.agent(
+        effective_agent_id(deps.workload_id, pod_id=deps.pod_id),
+        on_behalf_of=Principal.member(deps.user_id),
+        display_name=agent_display_name(deps.agent_display_name or deps.agent_name),
+    )
+
+
+def _call_key(deps: BaseAgentContext, ctx: RunContext[BaseAgentContext]) -> str | None:
+    """This call, named: a retried worker job replays it with the same name."""
+    if deps.agent_run_id and ctx.tool_call_id:
+        return line_client_id(f"{deps.agent_run_id}:{ctx.tool_call_id}")
+    return None
+
+
+async def _viewer(uow: SqlAlchemyUnitOfWork, deps: BaseAgentContext) -> Viewer:
+    return await channel_reads.viewer_of(uow, pod_id=deps.pod_id, user_id=deps.user_id)
+
+
+async def channel_post(
+    ctx: RunContext[BaseAgentContext], request: ChannelPostRequest
+) -> ChannelPostResponse:
+    """Write to a member of the pod who is not in this conversation, or in a
+    channel.
+
+    With `to`, it goes to their own channel in Lemma, and they are told where
+    they are. With `channel_id`, a line in the channel of the person you work
+    for -- never a group: it would speak for them in front of the others, and
+    it is not carried to the chat a group mirrors. It does **not**
+    pause your turn, and an answer never comes back as a tool result. When you
+    need answers, set `wants_answer` on each (only with `to`), send them all,
+    then **finish your turn**: you get a fresh one here once the last person
+    answers, and `channel_read(asked_by_me=True)` shows what they said.
+
+    To answer the person you are already talking to, just reply.
     """
     deps = ctx.deps
-
     if deps.pod_id is None:
-        return MessageUserResponse(
-            success=False, error="message_user is only available inside a pod."
+        return ChannelPostResponse(success=False, error="Only inside a pod.")
+    if refused := _refused_to_outsiders(deps):
+        return ChannelPostResponse(success=False, error=refused)
+    if (request.to is None) == (request.channel_id is None):
+        return ChannelPostResponse(
+            success=False, error="Give exactly one of `to` or `channel_id`."
         )
-
-    if deps.audience.answers_outsiders and deps.keeper_asking:
-        # It would reach the member who wrote the message, as though somebody
-        # outside the pod had asked it.
-        return MessageUserResponse(
-            success=False,
-            error=(
-                "The member who looks after this conversation wrote that "
-                "message, and message_user only reaches them. Answer in your "
-                "reply instead."
-            ),
-        )
-
-    if deps.audience.answers_outsiders:
-        # A stranger's run reaches one person, the member who looks after the
-        # conversation, whatever `to` says. Nothing is looked up first: a
-        # different answer for an address that is in the pod and one that is
-        # not would tell the stranger who is.
-        if len(request.message) > MAX_OUTSIDER_MESSAGE_CHARS:
-            return MessageUserResponse(
+    if request.channel_id is not None:
+        if request.wants_answer:
+            return ChannelPostResponse(
                 success=False,
                 error=(
-                    "That is too long to pass on. Say what they asked in "
-                    f"{MAX_OUTSIDER_MESSAGE_CHARS} characters or fewer."
+                    "`wants_answer` asks one person: use `to` for it. A line in a "
+                    "channel is not a question anyone has to answer."
                 ),
             )
-        recipient_user_id = deps.user_id
-    else:
-        recipient_user_id = await resolve_recipient(
-            pod_id=deps.pod_id, reference=request.to
-        )
-    if recipient_user_id is None:
-        return MessageUserResponse(
+        return await _post_in_channel(ctx, request.channel_id, request.text)
+    return await _post_to_member(ctx, request)
+
+
+async def _post_to_member(
+    ctx: RunContext[BaseAgentContext], request: ChannelPostRequest
+) -> ChannelPostResponse:
+    deps = ctx.deps
+    recipient = await direct_messages.resolve_recipient(
+        pod_id=deps.pod_id, reference=request.to or ""
+    )
+    if recipient is None:
+        return ChannelPostResponse(
             success=False,
             error=(
                 f"No member of this pod matches '{request.to}'. It takes a pod "
-                "member id, user id, or email address — a name will not "
+                "member id, user id, or email address -- a name will not "
                 "resolve. Call list_pod_members to look them up."
             ),
         )
-
-    # No further permission check. Holding this toolset IS the grant to contact
-    # colleagues — it is opt-in, withheld from sub-agents, and every message
-    # names the human whose authority the run carries. Reaching the run's own
-    # owner needs nothing at all: the run already carries their delegated
-    # authority. Pod membership is enforced below, in the service, fail-closed.
-
-    # Not wrapped in a try: GracefulToolset already turns a raising tool body
-    # into an error result the model can read, and catching here as well would
-    # bury a bug in our own code as "the send failed".
-    result = await send_notification(
-        pod_id=deps.pod_id,
-        recipient_user_id=recipient_user_id,
-        title=_title_for(deps, request),
-        # As written. Whether it came from outside the pod -- and so how the
-        # member reads it -- is the service's to say, from the conversation's
-        # routing link rather than from words the stranger steered.
-        body=request.message,
-        actor_user_id=deps.user_id,
-        # Normalised, because a delegation token can still name the assistant
-        # by the sentinel this module predates -- and that id is not a row in
-        # `agents`, while `notifications.actor_agent_id` is a foreign key to
-        # that table. Passing it raw fails the insert, and the failure escapes
-        # before commit, so the notification row is rolled back too and the
-        # recipient gets nothing at all.
-        actor_agent_id=effective_agent_id(deps.workload_id, pod_id=deps.pod_id),
-        # Display name first, but fall back to the pod-unique name: the display
-        # name comes from surface metadata and is None for any run that did not
-        # start on a surface -- a schedule, a workflow, the app. That fallback
-        # is why this must be normalised: the pod's own agent stores `pod_default`,
-        # and this value becomes a chat bot's username and an email `From`.
-        agent_name=agent_display_name(deps.agent_display_name or deps.agent_name),
-        origin_conversation_id=deps.conversation_id,
-        origin_agent_run_id=deps.agent_run_id,
-        # Reach out from the surface this run is already on, so the recipient
-        # hears from the same bot rather than another of the agent's surfaces.
-        origin_surface_id=deps.surface_id,
-        # Only when the agent asked. Everything above is a default the router
-        # applies; this is an instruction it either follows or refuses.
-        # A stranger's run does not choose how the member hears from it.
-        channel=(
-            request.channel.value
-            if request.channel and not deps.audience.answers_outsiders
-            else None
-        ),
-        background_instruction=_instruction_for_reply(deps, request),
-        # A stranger's question passed on is always a question: the member's
-        # answer is what brings this conversation back to relay it.
-        expects_response=request.expects_response or _passes_a_question_on(deps),
-        expires_in_seconds=request.expires_in_seconds,
-        # A retried worker job replays this exact tool call. Without a key it
-        # posts the message twice, and there is no outbound dedup store to
-        # catch it.
-        idempotency_key=(
-            f"run:{deps.agent_run_id}:{ctx.tool_call_id}"
-            if deps.agent_run_id and ctx.tool_call_id
-            else None
-        ),
+    key = _call_key(deps, ctx)
+    call = ctx.tool_call_id or uuid4().hex
+    question = (
+        NewQuestion(
+            kind=QuestionKind.ASK,
+            ref=message_ref(deps.conversation_id, call),
+            asker=Asker.message(deps.conversation_id, call),
+            question={"tool": "message", "prompt": request.text},
+            awaits=Principal.member(recipient),
+            batch_id=batch_of(deps.agent_run_id),
+            expires_at=datetime.now(UTC) + ASK_EXPIRES_AFTER,
+        )
+        # A question is its asking conversation's: with none, nothing would
+        # ever take the answer, so the line only tells them.
+        if request.wants_answer and deps.conversation_id is not None
+        else None
     )
-
-    return MessageUserResponse(
+    async with _uow() as uow:
+        channel = await direct_channel(uow, pod_id=deps.pod_id, user_id=recipient)
+        line = await post(
+            uow,
+            channel_id=channel.id,
+            line=NewLine(
+                sender=_sender(deps),
+                text=request.text,
+                client_message_id=key,
+                conversation_id=deps.conversation_id,
+                agent_run_id=deps.agent_run_id,
+            ),
+            question=question,
+        )
+        await uow.commit()
+    said = "In their channel in Lemma; they are told where they are."
+    if request.wants_answer:
+        said += (
+            " They have not answered yet. Once you have sent everything you "
+            "need, end your turn -- you get a fresh one when everyone has replied."
+        )
+    return ChannelPostResponse(
         success=True,
-        message=_outcome(result, requested=request.channel),
-        notification_id=result["notification_id"],
-        delivery_status=result["delivery_status"],
-        delivered_via=result["delivered_via"],
-        undeliverable_reason=result["undeliverable_reason"],
+        message=said,
+        message_id=line.id if line else None,
+        channel_id=channel.id,
     )
 
 
-async def check_messages(
-    ctx: RunContext[BaseAgentContext], request: CheckMessagesRequest
-) -> CheckMessagesResponse:
-    """Check whether the people you messaged have answered.
+def _group_refused(answers_shared: bool) -> str:
+    """Why a run may not write in a group for its member. A line it writes
+    is made with their access and is not carried to the chat a group
+    mirrors; and where the group keeps such answers to whoever asked
+    (``answers_shared`` off), the others are shown only that it was said.
+    Each says only what is true of that group."""
+    if answers_shared:
+        why = (
+            "it would be said for them in front of everybody there, and it "
+            "would not reach the chat the group mirrors."
+        )
+    else:
+        why = (
+            "what you write is made with their access, and this group keeps "
+            "such answers to the person they were for, so the others would "
+            "not see it."
+        )
+    return (
+        f"You cannot write in a group for them: {why} Reach the people you "
+        "need with `to`, or ask them to post it themselves."
+    )
 
-    Call it when a turn opens saying they have replied — that is what it is for.
-    Not in a loop, and not to check on people who have not answered yet: each
-    call replays this whole conversation, and you are told when there is
-    something to read. `RESPONDED` is the only status that means somebody
-    answered.
 
-    If some are still OPEN after you have genuinely waited, say who has not
-    answered and finish with what you have.
-    """
+async def _post_in_channel(
+    ctx: RunContext[BaseAgentContext], channel_id: UUID, text: str
+) -> ChannelPostResponse:
     deps = ctx.deps
-    if deps.pod_id is None:
-        return CheckMessagesResponse(
-            success=False, error="check_messages is only available inside a pod."
+    async with _uow() as uow:
+        channel = await channel_reads.visible_channel(
+            uow, viewer=await _viewer(uow, deps), channel_id=channel_id
         )
-    if not request.notification_ids:
-        return CheckMessagesResponse(
-            success=False, error="Give at least one notification id."
-        )
-
-    # Only what this conversation sent: an id from anywhere else in the pod
-    # matches nothing, however it was learned.
-    reports = await check_notifications(
-        pod_id=deps.pod_id,
-        conversation_id=deps.conversation_id,
-        notification_ids=request.notification_ids,
-    )
-    messages = [NotificationStatusReport(**report) for report in reports]
-    pending = sum(1 for report in messages if report.status == "OPEN")
-    answered = sum(1 for report in messages if report.status == "RESPONDED")
-
-    missing = len(request.notification_ids) - len(messages)
-    note = (
-        f" {missing} id(s) matched nothing this conversation sent."
-        if missing > 0
-        else ""
-    )
-
-    return CheckMessagesResponse(
-        success=True,
-        messages=messages,
-        pending=pending,
-        message=(
-            f"{answered} answered, {pending} still waiting.{note}"
-            if messages
-            else f"No matching notifications.{note}"
-        ),
-    )
-
-
-async def list_pod_members(
-    ctx: RunContext[BaseAgentContext], request: ListPodMembersRequest
-) -> ListPodMembersResponse:
-    """Look up who is in this pod, to find who to `message_user`.
-
-    `message_user` needs an id or an exact email address — a name won't resolve
-    — so start here whenever you know a person by name. Each result carries a
-    `to` value to pass straight through.
-
-    Also tells you `reachable_on`: the channels that can carry a message to each
-    person right now. Read it before setting `message_user`'s `channel`, and
-    don't ask for one that isn't listed — the send will be refused rather than
-    rerouted.
-
-    Searches names and email addresses; omit `search` to list everyone.
-    """
-    deps = ctx.deps
-
-    if deps.pod_id is None:
-        return ListPodMembersResponse(
-            success=False, error="list_pod_members is only available inside a pod."
-        )
-    if deps.audience.answers_outsiders:
-        # The directory is read as the member who looks after this run, and
-        # everything in it could be repeated to the stranger asking. Nobody
-        # listed there could be messaged from here anyway.
-        return ListPodMembersResponse(
-            success=False,
-            error=(
-                "You are talking to somebody outside the pod, so its members are "
-                "not yours to list. To pass a question on, use `message_user`: "
-                "it reaches the person who looks after this conversation."
+        if channel is None:
+            return ChannelPostResponse(success=False, error="No such channel here.")
+        if channel.kind is ChannelKind.CONTACT:
+            return ChannelPostResponse(
+                success=False,
+                error=(
+                    "A contact's channel is written in by members: tell the "
+                    "person who looks after them instead."
+                ),
+            )
+        if channel.kind is ChannelKind.GROUP:
+            return ChannelPostResponse(
+                success=False, error=_group_refused(channel.answers_shared)
+            )
+        if channel.is_archived:
+            return ChannelPostResponse(
+                success=False, error="That channel is archived: nothing new goes in."
+            )
+        line = await post(
+            uow,
+            channel_id=channel.id,
+            line=NewLine(
+                sender=_sender(deps),
+                text=text,
+                client_message_id=_call_key(deps, ctx),
+                conversation_id=deps.conversation_id,
+                agent_run_id=deps.agent_run_id,
             ),
         )
-
-    page = await pod_directory.list_pod_members(
-        pod_id=deps.pod_id,
-        requester_user_id=deps.user_id,
-        search=request.search,
-        limit=request.limit,
-    )
-    if page is None:
-        return ListPodMembersResponse(
-            success=False, error="You do not have access to this pod's member list."
-        )
-
-    members = page.members
-    if not members:
-        detail = (
-            f" Nothing matched '{request.search}'."
-            if request.search
-            else " This pod has no members."
-        )
-        return ListPodMembersResponse(
-            success=True, message=f"No members found.{detail}"
-        )
-
-    reach = await _reachable_on(members, pod_id=deps.pod_id, deps=deps)
-    return ListPodMembersResponse(
+        await uow.commit()
+    return ChannelPostResponse(
         success=True,
-        members=[
-            PodMemberSummary(
-                to=member.to,
-                name=member.name,
-                email=member.email,
-                role=member.role,
-                is_you=member.is_you,
-                # `user_id` is the key reachability is computed against and is
-                # deliberately not offered to the model: `to` is the value it
-                # copies, and a second id would only invite it to pass the wrong
-                # one.
-                reachable_on=reach.get(member.user_id, []),
-            )
-            for member in members
-        ],
-        total_matched=page.total_matched,
-        truncated=page.truncated,
-        message=(
-            f"{page.total_matched} match(es); showing {len(members)}. "
-            "Pass a member's `to` value to message_user."
-            if page.truncated
-            else f"{len(members)} member(s). Pass a `to` value to message_user."
-        ),
+        message="Posted in the channel.",
+        message_id=line.id if line else None,
+        channel_id=channel.id,
     )
 
 
-async def _reachable_on(
-    members: tuple[pod_directory.PodDirectoryMember, ...],
-    *,
-    pod_id: UUID,
-    deps: BaseAgentContext,
-) -> dict[UUID, list[str]]:
-    """Which channels this agent can reach each listed person on, right now.
+async def channel_read(
+    ctx: RunContext[BaseAgentContext], request: ChannelReadRequest
+) -> ChannelReadResponse:
+    """Read a channel's latest lines -- or, with `asked_by_me`, the questions
+    this conversation put to people and their answers, newest first.
 
-    Two lookups rather than one, because they are two modules' answers: `pod`
-    says who is in the pod, `agent_surfaces` says who has a surface this agent
-    can send on. They were one function in the composition root, which is what
-    made the mixture untypeable.
-
-    Only the page that is actually returned: reachability costs queries per
-    surface, and answering it for members nobody will see is work spent on rows
-    the model never reads.
+    Call `asked_by_me` when a turn opens saying they have answered -- not in a
+    loop, and not to check on people who have not answered: you are told when
+    there is something to read.
     """
-    recipients = {member.user_id: member.email for member in members if member.user_id}
-    if not recipients:
-        return {}
-    return await surfaces.reachable_channels(
-        pod_id=pod_id,
-        recipients=recipients,
-        # Whose reach to report. Same sentinel handling as message_user: the pod
-        # assistant is not a row in `agents`, and its surfaces are the ones with
-        # the pod's own id on them.
-        actor_agent_id=effective_agent_id(deps.workload_id, pod_id=pod_id),
+    deps = ctx.deps
+    if deps.pod_id is None:
+        return ChannelReadResponse(success=False, error="Only inside a pod.")
+    if refused := _refused_to_outsiders(deps):
+        return ChannelReadResponse(success=False, error=refused)
+    if request.asked_by_me:
+        return await _asked_by_me(deps, limit=request.limit)
+    if request.channel_id is None:
+        return ChannelReadResponse(
+            success=False, error="Name a channel, or ask for `asked_by_me`."
+        )
+    async with _uow() as uow:
+        channel = await channel_reads.visible_channel(
+            uow, viewer=await _viewer(uow, deps), channel_id=request.channel_id
+        )
+        if channel is None:
+            return ChannelReadResponse(success=False, error="No such channel here.")
+        lines = await channel_reads.page_lines(
+            uow, channel_id=channel.id, limit=request.limit
+        )
+    in_direct = channel.kind is ChannelKind.DIRECT
+    return ChannelReadResponse(
+        success=True,
+        lines=[
+            _summary(line, reader_id=deps.user_id, in_direct=in_direct)
+            for line in lines
+            if not line.is_deleted
+        ],
+    )
+
+
+async def _asked_by_me(deps: BaseAgentContext, *, limit: int) -> ChannelReadResponse:
+    """This conversation's questions to people, newest first -- the latest are
+    the ones a turn opening on "they have answered" is about."""
+    if deps.conversation_id is None:
+        return ChannelReadResponse(success=True, message="Nothing asked here.")
+    async with _uow() as uow:
+        asked = await channel_questions.questions_asked_by(
+            uow,
+            QuestionAsker.MESSAGE,
+            conversation_id=deps.conversation_id,
+            limit=limit,
+        )
+        lines = [
+            (question, await channel_reads.line_by_id(uow, question.message_id))
+            for question in asked
+        ]
+    summaries = [
+        _summary(line, reader_id=deps.user_id, in_direct=True, question=question)
+        for question, line in lines
+        if line is not None
+    ]
+    waiting = sum(
+        1
+        for question, _ in lines
+        if question.state in (QuestionState.OPEN, QuestionState.ANSWERING)
+    )
+    return ChannelReadResponse(
+        success=True,
+        lines=summaries,
+        message=f"{len(lines) - waiting} answered or closed, {waiting} still waiting.",
+    )
+
+
+async def channel_search(
+    ctx: RunContext[BaseAgentContext], request: ChannelSearchRequest
+) -> ChannelSearchResponse:
+    """Find lines in the channels you can read that contain every word."""
+    deps = ctx.deps
+    if deps.pod_id is None:
+        return ChannelSearchResponse(success=False, error="Only inside a pod.")
+    if refused := _refused_to_outsiders(deps):
+        return ChannelSearchResponse(success=False, error=refused)
+    async with _uow() as uow:
+        viewer = await _viewer(uow, deps)
+        found = await channel_reads.search_lines(
+            uow, viewer=viewer, words=request.query, limit=request.limit
+        )
+        own = {
+            channel.id
+            for channel, _ in await channel_reads.channels_for(
+                uow, viewer=viewer, kind=ChannelKind.DIRECT
+            )
+        }
+    return ChannelSearchResponse(
+        success=True,
+        lines=[
+            _summary(line, reader_id=deps.user_id, in_direct=line.channel_id in own)
+            for line in found
+            if not withheld_from(
+                line, user_id=deps.user_id, in_their_direct=line.channel_id in own
+            )
+        ],
+    )
+
+
+async def channel_list(
+    ctx: RunContext[BaseAgentContext], request: ChannelListRequest
+) -> ChannelListResponse:
+    """The pod's channels you can read, most recently active first, with the
+    outside places each is fed from."""
+    deps = ctx.deps
+    if deps.pod_id is None:
+        return ChannelListResponse(success=False, error="Only inside a pod.")
+    if refused := _refused_to_outsiders(deps):
+        return ChannelListResponse(success=False, error=refused)
+    try:
+        kind = ChannelKind(request.kind.upper()) if request.kind else None
+    except ValueError:
+        return ChannelListResponse(
+            success=False, error="kind is DIRECT, CONTACT or GROUP."
+        )
+    async with _uow() as uow:
+        channels = await channel_reads.channels_for(
+            uow, viewer=await _viewer(uow, deps), kind=kind
+        )
+    return ChannelListResponse(
+        success=True,
+        channels=[
+            ChannelSummary(
+                id=channel.id,
+                kind=channel.kind.value,
+                title=channel.title,
+                places=[
+                    f"{source.platform}: {source.title}"
+                    if source.title
+                    else source.platform
+                    for source in sources
+                ],
+            )
+            for channel, sources in channels
+        ],
     )
 
 
 messaging_toolset = FunctionToolset[BaseAgentContext](
     tools=[
-        message_user,
-        check_messages,
+        channel_post,
+        channel_read,
+        channel_search,
+        channel_list,
         list_pod_members,
         list_teammates,
         ask_teammate,
+        ask_a_person,
     ]
 )
+
+
+__all__ = [
+    "CHANNEL_POST_TOOL_NAME",
+    "ask_a_person",
+    "channel_list",
+    "channel_post",
+    "channel_read",
+    "channel_search",
+    "line_sender_name",
+    "list_pod_members",
+    "messaging_toolset",
+]

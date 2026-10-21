@@ -13,16 +13,27 @@ sandbox lifecycle belongs to [workspace](workspace.md).
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Agent CRUD/permissions, conversations/messages/SSE, runtime profiles, Agent Host pairing/dispatch, tools, widgets |
-| Redis consumer | Converts agent lifecycle events into queued work and title generation |
-| streaq tasks | Run agents, generate titles, reconcile orphaned runs |
-| Published stream | `agent_events` |
+| Work kinds | `agent.turn` (`interactive`) and `agent.turn.automation` (`automation`), one per run and one at a time per conversation, written with the run; `agent.title`; `agent.approval.execute`, written with an approval decision; `agent.wait.fire`, `agent.wait.poll` and `agent.wait.resolve_child` for paused turns; `agent.followup`, `agent.subagent_result` and `pod_ask.deliver`, written in a finished run's transaction; `agent.pause_questions` after a run ends (its pause questions brought in line, its batch of questions to people sealed) and `agent.asked_question_closed` as one closes, which write `agent.replies_arrived` once the run has finished and nothing it asked still waits; `agent.pause_expired` when a paused question's time ran out (resumed as nobody answering, never approved) |
+| Facts emitted | `AgentRunFinished` in every run's terminal transaction; workflow, schedule, surfaces and the parent's wait subscribe |
+| Periodic work | `agent.host_dispatch_reconcile` (5 min), `agent.host_retained_state_cleanup` (daily) |
+| After-commit projection | Drops a cached memory-brief section when the file behind it is written, from the committed `datastore.file.*` events |
 | Mounted MCP apps | Conversation and pod tool servers are assembled by the backend root using agent services |
 
-Durable lifecycle events are staged in the PostgreSQL outbox and reach Redis
-Streams only through the core message bus. Transient token/status frames use the
-core realtime-channel port with a Redis Pub/Sub adapter; each SSE connection
-leases one subscription connection and releases it on completion, failure, or
-cancellation.
+Everything that must follow a run's end is a work item or a fact written in the
+transaction that ends it, so a crash between the end and its follow-ups cannot
+lose one. Each step of a turn (a tool call, its return, the answer) commits
+fenced by the turn's claim, so a worker that lost the turn's lease cannot add a
+second answer, and a resumed turn whose answer had committed ends on it without
+asking the model again. Lemma's database being unreachable mid-turn interrupts
+the turn, which resumes; it is never recorded as the model failing. Transient token/status frames use the core realtime-channel port with
+a Redis Pub/Sub adapter; each SSE connection leases one subscription connection
+and releases it on completion, failure, or cancellation.
+
+Migration `0056_agent_surface_bundle_work` arms every active wait. A turn that
+was running on the old transport, and a conversation paused on an approval that
+was decided but not yet executed, are failed with a message asking the person
+to continue; nothing is replayed
+([cutover](../operators/reliability.md#cutover-from-the-old-transport-design-13)).
 
 ## Main data model
 
@@ -46,7 +57,7 @@ cancellation.
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
 | `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop |
 | `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
-| `/me/runtime/agent-hosts...`, `/agent-host/link` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP) |
+| `/me/runtime/agent-hosts...`, `/agent-host/link`, `/agent-host/transfers/{id}`, `/agent-host/runs/{run_id}/blobs/{sha256}` | Agent Host pairing and management; the host's link WebSocket (commands, events, harnesses, Lemma MCP), and the host-authenticated HTTP routes its bulk bytes take instead (file chunks, event images) |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
 | `/public/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL (`/widgets/serve...` is a legacy alias until 2026-11-08) |
 
@@ -83,6 +94,20 @@ and fragments for its enabled toolsets. Resource authoring details live in
 skills. Agent and conversation instructions follow
 the static guidance; runtime context and the task list follow those to preserve
 the cached prefix. In-process capabilities and Agent Host use the same fragments.
+
+A message answering a line in a channel keeps which lines of the channel it
+was handed as background, never what they said, and a member's line written
+into a contact's conversation is a mark naming its line, never its words
+(`contact_conversations.append_follow_up`). Both are read from the channel's
+timeline as the run's history is put together
+(`services/channel_background.with_channel_background`, from
+`runtime_history.assemble_runtime_history` and for messages steered into a
+run), so an edit, a deletion or a forgotten contact reaches every later
+prompt; the visitor's page and an export read a follow-up the same way. Only
+the runs carried whole get their background -- an older run is reduced to its
+requests and answer -- so the read is bounded and moves in elision's blocks.
+A run answering a line in Lemma answers the lines whose words it read
+(`services/channel_answers`, recorded in `channel_line_answers`).
 
 Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through

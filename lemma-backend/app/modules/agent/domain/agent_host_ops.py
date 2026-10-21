@@ -34,6 +34,10 @@ LINK_UNAVAILABLE = "link_unavailable"
 INVALID_ANSWER = "invalid_answer"
 #: The deadline passed with the request taken and unanswered.
 TIMEOUT = "timeout"
+#: The host answered, but the data it delivered over HTTP was missing or was
+#: not what its answer described. Worth one more try: nothing on the Mac is
+#: wrong, only the copy that reached Lemma.
+TRANSFER_INCOMPLETE = "transfer_incomplete"
 
 #: What an agent is told when the user's Mac is not there to answer. Written
 #: as the sentence the contract promises, because it reaches the model as-is.

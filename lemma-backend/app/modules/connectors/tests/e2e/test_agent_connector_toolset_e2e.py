@@ -423,7 +423,12 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
             ),
         )
         assert "error" in result, result
-        assert "42" not in str(result), result
+        assert result.get("code") == "CONNECTOR_ACCESS_DENIED", result
+        # No computed 42 came back. The connector's random name is left out:
+        # a hex suffix like ``02ed42b1`` holds the digits by chance.
+        assert "42" not in str(
+            {k: v for k, v in result.items() if k != "auth_config"}
+        ), result
 
     async def test_reading_the_operation_list_is_not_itself_gated(
         self, installed_connector, connector_test_pod, authenticated_client

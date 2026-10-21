@@ -10,7 +10,10 @@ import pytest
 
 from app.core.test_utils import get_postgres_container, get_postgres_url
 
-pytestmark = pytest.mark.e2e
+# Walking the Alembic chain from the base costs every one of these tests
+# ten-odd seconds, so they run in the weekly protected lane. The pull-request
+# lane keeps one round trip, `app/core/tests/e2e/test_work_migration_e2e.py`.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
 BEFORE = "0043_surface_groups"

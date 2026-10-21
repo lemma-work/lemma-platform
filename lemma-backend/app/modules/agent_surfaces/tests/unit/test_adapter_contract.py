@@ -27,6 +27,7 @@ from app.modules.agent_surfaces.domain.adapter_port import (
     InboundReader,
     InChatSetup,
     OutboundDelivery,
+    PlacePrivacyReader,
     ReplyWindowReopener,
     in_chat_setup,
     reply_window_reopener,
@@ -73,6 +74,7 @@ _PORT = (
 )
 _IN_CHAT_SETUP = _port_methods(InChatSetup)
 _REPLY_WINDOW = _port_methods(ReplyWindowReopener)
+_PLACE_PRIVACY = _port_methods(PlacePrivacyReader)
 
 
 @pytest.mark.parametrize("platform, adapter", _registered_adapters())
@@ -84,7 +86,9 @@ def test_adapter_exposes_nothing_the_port_does_not_name(platform, adapter):
         if cls is not object
         for name in _public_methods(cls)
     }
-    undeclared = sorted(exposed - _PORT - _IN_CHAT_SETUP - _REPLY_WINDOW)
+    undeclared = sorted(
+        exposed - _PORT - _IN_CHAT_SETUP - _REPLY_WINDOW - _PLACE_PRIVACY
+    )
     assert not undeclared, (
         f"{platform} exposes {undeclared}, which no port declares. Shared code "
         "reaches adapters through the port, so a method it does not name is "

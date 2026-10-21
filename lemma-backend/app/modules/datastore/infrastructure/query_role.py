@@ -32,6 +32,7 @@ import re
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
@@ -157,7 +158,8 @@ class QueryRoleGrants:
         """
         try:
             await self.ensure_role()
-        except SQLAlchemyError:
+        except SQLAlchemyError as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "datastore.query_role.ensure.degraded",
                 role=query_role_name(),
@@ -241,7 +243,8 @@ class QueryRoleGrants:
             return False
         try:
             await self._retrying(grant, schema_name)
-        except DBAPIError:
+        except DBAPIError as exc:
+            raise_if_database_unavailable(exc)
             logger.warning(
                 "datastore.query_role.heal.degraded",
                 schema_name=schema_name,

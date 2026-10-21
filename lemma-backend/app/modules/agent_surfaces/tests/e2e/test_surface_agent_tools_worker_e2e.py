@@ -101,18 +101,18 @@ def _tool_result_by_id(
     return payload
 
 
+# One test per platform: each is a few full runs through the real worker,
+# and together they passed the PR lane's per-test budget on a slow runner.
 @pytest.mark.asyncio
-async def test_public_agent_runs_platform_context_tools_through_real_worker(
+async def test_public_agent_runs_slack_context_tools_through_real_worker(
     authenticated_client,
     db_session,
-    e2e_settings,
     test_pod,
     fixed_test_user,
     fake_slack,
-    fake_teams,
     worker,
 ):
-    """A user can run Slack/Teams context tools through HTTP+SSE; each call
+    """A user can run the Slack context tools through HTTP+SSE; each call
     reaches the production worker, platform adapter, and provider contract and
     persists its structured tool return.
 
@@ -228,6 +228,23 @@ async def test_public_agent_runs_platform_context_tools_through_real_worker(
     )
     assert slack_missing_context["success"] is False
     assert "missing channel credentials" in slack_missing_context["error"]
+
+
+@pytest.mark.asyncio
+async def test_public_agent_runs_teams_context_tools_through_real_worker(
+    authenticated_client,
+    db_session,
+    e2e_settings,
+    test_pod,
+    fixed_test_user,
+    fake_teams,
+    worker,
+):
+    """The same for the Teams context tools: thread, channel and auto scope,
+    a run with no thread or no channel, and Graph failing."""
+
+    del worker
+    pod_id = test_pod["id"]
 
     teams_account = await _ensure_connector_account(
         db_session,

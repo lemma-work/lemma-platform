@@ -4,7 +4,9 @@ The transport is the seam: a fake that records each ``op`` and answers from a
 script, standing where the Agent Host link client stands in production. What
 the tests assert is the wire -- method names and params exactly as
 docs/architecture/desktop-host-execution.md §4 spells them -- and the
-``sandbox_runtime`` error each ``detail.kind`` becomes.
+``sandbox_runtime`` error each ``detail.kind`` becomes. File data is handed to
+the transport beside the op (``send`` / ``receive``), never in its params: the
+transport moves it over HTTP, and that half is tested where it lives.
 """
 
 from __future__ import annotations
@@ -49,8 +51,10 @@ from app.modules.workspace.providers.agent_host import (
     HostOpRefused,
 )
 from app.modules.workspace.providers.agent_host_ops import (
+    INLINE_DATA_BYTES,
     OP_MAX_DATA_BYTES,
     PYTHON_ON_HOST_SENTENCE,
+    WRITE_CHUNK_BYTES,
 )
 from app.modules.workspace.providers.base import (
     ProviderCapability,
@@ -78,12 +82,18 @@ def _stat(path: str, *, size: int = 3, sha: str | None = None) -> dict:
 
 
 class FakeTransport:
-    """Records every op; answers from ``answers[method]`` or raises a refusal."""
+    """Records every op; answers from ``answers[method]`` or raises a refusal.
+
+    ``send`` records the data it was handed in ``sent``; ``receive`` hands back
+    the ``data`` of its answer as the bytes the host delivered.
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[UUID, UUID, str, dict]] = []
         self.answers: dict[str, object] = {"workspace.open": {"root": ROOT}}
         self.refusals: dict[str, list[HostOpRefused]] = {}
+        self.sent: dict[str, list[bytes]] = {}
+        self.received_limits: list[int] = []
 
     async def request(self, *, host_id, workspace, method, params, deadline_at):
         self.calls.append((host_id, workspace, method, params))
@@ -92,6 +102,31 @@ class FakeTransport:
             raise queued.pop(0)
         answer = self.answers.get(method, {})
         return answer(params) if callable(answer) else answer
+
+    async def send(self, *, host_id, workspace, method, params, data, deadline_at):
+        self.sent.setdefault(method, []).append(data)
+        return await self.request(
+            host_id=host_id,
+            workspace=workspace,
+            method=method,
+            params=params,
+            deadline_at=deadline_at,
+        )
+
+    async def receive(
+        self, *, host_id, workspace, method, params, max_bytes, deadline_at
+    ):
+        self.received_limits.append(max_bytes)
+        answer = dict(
+            await self.request(
+                host_id=host_id,
+                workspace=workspace,
+                method=method,
+                params=params,
+                deadline_at=deadline_at,
+            )
+        )
+        return answer, answer.pop("data", b"")
 
     def methods(self) -> list[str]:
         return [call[2] for call in self.calls]
@@ -392,7 +427,12 @@ async def test_read_process_output_decodes_chunks_and_state(
     )
 
     assert transport.params("process.read") == [
-        {"process_id": "p1", "after_sequence": 3, "wait_ms": 1500}
+        {
+            "process_id": "p1",
+            "after_sequence": 3,
+            "wait_ms": 1500,
+            "max_bytes": INLINE_DATA_BYTES,
+        }
     ]
     assert [(c.sequence, c.channel, c.data) for c in snapshot.chunks] == [
         (4, ProcessOutputChannel.STDOUT, b"hi"),
@@ -486,10 +526,7 @@ async def test_a_large_read_moves_in_ranged_chunks_of_at_most_one_mebibyte(
 
     def read(params):
         piece = body[params["offset"] : params["offset"] + params["length"]]
-        return {
-            "data": base64.b64encode(piece).decode(),
-            "eof": params["offset"] + len(piece) >= len(body),
-        }
+        return {"data": piece, "eof": params["offset"] + len(piece) >= len(body)}
 
     transport.answers["file.read"] = read
 
@@ -509,13 +546,12 @@ async def test_a_large_read_moves_in_ranged_chunks_of_at_most_one_mebibyte(
     reads = transport.params("file.read")
     assert [r["offset"] for r in reads] == [0, OP_MAX_DATA_BYTES, 2 * OP_MAX_DATA_BYTES]
     assert all(r["length"] <= OP_MAX_DATA_BYTES for r in reads)
+    # The data came back beside each op, never in its params.
+    assert transport.received_limits == [r["length"] for r in reads]
 
 
 async def test_a_ranged_read_asks_for_only_that_range(provider, transport, instance):
-    transport.answers["file.read"] = {
-        "data": base64.b64encode(b"xyz").decode(),
-        "eof": False,
-    }
+    transport.answers["file.read"] = {"data": b"xyz", "eof": False}
     received = [
         chunk
         async for chunk in provider.open_file(
@@ -534,7 +570,7 @@ async def test_a_ranged_read_asks_for_only_that_range(provider, transport, insta
 async def test_a_large_write_is_chunked_and_only_the_last_chunk_is_final(
     provider, transport, instance
 ):
-    body = b"z" * (OP_MAX_DATA_BYTES * 2 + 17)
+    body = b"z" * (WRITE_CHUNK_BYTES * 2 + 17)
     digest = "sha256:" + hashlib.sha256(body).hexdigest()
     transport.answers["file.write"] = lambda params: (
         _stat(params["path"], size=len(body), sha=digest) if params["final"] else {}
@@ -556,13 +592,15 @@ async def test_a_large_write_is_chunked_and_only_the_last_chunk_is_final(
     writes = transport.params("file.write")
     assert [w["offset"] for w in writes] == [
         0,
-        OP_MAX_DATA_BYTES,
-        2 * OP_MAX_DATA_BYTES,
+        WRITE_CHUNK_BYTES,
+        2 * WRITE_CHUNK_BYTES,
     ]
     assert [w["final"] for w in writes] == [False, False, True]
     assert len({w["upload_id"] for w in writes}) == 1
-    assert all(len(base64.b64decode(w["data"])) <= OP_MAX_DATA_BYTES for w in writes)
-    assert b"".join(base64.b64decode(w["data"]) for w in writes) == body
+    sent = transport.sent["file.write"]
+    assert all("data" not in w for w in writes)
+    assert all(len(chunk) <= WRITE_CHUNK_BYTES for chunk in sent)
+    assert b"".join(sent) == body
     assert "expected_sha256" not in writes[0]
     assert writes[-1]["expected_sha256"] == digest
     assert stat.size_bytes == len(body)
@@ -583,7 +621,8 @@ async def test_an_empty_write_is_one_final_chunk(provider, transport, instance):
         deadline_at=_deadline(),
     )
     writes = transport.params("file.write")
-    assert len(writes) == 1 and writes[0]["final"] is True and writes[0]["data"] == ""
+    assert len(writes) == 1 and writes[0]["final"] is True
+    assert transport.sent["file.write"] == [b""]
 
 
 async def test_a_secret_is_delivered_without_a_shell(provider, transport, instance):
@@ -594,6 +633,54 @@ async def test_a_secret_is_delivered_without_a_shell(provider, transport, instan
         {"path": "/tmp/lemma/token", "data": base64.b64encode(b"s3cret").decode()}
     ]
     assert "process.start" not in transport.methods()
+
+
+async def test_input_travels_in_pieces_small_enough_to_ride_the_link(
+    provider, transport, instance
+):
+    data = b"i" * (INLINE_DATA_BYTES * 2 + 3)
+    await provider.send_process_input(
+        instance, process_id="p1", data=data, deadline_at=_deadline()
+    )
+    pieces = [
+        base64.b64decode(params["data"]) for params in transport.params("process.input")
+    ]
+    assert [len(piece) for piece in pieces] == [INLINE_DATA_BYTES, INLINE_DATA_BYTES, 3]
+    assert b"".join(pieces) == data
+
+
+async def test_a_secret_too_large_to_ride_the_link_is_refused_before_sending(
+    provider, transport, instance
+):
+    with pytest.raises(SandboxRejected, match="Write it to a file instead"):
+        await provider.deliver_secret(
+            instance,
+            path="/tmp/lemma/token",
+            value=b"s" * (INLINE_DATA_BYTES + 1),
+            deadline_at=_deadline(),
+        )
+    assert transport.calls == []
+
+
+async def test_a_write_retried_after_a_reopen_sends_its_data_again(
+    provider, transport, instance
+):
+    """The first transfer may have been fetched already; the retry stages anew."""
+    transport.refusals["file.write"] = [HostOpRefused("workspace_not_open", "?")]
+    transport.answers["file.write"] = _stat(f"{ROOT}/f", size=2)
+
+    async def body():
+        yield b"hi"
+
+    await provider.write_file(
+        instance,
+        path=f"{ROOT}/f",
+        data=body(),
+        expected_sha256=None,
+        deadline_at=_deadline(),
+    )
+    assert transport.methods() == ["file.write", "workspace.open", "file.write"]
+    assert transport.sent["file.write"] == [b"hi", b"hi"]
 
 
 # ---------------------------------------------------------------- not offered

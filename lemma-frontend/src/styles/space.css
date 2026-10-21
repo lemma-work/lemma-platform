@@ -2331,6 +2331,76 @@ samp,
     font-weight: 500;
     color: var(--ink-3);
 }
+/* The space's apps, under its name: one row of covers, newest first. */
+.home__section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+.home__all {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+.home__all:hover {
+    color: var(--ink);
+}
+.home__apps {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.home__app {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.home__app-cover {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 1200 / 630;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--wash-a);
+    transition: border-color 120ms ease;
+}
+.home__app:hover .home__app-cover {
+    border-color: var(--line-2);
+}
+.home__app-letter {
+    font-size: 26px;
+    font-weight: 500;
+    color: var(--ink-3);
+}
+.home__app-name {
+    overflow: hidden;
+    font-size: 14px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+@media (max-width: 720px) {
+    .home__apps {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
 .home__quiet {
     margin: 0;
     font-size: 14px;
@@ -4618,10 +4688,18 @@ samp,
 .askbox--over {
     background: var(--accent-soft);
 }
+/* The same layout the conversation's composer uses, because it is the same
+   box: the row aligns to its bottom edge, so a growing draft pushes upward,
+   and every control centres on the textarea's last line — the line the
+   placeholder is on when the box is empty and the line being typed on when it
+   is not. The attach used to hang off the textarea's own bottom margin
+   instead, which put it a few pixels above the send button beside it: the one
+   control in the row that did not line up with the others. */
 .askbox__row {
     display: flex;
     align-items: flex-end;
     gap: 8px;
+    --askbox-line: 24px;
 }
 .askbox__files {
     display: flex;
@@ -4631,15 +4709,15 @@ samp,
 .askbox__picker {
     display: none;
 }
-/* Sat against the first line of the text rather than the bottom of a box
-   that grows: 7px is the textarea's own bottom margin. */
+/* Centred on that line: 7px is the textarea's own bottom margin, and the rest
+   is the difference between a 34px control and the line it sits on. */
 .askbox__attach {
     display: grid;
     place-items: center;
     flex: none;
     width: 34px;
     height: 34px;
-    margin-bottom: 7px;
+    margin-block-end: calc(7px + (var(--askbox-line) - 34px) / 2);
     border: 0;
     border-radius: var(--r-sm);
     background: none;
@@ -4681,6 +4759,7 @@ samp,
     place-items: center;
     width: 36px;
     height: 36px;
+    margin-block-end: calc(7px + (var(--askbox-line) - 36px) / 2);
     border: 0;
     border-radius: 50%;
     background: var(--accent);
@@ -7709,9 +7788,9 @@ samp,
     }
 }
 
-/* ── A channel's groups: where people outside the space meet its bot ──
-   Under the channel they belong to, indented past its mark. One row a
-   group: its name, who answers there, and the two things to do about it. */
+/* ── A bot's groups: where people outside the space meet it ──────────
+   Under the bot they belong to, indented past its mark. One row a group:
+   its name, which opens its channel, where everything about it is. */
 .sgroups {
     display: flex;
     flex-direction: column;
@@ -7801,70 +7880,6 @@ samp,
     background: var(--wash-a);
     color: var(--ink);
 }
-.sgroup__acts {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0 14px;
-    margin-top: 2px;
-}
-/* A switch is a checkbox that says so: `role="switch"`, and the accent
-   rather than a second design for on and off. */
-.sgroup__switch {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 32px;
-    font-size: 13px;
-    color: var(--ink-2);
-    cursor: pointer;
-}
-.sgroup__switch input {
-    flex: none;
-    width: 16px;
-    height: 16px;
-    margin: 0;
-    accent-color: var(--accent);
-    cursor: pointer;
-}
-.sgroup__switch:has(input:disabled) {
-    opacity: 0.6;
-    cursor: default;
-}
-.sgroup__switch:has(input:disabled) input {
-    cursor: default;
-}
-.sgroup__take {
-    min-height: 32px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--ink-2);
-    font: inherit;
-    font-size: 13px;
-    text-decoration: underline;
-    text-decoration-color: var(--line-2);
-    text-underline-offset: 3px;
-    cursor: pointer;
-}
-.sgroup__take:hover:not(:disabled) {
-    color: var(--ink);
-    text-decoration-color: currentColor;
-}
-.sgroup__take:disabled {
-    opacity: 0.5;
-    cursor: default;
-}
-.sgroup__take:focus-visible,
-.sgroup__switch input:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-}
-.sgroup__problem {
-    font-size: 13px;
-    color: var(--bad);
-}
-
 /* ── A conversation that also lives on a chat platform ─────────────────
    Two ways to send, over the box: a note to the bot alone (the default in a
    group or a channel), or a reply the platform gets (the default in a
@@ -8097,4 +8112,71 @@ samp,
 }
 .modelchoice__foot .linkish {
     font-size: 13px;
+}
+
+/* ── the conversation box: what you type on top, its tools under it ──── */
+/* One row held the model's name, the paperclip, the words, the voice and
+   the send button side by side, so a long model name pushed the words into
+   the middle of the box. Two rows instead, the way a chat box is laid out:
+   the words across the whole width, then the paperclip and the model on
+   the left and voice and send on the right. Markup unchanged; the floating
+   chat already worked this way. */
+.composer .composer__box {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 10px 8px 10px;
+}
+.composer .composer__input {
+    order: -1;
+    flex: 1 0 100%;
+    min-height: 26px;
+    padding: 2px 8px 8px;
+}
+.composer .composer__attach {
+    order: 1;
+    margin: 0;
+}
+.composer .modelpick {
+    order: 2;
+    margin: 0;
+}
+.composer .composer__wave {
+    order: 3;
+    margin: 0 0 0 auto;
+}
+.composer .composer__stop {
+    order: 4;
+}
+.composer .composer__send {
+    order: 5;
+    width: 36px;
+    height: 36px;
+}
+
+/* ── the ask box: the same two rows as a conversation's box ───────────── */
+/* Home starts the conversation the composer then carries, so it reads the
+   same: the words across the top, the paperclip and the model on the left,
+   send on the right. */
+.askbox {
+    padding: 12px 10px 8px 10px;
+}
+.askbox__row {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+.askbox textarea {
+    order: -1;
+    flex: 1 0 100%;
+    min-height: 26px;
+    margin: 0;
+    padding: 2px 8px 8px;
+}
+.askbox__attach,
+.askbox__row .modelpick {
+    margin: 0;
+}
+.askbox__send {
+    margin: 0 0 0 auto;
 }

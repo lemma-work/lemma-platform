@@ -7,6 +7,9 @@ it before tapping. A tap is still answered by the interaction path either way.
 
 Only for a card a new message cancelled. A card answered by a typed reply has
 that reply right under it already, and a line saying "answered" would repeat it.
+One answered in the web app gets none either: it may be answered long after
+the 24-hour window a free-form line needs, and a tap on it is still turned
+away by the interaction path.
 """
 
 from __future__ import annotations

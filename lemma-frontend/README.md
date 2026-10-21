@@ -43,6 +43,13 @@ local WebSocket ports. Design conventions are in [DESIGN.md](DESIGN.md).
 - `src/data/`, `src/session/`: sample/live data and authentication.
 - `src/shell/`, `src/stage/`, `src/thread/`: workspace and conversations.
 - `src/call/`, `server/`: voice routing and WebSocket gateways.
+- `src/live/`: the pod's one live socket (`/pods/{pod}/live`), shared by every
+  live view: channel timelines and the inbox, a conversation's run (read as
+  the same SSE frames, with SSE as the fallback), and table rows. Polling is
+  only the fallback while it is down. The protocol is
+  `lemma-backend/docs/modules/live.md`.
+- `src/channels/`: the Channels place, the inbox bell, and a contact's
+  channel as a support inbox.
 - `src/marketing/`: landing previews and sample apps.
 - `src/styles/`: shared tokens and feature styles.
 
@@ -109,9 +116,9 @@ The ingestion and asset proxy hosts are configurable at build time using
 `NEXT_PUBLIC_ANALYTICS_INGEST_HOST` and `NEXT_PUBLIC_ANALYTICS_ASSETS_HOST`.
 Only explicitly allowed event properties and redacted route templates leave
 the app; DOM autocapture and replay are disabled. Storage consent is remembered.
-Feature flags (`groups`, `contacts`) come from PostHog and are off wherever it
-does not run; `NEXT_PUBLIC_LEMMA_FEATURES=groups,contacts` turns them on
-regardless.
+Feature flags (`contacts`) come from PostHog and are off wherever it does not
+run; `NEXT_PUBLIC_LEMMA_FEATURES=contacts` turns them on regardless. Channels
+and the inbox bell are not flagged.
 
 Run `npm run check`, `npm test`, and `npm run build` for the component gates.
 With Node dependencies installed, the public website scenarios build and boot

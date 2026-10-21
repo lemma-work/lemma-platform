@@ -140,6 +140,37 @@ class ExternalSurfaceUserRepository:
         rows = await self.session.execute(stmt)
         return {external: user for external, user in rows.all() if user is not None}
 
+    async def known_by_external_ids(
+        self,
+        *,
+        platform: str,
+        tenant_id: str | None,
+        external_user_ids: Sequence[str],
+    ) -> dict[str, tuple[UUID | None, str | None]]:
+        """Each of these platform users the surface has met: the Lemma user
+        they were resolved to, if any, and the name the platform gave them.
+
+        What a message naming them is read with -- ``<@U123>`` is a person the
+        reader should see by name, whether or not they are in the pod.
+        """
+        wanted = sorted(set(external_user_ids))
+        if not wanted:
+            return {}
+        stmt = select(
+            AgentSurfaceExternalUser.external_user_id,
+            AgentSurfaceExternalUser.resolved_user_id,
+            AgentSurfaceExternalUser.display_name,
+        ).where(
+            AgentSurfaceExternalUser.platform == platform,
+            AgentSurfaceExternalUser.external_user_id.in_(wanted),
+        )
+        if tenant_id is None:
+            stmt = stmt.where(AgentSurfaceExternalUser.tenant_id.is_(None))
+        else:
+            stmt = stmt.where(AgentSurfaceExternalUser.tenant_id == tenant_id)
+        rows = await self.session.execute(stmt.limit(len(wanted)))
+        return {external: (user, name) for external, user, name in rows.tuples()}
+
     async def upsert(
         self,
         *,
@@ -214,6 +245,30 @@ class ExternalSurfaceUserRepository:
         result = await self.session.execute(stmt)
         instance = result.scalar_one_or_none()
         return instance.to_entity() if instance else None
+
+    async def clear_others_resolved_to(
+        self,
+        *,
+        platform: str,
+        tenant_id: str,
+        resolved_user_id: UUID,
+        keep_external_user_id: str,
+    ) -> int:
+        """Forget that any other sender in this tenant is this person.
+
+        For a platform proof of one sender: an older match (a profile email a
+        workspace admin can edit) no longer speaks for them."""
+        result = await self.session.execute(
+            update(AgentSurfaceExternalUser)
+            .where(
+                AgentSurfaceExternalUser.platform == platform,
+                AgentSurfaceExternalUser.tenant_id == tenant_id,
+                AgentSurfaceExternalUser.resolved_user_id == resolved_user_id,
+                AgentSurfaceExternalUser.external_user_id != keep_external_user_id,
+            )
+            .values(resolved_user_id=None)
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def clear_resolved_user(self, resolved_user_id) -> int:
         """Clear cached platform identities after a Lemma profile phone change."""

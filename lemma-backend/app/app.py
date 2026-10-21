@@ -23,16 +23,7 @@ from app.middleware import (
     TrailingSlashMiddleware,
 )
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
-from app.core.infrastructure.events.message_bus import (
-    close_message_bus,
-    get_message_bus,
-)
 from app.core.infrastructure.db.session import close_engine
-from app.core.infrastructure.jobs.streaq_job_queue import (
-    close_streaq_job_queue,
-    get_streaq_job_queue,
-)
-from app.core.infrastructure.jobs.streaq_runtime import ensure_task_lanes_registered
 from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
 from app.core.infrastructure.redis.client import close_redis_clients
 from app.core.security import verify_auth
@@ -207,20 +198,6 @@ async def lifespan(app: FastAPI):
         if settings.api_docs_served():
             async with startup_step("openapi", service="lemma-api"):
                 await run_blocking(app.openapi, limiter="cpu_bound")
-        # Learn which lane each task runs on before serving traffic. The
-        # enqueue path resolves this lazily as a safety net, but the first
-        # resolution imports every module's handlers — half a second that
-        # would otherwise land on whichever request first enqueues a job.
-        # The composed list, not OSS: lemma-cloud installs more modules, and a
-        # cloud-only task missing here would be enqueued to the wrong lane.
-        # In a thread: it is imports, and imports on the loop are what the stall
-        # sampler keeps catching.
-        async with startup_step("task_lanes", service="lemma-api"):
-            await run_blocking(
-                ensure_task_lanes_registered,
-                getattr(app.state, "lemma_modules", OSS_MODULES),
-                limiter="cpu_bound",
-            )
         # Same trade as the line above, for the libraries a request reaches
         # rather than the handlers a job reaches. The imports are awaited: left
         # in the background they raced the first requests on importlib's module
@@ -239,10 +216,6 @@ async def lifespan(app: FastAPI):
             )
         async with startup_step("channel_connect", service="lemma-api"):
             await channel_service.connect()
-        async with startup_step("job_queue_connect", service="lemma-api"):
-            await get_streaq_job_queue().connect()
-        async with startup_step("message_bus_connect", service="lemma-api"):
-            await get_message_bus().connect()
         started = False
         try:
             # Module-contributed API lifespans (e.g. embedding preload on
@@ -291,8 +264,6 @@ async def lifespan(app: FastAPI):
             from app.core.analytics.bootstrap import stop_analytics
 
             await stop_analytics()
-            await close_streaq_job_queue()
-            await close_message_bus()
             # Outbound connector plumbing: the shared HTTP pool and any engines
             # opened against customer databases. Closed explicitly so a reload
             # does not leak sockets into the next process.
@@ -560,10 +531,13 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
+    from app.core.server_limits import WS_MAX_BYTES
+
     uvicorn.run(
         "app.app:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
+        ws_max_size=WS_MAX_BYTES,
         access_log=False,
     )

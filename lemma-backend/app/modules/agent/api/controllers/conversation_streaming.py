@@ -23,8 +23,9 @@ from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
-from app.modules.agent.domain.value_objects import AgentRunStartResult, AgentRunStatus
+from app.modules.agent.domain.value_objects import AgentRunStartResult
 from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.realtime import run_ending_payload
 
 logger = get_logger(__name__)
 
@@ -111,8 +112,12 @@ async def start_and_stream_run(
                 await close_subscription()
                 return
         try:
+
+            async def ended() -> str | None:
+                return terminal_run_chunk(await load_run(result.agent_run_id))
+
             async for chunk in with_keepalive(
-                iter_subscription(iterator, result.agent_run_id)
+                iter_subscription(iterator, result.agent_run_id), on_idle=ended
             ):
                 yield chunk
         except Exception:
@@ -162,31 +167,11 @@ async def load_authorized_agent_run(
 
 
 def terminal_run_chunk(agent_run: AgentRun) -> str | None:
-    if agent_run.status == AgentRunStatus.FAILED:
-        return encode_stream_chunk(
-            event_type="error",
-            data=agent_run.error or "Agent run failed",
-            agent_run_id=agent_run.id,
-        )
-    if agent_run.status == AgentRunStatus.STOPPED:
-        return encode_stream_chunk(
-            event_type="stopped",
-            data={
-                "conversation_id": str(agent_run.conversation_id),
-                "status": agent_run.status.value,
-            },
-            agent_run_id=agent_run.id,
-        )
-    if agent_run.status == AgentRunStatus.COMPLETED:
-        data: dict[str, object] = {
-            "conversation_id": str(agent_run.conversation_id),
-            "status": agent_run.status.value,
-        }
-        if agent_run.output_data is not None:
-            data["output_data"] = agent_run.output_data
-        return encode_stream_chunk(
-            event_type="completed",
-            data=data,
-            agent_run_id=agent_run.id,
-        )
-    return None
+    ending = run_ending_payload(agent_run)
+    if ending is None:
+        return None
+    return encode_stream_chunk(
+        event_type=str(ending["type"]),
+        data=ending["data"],
+        agent_run_id=agent_run.id,
+    )

@@ -2,7 +2,7 @@
 
 Visibility used to load every file row in a pod, hydrate all of them, collect
 their ancestor paths, re-query by those paths and re-derive inheritance in
-Python. ``visible_file_ids`` asks the database once. That is a rewrite of an
+Python. ``visible_file_ids`` asks the database a fixed few times. That is a rewrite of an
 *authorization* answer, so speed is not the property under test here — set
 equality is.
 
@@ -24,6 +24,7 @@ from __future__ import annotations
 from uuid import UUID, uuid4, uuid7
 
 import pytest
+from sqlalchemy import text
 from fastapi import status
 from httpx import AsyncClient
 
@@ -225,48 +226,62 @@ async def test_the_granted_folder_is_visible_and_the_ungranted_one_is_not(
 
 
 @pytest.mark.parametrize("principal", ["custom_viewer", "viewer"])
-async def test_both_scope_branches_admit_the_same_files(
+async def test_every_scope_branch_admits_the_same_files(
     db_session, visibility_pod, principal, monkeypatch
 ) -> None:
     """Which branch search takes is a cost decision. It must not be an answer.
 
-    A search either enumerates what the caller may read and sends it to the pod
-    database, or runs unnarrowed and authorizes the rows that come back. One
-    ceiling in configuration decides which, so the two have to agree exactly --
-    and they are different statements over different inputs, which is precisely
-    the kind of pair that drifts.
+    A search sends the readable ids, or the hidden ids, or nothing and
+    authorizes the rows that come back. Sizes and one ceiling decide which, so
+    all three have to agree exactly -- and they are different statements over
+    different inputs, which is precisely the kind of set that drifts.
 
-    Both are checked against the unbounded form of the same statement, so a
-    drift in either direction names itself.
+    Every branch is checked against the unbounded form of the visibility
+    statement, so a drift in any direction names itself.
     """
     pod_id = UUID(visibility_pod["pod_id"])
     user_id = UUID(visibility_pod[principal]["id"])
+    # The fixture uploads with search off; a scope only ever names files a
+    # chunk query could match, so make them that.
+    await db_session.execute(
+        text(
+            "UPDATE datastore_files SET status = 'COMPLETED', search_enabled = true "
+            "WHERE pod_id = :pod AND kind = 'FILE'"
+        ),
+        {"pod": pod_id},
+    )
     service = AuthorizationDataService(db_session)
     ctx = await service.build_user_context(user_id=user_id, pod_id=pod_id)
     authorizer, repository = _authorizer(db_session)
 
     readable = await _readable(repository, pod_id=pod_id, ctx=ctx)
-    every_id = {item.id for item in await repository.get_all_by_datastore(pod_id)}
-    assert readable and readable != every_id, (
-        "this caller reads all of the pod or none of it, so neither branch is "
-        "being asked anything"
+    items = await repository.get_all_by_datastore(pod_id)
+    every_id = {item.id for item in items}
+    searchable = {item.id for item in items if item.is_file}
+    assert readable & searchable and searchable - readable, (
+        "this caller reads all of the searchable files or none of them, so no "
+        "branch is being asked anything"
     )
 
     monkeypatch.setattr(
         datastore_settings, "datastore_search_readable_id_pushdown_limit", 10_000
     )
-    enumerated = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
-    assert enumerated.enumerated, "a pod this small must fit under any real ceiling"
-    assert enumerated.file_ids == readable, (
-        "the ids pushed into the chunk query are not the ids this caller may read"
-    )
+    shorter = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+    if len(readable & searchable) <= len(searchable - readable):
+        assert shorter.enumerated and shorter.file_ids == readable & searchable, (
+            "the readable side was the shorter and was not sent as the filter"
+        )
+    else:
+        assert shorter.excluding and shorter.file_ids == searchable - readable, (
+            "the hidden side was the shorter and was not sent as the exclusion"
+        )
 
     monkeypatch.setattr(
-        datastore_settings, "datastore_search_readable_id_pushdown_limit", 1
+        datastore_settings, "datastore_search_readable_id_pushdown_limit", 0
     )
     post_filtered = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
-    assert not post_filtered.enumerated, (
-        "the readable set is over the ceiling and was enumerated anyway"
+    assert not post_filtered.enumerated and not post_filtered.narrowed, (
+        "both sides are over the ceiling and the query was narrowed anyway"
     )
     assert not post_filtered.file_ids, (
         "an unnarrowed scope carried ids into a query that applies no filter"
@@ -307,10 +322,14 @@ async def test_an_unnarrowed_scope_still_rejects_a_chunk_whose_file_is_gone(
     assert admitted <= real
 
 
-async def test_visibility_costs_one_statement_regardless_of_pod_size(
+async def test_visibility_costs_a_fixed_number_of_statements(
     db_session, visibility_pod
 ) -> None:
-    """The count is the fix; the equality above is what makes it safe."""
+    """The count is the fix; the equality above is what makes it safe.
+
+    Three at most -- the caller's grants, the unreadable folders that hide
+    things, then the pod -- whatever the pod holds.
+    """
     pod_id = UUID(visibility_pod["pod_id"])
     user_id = UUID(visibility_pod["custom_viewer"]["id"])
     service = AuthorizationDataService(db_session)
@@ -324,8 +343,8 @@ async def test_visibility_costs_one_statement_regardless_of_pod_size(
     with counted_queries() as batched_statements:
         await _readable(repository, pod_id=pod_id, ctx=ctx)
 
-    assert len(batched_statements) == 1, (
-        f"visibility took {len(batched_statements)} statements, not one:\n"
+    assert len(batched_statements) <= 3, (
+        f"visibility took {len(batched_statements)} statements, not at most three:\n"
         + "\n".join(f"  - {s.strip()[:160]}" for s in batched_statements)
     )
     assert len(legacy_statements) > len(batched_statements), (

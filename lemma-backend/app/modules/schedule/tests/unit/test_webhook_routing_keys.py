@@ -20,6 +20,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleType,
     authored_config,
 )
+from app.modules.schedule.services.trigger_fire import FireOutcome
 from app.modules.schedule.services.webhook_handler import WebhookHandler
 from app.modules.schedule.services.webhook_schedule_matcher import (
     WebhookScheduleMatcher,
@@ -49,8 +50,10 @@ class _Fired:
     def __init__(self) -> None:
         self.schedule_ids: list[UUID] = []
 
-    async def publish_schedule_fired(self, *, schedule: ScheduleEntity, **_: object):
+    async def __call__(self, uow, schedule: ScheduleEntity, event) -> FireOutcome:
+        del uow, event
         self.schedule_ids.append(schedule.id)
+        return FireOutcome.STARTED
 
 
 @asynccontextmanager
@@ -130,7 +133,7 @@ async def test_a_delivery_verified_by_one_account_fires_only_that_accounts_sched
             schedule_repository=_Schedules(own, other)
         ),
         uow_factory=_no_uow,
-        event_publisher=fired,
+        fire=fired,
     )
 
     started = await handler.handle_webhook(

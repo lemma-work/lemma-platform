@@ -211,6 +211,7 @@ async def _require_admissible_harness(
         validate_agent_host_selections(
             config_options=harness.config_options or [],
             selections=run_spec.config_selections,
+            model_name=run_spec.model_name,
         )
     except RuntimeProfileValidationError as exc:
         raise AgentHostRunConflict(str(exc)) from exc

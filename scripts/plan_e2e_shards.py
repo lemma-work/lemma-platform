@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from functools import cache
 import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
@@ -144,7 +145,7 @@ PINNED = [
     {
         "name": "agent",
         "dirs": ["app/modules/agent/tests/e2e"],
-        "workers": 1,
+        "workers": 2,
         "markers": FAST_MARKERS,
         # False now, and derived rather than declared: with the two
         # `fast_workspace` files in their own group above, nothing left in this
@@ -172,10 +173,19 @@ PINNED = [
         # This note lived only in the generated JSON, where the next
         # regeneration would have deleted it and restored the false claim
         # above it. It belongs here, in the input.
+        #
+        # RE-MEASURED 2026-10-16, flipped to 2. CI run 38897825151 against
+        # baselines 38894541423, 38885721484, 38882019643: the shard's pytest
+        # step went from ~500s at workers=1 to 299s at workers=2, with 31% of
+        # the runner's CPU still idle, and nothing in it failed. The coverage
+        # spread above no longer matters to a gate: the floor is one combined
+        # total, not a per-shard number. Do not take this to 4, or raise the
+        # packed shards: workers=4 on packed shards was tried in the same
+        # experiment and broke real tests -- Postgres "too many clients",
+        # session-worker idle waits, timing checks starved of CPU.
         "why": (
-            "MEASURED 2026-08-22: xdist coverage race disproven, but the "
-            "per-run spread is 0.4pt against a 0.2pt bar -- re-measure before "
-            "raising"
+            "MEASURED 2026-10-16: pytest ~500s -> 299s at -n 2 with 31% CPU "
+            "idle (run 38897825151); -n 4 breaks co-tenant tests"
         ),
         "bins": 1,
     },
@@ -205,7 +215,7 @@ PACKED_SHARDS = 3
 # Two, not three. Three was generalised from the one shard ever measured at it
 # -- the old `pod` shard, 94 tests of pure API work -- and it does not hold for
 # a packed bin. Each xdist worker runs its own SuperTokens container and its
-# own streaq worker subprocess, so three of them on a four-vCPU runner starve
+# own worker subprocess, so three of them on a four-vCPU runner starve
 # the async workers the tests are waiting on. It shows up as a *condition*
 # wait timing out with a generous budget rather than as a slow assert:
 # test_apply_destructive_requires_confirmation blew a 90-second wait for a
@@ -362,8 +372,12 @@ def _negated_markers(markers: str) -> set[str]:
     return set(re.findall(r"\bnot\s+(\w+)", markers))
 
 
-def _module_marks(path: Path) -> set[str]:
+@cache
+def _module_marks(path: Path) -> frozenset[str]:
     """Marker names in a module-level `pytestmark`, by AST rather than by grep.
+
+    Cached: one run asks this of the same file once per shard, and the files do
+    not change while it runs.
 
     A substring search for "workspace" matches the word in a docstring, an
     import or a fixture name, so it would call most of this suite
@@ -379,7 +393,7 @@ def _module_marks(path: Path) -> set[str]:
         for inner in ast.walk(node.value):
             if isinstance(inner, ast.Attribute):
                 marks.add(inner.attr)
-    return marks
+    return frozenset(marks)
 
 
 def _session_worker_conflict(backend: Path, markers: str) -> tuple[set[str], set[str]]:

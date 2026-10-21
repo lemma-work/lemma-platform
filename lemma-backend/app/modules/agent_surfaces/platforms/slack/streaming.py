@@ -23,12 +23,12 @@ from app.modules.agent_surfaces.domain.credentials import (
 
 from typing import Any
 
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import is_slack_api_error
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 from app.modules.agent_surfaces.platforms.rendering import chunk_text
 
@@ -54,7 +54,7 @@ _OVERFLOW_ATTEMPTS = 2
 
 def _slack_error_code(exc: BaseException) -> str:
     """Slack's own error code when it sent one, else the exception's class."""
-    if isinstance(exc, SlackApiError):
+    if is_slack_api_error(exc):
         return str((exc.response or {}).get("error") or "unknown")
     return type(exc).__name__
 
@@ -89,7 +89,7 @@ async def remove_processing_reaction(
         await client.reactions_remove(
             channel=str(channel), name="eyes", timestamp=str(timestamp)
         )
-    except PLATFORM_TRANSPORT_ERRORS:
+    except platform_transport_errors():
         logger.debug(
             "agent_surfaces.service.slack_processing_reaction_not_removed.diagnostic",
             exc_info=True,
@@ -145,7 +145,7 @@ class SlackStreamSurface:
                 handle=replace(progress_handle, streamed_text=True),
                 appended=True,
             )
-        except PLATFORM_TRANSPORT_ERRORS as exc:
+        except platform_transport_errors() as exc:
             logger.debug(
                 "agent_surfaces.service.slack_append_stream_text.diagnostic",
                 error_code=_slack_error_code(exc),
@@ -254,7 +254,7 @@ class SlackStreamSurface:
                     channel=channel, ts=ts, chunks=[_markdown_chunk(chunks[0])]
                 )
             await client.chat_stopStream(channel=channel, ts=ts)
-        except PLATFORM_TRANSPORT_ERRORS as exc:
+        except platform_transport_errors() as exc:
             # Say which Slack error it was: this path falls back to a plain
             # message, so without the code a failure here is invisible. A
             # warning, because the fallback is what puts the answer in front of
@@ -298,7 +298,7 @@ class SlackStreamSurface:
                         event=event, message=remainder, metadata=metadata
                     )
                     break
-                except PLATFORM_TRANSPORT_ERRORS as exc:
+                except platform_transport_errors() as exc:
                     # Again only for what provably did not post (a rate limit, a
                     # refused connection): a timeout may have posted the part.
                     retryable = (
@@ -347,7 +347,7 @@ class SlackStreamSurface:
             if progress_handle.kind is ProgressHandleKind.STREAM:
                 await client.chat_stopStream(channel=str(channel), ts=ts)
             await client.chat_delete(channel=str(channel), ts=ts)
-        except PLATFORM_TRANSPORT_ERRORS:
+        except platform_transport_errors():
             logger.debug(
                 "agent_surfaces.service.slack_end_progress_delete_channel.diagnostic",
                 exc_info=True,

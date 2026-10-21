@@ -10,6 +10,9 @@ from .settings import load_settings
 from .transport import MISSING as _MISSING, LemmaTransport
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Mapping, Sequence
+
+    from .live import LiveEvent, LiveOp
     from .resources import (
         BoundConnectors,
         PodAgents,
@@ -22,10 +25,9 @@ if TYPE_CHECKING:
         PodQueries,
         PodRecords,
         PodSchedules,
-        PodNotifications,
         PodLinks,
         PodSurfaces,
-        PodGroups,
+        PodChannels,
         PodContacts,
         PodWebWidgets,
         PodTables,
@@ -160,22 +162,16 @@ class Pod:
         return self._resource(PodApps)
 
     @cached_property
-    def notifications(self) -> "PodNotifications":
-        from .resources import PodNotifications
-
-        return self._resource(PodNotifications)
-
-    @cached_property
     def surfaces(self) -> "PodSurfaces":
         from .resources import PodSurfaces
 
         return self._resource(PodSurfaces)
 
     @cached_property
-    def groups(self) -> "PodGroups":
-        from .resources import PodGroups
+    def channels(self) -> "PodChannels":
+        from .resources import PodChannels
 
-        return self._resource(PodGroups)
+        return self._resource(PodChannels)
 
     @cached_property
     def contacts(self) -> "PodContacts":
@@ -281,6 +277,34 @@ class Pod:
 
     def query(self, sql: str) -> Any:
         return self.queries.run(sql)
+
+    def watch_changes(
+        self,
+        table: str | None = None,
+        *,
+        ops: "Sequence[LiveOp] | None" = None,
+        since: str | None = None,
+        when: "Mapping[str, object] | None" = None,
+        max_reconnects: int | None = None,
+    ) -> "AsyncIterator[LiveEvent]":
+        """Live record changes for one table (or every readable one), as an
+        async iterator over the pod's live socket. Reconnects and resumes on
+        its own; see ``lemma_sdk.live``. Needs ``lemma-sdk[live]``."""
+        from .live import watch_changes
+
+        generated = self._transport.generated
+        return watch_changes(
+            base_url=str(generated._base_url),
+            pod_id=self.pod_id,
+            token=lambda: str(generated.token),
+            refresh=self._transport._refresh_session,
+            table=table,
+            ops=ops,
+            since=since,
+            when=when,
+            verify_ssl=bool(generated._verify_ssl),
+            max_reconnects=max_reconnects,
+        )
 
     def close(self) -> None:
         if self._owns_transport:

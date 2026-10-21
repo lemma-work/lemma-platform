@@ -11,7 +11,13 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Superseded pull request pushes are cancelled; pushes to main never are.
+  # Main's runs are the ones that warm every cache a pull request restores
+  # from, and a burst of merges used to cancel all but the last of them.
+  # On main the group is the commit itself, so no run there is ever queued
+  # behind, or cancelled by, the next merge. (From #796, which merged into a
+  # stacked branch and never reached main.)
+  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -77,6 +83,12 @@ jobs:
             workspace:
               - 'lemma-frontend/**'
               - 'lemma-typescript/**'
+              - 'tests/scenarios/journeys/public_website/**'
+              # What that journey runs on: the suite's harness and environment.
+              - 'tests/scenarios/harness/**'
+              - 'tests/scenarios/conftest.py'
+              - 'tests/scenarios/pyproject.toml'
+              - 'tests/scenarios/uv.lock'
               - '.nvmrc'
               - '.github/workflows/ci.yml'
             codegen:
@@ -147,8 +159,25 @@ jobs:
             #
             # This one is cheap enough to list ci.yml, so a change to the
             # desktop CI steps finally runs something desktop-shaped.
+            #
+            # The backend half this job exercises, not all of it. It used to
+            # list `lemma-backend/**`, which made a 7-minute job and one of the
+            # 20 shared runner slots a cost of every backend pull request -- 79
+            # of 80 runs. What it runs is `make desktop-agent-host-e2e`: four
+            # agent-host e2e files marked `local_cli`, which every PR e2e lane
+            # and the protected lane exclude, so this job is the only one that
+            # runs them -- and so it must also start on the shared code they
+            # drive: the agent and workspace modules (conversation, streaming,
+            # host execution), the e2e harness, the database layer, and the
+            # backend's root conftest.
             desktop_contract:
-              - 'lemma-backend/**'
+              - 'lemma-backend/app/modules/agent/**'
+              - 'lemma-backend/app/modules/workspace/**'
+              - 'lemma-backend/app/modules/test_support/**'
+              - 'lemma-backend/app/core/infrastructure/db/**'
+              - 'lemma-backend/conftest.py'
+              - 'lemma-backend/pyproject.toml'
+              - 'lemma-backend/uv.lock'
               - 'lemma-frontend/**'
               - 'lemma-typescript/**'
               - 'desktop/runtime/frontend-launcher.mjs'
@@ -165,11 +194,17 @@ jobs:
             # and the backend half of the Agent Host. Like `desktop`, ci.yml is
             # left out -- this is a macOS job -- so validate a change to the job
             # itself with Actions -> CI -> Run workflow.
+            #
+            # The backend half is the Agent Host seam only, as for
+            # `desktop_contract` above; all of `agent/**` started a macOS
+            # runner on most backend pull requests for an exempt check.
             desktop_launch:
               - 'desktop/**'
               - 'lemma-frontend/**'
               - 'lemma-typescript/**'
-              - 'lemma-backend/app/modules/agent/**'
+              - 'lemma-backend/app/modules/**/*agent_host*'
+              - 'lemma-backend/app/modules/**/*agent_host*/**'
+              - 'lemma-backend/app/modules/**/*host_execution*'
             repo_tooling:
               - 'Makefile'
               - 'tests/**'
@@ -231,6 +266,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - name: Sync deps
         run: uv sync --extra local
       # One command, and it is the one the contributing guide tells a person to
@@ -279,6 +315,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
       - run: uv sync
       - name: Verify consolidated reliability migration
         run: uv run python scripts/verify_reliability_migration.py
@@ -553,6 +590,20 @@ jobs:
         env:
           NEXT_PUBLIC_DATA: sample
       - run: git diff --exit-code -- lemma-typescript/public/lemma-client.js lemma-typescript/public/lemma-ui.js
+      # The public website journey from the product scenarios. It ran in a
+      # job of its own on every pull request -- backend-only ones included --
+      # repeating both `npm ci`s this job has already done. Here it runs when
+      # the frontend changes, on the install above; nightly it still runs in
+      # the scenarios workflow.
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: tests/scenarios/uv.lock
+      - name: Public website journey
+        working-directory: tests/scenarios
+        run: |
+          uv sync
+          uv run pytest journeys/public_website -q
 
   # The dev-workflow tests assert on the env `make dev` hands the backend. They
   # had drifted badly enough to reference deleted targets, because nothing ran
@@ -593,6 +644,17 @@ jobs:
       # access. Each was green on its own terms.
       - name: Both DMG pipelines verify the same things
         run: uv run --no-project --with pyyaml python scripts/check_release_parity.py
+
+      # The scenario suite's own guards: no backend imports, no mocking, no
+      # sleeping. Seconds; it used to be a job of its own in the scenarios
+      # workflow, started by every pull request whatever it touched. (The
+      # traceability gate it sat beside runs in `make quality`, in the
+      # backend quality job, on every pull request.)
+      - name: Scenario suite guards
+        working-directory: tests/scenarios
+        run: |
+          uv sync
+          uv run pytest journeys/test_harness_contract.py -q
 
   windows-cli:
     name: Windows CLI smoke test
@@ -699,8 +761,9 @@ jobs:
         run: cargo test -p lemma-locald -p lemma-guestd --locked
 
       # The Rust half of the Agent Host's wire contract. This job runs on
-      # backend-only pull requests -- `lemma-backend/**` is in its filter --
-      # and it did not run the half that would notice. Both sides of
+      # backend pull requests that touch the Agent Host's side of the seam --
+      # the agent and workspace modules are in its filter -- and it did not
+      # run the half that would notice. Both sides of
       # `tests/fixtures/wire_contract.json` are assertions over a committed
       # file; only the named suites, because the rest of this crate's tests
       # spawn agents.
@@ -718,6 +781,9 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: lemma-backend/uv.lock
 
       - name: Install backend dependencies
         working-directory: lemma-backend
@@ -1562,6 +1628,11 @@ jobs:
   ci:
     name: CI passed
     timeout-minutes: 10
+    # `always()`, deliberately not `!cancelled()`: a required check that is
+    # *skipped* reports success, so a run cancelled on the pull request's
+    # current head would otherwise let it merge with nothing verified. A
+    # superseded run reports failure instead, which is noise on a commit the
+    # pull request no longer points at, not a gate anyone can pass through.
     if: always()
     needs:
       - changes

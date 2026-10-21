@@ -7,10 +7,11 @@ use agent_client_protocol::schema::v1::SessionId;
 use super::{
     AcpCallbacks, AcpRunOutcome, Agent, CancelNotification, ConfigOption, ConnectionTo,
     ContentBlock, Duration, EventType, JsonMap, LoadSessionRequest, McpServer, NewSessionRequest,
-    PathBuf, PromptRequest, SessionConfigOption, SessionConfigOptionValue, SessionOrigin,
-    SetSessionConfigOptionRequest, SteerEvent, TurnSteering, Value, before_prompt_deadline,
-    cancel_requested, convert_config_option, model_unavailable_payload, run_outcome,
-    selection_is_allowed, session_config_value, session_lost_payload, watch,
+    PathBuf, PromptRequest, STOP_REASONS, SessionConfigOption, SessionConfigOptionValue,
+    SessionOrigin, SetSessionConfigOptionRequest, SteerEvent, TurnSteering, Value,
+    before_prompt_deadline, cancel_requested, convert_config_option, model_unavailable_payload,
+    note_unknown, run_outcome, selection_is_allowed, session_config_value, session_lost_payload,
+    watch,
 };
 
 pub(crate) type AcpError = agent_client_protocol::schema::v1::Error;
@@ -396,9 +397,15 @@ pub(crate) async fn prompt_turn(
     cancel_grace: Duration,
     mut steering: TurnSteering<'_>,
 ) -> Result<AcpRunOutcome, AcpError> {
-    let turn = connection
-        .send_request(PromptRequest::new(session_id.clone(), blocks))
-        .block_task();
+    // Sent untyped, and its answer read field by field: ACP's `stopReason` is
+    // a closed enum in the protocol crate, so a stop reason added after this
+    // host was built failed the whole response -- and with it a turn whose
+    // answer had already streamed. See `prompt_response`.
+    let request = agent_client_protocol::UntypedMessage::new(
+        "session/prompt",
+        PromptRequest::new(session_id.clone(), blocks),
+    )?;
+    let turn = connection.send_request(request).block_task();
     tokio::pin!(turn);
     let mut asked_to_stop = false;
     // One loop rather than one `select!`, because a turn can now be told
@@ -437,19 +444,8 @@ pub(crate) async fn prompt_turn(
         }
     };
     steering.finish();
-    let response = response?;
-    let stop_reason = serde_json::to_value(response.stop_reason)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "unknown".to_owned());
+    let (stop_reason, usage) = prompt_response(&response?);
     let (state, message) = run_outcome(asked_to_stop, &stop_reason);
-    // ACP's end-of-turn token count. Still marked unstable in the protocol,
-    // and it is the only place an adapter reports tokens at all: the
-    // `usage_update` notification is the context window, not usage.
-    let usage = response
-        .usage
-        .as_ref()
-        .and_then(|usage| serde_json::to_value(usage).ok());
     Ok(AcpRunOutcome {
         provider_session_id: session_id.to_string(),
         state,
@@ -457,4 +453,27 @@ pub(crate) async fn prompt_turn(
         message,
         usage,
     })
+}
+
+/// The stop reason and token usage out of a `session/prompt` answer.
+///
+/// A stop reason this host does not know is kept as the agent said it --
+/// `outcome_for` reports it, named, as a turn that did not finish -- and noted
+/// once. The usage is the adapter's object as sent: ACP's end-of-turn count is
+/// still marked unstable, and `usage_payload` reads each count it knows and
+/// ignores the rest, where the typed field dropped all of them over one.
+pub(crate) fn prompt_response(response: &Value) -> (String, Option<Value>) {
+    let stop_reason = response
+        .get("stopReason")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_owned();
+    if !STOP_REASONS.contains(&stop_reason.as_str()) {
+        note_unknown("stop reason", &stop_reason);
+    }
+    let usage = response
+        .get("usage")
+        .filter(|usage| usage.is_object())
+        .cloned();
+    (stop_reason, usage)
 }

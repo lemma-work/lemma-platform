@@ -26,7 +26,10 @@ System-scoped runtimes use registered per-model pricing when available. An
 unknown model is still metered, but its record has `cost_usd = null` and
 `metadata.pricing_missing = true`; missing pricing never blocks the run.
 User-owned provider profiles are recorded but do not count as Lemma system
-cost.
+cost. Every record without a cost says `pricing_missing`, whatever the reason:
+an unknown model, a profile Lemma does not price, or a request still in flight
+(`metering_state = PENDING`, written before it is sent, until its receipt
+lands). A bare null sums as zero, and the ledger would read the run as free.
 
 ## API groups
 

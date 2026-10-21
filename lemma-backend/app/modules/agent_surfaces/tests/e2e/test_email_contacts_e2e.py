@@ -23,7 +23,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.outsiders import AUDIENCE_KEY, CONTACT, CONTACT_KEY
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.config import surface_settings
@@ -31,10 +30,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.infrastructure.models import (
-    AgentSurface,
-    NotificationModel,
-)
+from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_surface,
     _ensure_connector_account,
@@ -48,6 +44,13 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     script_text,
     script_tool_call,
+)
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    contact_channel_id,
+    send_deliveries,
+    deliveries_of_line,
+    direct_lines,
+    member_writes,
 )
 from app.modules.agent_surfaces.tests.e2e.test_telegram_group_outsiders_e2e import (
     _table,
@@ -152,9 +155,8 @@ async def test_a_stranger_emailing_the_bot_is_answered_as_a_contact(
             )
         )
     ).scalar_one()
-    metadata = conversation.conversation_metadata or {}
     assert conversation.user_id == owner
-    assert metadata.get(AUDIENCE_KEY) == CONTACT
+    assert conversation.contact_id == context.audience.contact_id
 
     # The sender is now one of the pod's contacts, by the address that was
     # vouched for.
@@ -167,7 +169,7 @@ async def test_a_stranger_emailing_the_bot_is_answered_as_a_contact(
         )
     ).scalar_one()
     contact_id = str(identity.contact_id)
-    assert contact_id == metadata.get(CONTACT_KEY)
+    assert identity.contact_id == conversation.contact_id
     assert identity.strength == "CHANNEL"
 
     listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")
@@ -302,19 +304,15 @@ async def test_unauthenticated_mail_is_parked_for_the_member_never_answered(
     assert (await authenticated_client.get(f"/pods/{pod_id}/contacts")).json()[
         "items"
     ] == []
-    notices = (
-        (
-            await db_session.execute(
-                select(NotificationModel).where(
-                    NotificationModel.pod_id == UUID(pod_id),
-                    NotificationModel.recipient_user_id == UUID(fixed_test_user["id"]),
-                )
-            )
+    # Parked for the member: a note in their own channel, to them alone.
+    [note] = [
+        line
+        for line in await direct_lines(
+            db_session, pod_id=pod_id, user_id=fixed_test_user["id"]
         )
-        .scalars()
-        .all()
-    )
-    assert any(CUSTOMER in notice.title for notice in notices)
+        if f"Unverified email from {CUSTOMER}" in line.body
+    ]
+    assert note.members_only
 
 
 async def test_with_contacts_off_no_stranger_becomes_one(
@@ -394,6 +392,192 @@ async def test_an_organization_owner_sets_and_clears_the_contacts_cap(
         json={"monthly_limit_usd": -1},
     )
     assert refused.status_code == 422
+
+
+async def test_each_half_of_the_contacts_cap_is_kept_when_the_other_changes(
+    authenticated_client: AsyncClient, fixed_test_org, monkeypatch
+):
+    """An owner setting only a count keeps the spend cap they had; one who set
+    only a spend still gets the deployment's count until they choose one."""
+    from app.modules.usage.config import usage_settings
+
+    monkeypatch.setattr(usage_settings, "usage_contacts_max_default", 200)
+    org_id = fixed_test_org["id"]
+    cap = f"/usage/organizations/{org_id}/contacts-cap"
+
+    spend_only = await authenticated_client.put(cap, json={"monthly_limit_usd": 25})
+    assert spend_only.status_code == 200, spend_only.text
+    assert spend_only.json()["max_contacts"] == 200
+
+    count_too = await authenticated_client.put(cap, json={"max_contacts": 10})
+    assert count_too.status_code == 200, count_too.text
+    assert count_too.json()["monthly_limit_usd"] == 25
+    assert count_too.json()["max_contacts"] == 10
+
+    no_count = await authenticated_client.put(cap, json={"max_contacts": None})
+    assert no_count.status_code == 200, no_count.text
+    assert no_count.json()["max_contacts"] is None
+    assert no_count.json()["monthly_limit_usd"] == 25
+
+
+async def test_two_new_contacts_at_once_cannot_both_take_the_last_place(
+    authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
+):
+    """Admission counts and marks under one lock on the organization: the
+    second waits, counts the first, and is held for a person."""
+    import asyncio
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        open_contact,
+    )
+
+    org_id, pod_id = fixed_test_org["id"], UUID(test_pod["id"])
+    limited = await authenticated_client.put(
+        f"/usage/organizations/{org_id}/contacts-cap", json={"max_contacts": 1}
+    )
+    assert limited.status_code == 200, limited.text
+
+    async def a_new_contacts_conversation(email: str) -> UUID:
+        async with get_uow_factory()() as uow:
+            contact = await open_contact(
+                uow,
+                pod_id=pod_id,
+                kind=IdentityKind.EMAIL,
+                value=email,
+                strength=IdentityStrength.CHANNEL,
+                display_name=None,
+            )
+            conversation = ConversationModel(
+                user_id=UUID(fixed_test_user["id"]),
+                pod_id=pod_id,
+                contact_id=contact.id,
+            )
+            uow.session.add(conversation)
+            await uow.commit()
+            return conversation.id
+
+    conversations = [
+        await a_new_contacts_conversation(f"racer-{n}@client.example") for n in range(2)
+    ]
+
+    async def admit(conversation_id: UUID) -> bool:
+        async with get_uow_factory()() as uow:
+            held = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation_id
+            )
+            await uow.commit()
+            return held
+
+    held = await asyncio.gather(*(admit(c) for c in conversations))
+
+    assert sorted(held) == [False, True], held
+
+
+async def test_with_no_count_kept_new_contacts_are_marked_without_waiting(
+    authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
+):
+    """No number of contacts to keep: nothing to queue behind, and each is
+    still marked answered, so a count set later starts from the truth."""
+    import asyncio
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        contact_by_id,
+        open_contact,
+    )
+
+    org_id, pod_id = fixed_test_org["id"], UUID(test_pod["id"])
+    unlimited = await authenticated_client.put(
+        f"/usage/organizations/{org_id}/contacts-cap", json={"max_contacts": None}
+    )
+    assert unlimited.status_code == 200, unlimited.text
+    contacts, conversations = [], []
+    for n in range(2):
+        async with get_uow_factory()() as uow:
+            contact = await open_contact(
+                uow,
+                pod_id=pod_id,
+                kind=IdentityKind.EMAIL,
+                value=f"open-{n}@client.example",
+                strength=IdentityStrength.CHANNEL,
+                display_name=None,
+            )
+            conversation = ConversationModel(
+                user_id=UUID(fixed_test_user["id"]),
+                pod_id=pod_id,
+                contact_id=contact.id,
+            )
+            uow.session.add(conversation)
+            await uow.commit()
+            contacts.append(contact.id)
+            conversations.append(conversation.id)
+
+    async def admit(conversation_id: UUID) -> bool:
+        async with get_uow_factory()() as uow:
+            held = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation_id
+            )
+            await uow.commit()
+            return held
+
+    assert await asyncio.gather(*(admit(c) for c in conversations)) == [False, False]
+    async with get_uow_factory()() as uow:
+        for contact_id in contacts:
+            found = await contact_by_id(uow, pod_id=pod_id, contact_id=contact_id)
+            assert found is not None and found.answered
+
+
+async def test_two_turns_of_one_new_contact_at_once_both_run(
+    authenticated_client: AsyncClient, fixed_test_org, test_pod, fixed_test_user
+):
+    """The second turn waits on the count, then finds its contact already took
+    the place -- and runs, rather than being held as one too many."""
+    import asyncio
+
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.contacts.contracts import (
+        IdentityKind,
+        IdentityStrength,
+        open_contact,
+    )
+
+    org_id, pod_id = fixed_test_org["id"], UUID(test_pod["id"])
+    limited = await authenticated_client.put(
+        f"/usage/organizations/{org_id}/contacts-cap", json={"max_contacts": 1}
+    )
+    assert limited.status_code == 200, limited.text
+    async with get_uow_factory()() as uow:
+        contact = await open_contact(
+            uow,
+            pod_id=pod_id,
+            kind=IdentityKind.EMAIL,
+            value="twice@client.example",
+            strength=IdentityStrength.CHANNEL,
+            display_name=None,
+        )
+        conversation = ConversationModel(
+            user_id=UUID(fixed_test_user["id"]), pod_id=pod_id, contact_id=contact.id
+        )
+        uow.session.add(conversation)
+        await uow.commit()
+
+    async def admit() -> bool:
+        async with get_uow_factory()() as uow:
+            held = await held_for_a_person(
+                uow, pod_id=pod_id, conversation_id=conversation.id
+            )
+            await uow.commit()
+            return held
+
+    assert await asyncio.gather(admit(), admit()) == [False, False]
 
 
 async def _orders_for(
@@ -590,7 +774,8 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
     assert await subjects() == []
 
 
-async def test_a_member_follows_up_by_email_until_the_contact_unsubscribes(
+@pytest.mark.drives_work
+async def test_a_members_lines_are_mailed_until_the_contact_unsubscribes(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -634,21 +819,29 @@ async def test_a_member_follows_up_by_email_until_the_contact_unsubscribes(
         0
     ]["id"]
 
-    sent = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "Your order shipped today."},
+    # A member writes in her channel; the line is mailed to her afterwards.
+    channel = await contact_channel_id(authenticated_client, pod_id, dana)
+    sent = await member_writes(
+        authenticated_client, pod_id, channel, "Your order shipped today."
     )
-    assert sent.status_code == 200, sent.text
-    assert sent.json()["delivered"] is True
-    mail = json.dumps(
-        (await wait_for_messages(message_store, "RESEND", min_count=1))[-1]
-    )
+    await send_deliveries()
+    [delivery] = await deliveries_of_line(sent["id"])
+    assert (delivery.platform, delivery.status.value) == ("RESEND", "SENT")
+    sent_mail = (await wait_for_messages(message_store, "RESEND", min_count=1))[-1]
+    mail = json.dumps(sent_mail)
     assert "Your order shipped today." in mail
     link = re.search(
         r"https?://\S+/public/contacts/unsubscribe\?token=[^\s\"\\\\]+", mail
     )
     assert link is not None, mail
     token = parse_qs(urlparse(link.group(0)).query)["token"][0]
+    # The mail client's own button: List-Unsubscribe, one-click (RFC 8058),
+    # naming the same link, and a mailto the bot receives.
+    headers = sent_mail["headers"]
+    assert headers["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+    https, mailto = headers["List-Unsubscribe"].split(", ")
+    assert parse_qs(urlparse(https.strip("<>")).query)["token"] == [token]
+    assert mailto == f"<mailto:{address}?subject=unsubscribe>"
 
     # Opening the link only asks; the button unsubscribes.
     page = await authenticated_client.get(
@@ -664,16 +857,33 @@ async def test_a_member_follows_up_by_email_until_the_contact_unsubscribes(
     )
     assert done.status_code == 200 and "unsubscribed" in done.text
 
-    refused = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "A second note."},
+    # Her channel keeps the member's next line; it is not mailed, and says why.
+    mailed = len(message_store.get_all("RESEND"))
+    refused = await member_writes(
+        authenticated_client, pod_id, channel, "A second note."
     )
-    assert refused.status_code == 409, refused.text
+    await send_deliveries()
+    [held] = await deliveries_of_line(refused["id"])
+    assert held.status.value == "SKIPPED"
+    assert held.reason == "The contact asked not to be written to there"
+    assert len(message_store.get_all("RESEND")) == mailed
+
+    # Writing to her took her channel: the member answers her by hand now.
+    shown = await authenticated_client.get(f"/pods/{pod_id}/channels/{channel}")
+    assert shown.json()["assignee"]["id"] == fixed_test_user["id"]
+    # Switching the agent on hands her back to it at once.
+    handed_back = await authenticated_client.patch(
+        f"/pods/{pod_id}/channels/{channel}",
+        json={"agents_answer": True},
+    )
+    assert handed_back.status_code == 200, handed_back.text
+    assert handed_back.json()["assignee"] is None
 
     # Writing again is how a contact opts back in.
     await dana_writes("follow-2")
-    again = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{dana}/messages",
-        json={"message": "Thanks for writing back."},
+    again = await member_writes(
+        authenticated_client, pod_id, channel, "Thanks for writing back."
     )
-    assert again.status_code == 200, again.text
+    await send_deliveries()
+    [delivery] = await deliveries_of_line(again["id"])
+    assert delivery.status.value == "SENT"

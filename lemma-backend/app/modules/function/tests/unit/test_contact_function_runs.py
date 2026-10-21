@@ -5,7 +5,9 @@ its own (never a member's session) and an identity naming the contact, while a
 member's run reaches the runtime exactly as before. The runtime half: that
 token fetches its own revision and reports its own run, and nothing else. The
 policy half: opening a function to contacts takes pod settings permission and
-either owning the function or administering the pod.
+either owning the function or administering the pod. The input half: the
+contact's proved handles reach only a function that declares ``contact``, and
+never the model's.
 """
 
 from __future__ import annotations
@@ -49,11 +51,11 @@ from app.modules.function.domain.entities import (
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
 )
-from app.modules.function.tests.fakes import InMemoryPodRunSlots
 from app.modules.function.services.contact_access import (
     require_contact_input,
     require_contacts_opener,
 )
+from app.modules.function.services.contact_execution import with_contact_handles
 from sandbox_runtime.function.runtime_models import RuntimeInvocation
 
 pytestmark = pytest.mark.unit
@@ -136,7 +138,7 @@ async def _send(dispatch: FunctionExecutionDispatch, minter):
         runtime_http_client_factory=_Runtime,
         organization_resolver=_organization,
         delegated_tokens_enabled=True,
-        pod_runs=InMemoryPodRunSlots(),
+        max_running_per_pod=1_000,
     )
     endpoint = FunctionRuntimeEndpoint(
         url="https://sandbox.test/runtime/",
@@ -303,3 +305,40 @@ def test_a_function_must_declare_the_contact_it_is_told():
         with pytest.raises(DomainError) as raised:
             require_contact_input(_function(uuid4(), input_schema=schema))
         assert raised.value.status_code == 422
+
+
+_PROVED = {"id": str(uuid4()), "emails": ["dana@example.com"], "phones": []}
+
+
+def test_a_function_that_declares_contact_is_told_the_proved_one():
+    declared = _function(
+        uuid4(), input_schema={"properties": {"contact_id": {}, "contact": {}}}
+    )
+
+    told = with_contact_handles(
+        declared,
+        {"order": "A-1", "contact": {"emails": ["somebody@else.com"]}},
+        _PROVED,
+    )
+
+    assert told == {"order": "A-1", "contact": _PROVED}
+
+
+def test_a_function_that_does_not_declare_contact_is_told_none_at_all():
+    """Not even the model's: the key only ever holds what the platform proved."""
+    undeclared = _function(uuid4(), input_schema={"properties": {"contact_id": {}}})
+
+    told = with_contact_handles(
+        undeclared, {"order": "A-1", "contact": {"emails": ["x@y.z"]}}, _PROVED
+    )
+
+    assert told == {"order": "A-1"}
+
+
+def test_nobody_to_prove_is_a_null_contact():
+    """An anonymous form submission, or a contact forgotten mid-conversation."""
+    declared = _function(uuid4(), input_schema={"properties": {"contact": {}}})
+
+    told = with_contact_handles(declared, {"contact": {"id": "me"}}, None)
+
+    assert told == {"contact": None}

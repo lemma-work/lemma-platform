@@ -1,8 +1,9 @@
 import type { GeneratedClientAdapter } from "../generated.js";
-import type { FollowUpChannel } from "../openapi_client/models/FollowUpChannel.js";
+import type { OutreachRequest } from "../openapi_client/models/OutreachRequest.js";
 import type { WebWidgetCreateRequest } from "../openapi_client/models/WebWidgetCreateRequest.js";
 import type { WebWidgetUpdateRequest } from "../openapi_client/models/WebWidgetUpdateRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
+import { ContactOutreachService } from "../openapi_client/services/ContactOutreachService.js";
 import { ContactsService } from "../openapi_client/services/ContactsService.js";
 import { UsageService } from "../openapi_client/services/UsageService.js";
 
@@ -12,8 +13,8 @@ import { UsageService } from "../openapi_client/services/UsageService.js";
  * A contact wrote to one of the pod's own bots privately -- from WhatsApp,
  * Telegram or an authenticated email address -- while the bot's
  * `config.contacts.answer` was `known` or `anyone`. They never sign in and hold
- * no grant; they are answered from what the pod made Public. Every member who
- * can read the pod can list them; `remove` takes a pod admin.
+ * no grant; they are answered from what the pod made Public. The pod's editors
+ * and admins see them (`contact.read`); `remove` takes a pod admin.
  *
  * Contacts are never billed. What answering them may cost an organization a
  * month is its contacts cap: the deployment's default until an organization
@@ -22,11 +23,11 @@ import { UsageService } from "../openapi_client/services/UsageService.js";
 export class ContactsNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
 
-  /** The pod's contacts, newest first. Pass the opaque `next_before` back as
-   *  `before` for the next page. */
-  list(podId: string, options: { limit?: number; before?: string } = {}) {
+  /** The pod's contacts, newest first. Pass the opaque `next_cursor` back as
+   *  `cursor` for the next page. */
+  list(podId: string, options: { limit?: number; cursor?: string } = {}) {
     return this.client.request(() =>
-      ContactsService.contactList(podId, options.limit ?? 50, options.before),
+      ContactsService.contactList(podId, options.limit ?? 50, options.cursor),
     );
   }
 
@@ -42,22 +43,18 @@ export class ContactsNamespace {
     );
   }
 
-  /** Write to a contact in their latest conversation, where the channel allows:
-   *  never where they unsubscribed, on WhatsApp only within 24 hours of their
-   *  last message, and a few times a day at most. Takes `contact.message`.
-   *  `channel: "email"` sends to their verified email address instead, from
-   *  the pod's email address when their latest conversation is a web chat. */
-  followUp(
+  /** Write to a contact first, on one of their handles: email any time,
+   *  WhatsApp within 24 hours of their last message there, never a handle that
+   *  asked the pod to stop. Returns the line, in their channel at that handle's
+   *  place (opened if new), and its delivery -- `PENDING` until it goes. */
+  outreach(
     podId: string,
     contactId: string,
-    message: string,
-    options: { channel?: FollowUpChannel | `${FollowUpChannel}` } = {},
+    payload: OutreachRequest,
+    options: { idempotencyKey?: string } = {},
   ) {
     return this.client.request(() =>
-      ContactsService.contactFollowUp(podId, contactId, {
-        message,
-        channel: options.channel as FollowUpChannel | undefined,
-      }),
+      ContactOutreachService.contactOutreachSend(podId, contactId, payload, options.idempotencyKey),
     );
   }
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from app.core.authorization.context import ResourceType
 from app.core.domain.aggregate import AggregateRoot
@@ -19,13 +19,35 @@ class FileStatus(str, Enum):
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
+    # No longer written: a failure that may be retried is PENDING with a
+    # backoff on its work item. Kept so rows written before that still read.
     FAILED = "FAILED"
-    # Terminal failure: the file exhausted its processing-retry budget (or is
-    # unprocessable, e.g. too large). Unlike FAILED, the recovery cron never
-    # re-drives a FAILED_PERMANENT file, so it cannot rejoin the poison queue.
-    # A fresh upload / content update re-opens it (status -> PENDING, attempts
-    # reset) via mark_content_updated / set_search_enabled below.
+    # The one terminal failure: attempts exhausted, a preflight limit, a
+    # missing original, or the extractor down past its budget. The reason is in
+    # ``last_processing_error``. New bytes or a retry request re-open it;
+    # writing the same bytes again does not.
     FAILED_PERMANENT = "FAILED_PERMANENT"
+
+
+#: Statuses a byte-identical write leaves alone: the file is already processed,
+#: being processed, waiting to be, or has failed on exactly these bytes.
+_SETTLED_FOR_SAME_BYTES = frozenset(
+    {
+        FileStatus.PENDING,
+        FileStatus.PROCESSING,
+        FileStatus.COMPLETED,
+        FileStatus.FAILED_PERMANENT,
+    }
+)
+
+
+class ProcessingRequest(str, Enum):
+    """What asked for a file to be processed; content updates are debounced."""
+
+    CREATED = "created"
+    CONTENT = "content"
+    RETRY = "retry"
+    SEARCH_ENABLED = "search_enabled"
 
 
 class FileKind(str, Enum):
@@ -56,7 +78,31 @@ class DatastoreFileEntity(AggregateRoot):
     last_processing_error: str | None = None
     processing_attempts: int = 0
     content_sha256: str | None = None
+    #: The bytes the current chunks and derived artifacts were made from.
+    indexed_sha256: str | None = None
+    #: Where the bytes live: ``path`` (keyed by path; a rename copies them) or
+    #: ``object`` (keyed by id and sha; a rename touches no bytes).
+    storage_layout: str = "path"
+    parent_id: UUID | None = None
     allowed_actions: list[str] = Field(default_factory=list)
+
+    #: Why a transition asked for the file to be (re)processed, if one did;
+    #: the repository writes the work item in the same transaction as the row.
+    _processing_request: ProcessingRequest | None = PrivateAttr(default=None)
+
+    @property
+    def processing_request(self) -> "ProcessingRequest | None":
+        return self._processing_request
+
+    def clear_processing_request(self) -> None:
+        self._processing_request = None
+
+    def _request_processing(self, reason: "ProcessingRequest") -> None:
+        self.status = FileStatus.PENDING
+        self.indexed_at = None
+        self.processing_attempts = 0
+        self.last_processing_error = None
+        self._processing_request = reason
 
     @property
     def is_folder(self) -> bool:
@@ -99,16 +145,18 @@ class DatastoreFileEntity(AggregateRoot):
         return self.search_enabled and is_indexable_mime_type(self.mime_type, self.name)
 
     def set_search_enabled(self, enabled: bool) -> None:
+        # Repeating the current setting is not a request to reprocess: an
+        # update that merely echoes ``search_enabled`` back must not requeue
+        # an indexed file.
+        if enabled == self.search_enabled:
+            return
         self.search_enabled = enabled
         if not enabled:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
             return
         if self.is_file and is_indexable_mime_type(self.mime_type, self.name):
-            self.status = FileStatus.PENDING
-            self.indexed_at = None
-            self.processing_attempts = 0
-            self.last_processing_error = None
+            self._request_processing(ProcessingRequest.SEARCH_ENABLED)
         else:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
@@ -120,8 +168,7 @@ class DatastoreFileEntity(AggregateRoot):
             self.status = FileStatus.NOT_REQUIRED
             return
         if self._is_indexable():
-            self.status = FileStatus.PENDING
-            self.indexed_at = None
+            self._request_processing(ProcessingRequest.CREATED)
         else:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
@@ -135,18 +182,40 @@ class DatastoreFileEntity(AggregateRoot):
             )
         )
 
-    def mark_content_updated(self, actor_id: UUID | None = None) -> None:
+    def mark_content_updated(
+        self,
+        actor_id: UUID | None = None,
+        *,
+        previous_sha256: str | None = None,
+        inputs_changed: bool = False,
+    ) -> None:
+        """New content: process it again -- unless it is the same content.
+
+        ``previous_sha256`` is the digest the row held before this write. Bytes
+        identical to it change nothing about the file's processing: a file
+        already indexed stays indexed, one in flight stays in flight, and one
+        that failed permanently stays failed instead of rejoining the queue
+        with a fresh budget, which is how an agent rewriting the same failing
+        document kept it looping. ``inputs_changed`` is for writes that change
+        what processing reads without changing the bytes (supplied markdown,
+        a name that changes how they are read).
+        """
         from app.modules.datastore.domain.events import DatastoreFileUpdatedEvent
 
         if not self.is_file:
             self.status = FileStatus.NOT_REQUIRED
             return
-        if self._is_indexable():
-            self.status = FileStatus.PENDING
-            self.indexed_at = None
+        same_bytes = (
+            not inputs_changed
+            and previous_sha256 is not None
+            and self.content_sha256 == previous_sha256
+            and self.status in _SETTLED_FOR_SAME_BYTES
+        )
+        if same_bytes and self._is_indexable():
+            pass
+        elif self._is_indexable():
             # New content gets a fresh processing-retry budget.
-            self.processing_attempts = 0
-            self.last_processing_error = None
+            self._request_processing(ProcessingRequest.CONTENT)
         else:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
@@ -173,10 +242,7 @@ class DatastoreFileEntity(AggregateRoot):
 
         if self.status not in (FileStatus.FAILED, FileStatus.FAILED_PERMANENT):
             return False
-        self.status = FileStatus.PENDING
-        self.indexed_at = None
-        self.processing_attempts = 0
-        self.last_processing_error = None
+        self._request_processing(ProcessingRequest.RETRY)
         self.add_event(
             DatastoreFileUpdatedEvent(
                 file_id=self.id,

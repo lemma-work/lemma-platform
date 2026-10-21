@@ -98,7 +98,7 @@ class ModelDecisionProvider:
             UsageLimitExceeded,
             UsageLimits,
         )
-        from pydantic_ai.output import StructuredDict
+        from pydantic_ai.output import StructuredDict, ToolOutput
 
         del timeout_seconds  # the service bounds the whole call
         budget = _BUDGETS[task.priority]
@@ -120,8 +120,13 @@ class ModelDecisionProvider:
             runtime.model,
             system_prompt=prompt.system,
             # A fresh schema every run: `StructuredDict` writes into the dict
-            # it is given.
-            output_type=StructuredDict(answer_schema(task.schema), name="answers"),
+            # it is given. A tool, named rather than left to the model's
+            # default: a model that thinks by default would otherwise be asked
+            # for native JSON-schema output, which some Anthropic-compatible
+            # gateways refuse.
+            output_type=ToolOutput(
+                StructuredDict(answer_schema(task.schema), name="answers")
+            ),
             retries={"output": budget.output_retries},
         )
 

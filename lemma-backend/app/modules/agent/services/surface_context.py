@@ -1,9 +1,17 @@
-"""Where a conversation came from, read off its metadata.
+"""Which chat platform a run talks over, read off its conversation's metadata.
 
-A conversation that started on Slack, Teams or email carries the surface it
-arrived on in `metadata`, and both the runner and the conversation MCP bridge
-need the same nine fields out of it before they can build a tool context. They
-each had a copy; this is the one they share.
+A conversation a surface heard carries the platform it was last written to
+from in `metadata`, and both the runner and the conversation MCP bridge need
+the same nine fields out of it before they can build a tool context. They each
+had a copy; this is the one they share.
+
+A conversation in a channel is one person's across every place of it -- Lemma
+as much as WhatsApp or Slack -- so its metadata says where it was last heard,
+not where *this* run was asked. A run a line in Lemma started talks over no
+platform (`private_notes.asked_in_lemma`): it gets none of these fields, and so
+no platform's guidance, tools, files or progress. Reading the conversation
+alone told a member asking in Lemma that they were on WhatsApp, and sent the
+widget they asked for to their WhatsApp chat.
 
 `parse_surface_event_metadata` is imported lazily and its failure is tolerated
 on purpose: `agent_surfaces` imports this module's package, so reaching it at
@@ -13,11 +21,13 @@ current shape should still run with the raw payload rather than not at all.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TypedDict
 from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.private_notes import asked_in_lemma
 
 logger = get_logger(__name__)
 
@@ -56,8 +66,28 @@ class SurfaceContext(TypedDict):
     surface_conversation_kind: str | None
 
 
-def surface_context_from_conversation(conversation: Conversation) -> SurfaceContext:
-    """The surface fields a tool context needs, or nulls when there is no surface."""
+def _no_surface() -> SurfaceContext:
+    """A run that talks over no platform."""
+    return {
+        "surface_id": None,
+        "surface_platform": None,
+        "surface_metadata": None,
+        "external_channel_id": None,
+        "external_thread_id": None,
+        "external_user_id": None,
+        "external_message_id": None,
+        "agent_display_name": None,
+        "surface_conversation_kind": None,
+    }
+
+
+def surface_context_for_run(
+    conversation: Conversation, run_metadata: Mapping[str, object] | None
+) -> SurfaceContext:
+    """The surface fields a run's tool context needs: nulls for a run asked
+    in Lemma, or in a conversation no surface has heard."""
+    if asked_in_lemma(run_metadata):
+        return _no_surface()
     metadata = conversation.metadata or {}
     surface_id = metadata.get("surface_id")
     _warn_about_dropped_text(conversation, metadata)

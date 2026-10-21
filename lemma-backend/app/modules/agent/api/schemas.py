@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     computed_field,
+    field_validator,
     model_validator,
 )
 
@@ -140,6 +141,9 @@ class ConversationResponse(BaseModel):
     instructions: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
     parent_id: UUID | None = None
+    #: The channel it is held in, if any: a channel's conversations are
+    #: reached through the channel.
+    channel_id: UUID | None = None
     type: ConversationType = ConversationType.CHAT
     status: ConversationStatus | None = None
     output: JsonValue | None = None
@@ -161,6 +165,15 @@ class ConversationResponse(BaseModel):
             "waiting on the conversation's owner. Not implied by status: a "
             "WAITING conversation may be waiting on a timer, and a permission "
             "request waits inside a RUNNING one."
+        ),
+    )
+    waiting_on_work: bool = Field(
+        default=False,
+        description=(
+            "WAITING on the agent's own work -- a sub-agent, a process or a "
+            "timer -- rather than on a person: a run will start when it ends, "
+            "so a viewer can follow the conversation to it. Set when one "
+            "conversation is read, false in lists."
         ),
     )
     created_at: datetime
@@ -346,6 +359,22 @@ class SendMessageRequest(BaseModel):
             "first send's run, with deduplicated=true."
         ),
     )
+
+    @field_validator("client_message_id")
+    @classmethod
+    def _not_a_system_name(cls, value: str | None) -> str | None:
+        """The pod names some sends itself -- the turn a channel line starts,
+        the news that answers arrived -- and a client never takes one of
+        those names first."""
+        if value is not None and value.startswith(SYSTEM_CLIENT_ID_PREFIXES):
+            raise ValueError("That client_message_id is reserved")
+        return value
+
+
+#: The ``client_message_id`` names the pod gives its own sends in a
+#: conversation: ``channel_answers.turn_client_id``,
+#: ``message_reply_service.replies_client_id``.
+SYSTEM_CLIENT_ID_PREFIXES = ("channel-line:", "replies:")
 
 
 class CreateAgentRequest(BaseModel):

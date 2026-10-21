@@ -240,10 +240,6 @@ class AgentRuntimeProfileEditor:
                 if isinstance(config_selections, UnsetType)
                 else config_selections
             )
-            selections = validate_agent_host_selections(
-                config_options=config_options,
-                selections=selections or {},
-            )
 
             catalog = agent_host_model_catalog(
                 config_options,
@@ -268,6 +264,13 @@ class AgentRuntimeProfileEditor:
                     model_name=default_model_name,
                 )
 
+            # After the model is settled: the options a selection is checked
+            # against are the ones that model offers.
+            selections = validate_agent_host_selections(
+                config_options=config_options,
+                selections=selections or {},
+                model_name=selected_model,
+            )
             changes["default_model_name"] = selected_model
             changes["model_catalog"] = catalog
             changes["config"] = HarnessRuntimeConfig(

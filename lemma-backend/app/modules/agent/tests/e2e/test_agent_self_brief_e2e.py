@@ -217,7 +217,7 @@ async def test_an_empty_pod_still_renders_a_whole_brief(
     assert brief.startswith("# Runtime Context")
     assert "## You" in brief
     # The person who made it is in the pod, so this one is never empty -- and it
-    # carries the id `message_user` actually takes.
+    # carries the id `channel_post` actually takes.
     assert "## People here" in brief
     assert "(to: " in brief
     for empty_section in ("## Tables", "## Workflows", "## Agents", "## Functions"):

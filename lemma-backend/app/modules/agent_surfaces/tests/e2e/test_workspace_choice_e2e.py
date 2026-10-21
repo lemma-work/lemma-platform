@@ -356,12 +356,15 @@ async def test_a_thread_on_a_pod_you_left_is_not_somewhere_to_talk(
     choice from the one person who most needs it: somebody who just lost access
     to the only pod they were in, whose thread is still sitting on its surface.
     """
-    from app.modules.agent.infrastructure.models.conversation import ConversationModel
-    from app.modules.agent_surfaces.infrastructure.models import (
-        AgentSurfaceConversationLinkModel,
-    )
     from app.modules.agent_surfaces.services.onboarding_pod_choice import (
         has_somewhere_to_talk,
+    )
+    from app.modules.channels.contracts import (
+        AccountKey,
+        MembersHome,
+        Place,
+        SourceKind,
+        source_for,
     )
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
@@ -380,22 +383,19 @@ async def test_a_thread_on_a_pod_you_left_is_not_somewhere_to_talk(
         )
         session.add(surface)
         await session.flush()
-        conversation = ConversationModel(
-            user_id=fixed_test_user["id"], pod_id=UUID(test_pod["id"])
-        )
-        session.add(conversation)
-        await session.flush()
-        # The thread they were talking in, still pointing at that surface.
-        session.add(
-            AgentSurfaceConversationLinkModel(
+        # The chat they were talking in, still on that surface.
+        await source_for(
+            SqlAlchemyUnitOfWork(session),
+            pod_id=UUID(test_pod["id"]),
+            place=Place(
                 surface_id=surface.id,
-                conversation_id=conversation.id,
                 platform="WHATSAPP",
-                external_channel_id="15550001111",
-                external_thread_id="15550001111",
+                account=AccountKey(workspace=f"surface:{surface.id}"),
+                kind=SourceKind.PERSON,
+                external_channel_id=None,
                 external_user_id="15550001111",
-                last_inbound_at=datetime.now(timezone.utc),
-            )
+            ),
+            home=MembersHome(user_id=UUID(str(fixed_test_user["id"]))),
         )
         await session.commit()
 

@@ -33,6 +33,73 @@ export interface UploadedFile {
 
 let counter = 0;
 
+/** What a clipboard image is called, and why it needs another name.
+ *
+ *  A pasted screenshot arrives with no name of its own, so every browser calls
+ *  it `image.png` — or `image (1).png` if the desktop already had one. Two
+ *  pastes in one message are therefore two files called the same thing, and a
+ *  folder that already holds an `image.png` has nowhere to put either. Naming
+ *  them here, before they are offered, is what keeps the upload from being the
+ *  place this is discovered.
+ */
+const PASTED_STEM = "pasted";
+
+/** The extension a pasted file should keep, from its own name if it has one
+ *  and from its type if it does not: a clipboard image is often called
+ *  `image` with no extension at all, and a file stored without one cannot be
+ *  read back as an image by anything. */
+function pastedExtension(file: File): string {
+    const named = /\.[A-Za-z0-9]{1,8}$/.exec(file.name ?? "");
+    if (named) return named[0].toLowerCase();
+    const byType: Record<string, string> = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/svg+xml": ".svg",
+        "application/pdf": ".pdf",
+    };
+    return byType[file.type] ?? "";
+}
+
+/** The stamp a pasted file is named with: local time, because it is a name a
+ *  person reads and compares with when they took the screenshot. */
+function stampOf(at: Date): string {
+    const pad = (value: number) => String(value).padStart(2, "0");
+    return (
+        String(at.getFullYear()) + pad(at.getMonth() + 1) + pad(at.getDate()) +
+        "-" + pad(at.getHours()) + pad(at.getMinutes()) + pad(at.getSeconds())
+    );
+}
+
+/* Two pastes inside one second are two pastes, and the second one has to be
+   named as well as the first. The counter is kept across calls rather than
+   per call, because the two arrive as two paste events, and it counts the
+   files named rather than the pastes: a paste of two then a paste of one in
+   the same second would otherwise give the third the second's name. */
+let lastStamp = "";
+let namedThisSecond = 0;
+
+/** Name pasted files so no two of them collide: `pasted-20261017-064158.png`,
+ *  and `…-2.png` for a second one in the same second. */
+export function namePasted(files: readonly File[], at: Date = new Date()): File[] {
+    const stamp = stampOf(at);
+    if (stamp !== lastStamp) {
+        lastStamp = stamp;
+        namedThisSecond = 0;
+    }
+    const first = namedThisSecond;
+    namedThisSecond += files.length;
+    return files.map((file, index) => {
+        const count = first + index + 1;
+        const suffix = count === 1 ? "" : "-" + count;
+        const name = PASTED_STEM + "-" + stamp + suffix + pastedExtension(file);
+        /* A new File rather than a renamed one: the name is the whole of what
+           the upload and the chip read, and a File is immutable. */
+        return new File([file], name, { type: file.type, lastModified: file.lastModified });
+    });
+}
+
 /** A key that survives two files called the same thing.
  *
  *  Name plus size plus modified-time collides for a duplicate of the same file,

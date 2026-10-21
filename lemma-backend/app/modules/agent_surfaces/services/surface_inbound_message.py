@@ -36,6 +36,10 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.adapter_port import (
     SurfacePlatformAdapterPort,
 )
+from app.modules.agent_surfaces.services.channel_lines import (
+    ChannelLines,
+    ChannelLinesInDatabase,
+)
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
     Resumed,
@@ -142,6 +146,8 @@ async def write_inbound_message(
     message_text: str,
     metadata: dict[str, Any],
     uow: SqlAlchemyUnitOfWork,
+    *,
+    lines: ChannelLines | None = None,
 ) -> FinishedPauses:
     """Persist the inbound message, or resume the run it answers.
 
@@ -189,6 +195,41 @@ async def write_inbound_message(
             platform=context.platform,
         )
         return FinishedPauses()
+    # On the channel's timeline whatever the message turns out to be -- an
+    # answer to a pause is still something the person said. Written after the
+    # turn it starts: the line holds its channel's row from there to the
+    # commit, not across the turn.
+    heard = _Heard(lines or ChannelLinesInDatabase(uow), context, message_text)
+    finished = await _answer_or_start(context, message_text, metadata, uow, heard)
+    await heard.once()
+    return finished
+
+
+@dataclass(slots=True)
+class _Heard:
+    """The inbound message as a line, written once."""
+
+    lines: ChannelLines
+    context: SurfaceChatContext
+    text: str
+    written: bool = False
+
+    async def once(self) -> None:
+        if not self.written:
+            self.written = True
+            await self.lines.heard(self.context, text=self.text)
+
+
+async def _answer_or_start(
+    context: SurfaceChatContext,
+    message_text: str,
+    metadata: dict[str, Any],
+    uow: SqlAlchemyUnitOfWork,
+    heard: _Heard,
+) -> FinishedPauses:
+    """Resume the pause the message answers, or start the turn it asks for."""
+    if context.pod_id is None:
+        raise ValueError("Surface chat context requires a pod")
     auth_ctx = await create_authorization_data_service(uow).build_user_context(
         user_id=context.user_id,
         pod_id=context.pod_id,
@@ -215,7 +256,8 @@ async def write_inbound_message(
             # here is what turned an "approve" into a cancellation: it
             # supersedes the pause with an auto-DENY. The pause is still
             # there, so saying so and letting them answer again is the one
-            # move that loses nothing.
+            # move that loses nothing. Their line goes before the reply.
+            await heard.once()
             await _say_the_decision_was_not_recorded(context, uow)
             return FinishedPauses()
         if resumed.outcome is ResumeOutcome.NOT_A_DECISION:

@@ -67,6 +67,8 @@ LLM_OTEL      ?= 0
 E2E_TEMP_ROOT ?= /tmp/lemma-desktop-e2e
 
 UNIT_MARKERS  ?= not e2e and not local_guest and not local_host and not desktop_e2e and not provider
+# xdist workers for it; lemma-backend/Makefile says why four. 0 is serial.
+UNIT_WORKERS  ?= 4
 
 BACKEND_DIR   := lemma-backend
 FRONTEND_DIR  := lemma-frontend
@@ -839,9 +841,9 @@ _run-backend:
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
 		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(WORKSPACE_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		fi; wait"
 
 _run-frontend:
@@ -1606,7 +1608,7 @@ test-backend:
 
 test-backend-unit:
 	@echo "→ Backend unit tests…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" -q
+	@cd $(BACKEND_DIR) && uv run pytest -n $(UNIT_WORKERS) -m "$(UNIT_MARKERS)" -q
 
 test-backend-e2e:
 	@echo "→ Backend e2e tests (workers=$(E2E_WORKERS))…"
@@ -1909,7 +1911,7 @@ coverage-backend: coverage-backend-unit coverage-backend-e2e
 # entries in that script's LANES table.
 coverage-backend-unit:
 	@echo "→ Backend unit coverage…"
-	@cd $(BACKEND_DIR) && uv run pytest -m "$(UNIT_MARKERS)" \
+	@cd $(BACKEND_DIR) && uv run pytest -n $(UNIT_WORKERS) -m "$(UNIT_MARKERS)" \
 		--cov=app --cov-report=term-missing --cov-report=xml:coverage-unit.xml -q
 
 coverage-backend-e2e:
@@ -2082,77 +2084,186 @@ format-check:
 # `lint-e2e-waits` used to be the other exception, and it had no reason to be:
 # it is an AST pass over the test tree that needs nothing running, so leaving
 # it out only meant learning about a new clock-wait from CI.
+# Every gate `quality` runs, as its own target. `quality` runs them side by
+# side through scripts/run_quality_gates.py, which buffers each one's output
+# and prints it whole when that gate finishes: the macOS make (3.81) has no
+# `--output-sync`, and `-j` alone interleaves the lines of thirty gates. Run any
+# one on its own with `make qg-<name>`; `make quality QUALITY_JOBS=1` is serial.
+QUALITY_GATES := \
+	qg-formatting \
+	qg-ruff \
+	qg-ruff-clients \
+	qg-lockfiles \
+	qg-client-structure \
+	qg-client-types \
+	qg-async-safety \
+	qg-db-connection-scope \
+	qg-i-o-hygiene \
+	qg-import-bound-defaults \
+	qg-typed-surfaces \
+	qg-swallowed-errors \
+	qg-memory-hazards \
+	qg-public-prose \
+	qg-migration-order \
+	qg-in-subject-test-doubles \
+	qg-import-budget \
+	qg-critical-domain-types \
+	qg-architecture \
+	qg-logging-catalog \
+	qg-openapi-spec-freshness \
+	qg-module-contract-coverage \
+	qg-e2e-wait-patterns \
+	qg-local-domain-lists \
+	qg-local-auth-gates \
+	qg-script-portability \
+	qg-ci-aggregators \
+	qg-dmg-pipeline-parity \
+	qg-test-census \
+	qg-e2e-shard-layout \
+	qg-scenario-traceability \
+	qg-lint-repo
+
+.PHONY: quality $(QUALITY_GATES)
+
+QUALITY_JOBS ?=
+
 quality:
+	@python3 scripts/run_quality_gates.py $(if $(QUALITY_JOBS),--jobs $(QUALITY_JOBS)) $(QUALITY_GATES)
+	@echo "✓ quality gates pass"
+
+qg-formatting:
 	@echo "→ Formatting…"
 	@$(MAKE) --no-print-directory format-check
+
+qg-ruff:
 	@echo "→ Ruff…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
+
+qg-ruff-clients:
 	@echo "→ Ruff (CLI, SDK, stack, bundle, scenarios)…"
 	@$(MAKE) --no-print-directory lint-clients
+
+qg-lockfiles:
 	@echo "→ Lockfiles…"
 	@$(MAKE) --no-print-directory lint-lockfiles
+
+qg-client-structure:
 	@echo "→ Client structure (ADVISORY — new, records only)…"
 	@$(MAKE) --no-print-directory client-structure-record
+
+qg-client-types:
 	@echo "→ Client types (ADVISORY — new, records only)…"
 	@$(MAKE) --no-print-directory client-typecheck-record
+
+qg-async-safety:
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
+
+qg-db-connection-scope:
 	@echo "→ DB connection scope…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
+
+qg-i-o-hygiene:
 	@echo "→ I/O hygiene…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded-reads
+
+qg-import-bound-defaults:
 	@echo "→ Import-bound defaults…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-bound-defaults
+
+qg-typed-surfaces:
 	@echo "→ Typed surfaces…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-controller-types
+
+qg-swallowed-errors:
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
+
+qg-memory-hazards:
 	@echo "→ Memory hazards…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-memory-hazards
+
+qg-public-prose:
 	@echo "→ Public prose…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-public-prose
+
+qg-migration-order:
 	@echo "→ Migration order…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-migration-order
+
+qg-in-subject-test-doubles:
 	@echo "→ In-subject test doubles…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-test-doubles
+
+qg-import-budget:
 	@echo "→ Import budget…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-budget
+
+qg-critical-domain-types:
 	@echo "→ Critical domain types…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory typecheck-critical
+
+qg-architecture:
 	@echo "→ Architecture ratchet + route inventory…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory architecture
+
+qg-logging-catalog:
 	@echo "→ Logging event catalog freshness…"
 	@# The catalog is generated from the literal logger calls in the tree and is
 	@# what the logging contract is enforced against. Nothing ran the generator,
 	@# so nothing noticed when the two diverged.
 	@cd $(BACKEND_DIR) && uv run python ../scripts/generate_logging_event_catalogs.py --check
+
+qg-openapi-spec-freshness:
 	@echo "→ OpenAPI spec freshness…"
 	@cd $(BACKEND_DIR) && uv run python scripts/dump_openapi_spec.py --check
+
+qg-module-contract-coverage:
 	@echo "→ Module contract coverage…"
 	@cd $(BACKEND_DIR) && uv run python scripts/check_contracts.py
+
+qg-e2e-wait-patterns:
 	@echo "→ E2E wait patterns…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-e2e-waits
+
+qg-local-domain-lists:
 	@echo "→ Local domain lists…"
 	@$(MAKE) --no-print-directory local-domain-check
+
+qg-local-auth-gates:
 	@echo "→ Local auth gates…"
 	@$(MAKE) --no-print-directory local-auth-gate-check
+
+qg-script-portability:
 	@echo "→ Script portability…"
 	@$(MAKE) --no-print-directory script-portability-check
+
+qg-ci-aggregators:
 	@echo "→ CI aggregators + job timeouts…"
 	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
+
+qg-dmg-pipeline-parity:
 	@echo "→ Both DMG pipelines verify the same things…"
 	@uv run --no-project --with pyyaml python scripts/check_release_parity.py
+
+qg-test-census:
 	@echo "→ Test census (no suite has quietly stopped running)…"
 	@python3 scripts/check_pytest_census.py
+
+qg-e2e-shard-layout:
 	@echo "→ E2E shard layout…"
 	@cd $(BACKEND_DIR) && uv run python ../scripts/plan_e2e_shards.py --verify
+
+qg-scenario-traceability:
 	@echo "→ Product scenario traceability…"
 	@python3 scripts/check_scenario_coverage.py
+
+qg-lint-repo:
 	@echo "→ Shell, workflows, Dockerfiles, spelling, config…"
 	@$(MAKE) --no-print-directory lint-repo
-	@echo "✓ quality gates pass"
+
 
 # The backend's architecture ratchet, from the repo root. AGENTS.md and
 # CONTRIBUTING.md both tell you to run `make architecture`; until now only one

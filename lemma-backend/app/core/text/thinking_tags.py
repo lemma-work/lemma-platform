@@ -267,3 +267,19 @@ def _held_marker(buffer: str, position: int, marker: str) -> int:
         if len(buffer) - position >= length and buffer.endswith(marker[:length]):
             return len(buffer) - length
     return len(buffer)
+
+
+#: Lemma's own context blocks -- the memory brief's ``<memory …>`` sections
+#: and the ``<index path=…>`` entries inside them -- which a model sometimes
+#: repeats back. They are the platform's markup, never an answer.
+_CONTEXT_BLOCKS = re.compile(
+    r"<memory\b[^>]*>.*?</memory>|<index\b[^>]*>.*?</index>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def strip_context_echo(text: str) -> str:
+    """``text`` without the platform's own context blocks a model echoed."""
+    if not text or "<" not in text:
+        return text
+    return _CONTEXT_BLOCKS.sub("", text).strip()

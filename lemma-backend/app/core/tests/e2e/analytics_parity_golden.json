@@ -1,0 +1,381 @@
+[
+ {
+  "distinct_id": "<user>",
+  "groups": {},
+  "name": "auth.signed_up",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "origin": "WEB"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "organization": "<org>"
+  },
+  "name": "organization.created",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "origin": "WEB"
+  }
+ },
+ {
+  "distinct_id": "lemma:autonomous",
+  "groups": {
+   "organization": "56557020-41b8-5095-bd9a-a7d66f589347"
+  },
+  "name": "organization.created",
+  "properties": {
+   "actor_type": "SYSTEM",
+   "deployment": "parity"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "organization": "<org>"
+  },
+  "name": "organization.member_joined",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "member_count_bucket": "1-1",
+   "origin": "CLI"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "organization": "<org>",
+   "pod": "<pod>"
+  },
+  "name": "pod.created",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "origin": "WEB",
+   "pod_id": "<pod>"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "pod.member_joined",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "origin": "SDK",
+   "pod_id": "<pod>"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "table.created",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "origin": "MCP_POD",
+   "pod_id": "<pod>",
+   "table_id": "34a8edeb-7107-5b41-bdbe-6f645a23f64b"
+  }
+ },
+ {
+  "distinct_id": "lemma:autonomous",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "document.added",
+  "properties": {
+   "actor_type": "SYSTEM",
+   "deployment": "parity",
+   "document_id": "cf9abfff-ac58-51e3-92f6-318e815cecc7",
+   "kind": "pdf",
+   "origin": "IMPORT",
+   "pod_id": "<pod>",
+   "size_bucket": "100kb-1mb"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "function.created",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "function_id": "ce5e2621-23ec-551e-8359-f6c037448c5c",
+   "origin": "WEB",
+   "pod_id": "<pod>"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "agent.created",
+  "properties": {
+   "actor_type": "USER",
+   "agent_id": "40c911e8-dcb1-593f-b0fb-2278f43ec520",
+   "deployment": "parity",
+   "origin": "WEB",
+   "pod_id": "<pod>",
+   "tool_count_bucket": "5-20"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "conversation.started",
+  "properties": {
+   "actor_type": "USER",
+   "agent_id": "40c911e8-dcb1-593f-b0fb-2278f43ec520",
+   "conversation_id": "<conversation>",
+   "deployment": "parity",
+   "is_assistant": false,
+   "origin": "WEB",
+   "pod_id": "<pod>"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "organization": "<org>",
+   "pod": "<pod>"
+  },
+  "name": "agent_run.completed",
+  "properties": {
+   "actor_type": "USER",
+   "agent_id": "40c911e8-dcb1-593f-b0fb-2278f43ec520",
+   "conversation_id": "<conversation>",
+   "deployment": "parity",
+   "duration_bucket": "30-120s",
+   "origin": "WEB",
+   "pod_id": "<pod>",
+   "status": "COMPLETED"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "organization": "<org>",
+   "pod": "<pod>"
+  },
+  "name": "agent_run.completed",
+  "properties": {
+   "actor_type": "USER",
+   "conversation_id": "<conversation>",
+   "deployment": "parity",
+   "origin": "SCHEDULE",
+   "pod_id": "<pod>",
+   "status": "FAILED"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "organization": "<org>",
+   "pod": "<pod>"
+  },
+  "name": "pod.delivered",
+  "properties": {
+   "actor_type": "USER",
+   "days_since_created_bucket": "same_day",
+   "deployment": "parity",
+   "origin": "SCHEDULE",
+   "pod_id": "<pod>",
+   "resource_count_bucket": "1-1",
+   "via": "agent_run"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "organization": "<org>",
+   "pod": "<pod>"
+  },
+  "name": "agent_run.completed",
+  "properties": {
+   "actor_type": "USER",
+   "conversation_id": "<conversation>",
+   "deployment": "parity",
+   "duration_bucket": "1-5s",
+   "origin": "SURFACE",
+   "origin_platform": "slack",
+   "pod_id": "<pod>",
+   "status": "COMPLETED"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "schedule.created",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "origin": "WEB",
+   "pod_id": "<pod>",
+   "schedule_id": "beec7dff-898b-5fdb-b8d5-8c097c5f1141",
+   "trigger_kind": "TIME"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "schedule_run.completed",
+  "properties": {
+   "actor_type": "DELEGATED_USER_WORKLOAD",
+   "deployment": "parity",
+   "on_behalf_of_user": "<user>",
+   "origin": "SCHEDULE",
+   "pod_id": "<pod>",
+   "schedule_id": "beec7dff-898b-5fdb-b8d5-8c097c5f1141",
+   "status": "completed"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "workflow.created",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "node_count_bucket": "1-5",
+   "origin": "WEB",
+   "pod_id": "<pod>",
+   "workflow_id": "e5658717-2c89-5ba6-a020-109f50eefd01"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "workflow_run.completed",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "duration_bucket": "2-10m",
+   "origin": "WORKFLOW",
+   "pod_id": "<pod>",
+   "status": "COMPLETED",
+   "workflow_id": "e5658717-2c89-5ba6-a020-109f50eefd01"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "surface.connected",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "origin": "WEB",
+   "pod_id": "<pod>",
+   "surface_id": "f1e9c8ab-b7ad-572c-b94c-2112c7393216"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "app.created",
+  "properties": {
+   "actor_type": "USER",
+   "app_id": "327308e7-a855-51af-9532-bf1797b9e3ba",
+   "deployment": "parity",
+   "origin": "WEB",
+   "pod_id": "<pod>"
+  }
+ },
+ {
+  "distinct_id": "lemma:autonomous",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "app.published",
+  "properties": {
+   "actor_type": "SYSTEM",
+   "app_id": "327308e7-a855-51af-9532-bf1797b9e3ba",
+   "deployment": "parity",
+   "origin": "CLI",
+   "pod_id": "<pod>"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "organization": "<org>"
+  },
+  "name": "connector.connected",
+  "properties": {
+   "actor_type": "USER",
+   "connector_id": "github",
+   "deployment": "parity",
+   "origin": "WEB"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "bundle.exported",
+  "properties": {
+   "actor_type": "USER",
+   "bundle_id": "cbae82b0-976c-521c-b997-69d35e4c6602",
+   "deployment": "parity",
+   "origin": "WEB",
+   "pod_id": "<pod>",
+   "resource_count_bucket": "5-20"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "pod": "<pod>"
+  },
+  "name": "import.completed",
+  "properties": {
+   "actor_type": "USER",
+   "bundle_id": "d764c0f1-de6e-5724-a1e2-a1ad5c25701a",
+   "deployment": "parity",
+   "is_remix": true,
+   "origin": "IMPORT",
+   "pod_id": "<pod>",
+   "resource_count_bucket": "1-5"
+  }
+ },
+ {
+  "distinct_id": "<user>",
+  "groups": {
+   "organization": "<org>",
+   "pod": "d4c2d080-7fc7-59c1-bb29-3be7636da3cd"
+  },
+  "name": "pod.deleted",
+  "properties": {
+   "actor_type": "USER",
+   "deployment": "parity",
+   "origin": "WEB",
+   "pod_id": "d4c2d080-7fc7-59c1-bb29-3be7636da3cd"
+  }
+ }
+]

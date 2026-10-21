@@ -16,47 +16,47 @@ than for symmetry:
     token from there on has to be read again. A new message at the tail leaves
     everything before it untouched.
 
-Delivered through ``before_model_request`` rather than a history processor
-because the graph writes the result back into run state, so the notice stays
-part of the history it was added to. A processor's copy is discarded after the
-request, and the next turn's prefix would diverge at whatever it had edited.
+A ``ProcessHistory`` capability, because the notice has to stay part of the
+history it was added to: a later request that lost it would diverge from the
+prefix the provider already read. Since pydantic-ai 2.55 a plain
+``before_model_request`` hook edits only the request it is handed, and only
+``ProcessHistory`` writes its result back into the run's history -- so a
+notice delivered any other way held only while something registered after it
+happened to write the whole list back.
 """
 
 from __future__ import annotations
 
-from pydantic_ai import RunContext
-from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
+from pydantic_ai.capabilities import ProcessHistory
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    UserPromptPart,
+)
 
 from app.modules.agent.domain.run_notices import RunNotices
-from app.modules.agent.infrastructure.pydantic_ai_compat import ModelRequestContext
 
 
-class RunNoticeCapability(AbstractCapability[object]):
+class RunNoticeCapability(ProcessHistory[object]):
     """Put any notice this run has posted just before the user's message."""
 
     def __init__(self, notices: RunNotices, *, id: str | None = "run_notices") -> None:
+        super().__init__(processor=self._deliver)
         self._notices = notices
         self._id = id
 
-    def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
+    def get_serialization_name(self) -> str | None:  # type: ignore[override]  # pragma: no cover - metadata
         return self._id
 
-    async def before_model_request(
-        self,
-        ctx: RunContext[object],
-        request_context: ModelRequestContext,
-    ) -> ModelRequestContext:
+    async def _deliver(self, messages: list[ModelMessage]) -> list[ModelMessage]:
         waiting = self._notices.take()
         if not waiting:
-            return request_context
+            return messages
         notice = ModelRequest(parts=[UserPromptPart(content=text) for text in waiting])
-        messages = request_context.messages
         if messages and _is_user_request(messages[-1]):
-            request_context.messages = [*messages[:-1], notice, messages[-1]]
-        else:
-            request_context.messages = [*messages, notice]
-        return request_context
+            return [*messages[:-1], notice, messages[-1]]
+        return [*messages, notice]
 
 
 def _is_user_request(message: object) -> bool:

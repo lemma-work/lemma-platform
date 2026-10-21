@@ -6,16 +6,15 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Text, cast, func, select
+from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     build_whatsapp_signature_headers,
 )
-from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
+from app.modules.identity.events.identity_work import IDENTITY_WHATSAPP_VERIFICATION
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.services.whatsapp_mobile_verification import (
     WhatsAppMobileVerificationService,
@@ -409,25 +408,23 @@ async def test_signed_whatsapp_webhook_is_deduplicated_and_never_becomes_surface
         assert first.json()["message"] == "Verification message received"
 
         async with async_session_maker() as session:
-            identity_events = await session.scalar(
-                select(func.count())
-                .select_from(DomainEventOutbox)
-                .where(
-                    DomainEventOutbox.event_type
-                    == WhatsAppMobileVerificationReceivedEvent.get_event_type(),
-                    DomainEventOutbox.payload["whatsapp_message_id"].astext
-                    == message_id,
-                )
+            # Meta's retry of the same message is the same work item.
+            verifications = await session.scalar(
+                text(
+                    "SELECT count(*) FROM work_items WHERE kind = :kind "
+                    "AND payload->>'whatsapp_message_id' = :message_id"
+                ),
+                {"kind": IDENTITY_WHATSAPP_VERIFICATION, "message_id": message_id},
             )
+            # Nor is it a surface message: no inbound row for it.
             surface_events = await session.scalar(
-                select(func.count())
-                .select_from(DomainEventOutbox)
-                .where(
-                    DomainEventOutbox.event_type == "surface.webhook.received",
-                    cast(DomainEventOutbox.payload, Text).contains(message_id),
-                )
+                text(
+                    "SELECT count(*) FROM surface_inbound_messages "
+                    "WHERE CAST(payload AS text) LIKE :message"
+                ),
+                {"message": f"%{message_id}%"},
             )
-        assert identity_events == 1
+        assert verifications == 1
         assert surface_events == 0
     finally:
         await service.close()

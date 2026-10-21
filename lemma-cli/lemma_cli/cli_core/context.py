@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 from typing import TYPE_CHECKING, Any, Callable
+from uuid import UUID
 
 from lemma_sdk.config import resolve_base_url
 from lemma_sdk.errors import (
@@ -87,6 +88,36 @@ def selected_conversation(
         fail(
             "No conversation selected. Pass --conversation or set LEMMA_CONVERSATION_ID."
         )
+    return str(value) if value else None
+
+
+def chat_conversation(
+    state: CliState, explicit: str | None = None, *, agent: str | None
+) -> str | None:
+    """The conversation a chat should post into, or None to start a new one.
+
+    Narrower than ``selected_conversation`` on purpose. ``LEMMA_CONVERSATION_ID``
+    is ambient: an agent sandbox sets it to the *calling* agent's own
+    conversation, so that read commands (``conversations get/messages/stream``)
+    can act on "this conversation" with no id. A chat is a send that starts a
+    run; posting into the caller's own conversation makes the caller answer
+    itself. `lemma chat builder -m "…"` from inside an agent did exactly that —
+    the message never reached the builder. So chat never reads the env var.
+
+    What still counts: an id typed on this command line (``--conversation`` or
+    the global ``--conversation-id``), and — only when no agent is named — the
+    default a person picked with ``lemma conversations select``. Naming an agent
+    means "talk to that agent", which a saved default for some other
+    conversation must not override.
+    """
+    runtime = (
+        state.config.get("_runtime")
+        if isinstance(state.config.get("_runtime"), dict)
+        else {}
+    )
+    value = explicit or runtime.get("conversation")
+    if not value and not agent:
+        value = _defaults(state).get("conversation_id")
     return str(value) if value else None
 
 
@@ -239,6 +270,29 @@ def resolve_org(client: Lemma, selector: str) -> dict[str, Any]:
     raise AssertionError("unreachable")
 
 
+def selected_org_id(
+    client: Lemma,
+    state: CliState,
+    explicit: str | None = None,
+    *,
+    required: bool = True,
+) -> str | None:
+    """The selected organization as the id the API takes.
+
+    `--org`, LEMMA_ORG_ID and the stored default may name it by slug or name
+    (`lemma orgs` shows all three); routes take the id, and a slug sent as-is
+    came back "badly formed hexadecimal UUID string". An id costs nothing; a
+    slug or name pays one lookup.
+    """
+    selector = selected_org(state, explicit, required=required)
+    if not selector:
+        return None
+    try:
+        return str(UUID(selector))
+    except ValueError:
+        return str(resolve_org(client, selector)["id"])
+
+
 def resolve_pod(
     client: Lemma, state: CliState, selector: str, org: str | None = None
 ) -> dict[str, Any]:
@@ -247,7 +301,7 @@ def resolve_pod(
     except LemmaNotFoundError, LemmaPermissionError:
         pass  # see resolve_org: only "not there / not yours" scans by slug
 
-    org_id = org or selected_org(state, required=False)
+    org_id = selected_org_id(client, state, org, required=False)
     if not org_id:
         fail(
             "Pod lookup by slug needs an organization. Run `lemma orgs`, pass --org, or set LEMMA_ORG_ID."

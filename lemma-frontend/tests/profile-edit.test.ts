@@ -4,6 +4,7 @@ import type { UserResponse } from "lemma-sdk";
 import {
     changes, displayName, draftOf, hasChanges, isTimezone, localTimezone, problems, timezones,
 } from "../src/session/profile-edit.ts";
+import { needsTimezoneSync } from "../src/session/first-profile.ts";
 
 function user(over: Partial<UserResponse> = {}): UserResponse {
     return {
@@ -40,6 +41,12 @@ test("a field emptied on purpose is sent as null, not left out", () => {
     const after = { ...before, mobile_number: "" };
 
     assert.deepEqual(changes(before, after), { mobile_number: null });
+});
+
+test("clearing a timezone stays distinct from a timezone never set", () => {
+    const before = draftOf(user({ timezone: "Europe/Berlin" }));
+    assert.deepEqual(changes(before, { ...before, timezone: "" }), { timezone: "" });
+    assert.equal(needsTimezoneSync(user({ timezone: "" }), { dialogOpen: false }), false);
 });
 
 test("whitespace is not an edit", () => {

@@ -5,7 +5,14 @@ import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-qu
 import { AgentMark } from "./agent-mark";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { ChannelIcon } from "@/shell/channels";
-import { AgentIcon, ChatIcon, ClockIcon, FileIcon, PlusIcon, SearchIcon, WorkflowIcon, BellIcon } from "@/ui/icons";
+import { AgentIcon, ChatIcon, ClockIcon, FileIcon, SearchIcon, WorkflowIcon, BellIcon } from "@/ui/icons";
+import { ChannelMark, StartChat } from "@/channels/chat-starter";
+import { chatRows, listedAsChat } from "@/channels/chat-list";
+import { placeName } from "@/channels/chat-copy";
+import { badge, channelTitle, sayList, type Channel } from "@/channels/model";
+import { allChannels, useChannelList } from "@/channels/queries";
+import { SearchResults } from "@/channels/search";
+import { listStamp } from "@/data/stamp";
 import { originLabel, type ConversationOrigin, type OriginKind } from "@/thread/conversation-origin";
 import { emptyFor } from "./empty-copy";
 import { SpaceEmpty } from "./empty-state";
@@ -13,8 +20,8 @@ import { SpaceEmpty } from "./empty-state";
 type Filter = "all" | "chats" | "channels" | "automations" | "docs";
 const FILTERS: { id: Filter; label: string; kinds: OriginKind[] | null }[] = [
     { id: "all", label: "All", kinds: null },
-    { id: "chats", label: "Conversations", kinds: ["chat", "ask"] },
-    { id: "channels", label: "Channels", kinds: ["channel", "notification"] },
+    { id: "chats", label: "Just you", kinds: ["chat", "ask"] },
+    { id: "channels", label: "Shared", kinds: ["channel", "notification"] },
     { id: "automations", label: "Automations", kinds: ["schedule", "workflow", "task"] },
     { id: "docs", label: "On docs", kinds: ["resource"] },
 ];
@@ -31,14 +38,20 @@ function OriginIcon({ origin }: { origin: ConversationOrigin }) {
     return <ChatIcon size={16} />;
 }
 
-/** Every conversation in the space — yours with every bot here, the ones a
- *  channel started, and the ones a schedule or a workflow ran — each saying
- *  where it came from. Paged as you scroll; nothing is capped at a sidebar's
- *  eight. */
-export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPages, onAsk }: {
+/** Every chat in the space -- yours with every bot here, the ones shared
+ *  with people or mirrored from a group, and the ones a schedule or a
+ *  workflow ran -- each saying where it came from. Paged as you scroll;
+ *  nothing is capped at a sidebar's ten. */
+export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPages, onAsk, initialFilter = "all", onOpenChannel, onConnect }: {
     pod: Pod;
     openId: string | null;
     onOpen: (id: string) => void;
+    /** Which chats it opens on: every one, or only the shared ones. */
+    initialFilter?: Filter;
+    /** A chat that lives on a channel: shared, mirrored, or your default. */
+    onOpenChannel: (channelId: string) => void;
+    /** The space's bots, to connect one before bringing it into a group. */
+    onConnect: () => void;
     onOpenRun: (runId: string) => void;
     onNew: () => void;
     /** Where channels are connected, for a list with none on it yet. */
@@ -49,7 +62,7 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
 }) {
     const [typed, setTyped] = useState("");
     const [search, setSearch] = useState("");
-    const [filter, setFilter] = useState<Filter>("all");
+    const [filter, setFilter] = useState<Filter>(initialFilter);
     useEffect(() => {
         const timer = window.setTimeout(() => setSearch(typed.trim()), 180);
         return () => window.clearTimeout(timer);
@@ -67,7 +80,18 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
     const bots = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
     const botById = useMemo(() => new Map((bots.data ?? []).filter(bot => bot.id && !bot.front).map(bot => [bot.id, bot])), [bots.data]);
     const wanted = FILTERS.find(each => each.id === filter)?.kinds ?? null;
-    const shown = wanted ? all.filter(row => wanted.includes((row.origin ?? { kind: "chat" }).kind)) : all;
+    const conversations = filter === "channels" ? [] : wanted ? all.filter(row => wanted.includes((row.origin ?? { kind: "chat" }).kind)) : all;
+    /* The chats that live on a channel, in the same list: under All by when
+       they were last active, and alone under Shared. Searched by name, as
+       conversations are by title. */
+    const channelList = useChannelList(pod.id, { archived: false });
+    const channels = useMemo(() => {
+        if (filter !== "all" && filter !== "channels") return [];
+        const needle = search.toLowerCase();
+        return allChannels(channelList.data).filter(listedAsChat).filter((channel) => !needle || channelTitle(channel, pod.name).toLowerCase().includes(needle));
+    }, [filter, search, channelList.data, pod.name]);
+    const rows = useMemo(() => chatRows(conversations, channels, pod.name), [conversations, channels, pod.name]);
+    const shown = rows;
 
     /* Paging on sight of the last row, with a button for when that fails. */
     const more = useRef<HTMLButtonElement>(null);
@@ -88,9 +112,9 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
                 <h1>Chats</h1>
                 <label className="all__search">
                     <SearchIcon size={17} />
-                    <input placeholder="Search titles" aria-label="Search conversations" value={typed} onChange={event => setTyped(event.target.value)} />
+                    <input placeholder="Search chats" aria-label="Search chats and what was said in shared ones" value={typed} onChange={event => setTyped(event.target.value)} />
                 </label>
-                <button className="all__new-button" onClick={onNew}><PlusIcon size={15} /> New</button>
+                <StartChat pod={pod} look="pill" onNewChat={onNew} onOpenChannel={onOpenChannel} onConnect={onConnect} />
             </header>
             <div className="all__tabs chats-page__filters" role="tablist" aria-label="Which conversations">
                 {FILTERS.map(each => (
@@ -103,7 +127,9 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
                     <tr><th>Conversation</th><th className="chats-page__col-source">Came from</th><th className="all__col-when">Last activity</th></tr>
                 </thead>
                 <tbody>
-                    {shown.map((row: ConversationRef) => {
+                    {shown.map((each) => {
+                        if (each.kind === "channel") return <SharedRow key={each.id} pod={pod} channel={each.channel} title={each.title} onOpen={() => onOpenChannel(each.channel.id)} />;
+                        const row: ConversationRef = each.chat;
                         const origin = row.origin ?? { kind: "chat" as const, label: "Chat" };
                         const cameFrom = originLabel(origin, pod.name);
                         return (
@@ -136,19 +162,52 @@ export function ChatsPage({ pod, openId, onOpen, onOpenRun, onNew, onReach, onPa
                     })}
                 </tbody>
             </table>}
+            {search.length >= 2 && (
+                <section className="chats-page__said" aria-label="Messages in shared chats">
+                    <h2>Said in shared chats</h2>
+                    <SearchResults pod={pod} query={search} />
+                </section>
+            )}
             {pages.isPending && <p className="all__empty">Loading…</p>}
             {pages.isError && <p className="all__empty">Couldn’t load conversations.</p>}
-            {pages.isSuccess && shown.length === 0 && search && <p className="all__empty">Nothing matches that.</p>}
-            {pages.isSuccess && shown.length === 0 && !search && (
+            {pages.isSuccess && (filter !== "channels" || !channelList.isPending) && shown.length === 0 && search && <p className="all__empty">Nothing matches that.</p>}
+            {pages.isSuccess && (filter !== "channels" || !channelList.isPending) && shown.length === 0 && !search && (
                 <SpaceEmpty empty={emptyFor({ place: "chats", filter }, pod.teammate?.name || pod.name)}
                     on={{ chat: onNew, reach: onReach, pages: onPages, ask: onAsk }} />
             )}
-            {hasNextPage && (
+            {hasNextPage && filter !== "channels" && (
                 <button ref={more} className="chats-page__more" disabled={isFetchingNextPage} onClick={() => void fetchNextPage()}>
                     {isFetchingNextPage ? "Loading more…" : isFetchNextPageError ? "Couldn’t load more — try again" : "Load more"}
                 </button>
             )}
-            {!hasNextPage && all.length > 0 && <p className="chats-page__count">{all.length} conversations</p>}
+            {!hasNextPage && shown.length > 0 && <p className="chats-page__count">{shown.length === 1 ? "1 chat" : shown.length + " chats"}</p>}
         </div>
+    );
+}
+
+/** A chat that lives on a channel, as a row of the table: its name and what
+ *  is new in it, where it is mirrored from -- or that it is shared, or your
+ *  private line -- and when it was last active. */
+function SharedRow({ pod, channel, title, onOpen }: { pod: Pod; channel: Channel; title: string; onOpen: () => void }) {
+    const count = badge(channel.unread.lines);
+    const places = channel.sources.map((one) => placeName(one));
+    const cameFrom = channel.kind === "DIRECT"
+        ? "Your private line with " + (pod.teammate?.name || pod.name)
+        : places.length ? sayList(places) : "Shared chat";
+    return (
+        <tr tabIndex={0} onClick={onOpen} onKeyDown={event => { if (event.key === "Enter") onOpen(); }}>
+            <td>
+                <span className="chats-page__title">{title}</span>
+                {channel.unread.waiting > 0 && <span className="chats-page__waiting">Needs you</span>}
+                {count && <span className="chats-page__unread" aria-label={count + " new"}>{count}</span>}
+            </td>
+            <td className="chats-page__col-source">
+                <span className="chats-page__origin" data-kind="shared">
+                    <ChannelMark channel={channel} />
+                    <span title={cameFrom}>{cameFrom}</span>
+                </span>
+            </td>
+            <td className="all__col-when">{listStamp(channel.lastMessageAt ?? channel.createdAt)}</td>
+        </tr>
     );
 }

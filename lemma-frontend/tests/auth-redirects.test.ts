@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { asksForDestination, rawDestination, safeDestinationIn, authLink, landing, rememberDestination, storedDestination, type Where } from "../src/auth/redirects.ts";
+import { asksForDestination, rawDestination, safeDestinationIn, authLink, landing, rememberDestination, storedDestination, newOrganizationLink, afterNewOrganizationIn, installsTemplate, addsToSlack, type Where } from "../src/auth/redirects.ts";
 
 /** Where a sign-in may put somebody down.
  *
@@ -142,4 +142,35 @@ test("a sign-up headed for an invitation carries that invitation", async () => {
     assert.equal(invitationIn("/invitations/not-an-id/accept"), null);
     assert.equal(invitationIn("/t"), null);
     assert.equal(invitationIn(null), null);
+});
+
+test("creating an organization from an install returns to the install", () => {
+    // The install page sends somebody with no organization to make one. The
+    // link carries the install, and the organization page hands them back to
+    // it rather than to the workspace.
+    const install = "/import/github/ada-member/ledger-pod";
+    const link = newOrganizationLink(install);
+    assert.equal(link, "/organizations/new?redirect_uri=" + encodeURIComponent(install));
+    assert.equal(afterNewOrganizationIn("org-1", new URL(link, HERE.origin).search, HERE), HERE.origin + install);
+});
+
+test("a new organization with nowhere to return to opens in the workspace", () => {
+    assert.equal(afterNewOrganizationIn("org-1", "", HERE), "/t?org=org-1");
+    // A destination this app would not honour after sign-in is not honoured here either.
+    assert.equal(afterNewOrganizationIn("org-1", "?redirect_uri=https%3A%2F%2Fevil.example%2F", HERE), "/t?org=org-1");
+});
+
+test("a sign-in on its way to an install is told apart from any other", () => {
+    assert.equal(installsTemplate("/import/github/ada-member/ledger-pod"), true);
+    assert.equal(installsTemplate("https://app.example.test/import/github/ada-member/ledger-pod", HERE.origin), true);
+    assert.equal(installsTemplate("/t/marketing"), false);
+    assert.equal(installsTemplate(null), false);
+});
+
+test("a sign-in on its way to add Lemma to Slack is greeted as a newcomer too", () => {
+    assert.equal(addsToSlack("/slack/install"), true);
+    assert.equal(addsToSlack("https://app.example.test/slack/install/", HERE.origin), true);
+    // Where Slack's consent comes back to is not a first arrival.
+    assert.equal(addsToSlack("/slack/installed"), false);
+    assert.equal(addsToSlack(null), false);
 });

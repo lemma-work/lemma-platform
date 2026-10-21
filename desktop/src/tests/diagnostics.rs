@@ -245,3 +245,29 @@ fn the_phase_log_sources_are_served_too() {
         );
     }
 }
+
+/// Polling the log loses no line and shows no half line.
+///
+/// A resumed read used to trim everything up to its first newline -- right
+/// for a tail that starts mid-file, wrong for a cursor, which already sits on
+/// a boundary -- so This Mac → Advanced dropped a line on every poll that had
+/// anything new.
+#[test]
+fn polling_a_log_keeps_every_line_once() {
+    use std::io::Write;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.log");
+    std::fs::write(&path, "one\ntwo\nthr").unwrap();
+    let mut file = std::fs::File::open(&path).unwrap();
+    let (first, cursor) = read_log_window(&mut file, None).unwrap();
+    assert_eq!(first, "one\ntwo\n");
+
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writer.write_all(b"ee\nfour\n").unwrap();
+    let mut file = std::fs::File::open(&path).unwrap();
+    let (second, _) = read_log_window(&mut file, Some(&cursor)).unwrap();
+    assert_eq!(second, "three\nfour\n");
+}

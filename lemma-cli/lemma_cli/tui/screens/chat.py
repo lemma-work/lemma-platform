@@ -11,7 +11,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Input
 from textual.worker import get_current_worker
 
-from ...cli_core.chat import iter_sse_events
+from ...cli_core.sse import iter_sse_events
 from ...cli_core.io import list_items, to_plain
 from ...cli_core.state import CliState, client_session
 from ..events import (

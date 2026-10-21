@@ -16,7 +16,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from aiohttp import ClientError
-from slack_sdk.errors import SlackApiError
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.transaction_locks import connection_released
@@ -127,7 +127,7 @@ class ConfigurationAccess:
                 profile = await adapter.fetch_sender_profile(
                     credentials=credentials, event=event
                 )
-        except SlackApiError, ClientError:
+        except slack_api_error(), ClientError:
             profile = None
         resolved = await self.identity_service.resolve(
             event=event, sender_profile=profile, installation_id=installation_id

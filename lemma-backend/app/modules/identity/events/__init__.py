@@ -1,3 +1,1 @@
-from .handlers import router
-
-__all__ = ["router"]
+"""Identity work: the messages identity owes, as delivery work items."""

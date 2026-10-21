@@ -7,12 +7,13 @@ the lock: the metadata it is stored with, and the pause that holds it.
 A pause holds a message in two cases:
 
 - **Its answer is on its way.** The person approved, and the approved tool is
-  running in a worker. A run started now would rebuild a history in which the
-  call is unanswered, be told "the user did not answer this", and never see the
-  result -- the model asks again, and the action can run twice. So the message
-  waits for the resume run, which carries both.
+  running in a worker (its ``agent.approval.execute`` item). A run started now
+  would rebuild a history in which the call is unanswered, be told "the user
+  did not answer this", and never see the result -- the model asks again, and
+  the action can run twice. So the message waits for the resume run, which
+  carries both.
 - **The sender is not the person who was asked.** Replies arriving for
-  `message_user` are news, not an answer, and starting a turn would deny a
+  `channel_post` are news, not an answer, and starting a turn would deny a
   question the owner has not decided. A message the person types does supersede
   an open question; that is still `start`'s rule.
 """
@@ -22,7 +23,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.domain.conversation_ports import (
@@ -42,7 +42,6 @@ from app.modules.agent.domain.queued_messages import (
     SERVER_OWNED_KEYS,
 )
 from app.modules.agent.domain.value_objects import ConversationStatus
-from app.modules.agent.services import approval_reconciliation
 
 
 def stamped(
@@ -60,9 +59,7 @@ def stamped(
         return message_metadata
     marked = dict(message_metadata or {})
     marked.pop(WRITTEN_IN_LEMMA_KEY, None)
-    written_in = (
-        written_in_lemma_into(conversation.metadata) if typed_in_lemma else None
-    )
+    written_in = written_in_lemma_into(conversation) if typed_in_lemma else None
     if written_in is not None:
         marked[WRITTEN_IN_LEMMA_KEY] = written_in
     return marked or message_metadata
@@ -91,7 +88,7 @@ def user_message_metadata(
     metadata[DURING_ACTIVE_RUN] = joins_a_run
     if client_message_id is not None:
         metadata[CLIENT_MESSAGE_ID] = client_message_id
-    if is_private_note(metadata) and note_in_member_dm(conversation.metadata):
+    if is_private_note(metadata) and note_in_member_dm(conversation):
         metadata[NOTE_IN_DM_KEY] = True
     return metadata
 
@@ -103,8 +100,6 @@ class HeldTurn:
     #: The run that paused; the message is queued behind it, and the run that
     #: resumes it claims the message.
     agent_run_id: UUID
-    #: Approvals already decided whose return has not landed.
-    in_flight_approval_ids: tuple[str, ...]
 
 
 async def pause_holding_the_turn(
@@ -131,47 +126,23 @@ async def pause_holding_the_turn(
         return None
     newest = max(holding, key=lambda call: call.sequence)
     assert newest.agent_run_id is not None
-    return HeldTurn(
-        agent_run_id=newest.agent_run_id,
-        in_flight_approval_ids=tuple(
-            call.tool_call_id for call in in_flight if call.tool_call_id
-        ),
-    )
+    return HeldTurn(agent_run_id=newest.agent_run_id)
 
 
 async def hold_behind(
-    uow: SqlAlchemyUnitOfWork,
     repository: ConversationStatusWrite,
     conversation: Conversation,
-    held: HeldTurn,
 ) -> None:
-    """Leave the conversation waiting on the pause, and make sure it resolves.
+    """Leave the conversation waiting on the pause the message is held behind.
 
     WAITING even after Stop: Stop keeps an already-decided approval from waking
     the agent, but a message sent afterwards asks for an answer, and the resume
-    is what will carry it.
-
-    The decided approvals are handed to the worker again. The job id is the
-    approval's own, so a job still queued or running is not stacked; one that
-    was lost with its worker is what this recovers -- otherwise the message
-    would wait behind a result nothing is going to write.
+    is what will carry it. Nothing has to be re-queued for the decided ones:
+    each decision wrote its ``agent.approval.execute`` item in its own
+    transaction, and that item always ends with a return.
     """
     if conversation.status != ConversationStatus.WAITING:
         await repository.set_conversation_status(
             conversation_id=conversation.id, status=ConversationStatus.WAITING
         )
         conversation.status = ConversationStatus.WAITING
-    if not held.in_flight_approval_ids:
-        return
-    approval_ids = held.in_flight_approval_ids
-
-    async def _requeue() -> None:
-        for approval_id in approval_ids:
-            await approval_reconciliation.queue_approval_reconciliation(
-                conversation_id=conversation.id,
-                approval_id=approval_id,
-                user_id=conversation.user_id,
-                pod_id=conversation.pod_id,
-            )
-
-    uow.after_commit(_requeue)

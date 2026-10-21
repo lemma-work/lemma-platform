@@ -336,10 +336,11 @@ async def test_a_group_message_reads_the_groups_own_surfaces(
         session.add(mine)
         await session.flush()
         mine_id = mine.id
+        surface = mine.to_entity_or_none()
+        assert surface is not None
         await SurfaceGroupRepository(session).ensure(
             pod_id=UUID(test_pod["id"]),
-            surface_id=mine_id,
-            platform="TELEGRAM",
+            surface=surface,
             external_channel_id=str(chat_id),
         )
         await session.commit()

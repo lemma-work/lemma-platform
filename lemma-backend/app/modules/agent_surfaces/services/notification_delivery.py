@@ -1,7 +1,7 @@
 """Choosing where to reach a person, and what that choice is allowed to assume.
 
-Split out of :mod:`notification_service` because it is the part with real rules
-in it and no side effects — which makes it the part worth testing directly.
+Kept apart from the sending because it is the part with real rules in it and
+no side effects — which makes it the part worth testing directly.
 
 The choice belongs to the **sending agent**, not the recipient. That is the
 identity argument: a pod connects its own Telegram bot or Slack app, and a
@@ -46,13 +46,57 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
+from app.modules.channels.contracts import Source
+
+
+@dataclass(frozen=True, slots=True)
+class Outbound:
+    """A line in a member's own channel, on its way to them on a platform.
+
+    ``id`` is the line's: it seeds a cold email's thread, so the same line
+    re-sent lands in the same thread.
+    """
+
+    id: UUID
+    pod_id: UUID
+    recipient_user_id: UUID
+    title: str
+    #: The key every try of it is sent under, where the platform dedupes on
+    #: one (a push's delivery's).
+    key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Delivered:
+    """Where an outbound line went, or why it went nowhere."""
+
+    platform: str | None = None
+    conversation_id: UUID | None = None
+    #: The platform's id for what it sent, when it named one.
+    external_message_id: str | None = None
+    reason: str | None = None
+    #: Nothing took it because a platform failed, not because nothing could:
+    #: worth trying again.
+    retryable: bool = False
+    #: Held back by the hourly budget: its lines go with the next push.
+    held: bool = False
+
+    @property
+    def sent(self) -> bool:
+        return self.platform is not None
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformSent:
+    """A platform took it; its id for the message, when it named one."""
+
+    external_message_id: str | None = None
 
 
 # The name an agent uses for "reach them by mail", whichever provider carries it.
@@ -140,6 +184,10 @@ class UndeliverableReason:
         "reply window."
     )
     NO_EMAIL_ADDRESS = "No email address is on file for this person."
+    NOT_WORTH_AN_EMAIL = (
+        "No chat app reaches them, and a group's lines that do not name them "
+        "are not emailed; it waits in Lemma."
+    )
     NO_SURFACE_FOR_AGENT = (
         "This agent has no surface it can reach people on. Connect a chat "
         "surface for it, or configure email so it gets a mailbox."
@@ -149,10 +197,13 @@ class UndeliverableReason:
     # domain was unset reported "the pod has no active surface", which sent us
     # looking at pods and surfaces for a day. The reason a person is told should
     # be the reason it happened.
+    # A member reads this: what to do about it is theirs (connect a chat
+    # surface) or the operator's, whose instructions are in the log
+    # (``email_not_configured``), not here.
     EMAIL_NOT_CONFIGURED = (
         "Email is not set up for this deployment, so this agent has no mailbox "
-        "to reach people from. Set RESEND_API_KEY and RESEND_INBOUND_DOMAIN, or "
-        "connect a chat surface."
+        "to reach people from. Connect a chat surface, or ask whoever runs "
+        "Lemma here to set up email."
     )
     # "This agent" was read as the *recipient*, and sent someone looking for a
     # person who had been resolved as an agent. The agent here is the sender —
@@ -216,16 +267,16 @@ class UndeliverableReason:
 
 @dataclass(frozen=True)
 class DeliveryChannel:
-    """A resolved way to reach one person: which surface, and on which thread.
+    """A resolved way to reach one person: which surface, and at which place.
 
-    ``link`` is None for a cold-open email — there is no prior thread by
-    definition, which is exactly what makes email the last resort that still
-    works.
+    ``source`` is the person's private chat on the surface, and None for a
+    cold-open email -- there is no place yet by definition, which is exactly
+    what makes email the last resort that still works.
     """
 
     surface: AgentSurfaceEntity
     external_user_id: str | None = None
-    link: AgentSurfaceConversationLink | None = None
+    source: Source | None = None
     email_address: str | None = None
 
     @property
@@ -282,8 +333,12 @@ def surfaces_for_agent(
     return [surface for surface in surfaces if surface.agent_id == actor_agent_id]
 
 
-def sort_key_for_link(link: AgentSurfaceConversationLink) -> datetime:
-    activity = link.inbound_activity_at
+def heard_last(source: Source) -> datetime:
+    """When the person last wrote at this place -- or, never having, when it
+    was last touched."""
+    activity = source.last_inbound_at or source.updated_at
+    if activity is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
     return activity if activity.tzinfo else activity.replace(tzinfo=timezone.utc)
 
 
@@ -304,7 +359,7 @@ def rank_candidates(
         capabilities = get_platform_capabilities(channel.platform.value)
         is_email = bool(capabilities and capabilities.is_email)
         here = origin_surface_id is not None and channel.surface.id == origin_surface_id
-        freshness = sort_key_for_link(channel.link).timestamp() if channel.link else 0.0
+        freshness = heard_last(channel.source).timestamp() if channel.source else 0.0
         # Tuple is compared ascending, so negate what should come first.
         return (int(is_email), 0 if here else 1, -freshness)
 

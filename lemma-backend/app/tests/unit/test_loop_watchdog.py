@@ -205,7 +205,7 @@ async def test_the_watchdog_installs_the_stall_sampler(monkeypatch):
     "module_path, service",
     [
         ("app.app", "lemma-api"),
-        ("app.core.infrastructure.jobs.streaq_runtime", "lemma-worker"),
+        ("app.core.infrastructure.work.process", "lemma-worker"),
     ],
 )
 def test_both_processes_start_the_watchdog(module_path: str, service: str):

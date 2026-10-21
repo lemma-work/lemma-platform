@@ -1,27 +1,26 @@
-"""Durable GitHub publish worker and its resumable phase collaborators."""
+"""The GitHub publish job body (``pod_bundle.publish``) and its resumable phases."""
 
 from __future__ import annotations
 
 import io
 import json
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from streaq import StreaqRetry
-
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.concurrency.offload import run_blocking
 from app.core.domain.errors import DomainError
-from app.core.infrastructure.jobs.streaq_runtime import (
-    Lane,
-    AppWorkerContext,
-    streaq_task,
-    streaq_worker,
-)
+from app.core.infrastructure.work import Defer
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import BundleStagingMissingError
+from app.modules.pod_bundle.events.work import (
+    BundleWorkerContext,
+    worker_context as _worker_ctx,
+    yield_point,
+)
 from app.modules.pod_bundle.domain.state import (
     PublishFileProgress,
     PublishState,
@@ -94,7 +93,7 @@ async def _mark_exporting(store, state: PublishState) -> None:
 
 async def _load_or_export_archive(
     *,
-    worker_ctx: AppWorkerContext,
+    worker_ctx: BundleWorkerContext,
     store,
     staging: BundleStagingStorage,
     state: PublishState,
@@ -146,7 +145,7 @@ async def _load_or_export_archive(
 
 def _operation_runner(
     *,
-    worker_ctx: AppWorkerContext,
+    worker_ctx: BundleWorkerContext,
     state: PublishState,
     pod_id: UUID,
     user_id: UUID,
@@ -231,7 +230,7 @@ async def _ensure_repo(
 
 async def _ensure_readme(
     *,
-    worker_ctx: AppWorkerContext,
+    worker_ctx: BundleWorkerContext,
     state: PublishState,
     user_id: UUID,
     pod_id: UUID,
@@ -325,9 +324,8 @@ async def _publish_files(
     )
 
 
-@streaq_task(name="publish_pod_github", lane=Lane.BULK)
 async def publish_pod_github(context: dict[str, str | None]) -> None:
-    worker_ctx: AppWorkerContext = streaq_worker.context
+    worker_ctx = _worker_ctx()
     publish_id = UUID(str(context["publish_id"]))
     pod_id = UUID(str(context["pod_id"]))
     user_id = UUID(str(context["user_id"]))
@@ -359,6 +357,7 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
         pod_meta = _pod_meta_from_files(files)
         description = pod_meta.get("description")
 
+        yield_point()
         state.status = PublishStatus.PUBLISHING
         await store.save_publish(state)
         await publish_bundle_event(
@@ -399,6 +398,7 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             counts=counts,
             repo=repo,
         )
+        yield_point()
         repo = await _publish_files(
             store=store,
             state=state,
@@ -422,7 +422,7 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
     except DomainError as exc:
         if _is_retryable_publish_error(exc) and state.attempt < 3:
             await _record_publish_retry(store, state, exc)
-            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
+            raise Defer(timedelta(seconds=min(state.attempt**2, 9))) from exc
         await _fail_publish(store, state, exc)
         await _release_publish_lock(state)
         logger.warning(
@@ -430,9 +430,10 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             publish_id=publish_id,
         )
     except Exception as exc:
+        raise_if_database_unavailable(exc)
         if state.attempt < 3:
             await _record_publish_retry(store, state, exc)
-            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
+            raise Defer(timedelta(seconds=min(state.attempt**2, 9))) from exc
         await _fail_publish(
             store,
             state,
@@ -440,8 +441,8 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             public_message="Publish failed after three transient attempts.",
         )
         await _release_publish_lock(state)
-        logger.debug(
-            "pod_bundle.publish_task.pod_publish_s_retryable_s.propagated",
+        logger.warning(
+            "pod_bundle.publish_task.publish_transient.failed",
             publish_id=publish_id,
             exc_info=True,
         )

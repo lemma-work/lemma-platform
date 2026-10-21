@@ -53,7 +53,7 @@ from app.modules.agent_surfaces.platforms.delivery import (
 )
 from app.modules.agent_surfaces.platforms.rendering import chunk_text, utf16_length
 from app.modules.agent_surfaces.platforms.common import (
-    PLATFORM_TRANSPORT_ERRORS,
+    platform_transport_errors,
     assert_safe_api_base,
 )
 from app.modules.agent_surfaces.platforms.telegram.client import (
@@ -227,7 +227,7 @@ class TelegramPlatformService:
                 payload["reply_markup"] = reply_markup
             try:
                 sent.append(await self._send_chunk(payload, raw_chunk))
-            except PLATFORM_TRANSPORT_ERRORS:
+            except platform_transport_errors():
                 if index:
                     # Earlier chunks are already in the chat. The caller only
                     # sees "not delivered", so say what actually happened.

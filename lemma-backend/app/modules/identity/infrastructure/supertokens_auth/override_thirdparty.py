@@ -14,7 +14,6 @@ from sqlalchemy import func, select
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.errors import SignupNotAllowedError
 from app.modules.identity.domain.user_entities import UserEntity
@@ -147,14 +146,9 @@ def override_thirdparty_functions(
                 ):
                     async with async_session_maker() as db_session:
                         uow = SqlAlchemyUnitOfWork(db_session)
-                        message_bus = get_message_bus()
                         user_service = UserService(
-                            user_repository=UserRepository(
-                                uow, message_bus=message_bus
-                            ),
-                            organization_repository=OrganizationRepository(
-                                uow, message_bus=message_bus
-                            ),
+                            user_repository=UserRepository(uow),
+                            organization_repository=OrganizationRepository(uow),
                         )
                         # The provider just told us who this is. Storing it here is
                         # what lets the first screen after signup be the product

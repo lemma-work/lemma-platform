@@ -731,6 +731,35 @@ async def test_schedule_apply_maps_manifest_to_entity(tmp_path, monkeypatch):
     assert entity.config == {"cron": "0 2 * * *"}
 
 
+async def test_a_one_time_schedule_that_already_ran_is_left_out(tmp_path, monkeypatch):
+    """A pod exported after its one-time schedule fired carries it; creating
+    one in the past is refused, which used to fail the import half applied."""
+    root = tmp_path / "bundle"
+    _write(
+        root / "schedules" / "launch" / "launch.json",
+        {
+            "name": "launch",
+            "schedule_type": "TIME",
+            "workflow_name": "score_flow",
+            "config": {"scheduled_at": "2020-01-01T09:00:00"},
+        },
+    )
+    _write(
+        root / "schedules" / "later" / "later.json",
+        {
+            "name": "later",
+            "schedule_type": "TIME",
+            "workflow_name": "score_flow",
+            "config": {"scheduled_at": "2999-01-01T09:00:00Z"},
+        },
+    )
+    fake = FakeScheduleOperations().patch(monkeypatch)
+    applier = _grant_applier(root)
+    await applier.apply_step(_step(StepKind.SCHEDULE, "launch"))
+    await applier.apply_step(_step(StepKind.SCHEDULE, "later"))
+    assert [entity.name for entity in fake.created] == ["later"]
+
+
 async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monkeypatch):
     """Regression test: account_id, connector_trigger_id, filter_instruction and
     filter_output_schema were previously dropped on apply even when the bundle
@@ -818,6 +847,7 @@ class FakeSurfaceService:
         credential_mode,
         account_id,
         surface_identity_email=None,
+        contacts_chosen=None,
         ctx=None,
     ):
         from types import SimpleNamespace
@@ -830,6 +860,7 @@ class FakeSurfaceService:
             "account_id": account_id,
             "credential_mode": credential_mode,
             "surface_identity_email": surface_identity_email,
+            "config": config,
         }
         return SimpleNamespace(id=_uuid4(), config=config)
 
@@ -933,6 +964,64 @@ async def test_surface_apply_creates_with_resolved_account(tmp_path, monkeypatch
     assert surface_fake.created["platform"] == "SLACK"
     assert surface_fake.created["account_id"] == account
     assert surface_fake.updated is None  # created, not updated
+
+
+async def test_a_whatsapp_reengage_template_survives_export_and_import(
+    tmp_path, monkeypatch
+):
+    """Exported by the real exporter, imported by the real applier.
+
+    The exporter's normaliser kept channels, identity and the Telegram app and
+    dropped everything else, so an imported WhatsApp surface lost the template
+    a closed 24-hour window is reopened with -- and refused every message to a
+    member who had not written in a day.
+    """
+    from types import SimpleNamespace
+
+    from app.modules.agent_surfaces.domain.entities import (
+        AgentSurfaceEntity,
+        SurfaceConfig,
+        SurfacePlatform,
+    )
+    from app.modules.agent_surfaces.domain.surface_config import (
+        ReengageTemplate,
+        SurfaceWhatsAppConfig,
+    )
+    from app.modules.pod_bundle.infrastructure.exporter_surfaces import (
+        export_surfaces,
+    )
+
+    exported = AgentSurfaceEntity.create(
+        pod_id=uuid4(),
+        surface_type=SurfacePlatform.WHATSAPP,
+        name="support_line",
+        agent_id=uuid4(),
+        config=SurfaceConfig(
+            whatsapp=SurfaceWhatsAppConfig(
+                reengage_template="lemma_reengage", language="pt_BR"
+            )
+        ),
+    )
+
+    async def _list(uow, *, pod_id):
+        return [exported]
+
+    monkeypatch.setattr(f"{_SURFACES}.list_surfaces", _list)
+    root = tmp_path / "bundle"
+    warnings: list[str] = []
+    await export_surfaces(root, SimpleNamespace(session=object()), uuid4(), warnings)
+    assert warnings == []
+
+    surface_fake = FakeSurfaceService()
+    _patch_surface_operations(monkeypatch, surface_fake)
+    _patch_agent_lookup(monkeypatch)
+    await _applier(root).apply_step(_step(StepKind.SURFACE, "support_line"))
+
+    assert surface_fake.created is not None
+    imported = surface_fake.created["config"]
+    assert imported.whatsapp.template() == ReengageTemplate(
+        name="lemma_reengage", language="pt_BR"
+    )
 
 
 def _patch_resend_minting(monkeypatch, surface_fake, *, pod_name="Acme"):

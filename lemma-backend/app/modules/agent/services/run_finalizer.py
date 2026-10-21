@@ -20,6 +20,7 @@ from uuid import UUID
 
 
 from app.core.authorization.delegation import is_pod_default_agent
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
     classify_run_failure,
@@ -34,6 +35,9 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     JsonValue,
 )
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
+)
 from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
@@ -42,6 +46,7 @@ from app.modules.agent.services.realtime import (
     error_payload,
     publish_conversation_event,
 )
+from app.modules.agent.services.run_followups import stage_run_followups
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.usage.contracts.execution import usage_context_from_agent_context
 from app.modules.agent.tools.context import ConversationContext
@@ -94,12 +99,36 @@ def rejected_run_error_message(data: object) -> str:
     return "The Agent Host rejected this run before dispatch. Try again."
 
 
+async def waiting_on_work(uow: Any, conversation_id: UUID) -> bool:
+    """Whether a WAITING conversation waits on the agent's own work -- a
+    sub-agent, a process, a timer -- rather than on a person.
+
+    Said on the ``completed`` frame so a client can tell the two apart without
+    reading back: only this one has a run coming that it should follow.
+    """
+    return await AgentConversationWaitRepository(uow).has_active(conversation_id)
+
+
 class RunFinalizer:
     """Terminal writes for one runner's runs."""
 
-    def __init__(self, uow_factory: Any, usage_recorder: Any) -> None:
+    def __init__(
+        self,
+        uow_factory: Any,
+        usage_recorder: Any,
+        *,
+        terminal_units: UnitOfWorkFactory | None = None,
+    ) -> None:
         self.uow_factory = uow_factory
         self.usage_recorder = usage_recorder
+        # The transaction the terminal write commits in. A turn on the work
+        # runtime passes its fenced completion here (`events/turn_work.py`), so
+        # the run's status, its follow-ups and the item's deletion commit
+        # together -- and a worker whose lease was taken over rolls its
+        # finalize back instead of finishing the run a second time.
+        self.terminal_units = terminal_units or uow_factory
+        #: Writes the follow-ups of a run this finalize ended, in its transaction.
+        self.stage_followups = stage_run_followups
 
     async def finish(
         self,
@@ -116,7 +145,7 @@ class RunFinalizer:
         try:
             event: AgentRunCompletedEvent | None = None
             event_data: JsonObject = {}
-            async with self.uow_factory() as uow:
+            async with self.terminal_units() as uow:
                 finish_result = await ConversationRepository(uow).finish_agent_run(
                     agent_run_id=run.agent_run_id,
                     status=status,
@@ -136,6 +165,10 @@ class RunFinalizer:
                     if output_data is not None:
                         event_data["output_data"] = output_data
                     event_data["conversation_status"] = conversation_status.value
+                    if conversation_status is ConversationStatus.WAITING:
+                        event_data["waiting_on_work"] = await waiting_on_work(
+                            uow, run.conversation_id
+                        )
                     event = AgentRunCompletedEvent(
                         conversation_id=run.conversation_id,
                         agent_run_id=run.agent_run_id,
@@ -150,7 +183,16 @@ class RunFinalizer:
                         user_id=run.user_id,
                         started_at=run.started_at,
                     )
+                    # Analytics only now; every follow-up is staged below.
                     uow.collect_events([event])
+                if finish_result is not None:
+                    await self.stage_followups(
+                        uow,
+                        run_id=run.agent_run_id,
+                        conversation_id=run.conversation_id,
+                        finish=finish_result,
+                        started_at=run.started_at,
+                    )
             if finish_result is not None:
                 # A retry must repair receipts even when the run is terminal.
                 # The stored outcome wins over a retry's fallback failure status.
@@ -188,8 +230,11 @@ class RunFinalizer:
                 run=run,
             )
         except Exception:
-            logger.debug(
-                "agent.agent_runner_service.finalize_agent_run_run_s.propagated",
+            # Warning, not debug: a finalize that did not commit leaves the run
+            # RUNNING for its item to retry, and at debug that was invisible in
+            # every deployed environment.
+            logger.warning(
+                "agent.run_finalizer.finalize_failed.degraded",
                 agent_run_id=run.agent_run_id,
                 exc_info=True,
             )

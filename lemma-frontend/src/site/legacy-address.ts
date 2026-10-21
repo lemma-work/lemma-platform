@@ -101,6 +101,9 @@ export function legacyAddress(
                 return base + "/profile?section=what%20it%20can%20reach%20for";
             case "schedules":
                 return base + "/profile?section=schedules";
+            /* Notifications became the channels' inbox. */
+            case "notifications":
+                return base + "/channels";
             case "surfaces":
             case "channels":
                 return base + "/conversation?reach=1";

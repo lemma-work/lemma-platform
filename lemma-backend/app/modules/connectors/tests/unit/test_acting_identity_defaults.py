@@ -18,6 +18,7 @@ from app.modules.connectors.domain.kinds import ExecutionRequest
 from app.modules.connectors.services.connector_operation_service import (
     ConnectorOperationService,
 )
+from app.modules.test_support import source_tree
 
 pytestmark = pytest.mark.unit
 
@@ -41,11 +42,11 @@ def test_every_layer_defaults_to_the_person():
 def _callers_asking_to_be_the_app() -> set[str]:
     """Every source line that passes `act_as="app"`, by file."""
     found: set[str] = set()
-    for path in (BACKEND / "app").rglob("*.py"):
+    for path in source_tree.python_files(BACKEND / "app"):
         if "tests" in path.parts:
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = source_tree.tree(path)
         except SyntaxError:  # pragma: no cover - not our code to fix
             continue
         for node in ast.walk(tree):
@@ -75,5 +76,5 @@ def test_only_the_agent_tool_path_asks_to_be_the_app():
 def test_pod_bundle_never_asks_to_be_the_app():
     """Publish writes the commit; import reads a repository that may be one the
     App was never installed on. Both are the person's."""
-    for path in (BACKEND / "app" / "modules" / "pod_bundle").rglob("*.py"):
-        assert "act_as" not in path.read_text(encoding="utf-8"), path
+    for path in source_tree.python_files(BACKEND / "app" / "modules" / "pod_bundle"):
+        assert "act_as" not in source_tree.source(path), path

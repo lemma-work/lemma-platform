@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.core.config import settings
 from app.modules.agent.contracts import (
@@ -27,6 +28,7 @@ from app.modules.agent_surfaces.platforms.decision_cards import (
     take_decision_cards,
 )
 from app.modules.agent_surfaces.services.card_retirement import (
+    retire_cards_answered_in_lemma,
     retire_superseded_cards,
 )
 from app.modules.agent_surfaces.services.display_resource_renderer import (
@@ -172,3 +174,84 @@ async def test_each_card_is_retired_with_the_reason_its_pause_ended(
 
     [call] = adapter.retire_decision_card.await_args_list
     assert call.kwargs["reason"] is CardRetirement.ANSWERED
+
+
+class _Scope:
+    """A unit of work that only opens and closes."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info) -> None:
+        return None
+
+
+def _egress_resolving(target):
+    resolve = (
+        AsyncMock(side_effect=target)
+        if isinstance(target, Exception)
+        else (AsyncMock(return_value=target))
+    )
+    return lambda uow: SimpleNamespace(
+        delivery=SimpleNamespace(resolve_egress_target=resolve)
+    )
+
+
+async def test_a_web_answer_retires_the_platform_cards_as_answered(
+    card_store,
+) -> None:
+    conversation_id = uuid4()
+    await remember_decision_card(
+        build_callback_id(conversation_id, "call-a"),
+        DecisionCardHandle(platform="SLACK", channel="C1", message_id="1.0"),
+    )
+    adapter = SimpleNamespace(retire_decision_card=AsyncMock())
+
+    await retire_cards_answered_in_lemma(
+        uow_factory=_Scope,
+        egress_factory=_egress_resolving(
+            SimpleNamespace(adapter=adapter, credentials={})
+        ),
+        conversation_id=conversation_id,
+        tool_call_ids=["call-a"],
+    )
+
+    [call] = adapter.retire_decision_card.await_args_list
+    assert call.kwargs["reason"] is CardRetirement.ANSWERED
+
+
+async def test_a_web_answer_in_a_conversation_on_no_platform_retires_nothing(
+    card_store,
+) -> None:
+    conversation_id = uuid4()
+    callback_id = build_callback_id(conversation_id, "call-a")
+    handle = DecisionCardHandle(platform="SLACK", channel="C1", message_id="1.0")
+    await remember_decision_card(callback_id, handle)
+
+    await retire_cards_answered_in_lemma(
+        uow_factory=_Scope,
+        egress_factory=_egress_resolving(None),
+        conversation_id=conversation_id,
+        tool_call_ids=["call-a"],
+    )
+
+    assert await take_decision_cards(callback_id) == [handle]
+
+
+async def test_a_web_answer_whose_platform_cannot_be_read_does_not_raise(
+    card_store,
+) -> None:
+    """The decision has committed; the cards keeping their buttons is the cost."""
+    conversation_id = uuid4()
+    callback_id = build_callback_id(conversation_id, "call-a")
+    handle = DecisionCardHandle(platform="SLACK", channel="C1", message_id="1.0")
+    await remember_decision_card(callback_id, handle)
+
+    await retire_cards_answered_in_lemma(
+        uow_factory=_Scope,
+        egress_factory=_egress_resolving(OperationalError("select", {}, Exception())),
+        conversation_id=conversation_id,
+        tool_call_ids=["call-a"],
+    )
+
+    assert await take_decision_cards(callback_id) == [handle]

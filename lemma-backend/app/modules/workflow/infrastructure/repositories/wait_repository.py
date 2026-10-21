@@ -8,6 +8,7 @@ from sqlalchemy import or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import WorkWriter
 from app.modules.workflow.domain.ports import WorkflowRunWaitRepository
 from app.modules.workflow.domain.wait import (
     WorkflowRunWaitEntity,
@@ -58,7 +59,18 @@ class SqlAlchemyWorkflowRunWaitRepository(WorkflowRunWaitRepository):
             )
         )
         await self.session.execute(stmt)
+        if wait.status is not WorkflowRunWaitStatus.ACTIVE:
+            # Its expiry would only be claimed to find the wait resolved.
+            from app.modules.workflow.execution.wait_work import cancel_wait_expire
+
+            await cancel_wait_expire(
+                WorkWriter(self.session), pod_id=wait.pod_id, wait_id=wait.id
+            )
         return wait
+
+    async def get(self, wait_id: UUID) -> WorkflowRunWaitEntity | None:
+        model = await self.session.get(WorkflowRunWaitModel, wait_id)
+        return self._to_entity(model) if model else None
 
     async def get_active_for_run(
         self,

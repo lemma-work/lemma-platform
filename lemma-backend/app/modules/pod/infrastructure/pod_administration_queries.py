@@ -138,3 +138,39 @@ async def members_who_can(
         .limit(limit)
     )
     return [(member, user) for member, user in (await session.execute(stmt)).all()]
+
+
+async def member_holds(
+    session: AsyncSession,
+    *,
+    pod_id: UUID,
+    user_id: UUID,
+    permission_ids: Sequence[str],
+) -> bool:
+    """Whether this user's membership of the pod holds any of ``permission_ids``
+    through a role assigned to it."""
+    stmt = (
+        select(PodMember.id)
+        .join(
+            OrganizationMember,
+            OrganizationMember.id == PodMember.organization_member_id,
+        )
+        .join(
+            RoleAssignmentModel,
+            sa_and(
+                RoleAssignmentModel.principal_type == "POD_MEMBER",
+                RoleAssignmentModel.principal_id == PodMember.id,
+            ),
+        )
+        .join(
+            RolePermissionModel,
+            RolePermissionModel.role_id == RoleAssignmentModel.role_id,
+        )
+        .where(
+            PodMember.pod_id == pod_id,
+            OrganizationMember.user_id == user_id,
+            RolePermissionModel.permission_id.in_(permission_ids),
+        )
+        .limit(1)
+    )
+    return await session.scalar(stmt) is not None

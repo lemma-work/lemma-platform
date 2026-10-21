@@ -45,6 +45,10 @@ from app.modules.agent_surfaces.services.onboarding_submissions import (
 from app.modules.agent_surfaces.services.onboarding_private_delivery import (
     PrivateDeliveryUnavailable,
 )
+from app.modules.agent_surfaces.services.slack_workspace_people import (
+    held_for_pods,
+    sender_team,
+)
 from app.modules.connectors.contracts.surfaces import account_with_secrets
 from app.modules.pod.contracts.agent_access import pod_organization_ids
 
@@ -129,6 +133,30 @@ async def resolve_onboarding_transport(
             request, surfaces, parsed, receiver_ids, uow_factory
         )
     return await _installation_transport(surfaces, parsed, uow_factory, receiver_ids)
+
+
+async def among_the_workspaces_people(
+    uow_factory: UnitOfWorkFactory, transport: OnboardingTransport
+) -> bool:
+    """A sender in a Slack workspace the installation's organization holds.
+
+    Nobody there is asked to sign up with an email code: ordinary routing
+    takes the message, where a member routes as themselves and anybody else
+    is answered as a contact if the bot answers contacts, or refused as
+    before. The same predicate the doors ask (``slack_workspace_people``), so
+    this never steps aside for a bot whose pod's organization does not hold
+    the workspace -- that would leave its sender no way in at all. Every
+    candidate's pod is the installation's organization's, or there is no
+    installation transport.
+    """
+    event, installation = transport.event, transport.surface
+    if event.platform is not SurfacePlatform.SLACK or installation is None:
+        return False
+    team = sender_team(event)
+    if team is None:
+        return False
+    async with uow_factory() as uow:
+        return await held_for_pods(uow, team, [installation.pod_id])
 
 
 async def _transport_candidates(

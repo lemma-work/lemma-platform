@@ -68,9 +68,8 @@ def render_link_brief(
             "read, and say plainly what you could not see."
         ),
         (
-            f"- Who looks after this link: {keeper}. Pass on what you cannot "
-            "answer with `message_user` -- it always reaches them -- and their "
-            "reply comes back to you here."
+            f"- Who looks after this link: {keeper}. When it needs a person, "
+            "call `ask_a_person`."
         ),
     ]
     return "\n".join(lines)

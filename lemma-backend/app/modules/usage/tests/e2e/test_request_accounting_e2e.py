@@ -324,3 +324,34 @@ async def test_existing_ledger_writer_cannot_bypass_a_previously_checked_budget(
         )
     with pytest.raises(UsageLimitExceededError):
         await gateway.begin(uuid4(), now)
+
+
+async def test_a_request_not_yet_settled_says_its_price_is_unknown(
+    db_manager: DatabaseManager,
+) -> None:
+    # The row a request writes before it is sent has no cost until its receipt
+    # lands -- and none ever, if the receipt is lost. Read in that window (a
+    # title still being written after the run settled) it must say its price
+    # is missing, not read as a request that cost nothing.
+    user_id, request_id = uuid4(), uuid4()
+    now = datetime.now(timezone.utc)
+    gateway = gateway_for(db_manager, user_id)
+    await gateway.begin(request_id, now)
+    [pending] = await records_for(db_manager, user_id)
+    assert pending.cost_usd is None and pending.cost_amount is None
+    assert pending.record_metadata is not None
+    assert pending.record_metadata["metering_state"] == "PENDING"
+    assert pending.record_metadata["pricing_missing"] is True
+
+    await gateway.record(
+        RequestReceipt(
+            request_id=request_id,
+            counts=TokenCounts(input_tokens=3, output_tokens=5, request_count=1),
+            cost=Decimal(".000008"),
+            occurred_at=now,
+        )
+    )
+    [settled] = await records_for(db_manager, user_id)
+    assert settled.cost_amount == Decimal(".000008")
+    assert settled.record_metadata is not None
+    assert settled.record_metadata["pricing_missing"] is False

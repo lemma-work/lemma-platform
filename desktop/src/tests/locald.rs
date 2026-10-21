@@ -285,3 +285,66 @@ fn a_line_without_an_end_is_refused_rather_than_buffered() {
     );
     assert_eq!(ipc_read::bounded_line(&mut reader, 1024).unwrap(), None);
 }
+
+/// Only the stack's own operations take the shell's one slot.
+///
+/// Sharing, settings and Agent Host commands answer with an `ack` and an `id`
+/// too, but end in their own event and never in `done`. Read as operations,
+/// Stop sharing took the empty slot and nothing ever freed it, and every later
+/// Start, Stop and Restart was refused as busy.
+#[test]
+fn a_sharing_ack_is_not_an_operation() {
+    use serde_json::json;
+    assert_eq!(
+        locald_event_operation_id(&json!({"event": "ack", "cmd": "sharing.disable", "id": "s-1"})),
+        None
+    );
+    assert_eq!(
+        locald_event_operation_id(&json!({"event": "ack", "cmd": "config.apply", "id": "c-1"})),
+        None
+    );
+    assert_eq!(
+        locald_event_operation_id(&json!({"event": "ack", "cmd": "start", "id": "start-1"})),
+        Some("start-1")
+    );
+    assert_eq!(
+        locald_event_operation_id(&json!({"event": "done", "id": "start-1"})),
+        Some("start-1")
+    );
+    assert_eq!(
+        locald_event_operation_id(&json!({"event": "error", "code": "x", "id": "c-1"})),
+        Some("c-1")
+    );
+}
+
+/// An error about another request leaves a running workspace alone, and an
+/// error that ends the operation on screen frees its slot.
+#[test]
+fn errors_change_the_screen_only_for_the_operation_on_it() {
+    use serde_json::json;
+    let mut ui = UiState {
+        ready: true,
+        running: true,
+        status: "Ready".into(),
+        ..UiState::default()
+    };
+    // A rejected settings save, broadcast with its own id.
+    apply_locald_event(
+        &mut ui,
+        "error",
+        &json!({"event": "error", "code": "config-invalid", "message": "no", "id": "c-1"}),
+    );
+    assert!(!ui.error);
+    assert_eq!(ui.status, "Ready");
+
+    // `stopping` is a whole answer: no `done` follows it.
+    ui.active_operation_id = "start-2".into();
+    apply_locald_event(
+        &mut ui,
+        "error",
+        &json!({"event": "error", "code": "stopping", "message": "Lemma is stopping", "id": "start-2"}),
+    );
+    assert!(ui.error);
+    assert!(ui.active_operation_id.is_empty());
+    assert!(ui.completed_operation_ids.contains(&"start-2".to_string()));
+}

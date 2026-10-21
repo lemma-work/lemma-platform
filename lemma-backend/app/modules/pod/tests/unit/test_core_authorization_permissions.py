@@ -28,11 +28,30 @@ from app.core.authorization.permissions import (
     POD_USER_PERMISSIONS,
     POD_VIEWER_PERMISSIONS,
     Permissions,
+    pod_principal_may_hold,
     equivalent_permission_ids,
 )
 from app.core.authorization.resource_actions import owner_actions_for_resource
 from app.core.authorization.authorizer import Authorizer
 from app.core.domain.errors import BadRequestError
+from app.core.registry.assembly import configure_resource_names
+from app.core.registry.installed import OSS_MODULES
+
+
+@pytest.fixture(autouse=True)
+def _resource_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assemble the resource-name registry these grant tests resolve against.
+
+    Assembly is what fills it in a running process, and nothing in this module
+    ran it: the tests passed only when some earlier test in the same process
+    had, and failed with "registry is empty" when the pod unit tests ran alone.
+    A fresh table per test, so nothing here depends on, or leaks into, another
+    test's registry either.
+    """
+    monkeypatch.setattr(
+        "app.core.authorization.resource_names._NAME_REGISTRY", {}, raising=True
+    )
+    configure_resource_names(OSS_MODULES)
 
 
 class CountingAuthorizer:
@@ -80,6 +99,27 @@ def test_system_role_permissions_are_explicit_unions():
     assert equivalent_permission_ids(Permissions.CONTACT_MESSAGE) == {
         Permissions.CONTACT_MESSAGE
     }
+
+
+def test_channels_are_read_by_viewers_written_by_users_managed_by_editors():
+    assert Permissions.CHANNEL_READ in POD_VIEWER_PERMISSIONS
+    assert Permissions.CHANNEL_WRITE not in POD_VIEWER_PERMISSIONS
+    assert Permissions.CHANNEL_WRITE in POD_USER_PERMISSIONS
+    assert Permissions.CHANNEL_MANAGE not in POD_USER_PERMISSIONS
+    assert Permissions.CHANNEL_MANAGE in POD_EDITOR_PERMISSIONS
+    # Each implies the ones below it, so a custom role holding one passes the
+    # weaker checks.
+    assert equivalent_permission_ids(Permissions.CHANNEL_READ) == {
+        Permissions.CHANNEL_READ,
+        Permissions.CHANNEL_WRITE,
+        Permissions.CHANNEL_MANAGE,
+    }
+    assert equivalent_permission_ids(Permissions.CHANNEL_WRITE) == {
+        Permissions.CHANNEL_WRITE,
+        Permissions.CHANNEL_MANAGE,
+    }
+    # A linked pod never reads this pod's channels: they carry its contacts.
+    assert not pod_principal_may_hold(Permissions.CHANNEL_READ)
 
 
 def test_schedule_owner_can_fully_manage_owned_schedules():

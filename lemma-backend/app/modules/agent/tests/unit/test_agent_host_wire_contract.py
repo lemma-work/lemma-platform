@@ -318,6 +318,31 @@ def test_the_host_execution_ops_are_the_ones_the_exec_server_serves() -> None:
     assert OP_MAX_DATA_BYTES == contract["max_data_bytes"]
 
 
+def test_bulk_bytes_bounds_and_routes_are_shared() -> None:
+    """What rides the link is bounded the same way on both sides, and the
+    bytes that do not ride it go to the same routes, named the same way."""
+    from app.core.server_limits import WS_MAX_BYTES
+    from app.modules.agent.domain import agent_host_transfer as transfer
+    from app.modules.workspace.providers import agent_host_ops as provider
+
+    bulk = CONTRACT["bulk_bytes"]
+    assert WS_MAX_BYTES == bulk["max_message_bytes"]
+    assert transfer.LINK_EVENT_BATCH_MAX_BYTES == bulk["event_batch_max_bytes"]
+    assert transfer.LINK_INLINE_DATA_BYTES == bulk["inline_data_bytes"]
+    assert provider.INLINE_DATA_BYTES == bulk["inline_data_bytes"]
+    assert transfer.TRANSFER_MAX_BYTES == bulk["transfer_max_bytes"]
+    assert provider.OP_MAX_DATA_BYTES == bulk["transfer_max_bytes"]
+    assert transfer.BLOB_MAX_BYTES == bulk["blob_max_bytes"]
+    assert transfer.TRANSFER_PATH == bulk["transfer_path"]
+    assert transfer.BLOB_PATH == bulk["blob_path"]
+    assert transfer.DIGEST_HEADER == bulk["digest_header"]
+    assert transfer.BLOB_FIELD == bulk["blob_field"]
+    assert transfer.STAGED_FIELD == bulk["staged_field"]
+    assert transfer.STAGED_BODY_MAX_BYTES == bulk["staged_body_max_bytes"]
+    assert transfer.LINK_OUTBOUND_INLINE_BYTES == bulk["outbound_inline_bytes"]
+    assert bulk["hello_flag"] in HelloBody.model_fields
+
+
 def test_the_host_execution_capability_rides_on_hello_and_control() -> None:
     capability = CONTRACT["host_execution"]["capability"]
     assert set(HostExecutionCapability.model_fields) == set(capability["keys"])

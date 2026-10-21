@@ -120,6 +120,8 @@ class Schedule(UUIDAuditBase):
         nullable=False,
         default=0,
     )
+    # Why the platform turned it off; NULL while active or when a person did.
+    paused_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # Relationships
     user: Mapped[Any] = relationship("User", foreign_keys=[user_id])

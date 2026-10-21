@@ -13,19 +13,14 @@ from app.core.authorization.dependencies import (
 )
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.contracts.workflow_notifications import (
-    build_workflow_notification_adapter,
-)
+from app.core.infrastructure.work import WorkWriter
 from app.modules.icon.contracts.provisioning import create_icon_service
 from app.modules.agent.contracts.workflow_control import build_agent_control_adapter
 from app.modules.function.contracts.workflow_control import (
     build_function_control_adapter,
 )
 from app.modules.workflow.execution.engine import WorkflowEngine
-from app.modules.workflow.infrastructure.decision_queue import (
-    AfterCommitDecisionQueue,
-)
-from app.modules.workflow.execution.timers import WaitRowTimer
+from app.modules.workflow.infrastructure.form_questions import build_form_questions
 from app.modules.workflow.services.workflow_service import WorkflowService
 
 
@@ -34,7 +29,9 @@ def get_workflow_service(uow: UoWDep) -> WorkflowService:
     return WorkflowService(uow, icon_service=create_icon_service())
 
 
-def build_workflow_engine(uow: SqlAlchemyUnitOfWork) -> WorkflowEngine:
+def build_workflow_engine(
+    uow: SqlAlchemyUnitOfWork, *, work: WorkWriter | None = None
+) -> WorkflowEngine:
     """An engine with its collaborators bound, for this transaction.
 
     The one place that chooses them. `WorkflowEngine.__init__` used to default
@@ -42,14 +39,17 @@ def build_workflow_engine(uow: SqlAlchemyUnitOfWork) -> WorkflowEngine:
     and the binding lived at the bottom of the module rather than at its edge --
     which is how the engine came to import three other modules' adapters to run
     a workflow.
+
+    ``work`` is a work handler's writer: the engine then writes on the
+    handler's transaction and leaves the commit to the runtime.
     """
     return WorkflowEngine(
         uow,
         agent_adapter=build_agent_control_adapter(uow),
         function_adapter=build_function_control_adapter(uow),
-        schedule_adapter=WaitRowTimer(),
-        decision_adapter=AfterCommitDecisionQueue(uow),
-        notification_adapter=build_workflow_notification_adapter(uow),
+        form_questions=build_form_questions(uow),
+        work=work,
+        commits=work is None,
     )
 
 

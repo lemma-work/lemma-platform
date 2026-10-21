@@ -1,4 +1,5 @@
 from typing import AsyncGenerator, Annotated
+from uuid import UUID
 from fastapi import Depends
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.session import async_session_maker
@@ -66,3 +67,29 @@ def get_current_user(request: Request) -> AuthenticatedPrincipal:
 #: outlive the handler.
 UoWDep = Annotated[SqlAlchemyUnitOfWork, Depends(get_uow, scope="function")]
 CurrentUser = Annotated[AuthenticatedPrincipal, Depends(get_current_user)]
+
+
+async def optional_browser_user_id(request: Request) -> UUID | None:
+    """Whose Lemma session a browser coming back from a provider carries.
+
+    For a callback that authenticates by its ``state`` and is exempt from the
+    session gate, so nothing here requires a session. It is only read, so the
+    route can check that the person finishing is the person who started. Any
+    failure to read one is "no session".
+    """
+    from supertokens_python.exceptions import SuperTokensError
+    from supertokens_python.recipe.session.asyncio import get_session
+
+    try:
+        session = await get_session(request, session_required=False)
+    except SuperTokensError:
+        return None
+    if session is None:
+        return None
+    try:
+        return UUID(session.get_user_id())
+    except ValueError:
+        return None
+
+
+BrowserUserId = Annotated[UUID | None, Depends(optional_browser_user_id)]

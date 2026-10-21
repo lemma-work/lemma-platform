@@ -9,7 +9,6 @@ repository that the approval reconciliation path uses on its own.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import Select, func, select, update
@@ -113,27 +112,18 @@ class ConversationApprovalQueriesMixin:
         )
         return result.scalar_one_or_none() is not None
 
-    async def approval_execution_claim_expired(
+    async def approval_execution_claimed(
         self,
         *,
         conversation_id: UUID,
         approval_id: str,
-        stale_after_seconds: int,
     ) -> bool:
-        """Whether this approval's execution claim is old enough to be dead.
-
-        Read against the database's clock for the same reason the claim is
-        written with it: a claim compared against a server whose clock has
-        drifted is not a claim. ``False`` for an unclaimed approval -- there is
-        nothing abandoned about a claim nobody took.
-        """
+        """Whether an executor ever took this approval's one-shot claim."""
         result = await self.session.execute(
             select(AgentApprovalDecisionModel.id).where(
                 AgentApprovalDecisionModel.conversation_id == conversation_id,
                 AgentApprovalDecisionModel.approval_id == approval_id,
                 AgentApprovalDecisionModel.execution_claimed_at.is_not(None),
-                AgentApprovalDecisionModel.execution_claimed_at
-                < func.now() - timedelta(seconds=stale_after_seconds),
             )
         )
         return result.scalar_one_or_none() is not None
@@ -155,6 +145,23 @@ class ConversationApprovalQueriesMixin:
             return None
         response = row.response if isinstance(row.response, dict) else {}
         return AgentRunApprovalDecision(row.decision), response
+
+    async def tool_call_id_of_message(
+        self, *, conversation_id: UUID, message_id: UUID
+    ) -> str | None:
+        """The tool_call_id of a TOOL_CALL message, by the message's own id.
+
+        The approvals list returns messages, whose ``id`` is the message's; a
+        decision is addressed by the call's ``tool_call_id``. This lets a
+        client that sent the one it was given still reach the call.
+        """
+        return await self.session.scalar(
+            select(MessageModel.tool_call_id).where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.id == message_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+            )
+        )
 
     async def get_tool_call(
         self,

@@ -2890,25 +2890,24 @@ async def test_scripted_messaging_toolset_completes_the_ask_and_answer_loop(
     e2e_settings,
     worker,
 ):
-    """The whole MESSAGING toolset, in one run, against real notification rows.
+    """The MESSAGING toolset, in one run, against real channel lines.
 
-    Three tools that had no e2e coverage anywhere -- not a thin patch each, but
-    the sequence they exist to form, because that is where they can disagree:
+    The sequence the tools exist to form, because that is where they can
+    disagree:
 
         list_pod_members -> who can I reach
-        message_user     -> reach them, and get a notification id back
-        check_messages   -> that id is a real row, and it is OPEN
+        channel_post     -> ask them, and get the line's id back
+        channel_read     -> `asked_by_me` finds that line, still OPEN
 
-    The id round-trip is the assertion that matters. Each tool writing its own
-    row is provable in isolation; that the id `message_user` hands back is one
-    `check_messages` can actually find is not, and that is the join a caller
-    depends on.
+    The id round-trip is the assertion that matters. Each tool doing its own
+    part is provable in isolation; that the id `channel_post` hands back is one
+    `channel_read(asked_by_me=True)` actually finds is not, and that is the
+    join an asking conversation depends on when its turn comes back.
 
-    Answering is the other half of this loop and lives in
-    `test_notification_response_e2e.py`: `respond_to_notification` is not part
-    of this toolset at all. It is injected by `OpenNotificationsCapability`,
-    only into the conversation a notification was delivered to -- so it cannot
-    be reached from the asking side, which is where this run stands.
+    Answering is the other half and lives on the recipient's side:
+    `answer_question` is not part of this toolset at all. It arrives with the
+    open-questions capability, only in a conversation in the person's own
+    channel -- see `test_an_agent_answers_a_workflow_form_waiting_on_its_person`.
     """
     runtime = await _create_runtime_profile(
         authenticated_client, fixed_test_org, e2e_settings
@@ -2930,22 +2929,19 @@ async def test_scripted_messaging_toolset_completes_the_ask_and_answer_loop(
     )
     assert agent.status_code == status.HTTP_201_CREATED, agent.text
 
-    notification_id = script_tool_result_ref("msg-1", "notification_id")
     script = [
         script_tool_call("list_pod_members", {}, tool_call_id="members-1"),
         script_tool_call(
-            "message_user",
+            "channel_post",
             {
                 "to": fixed_test_user["email"],
-                "message": "Can you confirm the Q3 numbers?",
-                "background_instruction": "Record whatever they say.",
+                "text": "Can you confirm the Q3 numbers?",
+                "wants_answer": True,
             },
             tool_call_id="msg-1",
         ),
         script_tool_call(
-            "check_messages",
-            {"notification_ids": [notification_id]},
-            tool_call_id="check-open",
+            "channel_read", {"asked_by_me": True}, tool_call_id="check-open"
         ),
         script_text("Asked; waiting on an answer."),
     ]
@@ -2981,144 +2977,26 @@ async def test_scripted_messaging_toolset_completes_the_ask_and_answer_loop(
 
     sent = returns["msg-1"]
     assert sent["success"] is True, sent
-    assert sent["notification_id"], "no id came back, so nothing can check it"
+    assert sent["message_id"], "no id came back, so nothing can find it"
 
     still_open = returns["check-open"]
     assert still_open["success"] is True, still_open
-    assert still_open["pending"] == 1
-    assert [m["status"] for m in still_open["messages"]] == ["OPEN"]
-
-    assert str(sent["notification_id"]) in str(still_open["messages"][0]), (
-        "check_messages found a row, but not the one message_user reported"
+    assert [line["id"] for line in still_open["lines"]] == [sent["message_id"]], (
+        "channel_read found questions, but not the one channel_post reported"
     )
+    assert still_open["lines"][0]["question_state"] == "OPEN"
 
-
-async def test_an_agent_closes_a_notification_delivered_into_its_conversation(
-    authenticated_client,
-    fixed_test_org,
-    fixed_test_user,
-    e2e_settings,
-    worker,
-    db_session,
-):
-    """`respond_to_notification` closing a real row, reached the way agents reach it.
-
-    This tool is not in any toolset a user can grant. `OpenNotificationsCapability`
-    injects it at run assembly, and only into the conversation a notification was
-    *delivered* to -- so nothing in the agent module could reach it, and it had no
-    coverage anywhere. The HTTP `/respond` endpoint is covered in
-    `test_notifications_e2e.py`; the tool that shares its service was not.
-
-    The delivery itself is somebody else's test: it needs a real chat surface and
-    a real egress send, and `agent_surfaces` covers that. What is set up directly
-    here is the durable state a delivery leaves behind -- `delivery_conversation_id`
-    -- because that is the input this half actually consumes, and asserting on it
-    is what proves the capability keys on the right column.
-    """
-    from sqlalchemy import update
-
-    from app.modules.agent_surfaces.infrastructure.models import NotificationModel
-
-    runtime = await _create_runtime_profile(
-        authenticated_client, fixed_test_org, e2e_settings
-    )
-    pod = await _create_pod(authenticated_client, fixed_test_org)
-    pod_id = pod["id"]
-    agent_name = f"responder_{uuid4().hex[:8]}"
-    agent = await authenticated_client.post(
-        f"/pods/{pod_id}/agents",
-        json={
-            "name": agent_name,
-            "instruction": "Record what they tell you.",
-            "agent_runtime": {
-                "profile_id": runtime["id"],
-                "model_name": "mock-safe-model",
-            },
-            # Deliberately empty: the responding tool must arrive from the
-            # capability, not from a grant. If it only works with MESSAGING
-            # attached, this fails.
-            "toolsets": [],
-        },
-    )
-    assert agent.status_code == status.HTTP_201_CREATED, agent.text
-
-    notification = await authenticated_client.post(
-        f"/pods/{pod_id}/notifications",
-        json={
-            "recipient": fixed_test_user["email"],
-            "title": "Standup",
-            "body": "What did you ship yesterday?",
-            "background_instruction": "Record their update as the response summary.",
-            "expects_response": True,
-        },
-    )
-    assert notification.status_code == status.HTTP_201_CREATED, notification.text
-    notification_id = notification.json()["id"]
-    assert notification.json()["status"] == "OPEN"
-
-    script = [
-        script_tool_call(
-            "respond_to_notification",
-            {
-                "notification_id": notification_id,
-                "summary": "Shipped the importer and reviewed two PRs.",
-            },
-            tool_call_id="respond-1",
-        ),
-        script_text("Passed it on."),
+    # The durable record, not the tool's word for it: the question waits on
+    # its person in their inbox, in their own channel.
+    inbox = await authenticated_client.get(f"/pods/{pod_id}/inbox")
+    assert inbox.status_code == status.HTTP_200_OK, inbox.text
+    [waiting] = [
+        item
+        for item in inbox.json()["waiting"]
+        if item["message"]["id"] == sent["message_id"]
     ]
-    conversation = await authenticated_client.post(
-        f"/pods/{pod_id}/conversations",
-        json={
-            "agent_name": agent_name,
-            "title": "Standup reply",
-            "metadata": {"mock_llm_script": script},
-        },
-    )
-    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
-    conversation_id = conversation.json()["id"]
-
-    # What a delivery leaves behind. Without it the capability does not fire and
-    # the tool is not offered -- which is the behaviour asserted at the end.
-    await db_session.execute(
-        update(NotificationModel)
-        .where(NotificationModel.id == UUID(notification_id))
-        .values(delivery_conversation_id=UUID(conversation_id))
-    )
-    await db_session.commit()
-
-    events = await _send_message(
-        authenticated_client,
-        pod_id,
-        conversation_id,
-        "Shipped the importer and reviewed two PRs.",
-    )
-    assert events[-1]["type"] == "completed", events
-
-    messages = await authenticated_client.get(
-        f"/pods/{pod_id}/conversations/{conversation_id}/messages"
-    )
-    assert messages.status_code == status.HTTP_200_OK, messages.text
-    returns = {
-        item["tool_call_id"]: item["tool_result"]
-        for item in messages.json()["items"]
-        if item["kind"] == "TOOL_RETURN"
-    }
-    # A tool the model asked for but was never offered comes back as an error
-    # string rather than a result dict, so the type is the assertion.
-    assert isinstance(returns.get("respond-1"), dict), (
-        "the capability never offered respond_to_notification, so the agent "
-        f"could not close a question it was holding: {returns.get('respond-1')!r}"
-    )
-    assert returns["respond-1"]["success"] is True, returns["respond-1"]
-
-    # The durable record, not the tool's own word for it.
-    closed = await authenticated_client.get(f"/pods/{pod_id}/notifications")
-    assert closed.status_code == status.HTTP_200_OK, closed.text
-    row = next(item for item in closed.json()["items"] if item["id"] == notification_id)
-    assert row["status"] == "RESPONDED"
-    assert row["response_summary"] == "Shipped the importer and reviewed two PRs."
-    assert row["awaiting_response"] is False
+    assert waiting["channel"]["id"] == sent["channel_id"]
+    assert waiting["channel"]["kind"] == "DIRECT"
 
 
 async def test_scripted_connector_tools_reach_a_real_agent_run(
@@ -3278,7 +3156,7 @@ async def _seed_connector_with_operation(db_session) -> None:
     await db_session.commit()
 
 
-async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
+async def test_an_agent_answers_a_workflow_form_waiting_on_its_person(
     authenticated_client,
     fixed_test_org,
     fixed_test_user,
@@ -3286,24 +3164,30 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
     e2e_settings,
     worker,
 ):
-    """`submit_workflow_form` closing a real FORM wait, through an agent run.
+    """`answer_question` closing a real FORM line, through an agent run.
 
-    The HTTP route this shares a service with is covered
-    (`test_a_workflow_form_assignment_notifies_and_closes_on_submit`); the tool
-    was not covered anywhere. It is not in any grantable toolset either --
-    `OpenNotificationsCapability` injects it, and only into the conversation the
-    notification was delivered to -- so nothing in the agent suite could reach
-    it.
+    The question and its answer on the line are `workflow`'s test
+    (`test_form_questions_e2e`); what only this one reaches is the agent's
+    half. `answer_question` is in no grantable toolset: the open-questions
+    capability brings it, only to a run in the person's own channel with a
+    question waiting on them -- so the run here is in the assignee's DIRECT
+    channel, as a surface would have placed it, and its agent has no toolsets.
 
-    The run and node are deliberately *not* tool arguments: they are read from
-    the notification (`notification_form_action`), because letting a recipient's
-    agent name them would let it submit against any run whose ids it could
-    guess. So the agent passes only the id of the ask and the values, which is
-    what this drives.
+    The run and node are deliberately *not* tool arguments: they are read off
+    the line, because letting a recipient's agent name them would let it submit
+    against any run whose ids it could guess. The agent passes only the line's
+    id and the form's fields.
     """
     from sqlalchemy import select, update
 
-    from app.modules.agent_surfaces.infrastructure.models import NotificationModel
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+    from app.modules.agent.infrastructure.models.conversation import (
+        ConversationModel,
+    )
+    from app.modules.channels.contracts import ChannelKind, QuestionKind, channel_by_id
+    from app.modules.channels.contracts import questions as channel_questions
+    from app.modules.channels.contracts.lines import viewer_of
     from app.modules.identity.infrastructure.models.organization_models import (
         OrganizationMember,
     )
@@ -3371,14 +3255,33 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
     assert run.status_code == status.HTTP_201_CREATED, run.text
     run_id = run.json()["id"]
 
-    inbox = await authenticated_client.get(f"/pods/{pod_id}/notifications")
-    assert inbox.status_code == status.HTTP_200_OK, inbox.text
-    notification = next(
-        item
-        for item in inbox.json()["items"]
-        if item["origin_kind"] == "WORKFLOW_FORM" and item["origin_id"] == run_id
-    )
-    assert notification["responds_through_action"] is True
+    # The FORM line is written by the run's work, which the worker runs after
+    # the run's transaction commits.
+    async def forms_waiting() -> list:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            viewer = await viewer_of(
+                uow, pod_id=UUID(pod_id), user_id=UUID(str(fixed_test_user["id"]))
+            )
+            waiting = await channel_questions.waiting_on(uow, viewer)
+        return [
+            question
+            for question in waiting
+            if question.kind is QuestionKind.FORM
+            and question.question.get("run_id") == run_id
+        ]
+
+    waiting = (
+        await eventually(
+            label="the form's question in the assignee's channel",
+            probe=forms_waiting,
+            done=lambda found: len(found) == 1,
+            timeout_seconds=30,
+        )
+    )[0]
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        channel = await channel_by_id(uow, waiting.channel_id)
+    assert channel is not None and channel.kind is ChannelKind.DIRECT
+    question_id = str(waiting.message_id)
 
     agent_name = f"formfiller_{uuid4().hex[:8]}"
     agent = await authenticated_client.post(
@@ -3398,11 +3301,13 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
 
     script = [
         script_tool_call(
-            "submit_workflow_form",
-            {
-                "notification_id": notification["id"],
-                "inputs": {"approved": True},
-            },
+            "answer_question",
+            {"question_id": question_id, "answer": {"approved": "maybe"}},
+            tool_call_id="form-refused",
+        ),
+        script_tool_call(
+            "answer_question",
+            {"question_id": question_id, "answer": {"approved": True}},
             tool_call_id="form-1",
         ),
         script_text("Submitted."),
@@ -3418,11 +3323,13 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
     assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
     conversation_id = conversation.json()["id"]
 
-    # What a delivery leaves behind; without it the capability never fires.
+    # Where a surface puts the person's conversation: in their own channel.
+    # Without it nothing is waiting on this run's person and the capability
+    # never fires.
     await db_session.execute(
-        update(NotificationModel)
-        .where(NotificationModel.id == UUID(notification["id"]))
-        .values(delivery_conversation_id=UUID(conversation_id))
+        update(ConversationModel)
+        .where(ConversationModel.id == UUID(conversation_id))
+        .values(channel_id=waiting.channel_id)
     )
     await db_session.commit()
 
@@ -3441,14 +3348,27 @@ async def test_an_agent_submits_a_workflow_form_it_was_asked_to_fill_in(
         if item["kind"] == "TOOL_RETURN"
     }
     assert isinstance(returns.get("form-1"), dict), (
-        f"the capability never offered submit_workflow_form: {returns.get('form-1')!r}"
+        f"the capability never offered answer_question: {returns.get('form-1')!r}"
     )
+    # A field the form does not take is refused back to the model, which can
+    # ask again -- not swallowed, and not the end of the run.
+    assert returns["form-refused"]["success"] is False, returns["form-refused"]
     assert returns["form-1"]["success"] is True, returns["form-1"]
 
-    # The durable record on both sides: the ask is closed and the run moved on.
-    after = await authenticated_client.get(f"/pods/{pod_id}/notifications")
-    closed = next(
-        item for item in after.json()["items"] if item["id"] == notification["id"]
+    # The durable record on both sides: nothing waits on them, and the run
+    # moved on.
+    assert await forms_waiting() == []
+
+    async def workflow_run() -> dict:
+        response = await authenticated_client.get(
+            f"/pods/{pod_id}/workflow-runs/{run_id}"
+        )
+        assert response.status_code == status.HTTP_200_OK, response.text
+        return response.json()
+
+    await eventually(
+        label="the workflow run to finish once its form was answered",
+        probe=workflow_run,
+        done=lambda body: body["status"] == "COMPLETED",
+        timeout_seconds=30,
     )
-    assert closed["status"] == "RESPONDED"
-    assert closed["awaiting_response"] is False

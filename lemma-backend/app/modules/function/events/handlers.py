@@ -1,4 +1,8 @@
-"""Background jobs for asynchronous function execution and reconciliation."""
+"""Function module periodic work: run and revision retention.
+
+Queued runs are work items now (``events/run_work.py``), and so are their
+deadlines (``events/run_deadline.py``); nothing here starts or recovers a run.
+"""
 
 from __future__ import annotations
 
@@ -9,172 +13,21 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from faststream.redis import RedisRouter
-
-
 from app.core.infrastructure.db.session import get_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
-from app.core.infrastructure.jobs.streaq_runtime import (
-    AppWorkerContext,
-    Lane,
-    streaq_cron,
-    streaq_task,
-    streaq_worker,
-)
-from app.modules.function.api.dependencies import (
-    build_function_service,
-    build_function_use_cases,
-)
-from app.modules.function.domain.errors import (
-    FunctionNotFoundError,
-    FunctionRunNotFoundError,
-    FunctionRunQueueUnavailable,
-)
+from app.core.infrastructure.work import periodic_job
 from app.modules.function.config import function_settings, revision_settings
-from app.modules.function.infrastructure.function_run_queue import (
-    StreaqFunctionRunQueue,
-)
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
-from app.modules.function.infrastructure.execution_repository import (
-    FunctionExecutionRepository,
-)
-from app.modules.function.application.runtime_policy import (
-    FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
-    FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
-)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-router = RedisRouter()
-
 
 def provide_uow_factory() -> UnitOfWorkFactory:
     return SessionUnitOfWorkFactory(get_session_maker())
-
-
-async def _fail_run_after_worker_error(
-    worker_ctx: AppWorkerContext,
-    run_id: UUID,
-    error: Exception,
-) -> None:
-    """Persist the fallback terminal state without replaying the invocation."""
-
-    async with worker_ctx.uow() as uow:
-        await FunctionExecutionRepository(uow).fail_unfinished(
-            run_id,
-            error=f"Function execution failed ({type(error).__name__})",
-        )
-
-
-@streaq_task(name="process_function_run")
-async def process_function_run(
-    run_id: str,
-) -> None:
-    """Execute one queued function run without holding a DB session open."""
-    worker_ctx: AppWorkerContext = streaq_worker.context
-    parsed_run_id = UUID(run_id)
-
-    function_id: UUID | None = None
-    try:
-        async with worker_ctx.uow() as uow:
-            service = build_function_service(uow)
-            run = await service.run_repository.get_run(parsed_run_id)
-            if run is None:
-                raise FunctionRunNotFoundError(f"Run {parsed_run_id} not found")
-            function_id = run.function_id
-
-            function = await service.repository.get(run.function_id)
-            if function is None:
-                raise FunctionNotFoundError(f"Function {run.function_id} not found")
-
-        use_cases = build_function_use_cases(worker_ctx.uow_factory)
-        await use_cases.execute_run_by_id(parsed_run_id)
-    except Exception as exc:
-        logger.debug(
-            "function.handlers.function_run_job.propagated",
-            run_id=run_id,
-            exc_info=True,
-        )
-        if function_id is None:
-            raise
-        # The dispatcher normally persists the terminal failure itself. Guard
-        # this fallback with the same row-state transition so it cannot overwrite
-        # a terminal callback that committed concurrently. This task never loops
-        # back into dispatch after an invocation may have been accepted.
-        await _fail_run_after_worker_error(worker_ctx, parsed_run_id, exc)
-
-
-#: Wall-clock share of the once-a-minute reconcile tick each sweep may use.
-#: Both page until drained: a single page per tick left a large burst of
-#: stuck runs -- and the workflows waiting on them -- minutes behind.
-RECONCILE_SWEEP_BUDGET_SECONDS = 20.0
-
-
-async def _reconcile_unqueued_function_runs(
-    *,
-    uow_factory: UnitOfWorkFactory,
-    now: datetime,
-    limit: int = 100,
-    budget_seconds: float = RECONCILE_SWEEP_BUDGET_SECONDS,
-) -> int:
-    """Republish committed asynchronous PENDING runs without holding a connection."""
-
-    queue = StreaqFunctionRunQueue(get_streaq_job_queue())
-    started = time.monotonic()
-    published = 0
-    after: UUID | None = None
-    while True:
-        async with uow_factory() as uow:
-            run_ids = await FunctionRunRepository(uow).list_pending_async_runs(
-                now=now,
-                min_age_seconds=FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
-                limit=limit,
-                after=after,
-            )
-        for run_id in run_ids:
-            try:
-                await queue.enqueue(run_id)
-                published += 1
-            except FunctionRunQueueUnavailable as exc:
-                logger.warning(
-                    "function.handlers.run_reconcile_enqueue_failed.degraded",
-                    run_id=str(run_id),
-                    error_type=type(exc).__name__,
-                )
-        if len(run_ids) < limit or time.monotonic() - started >= budget_seconds:
-            return published
-        after = run_ids[-1]
-
-
-async def _fail_expired_function_runs(
-    *,
-    uow_factory: UnitOfWorkFactory,
-    now: datetime,
-    limit: int = 100,
-    budget_seconds: float = RECONCILE_SWEEP_BUDGET_SECONDS,
-) -> int:
-    """Fail every run past its window, a committed page at a time.
-
-    No cursor needed: a failed run leaves the predicate, so each page is the
-    next one.
-    """
-    started = time.monotonic()
-    failed = 0
-    while True:
-        async with uow_factory() as uow:
-            page = await FunctionRunRepository(uow).fail_expired(
-                now=now,
-                limit=limit,
-                job_callback_grace_seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
-            )
-        failed += page
-        if page < limit or time.monotonic() - started >= budget_seconds:
-            return failed
 
 
 async def _guard_cron(task_name: str, body: Coroutine[Any, Any, None]) -> None:
@@ -196,7 +49,7 @@ async def _guard_cron(task_name: str, body: Coroutine[Any, Any, None]) -> None:
         )
 
 
-@streaq_cron("17 * * * *", name="prune_function_runs")
+@periodic_job("function.runs_prune", every=timedelta(hours=1))
 async def prune_function_runs() -> None:
     """Reclaim finished runs past the retention window.
 
@@ -246,27 +99,11 @@ async def _prune_function_runs() -> None:
         )
 
 
-@streaq_cron("* * * * *", name="reconcile_function_runs")
-async def reconcile_function_runs() -> None:
-    """Recover unqueued runs and fail executions past their immutable deadline."""
-
-    await _guard_cron("reconcile_function_runs", _reconcile_function_runs())
-
-
-async def _reconcile_function_runs() -> None:
-    now = datetime.now(timezone.utc)
-    uow_factory = provide_uow_factory()
-    await _reconcile_unqueued_function_runs(
-        uow_factory=uow_factory,
-        now=now,
-    )
-    await _fail_expired_function_runs(uow_factory=uow_factory, now=now)
-
-
-@streaq_cron(
-    revision_settings.function_revision_retention_cron,
-    name="sweep_function_revisions",
-    lane=Lane.BULK,
+@periodic_job(
+    "function.revisions_sweep",
+    every=timedelta(
+        seconds=revision_settings.function_revision_retention_interval_seconds
+    ),
 )
 async def sweep_function_revisions() -> None:
     """Daily backstop for revisions whose retention window has passed.
@@ -276,7 +113,7 @@ async def sweep_function_revisions() -> None:
     function that stops being edited, whose surplus revisions would otherwise
     age forever with nothing re-evaluating them.
 
-    Bulk lane: it is slow, bursty and touches object storage.
+    Admin class: it is slow, bursty and touches object storage.
     """
     # Through the module's shared cron boundary, which is why this module keeps
     # exactly one broad catch rather than one per schedule.

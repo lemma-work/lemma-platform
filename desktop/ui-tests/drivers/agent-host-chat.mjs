@@ -107,9 +107,10 @@ try {
     const stopped = page.waitForResponse(response => response.url().endsWith('/stop'));
     await page.getByRole('button', { name: STOP, exact: true }).click();
     assert.equal((await stopped).status(), 200);
-    const reattached = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/stream'));
+    const reattached = reattachment(page, config.conversationUrl.split('/').pop());
     await page.reload();
-    assert.equal((await reattached).status(), 200);
+    const watched = await reattached;
+    assert.ok(watched.run, `the reloaded page reattached to no run: ${JSON.stringify(watched)}`);
     await writeFile(config.releaseFile, 'The browser reattached while stopping.');
     answer = /Started the requested work[.]\s+Stopped as requested[.]/;
   } else if (config.action === 'approve' || config.action === 'deny') {
@@ -175,6 +176,65 @@ try {
   server.kill('SIGTERM');
   log.end();
   network.end();
+}
+
+/**
+ * Resolve once a reloaded page is reading the conversation's run again.
+ *
+ * The workspace reads a run off the pod's live socket -- a `conversation`
+ * subscription, whose first event (`run`) names the run it watches, or none
+ * when nothing is going -- and falls back to the SSE `/stream` endpoint only
+ * when the socket cannot carry it. Either is a reattachment; waiting for the
+ * SSE response alone waits for a request the page no longer makes. Listening
+ * starts before the reload, and only for sockets opened after it, so a frame
+ * of the page being replaced cannot stand in for the new one's.
+ */
+function reattachment(page, conversationId) {
+  const parse = payload => {
+    try {
+      const frame = JSON.parse(String(payload));
+      return frame && typeof frame === 'object' ? frame : null;
+    } catch {
+      return null;
+    }
+  };
+  return new Promise((resolve, reject) => {
+    const stop = () => {
+      clearTimeout(deadline);
+      page.off('websocket', onSocket);
+      page.off('response', onResponse);
+    };
+    const settle = outcome => { stop(); resolve(outcome); };
+    const fail = error => { stop(); reject(error); };
+    const deadline = setTimeout(
+      () => fail(new Error('the reloaded page never reattached to the conversation')), 45_000,
+    );
+    const onResponse = response => {
+      if (!new URL(response.url()).pathname.endsWith('/stream')) return;
+      if (response.status() === 200) settle({ via: 'sse', run: 'stream' });
+      else fail(new Error(`the run's stream answered ${response.status()}`));
+    };
+    const onSocket = socket => {
+      const watching = new Set();
+      socket.on('framesent', ({ payload }) => {
+        const frame = parse(payload);
+        if (frame?.op === 'subscribe' && frame.topic === 'conversation'
+          && frame.conversation_id === conversationId) watching.add(frame.id);
+      });
+      socket.on('framereceived', ({ payload }) => {
+        const frame = parse(payload);
+        if (frame?.type === 'error' && watching.has(frame.id)) {
+          fail(new Error(`the socket refused the conversation: ${frame.code} ${frame.message ?? ''}`));
+          return;
+        }
+        if (frame?.type !== 'events' || !watching.has(frame.id) || !Array.isArray(frame.events)) return;
+        const state = frame.events.find(event => event?.type === 'run');
+        if (state) settle({ via: 'socket', run: state.agent_run_id, status: state.status });
+      });
+    };
+    page.on('response', onResponse);
+    page.on('websocket', onSocket);
+  });
 }
 
 /**

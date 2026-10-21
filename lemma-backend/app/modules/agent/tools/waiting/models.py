@@ -147,8 +147,8 @@ _WAKE_MESSAGES: dict[tuple[AgentWaitType, AgentWaitWakeReason], str] = {
         "be reached, say so rather than waiting on it again."
     ),
     (AgentWaitType.PROCESS, AgentWaitWakeReason.ANSWERED): (
-        "Everyone you reached with message_user has now replied, which is why "
-        "you woke early. Read them with check_messages. Your process is still "
+        "Everyone you asked with channel_post has now answered, which is why "
+        "you woke early. Read them with channel_read(asked_by_me=True). Your process is still "
         "running — nothing about it has changed."
     ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_FINISHED): (
@@ -171,13 +171,13 @@ _WAKE_MESSAGES: dict[tuple[AgentWaitType, AgentWaitWakeReason], str] = {
         "That sub-agent run can no longer be found, so its outcome is unknown."
     ),
     (AgentWaitType.SUBAGENT, AgentWaitWakeReason.ANSWERED): (
-        "Everyone you reached with message_user has now replied, which is why "
-        "you woke early. Read them with check_messages. The sub-agent is still "
+        "Everyone you asked with channel_post has now answered, which is why "
+        "you woke early. Read them with channel_read(asked_by_me=True). The sub-agent is still "
         "running — nothing about it has changed."
     ),
     (AgentWaitType.TIME, AgentWaitWakeReason.ANSWERED): (
-        "Everyone you reached with message_user has now replied, which is why "
-        "you woke before your time was up. Read them with check_messages. "
+        "Everyone you asked with channel_post has now answered, which is why "
+        "you woke before your time was up. Read them with channel_read(asked_by_me=True). "
         "Nothing else you were waiting on is known to have happened."
     ),
 }

@@ -24,7 +24,6 @@ from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     split_whatsapp_deliveries,
 )
 from app.modules.agent_surfaces.platforms.whatsapp import (
-    client as whatsapp_client_module,
     service as whatsapp_service_module,
 )
 from app.modules.agent_surfaces.platforms.telegram.adapter import (
@@ -35,6 +34,12 @@ from app.modules.agent_surfaces.platforms.telegram.attachment_naming import (
 )
 from app.modules.agent_surfaces.platforms.telegram.parser import (
     TelegramMessageParser,
+)
+from app.modules.agent_surfaces.tests.fakes import (
+    PlatformHandler,
+    PlatformHttp,
+    answer_json,
+    platform_http,
 )
 
 
@@ -123,6 +128,19 @@ def test_a_delivery_carrying_no_message_still_reaches_the_parser():
 
     assert split_whatsapp_deliveries(payload) == [payload]
     assert WhatsAppMessageParser().parse(payload) is None
+
+
+def test_a_whatsapp_message_from_our_own_number_is_not_a_person():
+    """An echo of the business's own number: answering it would be the bot
+    talking to itself, and making it a contact would be a contact of us."""
+    payload = _whatsapp_text_payload()
+    value = payload["entry"][0]["changes"][0]["value"]
+    value["metadata"]["display_phone_number"] = "+1 555-055-5555"
+
+    assert WhatsAppMessageParser().parse(payload) is None
+
+    value["metadata"]["display_phone_number"] = "+1 555-000-0000"
+    assert WhatsAppMessageParser().parse(payload) is not None
 
 
 def test_whatsapp_undeliverable_message_is_not_read_as_the_persons_words():
@@ -305,37 +323,21 @@ async def test_whatsapp_adapter_parse():
     assert event.platform == "WHATSAPP"
 
 
+def _telegram_file_api(file_path: str, body: bytes) -> PlatformHandler:
+    """getFile answers ``file_path``; the file host answers ``body``."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url).endswith("/getFile"):
+            return httpx.Response(
+                200, json={"ok": True, "result": {"file_path": file_path}}
+            )
+        return httpx.Response(200, content=body)
+
+    return handler
+
+
 @pytest.mark.asyncio
-async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
-    posted: dict = {}
-
-    class _Response:
-        status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"messages": [{"id": "wamid.1"}]}
-
-    class _Client:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def post(self, url, *, json, headers):
-            posted["url"] = url
-            posted["json"] = json
-            posted["headers"] = headers
-            return _Response()
-
-    monkeypatch.setattr(
-        whatsapp_client_module.httpx,
-        "AsyncClient",
-        lambda *args, **kwargs: _Client(),
-    )
+async def test_whatsapp_send_display_resource_uses_cta_url_payload():
     event = ParsedInboundSurfaceEvent(
         platform="WHATSAPP",
         conversation_type=ConversationType.EXTERNAL_DM,
@@ -352,79 +354,58 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
         },
     )
 
-    await whatsapp_service_module.WhatsAppPlatformService(
-        {
-            "access_token": "wa-token",
-            "api_base_url": "https://graph.example.test",
-        }
-    )._render_resource(
-        event,
-        SurfaceDisplayRenderPlan(
-            resource_type="FILE",
-            title="report.pdf",
-            summary="PDF · 2.3 MB",
-            actions=[
-                SurfaceDisplayAction(
-                    label="Open file",
-                    url="https://app.example.test/pod/p/files?file=/me/report.pdf",
-                )
-            ],
-        ),
-    )
+    with platform_http(answer_json({"messages": [{"id": "wamid.1"}]})) as http:
+        await whatsapp_service_module.WhatsAppPlatformService(
+            {
+                "access_token": "wa-token",
+                "api_base_url": "https://graph.example.test",
+            }
+        )._render_resource(
+            event,
+            SurfaceDisplayRenderPlan(
+                resource_type="FILE",
+                title="report.pdf",
+                summary="PDF · 2.3 MB",
+                actions=[
+                    SurfaceDisplayAction(
+                        label="Open file",
+                        url="https://app.example.test/pod/p/files?file=/me/report.pdf",
+                    )
+                ],
+            ),
+        )
 
-    assert posted["url"].endswith("/phone-number-1/messages")
-    assert posted["headers"]["Authorization"] == "Bearer wa-token"
-    assert posted["json"]["type"] == "interactive"
-    assert posted["json"]["interactive"]["type"] == "cta_url"
-    assert posted["json"]["interactive"]["action"]["parameters"]["url"].startswith(
-        "https://app.example.test"
+    (posted,) = http.requests
+    body = http.json_of(posted)
+    assert str(posted.url).endswith("/phone-number-1/messages")
+    assert posted.headers["Authorization"] == "Bearer wa-token"
+    assert body["type"] == "interactive"
+    assert body["interactive"]["type"] == "cta_url"
+    assert (
+        body["interactive"]["action"]["parameters"]["url"]
+        == "https://app.example.test/pod/p/files?file=/me/report.pdf"
     )
 
 
 @pytest.mark.asyncio
-async def test_whatsapp_display_phone_number_lookup_uses_graph_phone_id(monkeypatch):
-    requested: dict = {}
+async def test_whatsapp_display_phone_number_lookup_uses_graph_phone_id():
+    with platform_http(answer_json({"display_phone_number": "+1 555 0100"})) as http:
+        number = await whatsapp_service_module.WhatsAppPlatformService(
+            {
+                "access_token": "wa-token",
+                "phone_number_id": "PN42",
+                "api_base_url": "https://graph.example.test/v21.0",
+            }
+        ).get_display_phone_number()
 
-    class _Response:
-        status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"display_phone_number": "+1 555 0100"}
-
-    class _Client:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def get(self, url, *, params, headers):
-            requested["url"] = url
-            requested["params"] = params
-            requested["headers"] = headers
-            return _Response()
-
-    monkeypatch.setattr(
-        whatsapp_client_module.httpx,
-        "AsyncClient",
-        lambda *args, **kwargs: _Client(),
-    )
-
-    number = await whatsapp_service_module.WhatsAppPlatformService(
-        {
-            "access_token": "wa-token",
-            "phone_number_id": "PN42",
-            "api_base_url": "https://graph.example.test/v21.0",
-        }
-    ).get_display_phone_number()
-
+    (requested,) = http.requests
     assert number == "+1 555 0100"
-    assert requested["url"] == "https://graph.example.test/v21.0/PN42"
-    assert requested["params"] == {"fields": "display_phone_number"}
-    assert requested["headers"]["Authorization"] == "Bearer wa-token"
+    assert requested.method == "GET"
+    assert (
+        requested.url.copy_with(query=None) == "https://graph.example.test/v21.0/PN42"
+    )
+    assert dict(requested.url.params) == {"fields": "display_phone_number"}
+    assert requested.headers["Authorization"] == "Bearer wa-token"
 
 
 def _telegram_text_payload() -> dict:
@@ -590,28 +571,7 @@ async def test_telegram_adapter_parse():
 
 
 @pytest.mark.asyncio
-async def test_telegram_send_display_resource_uses_inline_keyboard(monkeypatch):
-    posted: dict = {}
-
-    class _Response:
-        status_code = 200
-
-        def json(self):
-            return {"ok": True, "result": {"message_id": 1}}
-
-        @property
-        def text(self):
-            return ""
-
-    async def fake_post(self, url, *, json=None, **kwargs):
-        posted["url"] = url
-        posted["json"] = json
-        return _Response()
-
-    # _render_resource routes through TelegramClient.call, which uses
-    # httpx.AsyncClient from the client module — patch the class method so the
-    # call is intercepted regardless of import site.
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+async def test_telegram_send_display_resource_uses_inline_keyboard():
     event = ParsedInboundSurfaceEvent(
         platform="TELEGRAM",
         conversation_type=ConversationType.EXTERNAL_DM,
@@ -624,131 +584,61 @@ async def test_telegram_send_display_resource_uses_inline_keyboard(monkeypatch):
         reply_target={"chat_id": "999888777", "message_id": 42},
     )
 
-    await telegram_service_module.TelegramPlatformService(
-        {"bot_token": "telegram-token", "api_base_url": "https://telegram.example/bot"}
-    )._render_resource(
-        event,
-        SurfaceDisplayRenderPlan(
-            resource_type="TABLE",
-            title="Table: deals",
-            summary="3 of 41 records",
-            actions=[
-                SurfaceDisplayAction(
-                    label="Open in Lemma",
-                    url="https://app.example.test/pod/p/data?tab=deals",
-                )
-            ],
-        ),
+    with platform_http(answer_json({"ok": True, "result": {"message_id": 1}})) as http:
+        await telegram_service_module.TelegramPlatformService(
+            {
+                "bot_token": "telegram-token",
+                "api_base_url": "https://telegram.example/bot",
+            }
+        )._render_resource(
+            event,
+            SurfaceDisplayRenderPlan(
+                resource_type="TABLE",
+                title="Table: deals",
+                summary="3 of 41 records",
+                actions=[
+                    SurfaceDisplayAction(
+                        label="Open in Lemma",
+                        url="https://app.example.test/pod/p/data?tab=deals",
+                    )
+                ],
+            ),
+        )
+
+    posted = http.requests[-1]
+    body = http.json_of(posted)
+    assert str(posted.url).endswith("/sendMessage")
+    assert body["parse_mode"] == "HTML"
+    assert (
+        body["reply_markup"]["inline_keyboard"][0][0]["url"]
+        == "https://app.example.test/pod/p/data?tab=deals"
     )
 
-    assert posted["url"].endswith("/sendMessage")
-    assert posted["json"]["parse_mode"] == "HTML"
-    assert posted["json"]["reply_markup"]["inline_keyboard"][0][0]["url"].startswith(
-        "https://app.example.test"
-    )
 
-
-async def test_telegram_download_attachment_bytes_getfile_then_download(monkeypatch):
-    calls: list[str] = []
-
-    class _Resp:
-        status_code = 200
-
-        def __init__(self, *, json_body=None, content=b""):
-            self._json = json_body
-            self.content = content
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return self._json
-
-        @property
-        def text(self):
-            return ""
-
-    async def fake_post(self, url, *, json=None, **kwargs):
-        calls.append(url)
-        return _Resp(json_body={"ok": True, "result": {"file_path": "docs/a.pdf"}})
-
-    class _Stream:
-        """The file body arrives in chunks now, so the fake yields them.
-
-        The adapter streams under `INBOUND_ATTACHMENT_BYTE_CAP` rather than
-        taking `response.content`, so a fake that only offers `.content` no
-        longer resembles what it talks to.
-        """
-
-        def __init__(self, url, chunks):
-            self._url = url
-            self._chunks = chunks
-            self.status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        async def aiter_bytes(self):
-            for chunk in self._chunks:
-                yield chunk
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-    def fake_stream(self, method, url, **kwargs):
-        calls.append(url)
-        return _Stream(url, [b"PDF", b"DATA"])
-
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
-
+async def test_telegram_download_attachment_bytes_getfile_then_download():
     event = ParsedInboundSurfaceEvent(
         platform="TELEGRAM",
         conversation_type=ConversationType.EXTERNAL_DM,
         external_thread_id="1",
         message_text="file",
     )
-    result = await telegram_service_module.TelegramPlatformService(
-        {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
-    ).download_attachment_bytes(
-        event, {"file_id": "F1", "name": "a.pdf", "mime_type": "application/pdf"}
-    )
+    with platform_http(_telegram_file_api("docs/a.pdf", b"PDFDATA")) as http:
+        result = await telegram_service_module.TelegramPlatformService(
+            {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
+        ).download_attachment_bytes(
+            event, {"file_id": "F1", "name": "a.pdf", "mime_type": "application/pdf"}
+        )
 
     assert result is not None
     content, name, mime = result
     assert content == b"PDFDATA"
     assert name == "a.pdf"
     assert mime == "application/pdf"
-    assert any(u.endswith("/getFile") for u in calls)
+    assert http.to("/getFile")
+    assert http.to("docs/a.pdf")
 
 
-async def test_telegram_send_file_bytes_posts_multipart_document(monkeypatch):
-    posted: dict = {}
-
-    class _Resp:
-        status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"ok": True, "result": {"message_id": 7}}
-
-        @property
-        def text(self):
-            return ""
-
-    async def fake_post(self, url, *, data=None, files=None, **kwargs):
-        posted["url"] = url
-        posted["data"] = data
-        posted["files"] = files
-        return _Resp()
-
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-
+async def test_telegram_send_file_bytes_posts_multipart_document():
     event = ParsedInboundSurfaceEvent(
         platform="TELEGRAM",
         conversation_type=ConversationType.EXTERNAL_DM,
@@ -757,43 +647,27 @@ async def test_telegram_send_file_bytes_posts_multipart_document(monkeypatch):
         message_text="x",
         reply_target={"chat_id": "9"},
     )
-    sent = await telegram_service_module.TelegramPlatformService(
-        {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
-    ).send_file_bytes(
-        event,
-        file_name="report.pdf",
-        file_bytes=b"PDFDATA",
-        mime_type="application/pdf",
-        caption="Your report",
-    )
+    with platform_http(answer_json({"ok": True, "result": {"message_id": 7}})) as http:
+        sent = await telegram_service_module.TelegramPlatformService(
+            {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
+        ).send_file_bytes(
+            event,
+            file_name="report.pdf",
+            file_bytes=b"PDFDATA",
+            mime_type="application/pdf",
+            caption="Your report",
+        )
 
+    posted = http.requests[-1]
+    form = http.form_of(posted)
     assert sent is True
-    assert posted["url"].endswith("/sendDocument")
-    assert posted["data"]["chat_id"] == "9"
-    assert posted["data"]["caption"] == "Your report"
-    assert posted["files"]["document"][0] == "report.pdf"
+    assert str(posted.url).endswith("/sendDocument")
+    assert form["chat_id"].text == "9"
+    assert form["caption"].text == "Your report"
+    assert form["document"].filename == "report.pdf"
 
 
-async def test_telegram_send_voice_bytes_uses_sendvoice(monkeypatch):
-    posted: dict = {}
-
-    class _Resp:
-        status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"ok": True, "result": {"message_id": 8}}
-
-    async def fake_post(self, url, *, data=None, files=None, **kwargs):
-        posted["url"] = url
-        posted["data"] = data
-        posted["files"] = files
-        return _Resp()
-
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-
+async def test_telegram_send_voice_bytes_uses_sendvoice():
     event = ParsedInboundSurfaceEvent(
         platform="TELEGRAM",
         conversation_type=ConversationType.EXTERNAL_DM,
@@ -802,40 +676,26 @@ async def test_telegram_send_voice_bytes_uses_sendvoice(monkeypatch):
         message_text="x",
         reply_target={"chat_id": "9"},
     )
-    sent = await telegram_service_module.TelegramPlatformService(
-        {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
-    ).send_voice_bytes(
-        event,
-        file_name="reply.ogg",
-        audio_bytes=b"OGGOPUS",
-        mime_type="audio/ogg",
-    )
+    with platform_http(answer_json({"ok": True, "result": {"message_id": 8}})) as http:
+        sent = await telegram_service_module.TelegramPlatformService(
+            {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
+        ).send_voice_bytes(
+            event,
+            file_name="reply.ogg",
+            audio_bytes=b"OGGOPUS",
+            mime_type="audio/ogg",
+        )
 
+    posted = http.requests[-1]
+    voice = http.form_of(posted)["voice"]
     assert sent is True
     # A native voice bubble requires sendVoice with the "voice" file field.
-    assert posted["url"].endswith("/sendVoice")
-    assert posted["files"]["voice"][0] == "reply.ogg"
-    assert posted["files"]["voice"][2] == "audio/ogg"
+    assert str(posted.url).endswith("/sendVoice")
+    assert voice.filename == "reply.ogg"
+    assert voice.content_type == "audio/ogg"
 
 
-async def test_telegram_stream_progress_send_edit_delete(monkeypatch):
-    calls: list[str] = []
-
-    class _Resp:
-        status_code = 200
-
-        def json(self):
-            return {"ok": True, "result": {"message_id": 5}}
-
-        @property
-        def text(self):
-            return ""
-
-    async def fake_post(self, url, *, json=None, **kwargs):
-        calls.append(url.rsplit("/", 1)[-1])
-        return _Resp()
-
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+async def test_telegram_stream_progress_send_edit_delete():
     event = ParsedInboundSurfaceEvent(
         platform="TELEGRAM",
         conversation_type=ConversationType.EXTERNAL_DM,
@@ -848,16 +708,22 @@ async def test_telegram_stream_progress_send_edit_delete(monkeypatch):
         {"bot_token": "t", "api_base_url": "https://telegram.example/bot"}
     )
 
-    handle = await svc.stream_progress(event, "Searching the web")
-    assert handle == ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id="5")
-    assert calls[-1] == "sendMessage"
+    def last_method(http: PlatformHttp) -> str:
+        return str(http.requests[-1].url).rsplit("/", 1)[-1]
 
-    handle2 = await svc.stream_progress(event, "Reading results", handle)
-    assert handle2 == ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id="5")
-    assert calls[-1] == "editMessageText"
+    with platform_http(answer_json({"ok": True, "result": {"message_id": 5}})) as http:
+        handle = await svc.stream_progress(event, "Searching the web")
+        assert handle == ProgressHandle(kind=ProgressHandleKind.MESSAGE, message_id="5")
+        assert last_method(http) == "sendMessage"
 
-    await svc.end_progress(event, handle2)
-    assert calls[-1] == "deleteMessage"
+        handle2 = await svc.stream_progress(event, "Reading results", handle)
+        assert handle2 == ProgressHandle(
+            kind=ProgressHandleKind.MESSAGE, message_id="5"
+        )
+        assert last_method(http) == "editMessageText"
+
+        await svc.end_progress(event, handle2)
+        assert last_method(http) == "deleteMessage"
 
 
 async def test_base_adapter_download_and_send_file_defaults():
@@ -1043,48 +909,10 @@ def test_an_unknowable_blob_is_reported_as_one_rather_than_guessed_at():
     assert name == "file_1"
 
 
-async def test_a_downloaded_photo_arrives_typed_end_to_end(monkeypatch):
+async def test_a_downloaded_photo_arrives_typed_end_to_end():
     """The whole of bug A's adapter half: a photo update in, an openable
     `image/png` out, with nothing but `file_id` to start from."""
     png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-
-    class _Resp:
-        status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"ok": True, "result": {"file_path": "photos/file_42.jpg"}}
-
-        @property
-        def text(self):
-            return ""
-
-    class _Stream:
-        status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        async def aiter_bytes(self):
-            yield png
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-    async def fake_post(self, url, *, json=None, **kwargs):
-        return _Resp()
-
-    def fake_stream(self, method, url, **kwargs):
-        return _Stream()
-
-    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
-    monkeypatch.setattr(httpx.AsyncClient, "stream", fake_stream)
-
     event = ParsedInboundSurfaceEvent(
         platform="TELEGRAM",
         conversation_type=ConversationType.EXTERNAL_DM,
@@ -1092,13 +920,14 @@ async def test_a_downloaded_photo_arrives_typed_end_to_end(monkeypatch):
         message_text="what colour is this?",
     )
 
-    result = await telegram_service_module.TelegramPlatformService(
-        {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
-    ).download_attachment_bytes(
-        event,
-        # Exactly what the parser produces for a photo, and all Telegram sends.
-        {"file_id": "large", "name": "photo", "content_type": "image"},
-    )
+    with platform_http(_telegram_file_api("photos/file_42.jpg", png)):
+        result = await telegram_service_module.TelegramPlatformService(
+            {"bot_token": "tok", "api_base_url": "https://telegram.example/bot"}
+        ).download_attachment_bytes(
+            event,
+            # Exactly what the parser produces for a photo, and all Telegram sends.
+            {"file_id": "large", "name": "photo", "content_type": "image"},
+        )
 
     assert result is not None
     content, name, mime = result

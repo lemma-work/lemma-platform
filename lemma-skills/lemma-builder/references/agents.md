@@ -123,8 +123,8 @@ colleague hearing from an implementation detail of somebody's turn cannot place 
 | `CONNECTORS` | **Derived — any connector grant.**  call third-party APIs through the org's connector installs, without a sandbox. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `search_connector_operations` (leave `auth_config` unset to search **every** install — each hit names the one to run it against) and `run_connector_operation`; `describe_connector_operation` only if you want the full input schema up front, `list_connectors` only to see what is installed. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
 | `TODO` | **Always on.**  a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
 | `MEMORY` | **Declared.**  durable facts kept between conversations, in ordinary pod files: `/memory` for what the whole pod should know, `/me` for what is true of one person only. `AGENTS.md` in each scope is read into every run automatically, so it must stay a short index of pointers — it is capped, and the overflow is truncated with a marker. It carries **no tools of its own**, but it does not need pairing: turning it on **derives a `folder.write` grant on `/memory`** (write implies read), which in turn derives `POD` — so the agent gets the file tools that make the instruction actionable. Turning it off takes the grant back, and it is re-derived on every write, so a `permissions` replace cannot strip it |
-| `WAIT` | **Always on.**  suspend the current turn and resume it when there is a reason to (`wait_for`): a time, a sandbox process exiting, or a sub-agent run finishing. Capped at 24h. Every wake replays the whole conversation, so one real wait beats a loop of short ones — and it is **not** for waiting on a person, nor on a `message_user` answer |
-| `MESSAGING` | **Always on.**  the way an agent reaches a person *unprompted*: `message_user` contacts a **pod member who is not in this conversation** on whichever surface they last used — or by email, cold, if they have never messaged the bot — with a copy always landing in their Lemma inbox; `list_pod_members` looks people up (and reports each member's `reachable_on`); `check_messages` reads the answers. See the pattern below — it is the one people get wrong |
+| `WAIT` | **Always on.**  suspend the current turn and resume it when there is a reason to (`wait_for`): a time, a sandbox process exiting, or a sub-agent run finishing. Capped at 24h. Every wake replays the whole conversation, so one real wait beats a loop of short ones — and it is **not** for waiting on a person, nor on a `channel_post` answer |
+| `MESSAGING` | **Always on.**  the pod's channels, and reaching a person *unprompted*: `channel_post` writes to a **pod member who is not in this conversation** — a line in their own channel in Lemma, carried on to the app they last used or their email — or into a channel; `list_pod_members` looks people up (and reports each member's `reachable_on`); `channel_read(asked_by_me=True)` reads the answers; `channel_list` / `channel_read` / `channel_search` read the channels the agent's person can see. A run answering a contact gets only `ask_a_person`, which calls a member in. See the pattern below — it is the one people get wrong |
 
 For pod files and data you grant the folder or table and `POD` follows — typed,
 grant-checked table/record/file tools. `WORKSPACE_CLI` is the escape hatch when
@@ -144,37 +144,33 @@ not enough when the tool is behind a search.
 
 This is the capability people miss, because it looks like `ask_user` and behaves
 nothing like it. `ask_user` pauses the run and waits on the person *already in this
-conversation*. `message_user` reaches **anyone in the pod, wherever they are**, and does
+conversation*. `channel_post` reaches **anyone in the pod, wherever they are**, and does
 **not** pause anything.
 
 The loop, in full:
 
-1. **Look them up.** `list_pod_members` — `message_user`'s `to` takes a **pod member id,
+1. **Look them up.** `list_pod_members` — `channel_post`'s `to` takes a **pod member id,
    user id, or email address**. A human name will not resolve, and the error says so.
-   The listing also reports each member's `reachable_on`, so choosing a channel is a
+   The listing also reports each member's `reachable_on`, so choosing a platform is a
    read rather than a guess.
-2. **Send, with a `background_instruction`.** The reply is handled by the *recipient's
-   own agent*, in their own thread, under **their** permissions — your run's authority
-   never crosses over. `background_instruction` is never shown to them; it tells that
-   agent what counts as an answer and where to put it ("get the invoice number, not just
-   a yes"). **Omit it and nothing comes back to you.** Use `expects_response: false` for
-   a pure FYI; requests expire after 72h unless you set `expires_in_seconds`. Leave
-   `channel` unset unless you have a reason — a channel you *do* name is used or refused,
-   never silently swapped, and a chat app they have never messaged this agent on cannot
-   be used at all.
+2. **Send, with `wants_answer` when you need one.** It is a line in their own channel in
+   Lemma, waiting on them in their inbox, and is carried to the app they last used. They
+   answer on the line, or in words to their own agent, which records it with
+   `answer_question` under **their** permissions — your run's authority never crosses
+   over. Leave `platform` unset unless you have a reason — one you *do* name is used or
+   refused, never silently swapped.
 3. **Then finish the turn and stop.** Do **not** `wait_for` it, and do not poll. When the
    **last** outstanding answer lands, the backend starts a fresh turn in your
-   conversation on its own; you read what everyone said with `check_messages` there.
-   Say who you are waiting on before you stop — that sentence is the last thing the
-   person who asked you sees until the answers arrive.
+   conversation on its own; you read what everyone said with
+   `channel_read(asked_by_me=True)` there. Say who you are waiting on before you stop —
+   that sentence is the last thing the person who asked you sees until the answers
+   arrive.
 
 Two design rules follow. **Say in the instruction who the agent may chase and when**,
 or a deferred tool behind a search will never be used. And **withheld from sub-agents**:
 a colleague hearing from an implementation detail of somebody's turn has no way to place
-it, so whatever needs saying, the parent says. Holding the toolset **is** the grant —
-there is no surface-level switch to find as well (`send_policy.allow_send` is a
-different tool, for the person already in the conversation), and every delivered message
-names both the agent and the human whose authority the run carries.
+it, so whatever needs saying, the parent says. Holding the toolset **is** the grant, and
+every line names both the agent and the human whose authority the run carries.
 
 ## Using files (search-first → read markdown → page → view image)
 

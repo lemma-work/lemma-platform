@@ -1,10 +1,10 @@
 """Worker retry classification for GitHub provider failures."""
 
-from types import SimpleNamespace
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-from streaq import StreaqRetry
+from app.core.infrastructure.work import Defer
 
 from app.modules.connectors.domain.errors import (
     OperationExecutionInfrastructureError,
@@ -79,7 +79,7 @@ class _StateStore:
         self.state = state
 
 
-async def test_github_import_schedules_bounded_streaq_retry(monkeypatch):
+async def test_github_import_schedules_bounded_retry(monkeypatch):
     state = ImportState(
         import_id=uuid4(),
         pod_id=uuid4(),
@@ -99,7 +99,7 @@ async def test_github_import_schedules_bounded_streaq_retry(monkeypatch):
                 status_code=429,
             )
 
-    monkeypatch.setattr(handlers, "streaq_worker", SimpleNamespace(context=object()))
+    monkeypatch.setattr(handlers, "_worker_ctx", lambda: object())
     monkeypatch.setattr(handlers, "get_pod_bundle_state_store", lambda: store)
     monkeypatch.setattr(handlers, "BundleStagingStorage", lambda: object())
     monkeypatch.setattr(
@@ -108,15 +108,15 @@ async def test_github_import_schedules_bounded_streaq_retry(monkeypatch):
         lambda _worker_ctx, _state: _Fetcher(),
     )
 
-    with pytest.raises(StreaqRetry) as caught:
-        await handlers.import_pod_github.fn({"import_id": str(state.import_id)})
+    with pytest.raises(Defer) as caught:
+        await handlers.import_pod_github({"import_id": str(state.import_id)})
 
-    assert caught.value.delay == 1
+    assert caught.value.delay == timedelta(seconds=1)
     assert state.retryable is True
     assert state.error_code == "GITHUB_RATE_LIMITED"
 
 
-async def test_github_publish_schedules_bounded_streaq_retry(monkeypatch):
+async def test_github_publish_schedules_bounded_retry(monkeypatch):
     state = PublishState(
         publish_id=uuid4(),
         pod_id=uuid4(),
@@ -131,14 +131,14 @@ async def test_github_publish_schedules_bounded_streaq_retry(monkeypatch):
 
     monkeypatch.setattr(
         publish_task,
-        "streaq_worker",
-        SimpleNamespace(context=object()),
+        "_worker_ctx",
+        lambda: object(),
     )
     monkeypatch.setattr(publish_task, "get_pod_bundle_state_store", lambda: store)
     monkeypatch.setattr(publish_task, "_load_or_export_archive", _provider_outage)
 
-    with pytest.raises(StreaqRetry) as caught:
-        await publish_task.publish_pod_github.fn(
+    with pytest.raises(Defer) as caught:
+        await publish_task.publish_pod_github(
             {
                 "publish_id": str(state.publish_id),
                 "pod_id": str(state.pod_id),
@@ -146,6 +146,6 @@ async def test_github_publish_schedules_bounded_streaq_retry(monkeypatch):
             }
         )
 
-    assert caught.value.delay == 1
+    assert caught.value.delay == timedelta(seconds=1)
     assert state.retryable is True
     assert state.error_code == "OPERATION_EXECUTION_INFRA_ERROR"

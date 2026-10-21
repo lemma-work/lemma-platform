@@ -11,6 +11,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
 )
+from app.modules.agent_surfaces.domain.place_privacy import CHANNEL_MEMBERSHIP_KEY
 from app.modules.agent_surfaces.platforms.common import (
     payload_any,
     payload_first,
@@ -158,6 +159,8 @@ class _TeamsRouting:
 
     is_dm: bool
     is_thread_reply: bool
+    #: Teams' ``conversationType``: ``personal``, ``groupChat`` or ``channel``.
+    channel_type: str
     channel_id: str | None
     external_channel_id: str
     external_thread_id: str
@@ -187,9 +190,21 @@ def _teams_routing(message: dict[str, Any]) -> _TeamsRouting:
     conversation = payload_section(message, "conversation")
     channel = payload_section(payload_section(message, "channelData"), "channel")
     conversation_id = payload_text(conversation, "id")
-    is_dm = payload_text(
-        conversation, "conversationType"
-    ).lower() == "personal" or not channel.get("id")
+    channel_type = payload_text(conversation, "conversationType")
+    if channel_type.lower() == "groupchat":
+        # A chat of several people and the bot: no channel, and no threads --
+        # the chat is one place, and an answer goes into it.
+        return _TeamsRouting(
+            is_dm=False,
+            is_thread_reply=False,
+            channel_type=channel_type,
+            channel_id=None,
+            external_channel_id=conversation_id,
+            external_thread_id=conversation_id,
+            conversation_id=conversation_id,
+            reply_to_id=None,
+        )
+    is_dm = channel_type.lower() == "personal" or not channel.get("id")
 
     # For channel thread replies Teams may leave channelData.channel.id empty and
     # set conversation.id to a compound string:
@@ -202,6 +217,7 @@ def _teams_routing(message: dict[str, Any]) -> _TeamsRouting:
     return _TeamsRouting(
         is_dm=is_dm,
         is_thread_reply=bool(message.get("replyToId")),
+        channel_type=channel_type or ("personal" if is_dm else "channel"),
         channel_id=channel_id or None,
         external_channel_id=channel_id or conversation_id,
         # For channels the thread root is the message being replied to, or this
@@ -361,6 +377,7 @@ class TeamsMessageParser:
         tenant = payload_section(channel_data, "tenant")
         meta = self._build_metadata(
             is_thread_reply=routing.is_thread_reply,
+            channel_type=routing.channel_type,
             team_id=payload_text(team, "id") or None,
             team_aad_group_id=payload_text(team, "aadGroupId") or None,
             channel_id=routing.channel_id,
@@ -369,6 +386,13 @@ class TeamsMessageParser:
             reply_to_id=routing.reply_to_id,
             attachments=attachments,
         )
+        # Teams names a team channel's membership on some activities and not
+        # others; where it does, it settles whether the place is open to the
+        # team (``domain/place_privacy``).
+        channel = payload_section(channel_data, "channel")
+        membership = payload_first(channel, "membershipType", "type")
+        if membership:
+            meta[CHANNEL_MEMBERSHIP_KEY] = membership
         return ParsedInboundSurfaceEvent(
             platform=self.platform,
             conversation_type=routing.conversation_type,
@@ -467,6 +491,7 @@ class TeamsMessageParser:
         self,
         *,
         is_thread_reply: bool,
+        channel_type: str | None = None,
         team_id: str | None,
         team_aad_group_id: str | None,
         channel_id: str | None,
@@ -479,6 +504,7 @@ class TeamsMessageParser:
         # teams_get_recent_channel_messages) can access them via surface_metadata.
         meta: dict[str, Any] = {
             "is_thread_reply": is_thread_reply,
+            "channel_type": channel_type,
             "team_id": team_id,
             "team_aad_group_id": team_aad_group_id,
             "channel_id": channel_id,

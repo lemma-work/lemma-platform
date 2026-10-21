@@ -79,6 +79,11 @@ class Permissions:
     CONVERSATION_READ: ClassVar[str] = "conversation.read"
     CONVERSATION_WRITE: ClassVar[str] = "conversation.write"
 
+    CHANNEL_READ: ClassVar[str] = "channel.read"
+    CHANNEL_WRITE: ClassVar[str] = "channel.write"
+    CHANNEL_MANAGE: ClassVar[str] = "channel.manage"
+
+    CONTACT_READ: ClassVar[str] = "contact.read"
     CONTACT_MESSAGE: ClassVar[str] = "contact.message"
 
     CONNECTOR_USE: ClassVar[str] = "connector.use"
@@ -284,6 +289,30 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Create and update conversations",
     ),
     PermissionDefinition(
+        Permissions.CHANNEL_READ,
+        PermissionScope.POD,
+        "channel",
+        "Read the pod's channels the member may see",
+    ),
+    PermissionDefinition(
+        Permissions.CHANNEL_WRITE,
+        PermissionScope.POD,
+        "channel",
+        "Write in channels and start groups",
+    ),
+    PermissionDefinition(
+        Permissions.CHANNEL_MANAGE,
+        PermissionScope.POD,
+        "channel",
+        "Rename, archive and delete any group, and change its members",
+    ),
+    PermissionDefinition(
+        Permissions.CONTACT_READ,
+        PermissionScope.POD,
+        "contact",
+        "See the pod's contacts and their chats",
+    ),
+    PermissionDefinition(
         Permissions.CONTACT_MESSAGE,
         PermissionScope.POD,
         "contact",
@@ -343,6 +372,7 @@ POD_VIEWER_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.WORKFLOW_READ,
         Permissions.SCHEDULE_READ,
         Permissions.CONVERSATION_READ,
+        Permissions.CHANNEL_READ,
     }
 )
 POD_USER_PERMISSIONS: frozenset[str] = frozenset(
@@ -358,6 +388,7 @@ POD_USER_PERMISSIONS: frozenset[str] = frozenset(
         # pod-wide SCHEDULE_UPDATE/SCHEDULE_DELETE permissions that editors hold.
         Permissions.SCHEDULE_CREATE,
         Permissions.CONVERSATION_WRITE,
+        Permissions.CHANNEL_WRITE,
         Permissions.CONNECTOR_USE,
         Permissions.CONNECTOR_ACCOUNT_USE,
         Permissions.WEB_LOGIN_USE,
@@ -381,10 +412,16 @@ POD_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.WORKFLOW_UPDATE,
         Permissions.SCHEDULE_CREATE,
         Permissions.SCHEDULE_UPDATE,
+        # Any group's settings and roster, not only the ones they own: the
+        # same people who change the pod's agents and apps keep its rooms.
+        Permissions.CHANNEL_MANAGE,
         # Writing first to somebody outside the pod speaks for the pod, to a
         # person who did not ask, on a channel whose sender reputation the pod
         # shares. Writing in one's own conversations does not; this does.
         Permissions.CONTACT_MESSAGE,
+        # Who the pod's contacts are, and what they said to it, is theirs and
+        # the pod's -- not every member's. Those who answer for the pod see it.
+        Permissions.CONTACT_READ,
     }
 )
 POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
@@ -449,6 +486,12 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
         {Permissions.CONNECTOR_ACCOUNT_USE}
     ),
     Permissions.CONVERSATION_WRITE: frozenset({Permissions.CONVERSATION_READ}),
+    Permissions.CHANNEL_WRITE: frozenset({Permissions.CHANNEL_READ}),
+    Permissions.CHANNEL_MANAGE: frozenset(
+        {Permissions.CHANNEL_WRITE, Permissions.CHANNEL_READ}
+    ),
+    # Writing to a contact is done looking at who they are and what they said.
+    Permissions.CONTACT_MESSAGE: frozenset({Permissions.CONTACT_READ}),
     # Executing a workload requires reading its definition (an agent's
     # instructions, a function's source) to run it at all, so execute-only
     # grants must satisfy read checks. Read does NOT imply execute.
@@ -477,6 +520,10 @@ def pod_principal_may_hold(permission_id: str) -> bool:
     """Whether another pod may ever hold ``permission_id`` here.
 
     Reading, and running this pod's assistant -- the link itself. Nothing that
-    changes anything, whatever a grant row says.
+    changes anything, whatever a grant row says. Nor the pod's contacts: people
+    who wrote to this pod did not write to the pods it is linked to -- and
+    its channels carry what they said.
     """
+    if permission_id in (Permissions.CONTACT_READ, Permissions.CHANNEL_READ):
+        return False
     return permission_id.endswith(".read") or permission_id == Permissions.AGENT_EXECUTE

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { AttachIcon, CloseIcon, FileIcon, SendIcon } from "@/ui/icons";
-import { canSend, describeSize, offered, toAttachments, type Attachment } from "@/thread/attachments";
+import { canSend, describeSize, namePasted, offered, toAttachments, type Attachment } from "@/thread/attachments";
 
 /** A box to start a conversation from somewhere that is not one — Home, a
  *  bot's page. It holds no conversation of its own: the words and the files
@@ -13,8 +13,10 @@ import { canSend, describeSize, offered, toAttachments, type Attachment } from "
  *  Files take the same road as the words rather than being uploaded here:
  *  there is no `pod_cwd` to put them in until the conversation exists, and
  *  reading it off the conversation is the Chat tab's job. */
-export function AskBox({ placeholder, fill, onFilled, onAsk }: {
+export function AskBox({ placeholder, fill, onFilled, onAsk, model }: {
     placeholder: string;
+    /** The model the conversation it starts answers on, beside the paperclip. */
+    model?: ReactNode;
     /** Words put in the box from outside, e.g. a starter on Home. */
     fill?: { text: string; id: number } | null;
     onFilled?: () => void;
@@ -151,6 +153,7 @@ export function AskBox({ placeholder, fill, onFilled, onAsk }: {
                 >
                     <AttachIcon size={19} />
                 </button>
+                {model}
                 <textarea
                     ref={area}
                     rows={1}
@@ -165,7 +168,11 @@ export function AskBox({ placeholder, fill, onFilled, onAsk }: {
                         const files = Array.from(event.clipboardData.files);
                         if (files.length === 0) return;
                         event.preventDefault();
-                        offer(files);
+                        /* Named here: every clipboard image is called
+                           `image.png`, so two of them in one message would be
+                           one name, and a folder already holding one would
+                           have nowhere to put either. */
+                        offer(namePasted(files));
                     }}
                     onKeyDown={(event) => {
                         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {

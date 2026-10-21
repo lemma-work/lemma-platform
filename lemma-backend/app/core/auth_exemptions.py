@@ -51,6 +51,9 @@ SELF_AUTHENTICATED: tuple[str, ...] = (
     "/auth/cli/refresh",  # the CLI's refresh token is the credential
     # The provider's redirect back after OAuth; bound by the state parameter.
     "/connectors/connect-requests/oauth/callback",
+    # Slack's redirect back after Sign in with Slack; bound by the state, and
+    # the browser's session is only read, to refuse one other than the starter's.
+    "/surface-setup/slack/people/sign-in/callback",
     # Microsoft's redirect after a tenant admin consents; bound by the state.
     "/surfaces/teams/admin-consent/callback",
     # Platform webhooks; each handler verifies its platform's signature.
@@ -128,9 +131,10 @@ SIGN_IN_PATHS: dict[str, frozenset[str]] = {
 
 #: WebSocket handshakes that authenticate themselves (cookie, bearer, or the
 #: `access_token` query parameter a browser must use because it cannot set
-#: headers on an upgrade). Exempt on the websocket scope only. The datastore
-#: changes socket, `/pods/{pod_id}/datastore/changes`, is matched by
-#: `_is_datastore_changes_ws_path` because its prefix is a pod id.
+#: headers on an upgrade). Exempt on the websocket scope only. The pod live
+#: socket, `/pods/{pod_id}/live`, and its predecessor
+#: `/pods/{pod_id}/datastore/changes` are matched by `_is_pod_live_ws_path`
+#: because their prefix is a pod id.
 SELF_AUTHENTICATED_WEBSOCKETS: tuple[str, ...] = ("/workspace/browser/view",)
 
 #: Old paths of routes that moved under `/public/`, and the day each goes. The
@@ -170,14 +174,17 @@ def _is_surface_webhook_path(path: str) -> bool:
     return True
 
 
-def _is_datastore_changes_ws_path(path: str) -> bool:
-    """Match ``/pods/{pod_id}/datastore/changes`` (the changes websocket).
+_POD_LIVE_WS_TAILS = (["live"], ["datastore", "changes"])
 
-    The handler authenticates the session itself (cookie or bearer), so the
-    global HTTP auth dependency must let the handshake through.
+
+def _is_pod_live_ws_path(path: str) -> bool:
+    """Match ``/pods/{pod_id}/live`` and ``/pods/{pod_id}/datastore/changes``.
+
+    The handlers authenticate the session themselves (cookie or bearer), so
+    the global HTTP auth dependency must let the handshake through.
     """
     parts = path.strip("/").split("/")
-    if len(parts) != 4 or parts[0] != "pods" or parts[2:4] != ["datastore", "changes"]:
+    if len(parts) < 3 or parts[0] != "pods" or parts[2:] not in _POD_LIVE_WS_TAILS:
         return False
     try:
         UUID(parts[1])
@@ -213,9 +220,7 @@ def exemption_of(path: str, method: str) -> str | None:
 
 def is_self_authenticated_websocket(path: str) -> bool:
     """Whether a websocket handshake on this path authenticates itself."""
-    return _under_any(path, SELF_AUTHENTICATED_WEBSOCKETS) or (
-        _is_datastore_changes_ws_path(path)
-    )
+    return _under_any(path, SELF_AUTHENTICATED_WEBSOCKETS) or _is_pod_live_ws_path(path)
 
 
 __all__ = [

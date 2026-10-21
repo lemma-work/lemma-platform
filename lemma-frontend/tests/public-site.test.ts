@@ -13,6 +13,7 @@ import {
   settingsFromQuery,
 } from "../src/site/legacy-address.ts";
 import {
+  ROUTE_TEMPLATES,
   toTemplateUrl,
   toRouteTemplate,
 } from "../src/site/analytics/route-template.ts";
@@ -82,6 +83,11 @@ test("old links reach their resource rather than the default workspace", () => {
     legacyAddress(["profile", "usage"], new URLSearchParams()),
     "/t?settings=usage",
   );
+  assert.equal(
+    legacyAddress(["pod", "p", "notifications"], new URLSearchParams()),
+    "/t/p/channels",
+    "notifications became the channels' inbox",
+  );
   assert.equal(legacyAddress(["not-a-page"], new URLSearchParams()), null);
   assert.equal(settingsFromQuery("anything"), null);
 });
@@ -92,6 +98,8 @@ test("analytics never exports private workspace paths or link query payloads", (
     "/t/[[...podId]]",
   );
   assert.equal(toRouteTemplate("/d/private-share-code"), "/d/[code]");
+  /* The notifications page is gone: the inbox is under the channels now. */
+  assert.ok(!ROUTE_TEMPLATES.some((route) => route.includes("notifications")));
   const url = toTemplateUrl(
     "https://example.test/t/private/conversation/secret?remixSource=private#private",
   );

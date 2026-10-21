@@ -13,9 +13,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.modules.agent.domain.private_notes import (
+    ASKED_IN_LEMMA_KEY,
+    LEMMA_CHANNEL,
     PRIVATE_NOTE_KEY,
     PRIVATE_NOTE_LABEL,
+    asked_in_lemma,
     is_private_note,
+    privacy_of,
+    run_delivers_to_surface,
     run_is_private,
     run_metadata_for,
 )
@@ -44,6 +49,30 @@ def test_anything_short_of_true_is_an_ordinary_message(message_metadata):
     assert not is_private_note(message_metadata)
     assert run_metadata_for(message_metadata) == {"source": "user_message"}
     assert not run_is_private(run_metadata_for(message_metadata))
+
+
+def test_a_line_in_lemma_marks_its_run_as_asked_there():
+    """Its conversation may also be on WhatsApp; the run is not."""
+    metadata = run_metadata_for({"source": LEMMA_CHANNEL})
+
+    assert metadata == {"source": "user_message", ASKED_IN_LEMMA_KEY: True}
+    assert asked_in_lemma(metadata)
+    assert not run_delivers_to_surface(metadata)
+    assert not run_is_private(metadata), "asked in Lemma is not a private note"
+
+
+def test_the_run_that_carries_one_on_is_asked_in_lemma_too():
+    """A resume or a retry answers where the run it continues was asked."""
+    carried = privacy_of(run_metadata_for({"source": LEMMA_CHANNEL}))
+
+    assert carried == {ASKED_IN_LEMMA_KEY: True}
+
+
+def test_a_message_from_a_platform_delivers_there():
+    metadata = run_metadata_for({"source": "agent_surfaces"})
+
+    assert not asked_in_lemma(metadata)
+    assert run_delivers_to_surface(metadata)
 
 
 def test_the_history_tells_the_model_the_note_was_for_it_alone():

@@ -10,6 +10,7 @@ import type { ScheduleRunListResponse } from '../models/ScheduleRunListResponse.
 import type { ScheduleRunResponse } from '../models/ScheduleRunResponse.js';
 import type { ScheduleRunStatus } from '../models/ScheduleRunStatus.js';
 import type { ScheduleType } from '../models/ScheduleType.js';
+import type { TriggerSkipListResponse } from '../models/TriggerSkipListResponse.js';
 import type { UpdateScheduleRequest } from '../models/UpdateScheduleRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
@@ -238,6 +239,39 @@ export class SchedulesService {
                 'pod_id': podId,
                 'schedule_id': scheduleId,
                 'run_id': runId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Schedule Skips
+     * What the trigger let pass without firing -- e.g. the changes of a bulk
+     * write or an import it is set to skip -- newest first.
+     * @param podId
+     * @param scheduleId
+     * @param limit
+     * @param pageToken
+     * @returns TriggerSkipListResponse Successful Response
+     * @throws ApiError
+     */
+    public static scheduleSkipList(
+        podId: string,
+        scheduleId: string,
+        limit: number = 50,
+        pageToken?: (string | null),
+    ): CancelablePromise<TriggerSkipListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/schedules/{schedule_id}/skips',
+            path: {
+                'pod_id': podId,
+                'schedule_id': scheduleId,
+            },
+            query: {
+                'limit': limit,
+                'page_token': pageToken,
             },
             errors: {
                 422: `Validation Error`,

@@ -104,10 +104,12 @@ async def record_fire(
     run_id: str | None = None,
     error: str | None = None,
 ) -> None:
-    """Stamp the outcome of one fire onto the schedule."""
-    await ScheduleRepository(uow).record_fire(
-        schedule_id, status=status, run_id=run_id, error=error
-    )
+    """No longer writes anything: a schedule's last fire is read from its runs.
+
+    Kept for the workflow module's schedule-start path until it moves onto the
+    work runtime; the run row it already wrote says everything this did.
+    """
+    del uow, schedule_id, status, run_id, error
 
 
 async def record_pre_dispatch_failure(

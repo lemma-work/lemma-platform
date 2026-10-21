@@ -127,8 +127,22 @@ def get_surface(
 @app.command("upsert")
 def upsert_surface(
     ctx: typer.Context,
-    platform: str = typer.Argument(..., help=_PLATFORM_HELP),
+    platform: str = typer.Argument(
+        ...,
+        help=(
+            "A platform, meaning the agent's surface on it, or a surface name "
+            "(see `lemma surfaces list`). Platforms: " + _PLATFORM_HELP
+        ),
+    ),
     pod: str | None = typer.Option(None, "--pod"),
+    name: str | None = typer.Option(
+        None,
+        "--name",
+        help=(
+            "The surface to address, when it is not named for its platform "
+            "(e.g. resend-assistant). PLATFORM is then its platform."
+        ),
+    ),
     default_agent_name: str | None = typer.Option(
         None, "--agent", "--agent-name", help="Default agent that handles messages."
     ),
@@ -149,11 +163,13 @@ def upsert_surface(
         readable=True,
     ),
 ) -> None:
-    """Create or update the surface for a platform (one surface per platform per pod).
+    """Create or update a surface: the agent's surface on a platform, or one by name.
 
-    A surface is unique per pod+platform, so this single command covers create,
-    config/agent/account edits, and enable/disable. Only the fields you pass are
-    applied to an existing surface.
+    An agent reaches a platform in one place, so `upsert resend` changes the
+    mailbox the agent already has (every agent is given one, named
+    `resend-<agent>`) rather than refusing to make a second. One command covers
+    create, config/agent/account edits, and enable/disable. Only the fields you
+    pass are applied to an existing surface.
     """
     state = state_from_ctx(ctx)
     payload = _surface_payload(
@@ -166,6 +182,8 @@ def upsert_surface(
     )
     if enabled is not None:
         payload["is_enabled"] = enabled
+    if name:
+        payload["name"] = name
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).surfaces.upsert(

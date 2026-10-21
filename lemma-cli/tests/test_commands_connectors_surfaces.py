@@ -71,9 +71,9 @@ def _make_surfaces_client_and_captured():
     return FakeClient(), captured
 
 
-def _patch_surfaces(monkeypatch, client, output="pretty"):
+def _patch_surfaces(monkeypatch, client, output="pretty", pod="pod-1"):
     state = SimpleNamespace(
-        config={"_runtime": {"pod": "pod-1"}, "defaults": {"org_id": "org-1"}},
+        config={"_runtime": {"pod": pod}, "defaults": {"org_id": "org-1"}},
         output=output,
         full=False,
     )
@@ -243,3 +243,138 @@ def test_telegram_setup_status_dispatches_setup_id(monkeypatch):
     assert captured["status_setup_id"] == "setup-1"
     payload = json.loads(result.stdout)
     assert payload["bot_username"] == "acme_ops_bot"
+
+
+# ---------------------------------------------------------------------------
+# `surfaces upsert` against the mailbox every agent is given
+# ---------------------------------------------------------------------------
+
+_POD_ID = "01a15c8a-6727-742d-a61f-35bae06d7143"
+
+
+class _PodWithAssistantMailbox:
+    """The real SDK's transport seam, answering as the backend does.
+
+    The pod's assistant holds one Resend surface, ``resend-assistant``, from
+    pod creation. Anything else named is not found, and creating a second
+    Resend surface for the same agent is refused with the name it already has.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def call(self, endpoint, *path_args, **kwargs):
+        from lemma_sdk.errors import api_error
+        from lemma_sdk.openapi_client.api.agent_surfaces import (
+            agent_surface_create,
+            agent_surface_update,
+        )
+
+        body = kwargs["body_model"].from_dict(kwargs["body"]).to_dict()
+        if endpoint is agent_surface_update:
+            name = path_args[1]
+            self.calls.append(("PATCH", name, body))
+            if name != "resend-assistant":
+                raise api_error(404, f"Agent surface '{name}' not found")
+            return {"name": name, "platform": "RESEND", "config": body["config"]}
+        assert endpoint is agent_surface_create
+        self.calls.append(("POST", body["name"], body))
+        raise api_error(
+            409,
+            "This agent already has a Resend surface ('resend-assistant').",
+            code="AGENT_SURFACE_AGENT_PLATFORM_CONFLICT",
+            details={
+                "conflicting_surface": {"pod_id": _POD_ID, "name": "resend-assistant"}
+            },
+        )
+
+
+def _patch_real_surfaces(monkeypatch):
+    from lemma_sdk.resources.surfaces import PodSurfaces
+
+    transport = _PodWithAssistantMailbox()
+
+    class FakeClient:
+        def pod(self, pod_id):
+            return SimpleNamespace(surfaces=PodSurfaces(transport, pod_id=pod_id))
+
+    _patch_surfaces(monkeypatch, FakeClient(), output="json", pod=_POD_ID)
+    return transport
+
+
+_CONTACTS_ON = '{"config": {"contacts": {"answer": "anyone"}}}'
+
+
+def test_upsert_resend_switches_contacts_on_the_agents_existing_mailbox(monkeypatch):
+    """QA #4: `upsert resend` came back 409 "name the surface resend-assistant",
+    because no surface is called `resend` and the agent already has a mailbox.
+    Addressed by platform it means that mailbox, so it is the one changed --
+    and again, identically, the second time."""
+    transport = _patch_real_surfaces(monkeypatch)
+
+    for _ in range(2):
+        result = runner.invoke(
+            app,
+            [
+                "--json",
+                "--pod",
+                _POD_ID,
+                "surfaces",
+                "upsert",
+                "resend",
+                "-d",
+                _CONTACTS_ON,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["name"] == "resend-assistant"
+
+    assert transport.calls[-1] == (
+        "PATCH",
+        "resend-assistant",
+        {"config": {"contacts": {"answer": "anyone"}}},
+    )
+
+
+def test_upsert_addresses_the_surface_the_409_named(monkeypatch):
+    """The other half of QA #4: doing what the refusal said -- naming the
+    surface `resend-assistant` -- gave the same 409, because the name was
+    dropped and `resend` was created again. Whether by `--name` or in the
+    payload, the named surface is what is updated, and nothing is created."""
+    transport = _patch_real_surfaces(monkeypatch)
+
+    by_flag = runner.invoke(
+        app,
+        [
+            "--json",
+            "--pod",
+            _POD_ID,
+            "surfaces",
+            "upsert",
+            "resend",
+            "--name",
+            "resend-assistant",
+            "-d",
+            _CONTACTS_ON,
+        ],
+    )
+    in_payload = runner.invoke(
+        app,
+        [
+            "--json",
+            "--pod",
+            _POD_ID,
+            "surfaces",
+            "upsert",
+            "resend",
+            "-d",
+            '{"name": "resend-assistant", "config": {"contacts": {"answer": "anyone"}}}',
+        ],
+    )
+
+    assert by_flag.exit_code == 0, by_flag.output
+    assert in_payload.exit_code == 0, in_payload.output
+    assert [(verb, name) for verb, name, _ in transport.calls] == [
+        ("PATCH", "resend-assistant"),
+        ("PATCH", "resend-assistant"),
+    ]

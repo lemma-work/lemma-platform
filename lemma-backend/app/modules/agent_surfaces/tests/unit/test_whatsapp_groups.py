@@ -35,6 +35,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.group_updates import (
     whatsapp_group_updates,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.parser import WhatsAppMessageParser
+from app.modules.agent_surfaces.domain.reply_targets import WhatsAppReplyTarget
 from app.modules.agent_surfaces.platforms.whatsapp.payloads import whatsapp_recipient
 from app.modules.agent_surfaces.platforms.whatsapp.service import (
     WhatsAppPlatformService,
@@ -192,7 +193,7 @@ def test_an_at_mention_is_the_whole_number(text, expected):
 
 def test_a_group_reply_never_falls_back_to_the_senders_number():
     recipient = whatsapp_recipient(
-        {"group_id": GROUP, "sender_wa_id": "16505551234"},
+        WhatsAppReplyTarget(group_id=GROUP, sender_wa_id="16505551234"),
         fallback_wa_id="16505551234",
     )
 
@@ -201,7 +202,7 @@ def test_a_group_reply_never_falls_back_to_the_senders_number():
 
 
 def test_a_private_reply_still_goes_to_the_person():
-    recipient = whatsapp_recipient({}, fallback_wa_id="16505551234")
+    recipient = whatsapp_recipient(WhatsAppReplyTarget(), fallback_wa_id="16505551234")
 
     assert recipient is not None
     assert (recipient.to, recipient.recipient_type) == ("16505551234", "individual")
@@ -432,6 +433,7 @@ def test_a_whatsapp_group_is_named_from_the_pods_record_of_it():
     from app.modules.agent_surfaces.services.outsiders import named_after
 
     group = SurfaceGroup(
+        channel_id=uuid4(),
         pod_id=uuid4(),
         surface_id=uuid4(),
         platform="WHATSAPP",

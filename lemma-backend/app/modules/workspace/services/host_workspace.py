@@ -64,16 +64,63 @@ class LinkTransport:
         params: dict[str, object],
         deadline_at: datetime,
     ) -> dict[str, object]:
-        from app.modules.agent.contracts.host_execution import AgentHostOpError
-
-        try:
-            return await self._link().request(
+        return await self._refusing(
+            self._link().request(
                 host_id=host_id,
                 workspace=workspace,
                 method=method,
                 params=params,
                 deadline_at=deadline_at,
             )
+        )
+
+    async def send(
+        self,
+        *,
+        host_id: UUID,
+        workspace: UUID,
+        method: str,
+        params: dict[str, object],
+        data: bytes,
+        deadline_at: datetime,
+    ) -> dict[str, object]:
+        return await self._refusing(
+            self._link().send(
+                host_id=host_id,
+                workspace=workspace,
+                method=method,
+                params=params,
+                data=data,
+                deadline_at=deadline_at,
+            )
+        )
+
+    async def receive(
+        self,
+        *,
+        host_id: UUID,
+        workspace: UUID,
+        method: str,
+        params: dict[str, object],
+        max_bytes: int,
+        deadline_at: datetime,
+    ) -> tuple[dict[str, object], bytes]:
+        return await self._refusing(
+            self._link().receive(
+                host_id=host_id,
+                workspace=workspace,
+                method=method,
+                params=params,
+                max_bytes=max_bytes,
+                deadline_at=deadline_at,
+            )
+        )
+
+    async def _refusing[T](self, call: Awaitable[T]) -> T:
+        from app.modules.agent.contracts.host_execution import AgentHostOpError
+
+        try:
+            return await call
         except AgentHostOpError as exc:
             raise HostOpRefused(exc.kind, exc.message, retryable=exc.retryable) from exc
 

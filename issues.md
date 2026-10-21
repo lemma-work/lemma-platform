@@ -260,6 +260,22 @@ a name could mean. CI's unit lane — wider than the local `-m unit` lane —
 failed on the bundle test, which is what made the bundle path visible at all.
 The widening was reverted; this is what it had walked into.
 
+### DEV-SURF-004 — A row from a page with no chat names no contact
+**Violates:** PS-SURF-049
+**Severity:** medium
+**Where:** `lemma-backend/app/modules/agent_surfaces/services/web_chat.py:353`
+**Required:** "The system shall make an anonymous visitor a contact of the pod
+the first time they write something -- a message, a row".
+**Actual:** the public rows endpoint accepts a request with no visitor session.
+`WebChat.add_visitor_row` then skips `_writer` and stores the row with
+`contact_id=None`, so the visitor is never made a contact. Found in review of
+pull request #992.
+**Why it matters:** a form embedded without the chat stores answers nobody can
+export, forget or follow up as the person who sent them.
+**Fix:** open an anonymous session -- and with it the contact -- on a row write
+that arrives without one, and hand its secret back to the page so a later
+message is the same visitor.
+
 ### DEV-DESK-001 — The viewer's VNC server polls the whole screen, by a flag nobody explained
 **Violates:** nothing written down. No statement bounds what a sandbox may spend
 while somebody watches it.

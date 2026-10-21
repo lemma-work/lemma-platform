@@ -144,6 +144,10 @@ async def test_setup_confirmation_names_what_was_saved():
     text = blocks[0]["text"]
     assert "the pod assistant" in text
     assert "#sales" in text
+    # The bot says it, under whatever name its app has: never "Lemma", which
+    # an app made from an agent's own manifest is not, and in one voice.
+    assert "Mention me here and I'll reply." in text
+    assert "Lemma" not in text
 
 
 async def test_home_leads_with_value_then_configuration():

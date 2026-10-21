@@ -269,3 +269,45 @@ async def test_any_other_double_failure_is_retryable() -> None:
     with pytest.raises(DecisionUnavailableError) as raised:
         await service.decide(REQUEST, CALLER)
     assert raised.value.reason == "provider_error"
+
+
+class _TooManyClients(Exception):
+    sqlstate = "53300"
+
+
+async def test_lemmas_database_failing_the_usage_checkpoint_is_not_the_provider() -> (
+    None
+):
+    """The provider answered, or failed, and the usage checkpoint could not
+    reach Lemma's database: that is the database being unavailable -- retried
+    by the caller's work item -- never "the provider did not answer"."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.core.infrastructure.db.transient_errors import is_database_unavailable
+
+    down = OperationalError("INSERT", {}, _TooManyClients("too many clients"))
+
+    @asynccontextmanager
+    async def failing_checkpoint(_: UsageExecutionContext) -> AsyncIterator[object]:
+        try:
+            yield object()
+        except DecisionUnavailableError as failure:
+            raise BaseExceptionGroup(
+                "Execution and usage finalization failed", [failure, down]
+            ) from None
+        raise down
+
+    for provider in (
+        _Provider(GOOD),
+        _Provider(raises=DecisionUnavailableError("transport")),
+    ):
+        service = DecisionService(
+            settings=DecisionsSettings(),
+            provider=lambda _, provider=provider: provider,
+            limiter=_Limiter(),
+            metering=failing_checkpoint,
+        )
+        with pytest.raises(BaseException) as raised:
+            await service.decide(REQUEST, CALLER)
+        assert not isinstance(raised.value, DecisionUnavailableError)
+        assert is_database_unavailable(raised.value)

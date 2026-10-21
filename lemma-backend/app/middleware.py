@@ -13,6 +13,7 @@ import uuid
 from opentelemetry import metrics
 from fastapi.responses import JSONResponse
 
+from app.core.api.exception_handlers import ERROR_REQUEST_ID
 from app.core.domain.errors import PayloadTooLargeError
 from starlette.types import Scope
 
@@ -129,11 +130,15 @@ class RequestObserverMiddleware:
             request_id = uuid.uuid4().hex
 
         correlation_id = uuid.uuid7()
+        # Set on the scope the server handed in, not only on the copy below: an
+        # unhandled exception becomes its 500 in Starlette's outermost layer,
+        # which reads that scope -- so the id this layer chose is otherwise
+        # invisible to the one error response that most needs it.
+        scope.setdefault("state", {})[ERROR_REQUEST_ID] = request_id
         scope = dict(scope)
         scope["headers"] = [
             (key, value) for key, value in headers if key.lower() != self.HEADER
         ] + [(self.HEADER, request_id.encode("ascii"))]
-        scope.setdefault("state", {})
 
         started_at = time.perf_counter()
         response_started_at: float | None = None

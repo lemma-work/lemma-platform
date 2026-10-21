@@ -14,20 +14,44 @@ it("preserves HTTP and stream failure reasons consistently", () => {
 });
 
 it('a runtime notice survives the status frame it arrives on', () => {
-  // The Agent Host writes these with a human sentence in `detail`, and the
-  // backend forwards them as STATUS frames. `normalizeStatus` only recognises
-  // the twelve run-lifecycle words, so every one of these normalised to
-  // undefined and the sentence was never read by anything.
+  // The shape the backend forwards a host notice in: `status` names the frame,
+  // `notice` the kind, `detail` the sentence. `normalizeStatus` only
+  // recognises the run-lifecycle words, so before this every one of these
+  // normalised to undefined and the sentence was never read by anything.
   expect(parseAssistantStreamEvent({
     type: 'status',
     data: {
-      status: 'model_unavailable',
-      detail: 'This agent no longer offers gpt-5. It answered on its own default.',
+      status: 'config_update',
+      notice: 'model_unavailable',
+      detail: 'Claude Code no longer offers gpt-5. It ran on its default.',
+      option: 'model',
     },
   })).toEqual({
-    notice: 'This agent no longer offers gpt-5. It answered on its own default.',
+    notice: 'Claude Code no longer offers gpt-5. It ran on its default.',
     noticeKind: 'model_unavailable',
   });
+});
+
+it('a notice in the older nested shape still reads', () => {
+  // Earlier backends forwarded the host's own `{status, detail}` inside
+  // `detail`, under a `config_update` frame.
+  expect(parseAssistantStreamEvent({
+    type: 'status',
+    data: {
+      status: 'config_update',
+      detail: { status: 'session_lost', detail: 'The agent lost its session and started a new one.' },
+    },
+  })).toEqual({
+    notice: 'The agent lost its session and started a new one.',
+    noticeKind: 'session_lost',
+  });
+});
+
+it('a notice with no kind of its own falls back to the frame status', () => {
+  expect(parseAssistantStreamEvent({
+    type: 'status',
+    data: { status: 'model_unavailable', detail: 'This agent no longer offers gpt-5.' },
+  })).toEqual({ notice: 'This agent no longer offers gpt-5.', noticeKind: 'model_unavailable' });
 });
 
 it('a lifecycle status is still a status and not a notice', () => {
@@ -40,4 +64,5 @@ it('a lifecycle status is still a status and not a notice', () => {
 it('a status frame with nothing to say produces nothing', () => {
   expect(parseAssistantStreamEvent({ type: 'status', data: { status: 'config_update' } })).toEqual({});
   expect(parseAssistantStreamEvent({ type: 'status', data: { detail: '   ' } })).toEqual({});
+  expect(parseAssistantStreamEvent({ type: 'status', data: { status: 'config_update', notice: 'session_lost', detail: { detail: '' } } })).toEqual({});
 });

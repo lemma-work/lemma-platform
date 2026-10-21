@@ -25,14 +25,13 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     WhatsAppSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms import common
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import note_partial_delivery
 from app.modules.agent_surfaces.platforms.send_guard import unsendable
 from app.modules.agent_surfaces.platforms.whatsapp import media
 from app.modules.agent_surfaces.platforms.whatsapp.indicators import (
     acknowledge_inbound,
 )
-from app.modules.agent_surfaces.platforms.whatsapp.sent_messages import remember_sent
 from app.core.config import reveal_secret
 from app.modules.agent_surfaces.domain.credentials import (
     CredentialsLike,
@@ -126,7 +125,9 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
         event: ParsedInboundSurfaceEvent,
         message: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> str | None:
+        """Send the message; the id of its first part, which is what Meta's
+        later status report about it names."""
         phone_number_id = self._arrival_number(event)
         recipient = recipient_of(event)
         if recipient is None or not phone_number_id or not self._access_token:
@@ -142,12 +143,12 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
         bodies = whatsapp_message_bodies(message)
         interactive = _interactive_reply(event, message, bodies, metadata, recipient)
         if interactive is not None:
-            await self._client.send_interactive(
+            return await self._client.send_interactive(
                 phone_number_id=phone_number_id,
                 to=recipient.to,
                 interactive=interactive,
             )
-            return
+        first: str | None = None
         for index, body in enumerate(bodies):
             try:
                 message_id = await self._client.send_message_payload(
@@ -160,8 +161,8 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
                         "text": {"body": body},
                     },
                 )
-                await remember_sent((metadata or {}).get("notification_id"), message_id)
-            except PLATFORM_TRANSPORT_ERRORS:
+                first = first or message_id
+            except platform_transport_errors():
                 if index:
                     # The person already has the first part. The caller sees
                     # this as "not delivered" and there is no rung below plain
@@ -175,6 +176,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
                         exc_info=True,
                     )
                 raise
+        return first
 
     async def acknowledge_interaction(
         self,

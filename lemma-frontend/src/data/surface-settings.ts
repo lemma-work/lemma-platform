@@ -1,6 +1,6 @@
 import type { Surface } from "./types";
 import { isPodDefaultAgent } from "./agent-names";
-import { isGroupPlatform } from "./groups";
+import { isGroupPlatform } from "@/channels/sources";
 import type { AgentSurfaceResponse, SurfaceContactsConfig, SurfaceUpdateRequest } from "lemma-sdk";
 
 export interface SurfaceDraft {

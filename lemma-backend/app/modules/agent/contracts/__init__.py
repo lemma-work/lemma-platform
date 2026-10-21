@@ -1,7 +1,7 @@
 """Stable agent DTOs shared with delivery surfaces."""
 
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.errors import AgentNotFoundError
+from app.modules.agent.domain.errors import AgentNotFoundError, RuntimeUnavailableError
 from app.modules.agent.contracts.pod_summaries import (
     PodAgentSummary,
     list_agent_summaries_by_pod,
@@ -29,6 +29,10 @@ __all__ = [
     # that means "this agent is not here". `get_agent_by_name` authorizes after
     # the lookup, so catching everything reads a denial as absence.
     "AgentNotFoundError",
+    # A turn refused before its run exists because the teammate's model cannot
+    # run for this person -- most often another member's own runtime. A surface
+    # says why instead of retrying a refusal that will not change.
+    "RuntimeUnavailableError",
     "PodAgentSummary",
     "list_agent_summaries_by_pod",
     "AgentEvent",

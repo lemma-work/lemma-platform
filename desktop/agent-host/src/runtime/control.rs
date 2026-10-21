@@ -7,8 +7,8 @@ use crate::link::protocol::RefusedUpdate;
 use crate::link::{LinkHandle, Push};
 
 use super::{
-    CANCEL_KILL_AFTER, CommandKind, ControlBatch, Duration, REFUSED_HEARTBEAT_BACKOFF, RunState,
-    SHUTDOWN_GRACE, TargetWorker, mpsc, terminal_failure,
+    CANCEL_KILL_AFTER, Checkpoint, CommandKind, ControlBatch, Duration, REFUSED_HEARTBEAT_BACKOFF,
+    RunState, SHUTDOWN_GRACE, TargetWorker, Uuid, mpsc, terminal_failure,
 };
 
 impl TargetWorker {
@@ -128,7 +128,8 @@ impl TargetWorker {
         self.flusher.lock().await.drain(link).await.map(|_| ())
     }
 
-    /// Collect run tasks that have finished, without waiting on any.
+    /// Collect run tasks that have finished, without waiting on any, and end
+    /// any run one of them left unfinished.
     pub(crate) fn reap_finished_now(&mut self) {
         let finished = self
             .active_runs
@@ -137,6 +138,7 @@ impl TargetWorker {
             .collect::<Vec<_>>();
         for run_id in finished {
             if let Some(active) = self.active_runs.remove(&run_id) {
+                let asked_to_stop = *active.cancel.borrow();
                 // Finished, so the join is already resolved.
                 match active.handle.join().now_or_never() {
                     Some(Err(error)) if !error.is_cancelled() => {
@@ -147,6 +149,14 @@ impl TargetWorker {
                     }
                     _ => {}
                 }
+                // A task that ends normally has written the run's terminal
+                // state. One that returned an error -- a journal write it
+                // could not make -- or panicked has not, and the run stayed
+                // ACCEPTED or RUNNING in the journal: its liveness checkpoint
+                // went up on every heartbeat, its lease never lapsed, and the
+                // turn in Lemma never ended. Checked for every finished task,
+                // so whatever stopped one, its run gets a final state.
+                self.orphaned_runs.insert(run_id, asked_to_stop);
             }
             // The task is provably gone, so nothing can answer a request it
             // left parked -- including one it parked while being aborted.
@@ -154,6 +164,63 @@ impl TargetWorker {
             // Its terminal checkpoint is in the journal; say so now.
             self.events_ready.notify_one();
         }
+        self.settle_orphaned_runs();
+    }
+
+    /// End every run whose task stopped without ending it, keeping any the
+    /// journal will not yet take for the next pass.
+    pub(crate) fn settle_orphaned_runs(&mut self) {
+        for (run_id, asked_to_stop) in std::mem::take(&mut self.orphaned_runs) {
+            match self.settle_orphaned_run(run_id, asked_to_stop) {
+                Ok(false) => {}
+                Ok(true) => self.events_ready.notify_one(),
+                Err(error) => {
+                    tracing::error!(
+                        %run_id,
+                        %error,
+                        "could not end a run its task left unfinished; trying again"
+                    );
+                    self.orphaned_runs.insert(run_id, asked_to_stop);
+                }
+            }
+        }
+    }
+
+    /// Give one run its final state, if it has none. The state is the one the
+    /// run's own failure path would have chosen: unknown once the prompt may
+    /// have reached the agent, since a turn that may have acted is not one
+    /// Lemma can safely repeat.
+    fn settle_orphaned_run(&self, run_id: Uuid, asked_to_stop: bool) -> anyhow::Result<bool> {
+        let Some(run) = self.journal.get_run(self.target.target_id, run_id)? else {
+            return Ok(false);
+        };
+        if run.state.is_terminal() {
+            return Ok(false);
+        }
+        let (state, message) = if run.checkpoint == Checkpoint::DispatchIntent {
+            (
+                RunState::DispatchUnknown,
+                "the Agent Host lost this run as its prompt was sent; the turn was not repeated",
+            )
+        } else if asked_to_stop {
+            (
+                RunState::Cancelled,
+                "run cancelled by Lemma; the Agent Host lost the run while it stopped",
+            )
+        } else if run.prompt_dispatched {
+            (
+                RunState::DispatchUnknown,
+                "the Agent Host lost this run after its prompt was sent; the turn was not repeated",
+            )
+        } else {
+            (
+                RunState::Failed,
+                "the Agent Host lost this run before its prompt was sent; Lemma may safely retry",
+            )
+        };
+        tracing::error!(%run_id, state = ?state, "ending a run its task left unfinished");
+        self.end_interrupted_run(&run, state, message)?;
+        Ok(true)
     }
 
     /// Stop, giving every run in flight the chance to end its own turn.

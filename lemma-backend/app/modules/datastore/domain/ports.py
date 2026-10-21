@@ -27,18 +27,26 @@ from app.modules.datastore.domain.document_processing import (
     DocumentExtraction,
     IndexingMetrics,
 )
-from app.modules.datastore.domain.file_projections import DispatchableFileRef
 from app.modules.datastore.domain.row_security import RowPrincipal
-from app.modules.datastore.domain.search_scope import SearchFileScope
+from app.modules.datastore.domain.search_scope import (
+    SearchablePartition,
+    SearchFileScope,
+)
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
-    FileStatus,
     SearchMethod,
 )
 
 if TYPE_CHECKING:
+    from app.modules.datastore.changes.capture import ChangeCapture
     from app.core.domain.events import DomainEvent
+    from app.modules.datastore.domain.live import (
+        ChangePosition,
+        LivePage,
+        LiveTable,
+        RowPayload,
+    )
     from app.modules.datastore.domain.record_entities import RecordEntity
 
 
@@ -188,47 +196,16 @@ class DatastoreFileRepositoryPort(Protocol):
         file_ids: Sequence[UUID],
     ) -> set[UUID]: ...
 
-    async def list_pending_dispatch_candidates(
+    async def searchable_partition(
         self,
         *,
-        per_pod_limit: int,
-        global_limit: int,
-    ) -> Sequence[DispatchableFileRef]: ...
-
-    async def list_stale_recovery_candidates(
-        self,
-        *,
-        pending_cutoff: datetime,
-        processing_cutoff: datetime,
-        failed_cutoff: datetime | None = None,
-        max_attempts: int = 3,
-        limit: int = 500,
-    ) -> Sequence[DispatchableFileRef]: ...
-
-    async def list_exhausted_recovery_candidates(
-        self,
-        *,
-        processing_cutoff: datetime,
-        failed_cutoff: datetime | None = None,
-        max_attempts: int = 3,
-        limit: int = 500,
-    ) -> Sequence[DispatchableFileRef]: ...
-
-    async def bulk_update_status(
-        self,
-        *,
-        file_ids: Sequence[UUID],
-        status: FileStatus,
-    ) -> int: ...
-
-    async def bulk_mark_failed_permanent(
-        self,
-        *,
-        file_ids: Sequence[UUID],
-        error: str,
-    ) -> int: ...
-
-    async def mark_failed_permanent(self, file_id: UUID, *, error: str) -> bool: ...
+        pod_id: UUID,
+        ctx: Context,
+        walk_ancestors: bool,
+        timeout_ms: int,
+        limit: int | None = None,
+        readable_only: bool = False,
+    ) -> SearchablePartition: ...
 
 
 class DatastoreSchemaPort(Protocol):
@@ -286,23 +263,6 @@ class DatastoreSchemaPort(Protocol):
     async def set_rls_context(self, session, principal: RowPrincipal) -> None: ...
 
 
-class RecordEventFactory(Protocol):
-    """Builds the domain event for a row the repository has just written.
-
-    Only the repository knows which columns a statement actually wrote and what
-    they held beforehand, so it hands those to the factory rather than letting
-    the caller infer them from what was submitted. Operations with no prior
-    image — inserts and deletes — call it with the row alone.
-    """
-
-    def __call__(
-        self,
-        record: "RecordEntity",
-        changed: list[str] | None = None,
-        previous: dict[str, Any] | None = None,
-    ) -> "DomainEvent": ...
-
-
 class DatastoreRecordRepositoryPort(Protocol):
     async def create_record(
         self,
@@ -310,7 +270,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         data: dict,
         user_id: UUID,
         *,
-        event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture,
     ): ...
 
     async def bulk_create_records(
@@ -319,7 +279,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         records: list[dict],
         user_id: UUID,
         *,
-        event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture,
     ) -> int: ...
 
     async def bulk_upsert_records(
@@ -328,7 +288,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         records: list[dict],
         user_id: UUID,
         *,
-        event_factory: RecordEventFactory | None = None,
+        changes: ChangeCapture,
     ) -> int: ...
 
     async def get_record(
@@ -338,7 +298,6 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
-        event_factory: RecordEventFactory | None = None,
     ): ...
 
     async def execute_readonly_query(
@@ -365,8 +324,8 @@ class DatastoreRecordRepositoryPort(Protocol):
         data: dict,
         user_id: UUID,
         *,
+        changes: ChangeCapture,
         enforce_user_scope: bool = True,
-        event_factory: RecordEventFactory | None = None,
         expected_updated_at: datetime | None = None,
     ): ...
 
@@ -376,8 +335,8 @@ class DatastoreRecordRepositoryPort(Protocol):
         record_id,
         user_id: UUID,
         *,
+        changes: ChangeCapture,
         enforce_user_scope: bool = True,
-        event_factory: RecordEventFactory | None = None,
     ) -> "RecordEntity": ...
 
 
@@ -469,6 +428,8 @@ class DatastoreSearchPort(Protocol):
         file_id: UUID,
         chunks: list[dict],
         metadata: dict | None = None,
+        *,
+        sha256: str | None = None,
     ) -> IndexingMetrics: ...
 
     async def remove_file(self, file_id: UUID) -> None: ...
@@ -481,6 +442,8 @@ class DatastoreSearchPort(Protocol):
         path: str,
         parent_path: str | None,
     ) -> None: ...
+
+    async def rename_folder(self, previous_path: str, new_path: str) -> bool: ...
 
     async def search(
         self,
@@ -507,3 +470,43 @@ class DatastoreReindexQueuePort(Protocol):
         metadata: dict | None,
         defer_until: datetime | None = None,
     ) -> bool: ...
+
+
+class LiveChangeFeedPort(Protocol):
+    """The pod change log, as the live hub reads it."""
+
+    async def horizon(self, pod_id: UUID) -> str:
+        """A cursor at the log's current readable end."""
+
+    async def read(
+        self,
+        pod_id: UUID,
+        cursor: str,
+        *,
+        table_ids: Sequence[UUID] | None,
+        limit: int,
+    ) -> "LivePage":
+        """Changes after ``cursor``; raises ``LiveCursorExpired`` past the window."""
+
+    async def rows(
+        self, pod_id: UUID, table_id: UUID, record_ids: Sequence[str]
+    ) -> "dict[str, RowPayload]":
+        """Current rows by record id; a record that no longer exists is absent."""
+
+    def position(self, cursor: str) -> "ChangePosition":
+        """Decode a cursor; raises ``LiveCursorExpired`` for one that is not ours."""
+
+
+class LiveAccessPort(Protocol):
+    """Who may watch which table, asked at subscribe and on an authz epoch bump."""
+
+    async def table(self, user_id: UUID, pod_id: UUID, table_name: str) -> "LiveTable":
+        """The table if the user may read it; raises ``LiveAccessDenied``."""
+
+    async def readable_tables(self, user_id: UUID, pod_id: UUID) -> "list[LiveTable]":
+        """Every table the user may read; raises ``LiveAccessDenied`` for the pod."""
+
+    async def still_readable(
+        self, user_id: UUID, pod_id: UUID, table_ids: Sequence[UUID]
+    ) -> "dict[UUID, str | None]":
+        """Per table: ``None`` while readable, else an ``UnsubscribedReason``."""

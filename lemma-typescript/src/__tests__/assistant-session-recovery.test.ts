@@ -432,3 +432,160 @@ describe("resuming after a queued approval", () => {
     expect(harness.messagesList).toHaveBeenCalledOnce();
   });
 });
+
+describe("a run that ends waiting on the agent's own work", () => {
+  function pausingStream(waitingOnWork: boolean): ReadableStream<Uint8Array> {
+    const encoder = new TextEncoder();
+    const data = { status: "COMPLETED", conversation_status: "WAITING", waiting_on_work: waitingOnWork };
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          `data: ${JSON.stringify({ type: "completed", agent_run_id: "run-1", data })}\n\n`,
+        ));
+        controller.close();
+      },
+    });
+  }
+
+  async function watched(waitingOnWork: boolean) {
+    const waiting = { id: "conv-1", status: "WAITING", last_run_finished_at: "2026-10-17T00:00:00.000Z" };
+    const reads = [waiting, waiting, { ...waiting, status: "RUNNING", last_run_finished_at: null }];
+    let call = 0;
+    const get = vi.fn(async () => reads[Math.min(call++, reads.length - 1)]);
+    const resumeStream = vi.fn()
+      .mockResolvedValueOnce(pausingStream(waitingOnWork))
+      .mockResolvedValue(completedStream("run-2"));
+    const client = {
+      podId: "pod-1",
+      withPod() {
+        return this;
+      },
+      conversations: {
+        get,
+        list: async () => ({ items: [], limit: 20, next_page_token: null }),
+        messages: { list: vi.fn(async () => ({ items: [], limit: 100, next_page_token: null })) },
+        resumeStream,
+      },
+    } as unknown as LemmaClient;
+    const session = captureHookResult<UseAssistantSessionResult>();
+    function Harness() {
+      session.set(useAssistantSession({ client, podId: "pod-1", conversationId: "conv-1", autoLoad: false }));
+      return null;
+    }
+    await render(createElement(Harness));
+    // The person watches the run that pauses on a sub-agent.
+    await act(async () => {
+      await session.get().resume("conv-1");
+    });
+    return {
+      get,
+      resumeStream,
+      advance: (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); }),
+    };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("follows the conversation to the run that answers it", async () => {
+    // Nothing the person does starts that run: the sub-agent finishing does.
+    // Without following, the answer sat unseen until a reload.
+    vi.useFakeTimers();
+    const harness = await watched(true);
+    await harness.advance(0);
+    expect(harness.resumeStream).toHaveBeenCalledTimes(1);
+
+    await harness.advance(500);
+    await harness.advance(1000);
+
+    expect(harness.resumeStream).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a conversation waiting on the person alone, and reads nothing", async () => {
+    vi.useFakeTimers();
+    const harness = await watched(false);
+    await harness.advance(60_000);
+
+    expect(harness.resumeStream).toHaveBeenCalledTimes(1);
+    expect(harness.get).not.toHaveBeenCalled();
+  });
+});
+
+describe("opening a conversation whose agent waits on its own work", () => {
+  async function opened(reads: Record<string, unknown>[]) {
+    let call = 0;
+    const get = vi.fn(async () => reads[Math.min(call++, reads.length - 1)]);
+    const messagesList = vi.fn(async () => ({ items: [], limit: 100, next_page_token: null }));
+    const resumeStream = vi.fn(async () => completedStream("run-2"));
+    const client = {
+      podId: "pod-1",
+      withPod() {
+        return this;
+      },
+      conversations: {
+        get,
+        list: async () => ({ items: [], limit: 20, next_page_token: null }),
+        messages: { list: messagesList },
+        resumeStream,
+      },
+    } as unknown as LemmaClient;
+    const session = captureHookResult<UseAssistantSessionResult>();
+    function Harness() {
+      session.set(useAssistantSession({ client, podId: "pod-1", conversationId: "conv-1", autoLoad: false }));
+      return null;
+    }
+    await render(createElement(Harness));
+    let result: boolean | undefined;
+    await act(async () => {
+      const record = await session.get().refreshConversation("conv-1");
+      void session.get()
+        .resumeIfRunning("conv-1", { knownConversation: record })
+        .then((value) => { result = value; });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    return {
+      get,
+      messagesList,
+      resumeStream,
+      result: () => result,
+      advance: (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); }),
+    };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const onWork = { id: "conv-1", status: "WAITING", waiting_on_work: true, last_run_finished_at: "2026-10-17T00:00:00.000Z" };
+
+  it("follows it to the run that answers, though no frame announced the wait", async () => {
+    vi.useFakeTimers();
+    const harness = await opened([onWork, onWork, { ...onWork, status: "RUNNING", waiting_on_work: false }]);
+    await harness.advance(500);
+
+    expect(harness.result()).toBe(true);
+    expect(harness.resumeStream).toHaveBeenCalledOnce();
+    // The wait's result landed while nothing was listening: read once first.
+    expect(harness.messagesList).toHaveBeenCalledOnce();
+  });
+
+  it("reads the transcript once when the ladder runs out with nothing seen", async () => {
+    vi.useFakeTimers();
+    const harness = await opened([onWork]);
+    await harness.advance(16 * 60_000);
+
+    expect(harness.result()).toBe(false);
+    expect(harness.resumeStream).not.toHaveBeenCalled();
+    expect(harness.messagesList).toHaveBeenCalledOnce();
+  });
+
+  it("does not watch a conversation waiting on the person", async () => {
+    vi.useFakeTimers();
+    const harness = await opened([{ ...onWork, waiting_on_work: false }]);
+    await harness.advance(60_000);
+
+    expect(harness.result()).toBe(false);
+    expect(harness.get).toHaveBeenCalledOnce();
+  });
+});

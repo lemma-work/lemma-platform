@@ -15,7 +15,6 @@ from httpx import AsyncClient
 from starlette import status
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.ports.plan_limits import PodAllowance
 from app.modules.identity.infrastructure.adapters.pod_membership_adapter import (
     SqlAlchemyPodMembershipAdapter,
@@ -149,10 +148,9 @@ async def test_with_no_plan_declared_nobody_is_turned_away(async_client: AsyncCl
 
 
 def _first_workspace_service(uow: SqlAlchemyUnitOfWork) -> OrganizationService:
-    message_bus = get_message_bus()
     return OrganizationService(
-        organization_repository=OrganizationRepository(uow, message_bus=message_bus),
-        user_repository=UserRepository(uow, message_bus=message_bus),
+        organization_repository=OrganizationRepository(uow),
+        user_repository=UserRepository(uow),
         invitation_accept_base_url="https://app.example.test",
         pod_membership_port=SqlAlchemyPodMembershipAdapter(uow),
     )

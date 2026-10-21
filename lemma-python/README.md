@@ -180,8 +180,8 @@ helpers return the integer `count` directly.
 
 `pod.tables` · `pod.records` · `pod.queries` · `pod.files` · `pod.functions` ·
 `pod.agents` · `pod.workflows` · `pod.schedules` · `pod.conversations` ·
-`pod.decisions` · `pod.members` · `pod.apps` · `pod.surfaces` · `pod.connectors` ·
-`pod.pod_links`
+`pod.decisions` · `pod.members` · `pod.apps` · `pod.surfaces` · `pod.channels` ·
+`pod.contacts` · `pod.web_widgets` · `pod.connectors` · `pod.pod_links`
 
 Plus helpers: `pod.table(name)` (bound single-table helper), `pod.query(sql)`,
 `pod.generated` (raw OpenAPI client escape hatch).

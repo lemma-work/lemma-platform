@@ -319,3 +319,181 @@ async fn a_late_cancel_is_still_obeyed() {
         .unwrap();
     assert!(run.state.is_terminal(), "{:?}", run.state);
 }
+
+/// Wait for a tracked run's task to end, then reap it.
+async fn reap_when_finished(harness: &mut Harness, run_id: Uuid) {
+    within(Duration::from_secs(5), "the run task to end", || {
+        harness.worker.active_runs[&run_id].handle.is_finished()
+    })
+    .await;
+    harness.worker.reap_finished_now();
+}
+
+fn journalled_state(harness: &Harness, run_id: Uuid) -> RunState {
+    harness
+        .journal
+        .get_run(harness.target_id, run_id)
+        .unwrap()
+        .unwrap()
+        .state
+}
+
+/// A run task that stops on an error of its own -- a journal write it could
+/// not make -- has written no final state. The run used to stay ACCEPTED in
+/// the journal and heartbeat for ever: its lease never lapsed, so the turn in
+/// Lemma never ended.
+#[tokio::test]
+async fn a_run_task_that_errors_ends_its_run_and_tells_lemma() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    harness.worker.track_run(
+        run_id,
+        tokio::spawn(async { Err(anyhow::anyhow!("database is locked")) }),
+    );
+
+    reap_when_finished(&mut harness, run_id).await;
+
+    assert_eq!(journalled_state(&harness, run_id), RunState::Failed);
+    let terminal = harness
+        .journal
+        .pending_events(harness.target_id, usize::MAX)
+        .unwrap()
+        .into_iter()
+        .flat_map(|batch| batch.events)
+        .find(|event| event.run_id == run_id && event.event_type == EventType::Terminal)
+        .expect("Lemma hears the run end through the ordinary event path");
+    assert_eq!(terminal.payload["state"], "FAILED");
+    let batch = harness.worker.control_batch().unwrap();
+    assert!(
+        batch
+            .checkpoints
+            .iter()
+            .filter(|checkpoint| checkpoint.run_id == run_id)
+            .all(|checkpoint| checkpoint.state.is_terminal()),
+        "no liveness checkpoint may keep the lease alive: {:?}",
+        batch.checkpoints
+    );
+    assert!(harness.worker.orphaned_runs.is_empty());
+}
+
+/// Once the prompt may have reached the agent, the turn may have acted, and
+/// Lemma must not repeat it: the run ends `DISPATCH_UNKNOWN`, as a restart
+/// that found it would have ended it.
+#[tokio::test]
+async fn a_run_task_that_panics_after_dispatch_ends_dispatch_unknown() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    harness
+        .journal
+        .mark_dispatch_intent(harness.target_id, run_id, 1, "provider-session")
+        .unwrap();
+    harness.worker.track_run(
+        run_id,
+        tokio::spawn(async { panic!("a run task that panics after dispatch") }),
+    );
+
+    reap_when_finished(&mut harness, run_id).await;
+
+    assert_eq!(
+        journalled_state(&harness, run_id),
+        RunState::DispatchUnknown
+    );
+}
+
+/// A run that ended itself keeps the state it chose.
+#[tokio::test]
+async fn reaping_leaves_a_finished_runs_own_state_alone() {
+    let mut harness = Harness::new().await;
+    let run_id = harness.seed_run(0);
+    let journal = harness.journal.clone();
+    let target_id = harness.target_id;
+    harness.worker.track_run(
+        run_id,
+        tokio::spawn(async move {
+            terminal_failure(
+                &journal,
+                target_id,
+                run_id,
+                1,
+                RunState::Cancelled,
+                "stopped",
+            )
+        }),
+    );
+
+    reap_when_finished(&mut harness, run_id).await;
+
+    assert_eq!(journalled_state(&harness, run_id), RunState::Cancelled);
+}
+
+/// A `config.json` caught half-written is not a reason to end the worker:
+/// that aborted every run on the pairing. The settings last read stay in
+/// force and the runs keep going.
+#[tokio::test]
+async fn an_unreadable_config_keeps_the_last_settings_and_the_runs() {
+    let mut harness = Harness::new().await;
+    let mut draining = harness.worker.target.clone();
+    draining.draining = true;
+    crate::config::HostConfig::mutate(&harness.worker.paths, |config| {
+        config.targets.push(draining.clone());
+        Ok(true)
+    })
+    .unwrap();
+    harness.worker.apply_local_controls().unwrap();
+    assert!(harness.worker.draining);
+    let run_id = harness.seed_run(0);
+    harness.worker.track_run(
+        run_id,
+        tokio::spawn(async {
+            std::future::pending::<()>().await;
+            Ok(())
+        }),
+    );
+
+    std::fs::write(&harness.worker.paths.config, b"{ half written").unwrap();
+    harness.worker.controls_due = std::time::Instant::now();
+    harness.worker.housekeeping();
+
+    assert!(harness.worker.local_controls_unreadable);
+    assert!(
+        harness.worker.draining,
+        "the last good settings stay in force"
+    );
+    assert!(
+        !harness.worker.active_runs[&run_id].handle.is_finished(),
+        "the run on this pairing is untouched"
+    );
+    assert!(!journalled_state(&harness, run_id).is_terminal());
+}
+
+/// The driver gets what is left of the run when it starts, not what was left
+/// before the CLI was chosen; a run whose deadline went by meanwhile never
+/// starts its agent.
+#[test]
+fn a_run_gets_only_the_time_left_when_its_agent_starts() {
+    use crate::runtime::run::time_left;
+    let now = Utc::now();
+    assert_eq!(
+        time_left(now + chrono::Duration::seconds(30), now),
+        Some(Duration::from_secs(30))
+    );
+    assert_eq!(time_left(now, now), None);
+    assert_eq!(time_left(now - chrono::Duration::seconds(1), now), None);
+
+    // Asserted on the source, as the terminal-path test above is: reaching
+    // the order from a test needs a CLI download that outlives a deadline.
+    let source = include_str!("../../run.rs").replace("\r\n", "\n");
+    let chosen = source
+        .find("cli_bin_for_run(")
+        .expect("the run chooses its CLI");
+    let measured = source
+        .find("time_left(spec.run_deadline")
+        .expect("the run measures its time");
+    let started = source
+        .find("tokio::time::timeout(remaining")
+        .expect("the run starts its agent");
+    assert!(
+        chosen < measured && measured < started,
+        "the time left is measured after the CLI is chosen and before the agent starts"
+    );
+}

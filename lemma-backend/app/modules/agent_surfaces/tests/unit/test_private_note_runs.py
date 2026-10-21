@@ -37,7 +37,9 @@ def _refusing_observer(touched: list[str]) -> SurfaceAgentRunProgressObserver:
         raise AssertionError("a private note's run reached for the platform")
 
     return SurfaceAgentRunProgressObserver(
-        uow_factory=_uow_factory, egress_factory=_egress_factory
+        contact_gate=_no_contact_refuses,
+        uow_factory=_uow_factory,
+        egress_factory=_egress_factory,
     )
 
 
@@ -45,7 +47,7 @@ async def test_a_private_notes_run_never_reaches_the_platform():
     touched: list[str] = []
     observer = _refusing_observer(touched)
     conversation = SimpleNamespace(
-        id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
     )
     ctx = SimpleNamespace(agent_run_id=uuid4(), delivers_to_surface=False)
 
@@ -68,3 +70,8 @@ async def test_a_private_notes_run_never_reaches_the_platform():
     await observer.on_run_finished(conversation, ctx)
 
     assert touched == []
+
+
+async def _no_contact_refuses(_conversation_id) -> bool:
+    """No contact here refuses the answer (``contact_stream_gate``)."""
+    return False

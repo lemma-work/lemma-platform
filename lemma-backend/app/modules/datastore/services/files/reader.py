@@ -21,9 +21,7 @@ from app.modules.datastore.domain.ports import DatastoreStoragePort
 from app.modules.datastore.infrastructure.storage_paths import (
     CHILD_MANIFEST_ARTIFACT,
     CHILD_MARKDOWN_ARTIFACT,
-    build_datastore_child_artifact_key,
-    build_datastore_child_manifest_key,
-    build_datastore_child_markdown_key,
+    FileKeys,
     child_page_artifact_name,
 )
 from app.modules.datastore.services.authorization import DatastoreAuthorization
@@ -34,11 +32,23 @@ from app.modules.datastore.services.files.page_markers import (
     slice_pages,
 )
 from app.modules.datastore.services.files.path_resolver import PathResolver
-from app.modules.datastore.services.files.projection import datastore_storage_key
+from app.modules.datastore.services.files.projection import read_stored
 from app.modules.datastore.services.files.skills_overlay import SkillsOverlay
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
 
 logger = get_logger(__name__)
+
+
+def _original(keys: FileKeys) -> str:
+    return keys.original
+
+
+def _manifest(keys: FileKeys) -> str:
+    return keys.manifest
+
+
+def _markdown(keys: FileKeys) -> str:
+    return keys.markdown
 
 
 def _missing_markdown_message(file_entity: DatastoreFileEntity) -> str:
@@ -346,7 +356,7 @@ class FileReader:
         if system_skill_content is not None:
             return system_skill_content
         try:
-            return await self.storage.download_file(datastore_storage_key(file_entity))
+            return await read_stored(self.storage, file_entity, _original)
         except DatastoreObjectNotFoundError as exc:
             # Metadata exists but the stored blob is gone — report a clean 404
             # instead of letting the storage error surface as a 500.
@@ -502,10 +512,8 @@ class FileReader:
             raise DatastoreFileNotFoundError(
                 f"Child artifact {artifact_name} not found for {file_entity.path}"
             )
-        content = await self.storage.download_file(
-            build_datastore_child_artifact_key(
-                file_entity.pod_id, file_entity.path, artifact_name
-            )
+        content = await read_stored(
+            self.storage, file_entity, lambda keys: keys.child(artifact_name)
         )
         if artifact_name == CHILD_MARKDOWN_ARTIFACT and (
             page_start is not None or page_end is not None
@@ -534,9 +542,7 @@ class FileReader:
         self, file_entity: DatastoreFileEntity
     ) -> dict[str, Any] | None:
         try:
-            raw = await self.storage.download_file(
-                build_datastore_child_manifest_key(file_entity.pod_id, file_entity.path)
-            )
+            raw = await read_stored(self.storage, file_entity, _manifest)
             return json.loads(raw.decode("utf-8"))
         except DatastoreObjectNotFoundError:
             return None
@@ -563,9 +569,7 @@ class FileReader:
             pod_id, path, requester_user_id, ctx=ctx
         )
         try:
-            content = await self.storage.download_file(
-                build_datastore_child_markdown_key(file_entity.pod_id, file_entity.path)
-            )
+            content = await read_stored(self.storage, file_entity, _markdown)
         except DatastoreObjectNotFoundError:
             # The row knows why, and saying so is the difference between a
             # caller that waits and one that concludes the document is

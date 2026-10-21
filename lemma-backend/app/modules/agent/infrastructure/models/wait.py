@@ -9,7 +9,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
-    Integer,
     String,
     text,
 )
@@ -71,15 +70,9 @@ class AgentConversationWaitModel(UUIDAuditBase):
     status: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
 
     external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # When the wait's work item is due: informational ("wakes at"); the item
+    # is what fires it.
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    wake_attempts: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
-    # See the workflow wait model: a timer fires once, so a row lock is not a
-    # claim -- it is released at commit and the next tick reclaims the row.
-    fire_lease_until: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
     # Nullable to match the migration: `create` always writes a dict, but a row
     # inserted by hand or by a future backfill must not need one.
@@ -103,7 +96,6 @@ class AgentConversationWaitModel(UUIDAuditBase):
             status=AgentWaitStatus(self.status),
             external_ref=self.external_ref,
             scheduled_at=self.scheduled_at,
-            wake_attempts=self.wake_attempts,
             spec=dict(self.spec or {}),
             completed_at=self.completed_at,
             created_at=self.created_at,

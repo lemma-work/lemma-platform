@@ -93,8 +93,22 @@ class FolderCreationMixin(FileTransactionWriter):
             size_bytes=0,
             search_enabled=False,
             status=FileStatus.NOT_REQUIRED,
+            parent_id=self._parent_row_id(pod_id, parent_directory),
         )
         return await self.file_repository.create(folder)
+
+    def _parent_row_id(
+        self, pod_id: UUID, parent: DatastoreFileEntity | None
+    ) -> UUID | None:
+        """The parent's row id, or None for the root and the synthetic overlay."""
+        if parent is None:
+            return None
+        if (
+            self.system_skill_files.is_path(parent.path)
+            and self.system_skill_files.get_entity(pod_id, parent.path) is not None
+        ):
+            return None
+        return parent.id
 
     async def _ensure_directory_path(
         self,
@@ -186,5 +200,6 @@ class FolderCreationMixin(FileTransactionWriter):
             size_bytes=0,
             search_enabled=False,
             status=FileStatus.NOT_REQUIRED,
+            parent_id=self._parent_row_id(pod_id, parent_directory),
         )
         return await self.file_repository.create(folder)

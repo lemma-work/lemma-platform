@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import httpx
 
+from app.core.infrastructure.db.transient_errors import is_database_unavailable
+from app.core.infrastructure.work import Released
 from app.core.redaction import redact_text
 from app.modules.function.contracts.runtime import RuntimeTerminalRequest
 from sandbox_runtime.errors import (
@@ -44,6 +46,22 @@ class RuntimeNeverReached(InvocationOutcomeUnconfirmed):
     It still subclasses ``InvocationOutcomeUnconfirmed`` so that any caller
     which does not know about this distinction keeps the safe behaviour.
     """
+
+
+class PodAtCapacity(Exception):
+    """The pod already runs as many functions as it may; this run has not started.
+
+    Not a domain error: nobody sees it. A queued run waits its turn and a
+    synchronous caller waits up to its start deadline. The slot is the RUNNING
+    row, counted at the start under the pod's lock, so it is held until the run
+    is terminal however that end arrives -- inline, by callback, or by the
+    deadline.
+    """
+
+
+class SandboxNotReady(Exception):
+    """The pod's sandbox could not be reached or is still starting, and the run
+    has not started. Nothing ran, so a queued run waits and tries again."""
 
 
 #: The runtime's name for a run that waited for a free worker until its deadline.
@@ -96,3 +114,16 @@ def execution_error(exc: BaseException) -> str:
     if isinstance(exc, ValueError) and "token expires" in str(exc):
         return "Function execution exceeds delegated token lifetime"
     return "Function execution failed"
+
+
+def not_a_failure(exc: Exception, *, queued: bool, started: bool) -> bool:
+    """Signals for the caller, not outcomes of the run: a full pod, a sandbox
+    not up yet, or a queued run stopped before its start."""
+    if isinstance(exc, (PodAtCapacity, SandboxNotReady)):
+        return True
+    if not started and is_database_unavailable(exc):
+        # Lemma's database could not be reached before the function was sent
+        # anywhere: nothing ran, so the run is retried, not failed. Once it
+        # started, the result is the sandbox's and failing is what records it.
+        return True
+    return queued and not started and isinstance(exc, Released)

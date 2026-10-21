@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UserResponse } from "lemma-sdk";
 import { source } from "@/data";
@@ -9,10 +9,11 @@ import { isLandingPreview } from "@/marketing/preview-mode";
 import { Modal } from "@/shell/modal";
 import { CheckCircleIcon, RefreshIcon } from "@/ui/icons";
 import { lemma } from "./client";
-import { asksFirstProfile, firstProfileNeeds, settledKey } from "./first-profile";
+import { asksFirstProfile, canDismissFirstProfile, firstProfileNeeds, needsTimezoneSync, settledKey, syncDetectedTimezone } from "./first-profile";
 import { Code, Countdown, OpenWhatsApp } from "./mobile-verification";
-import { changes, draftOf } from "./profile-edit";
+import { changes, draftOf, localTimezone, timezones } from "./profile-edit";
 import { useWhatsAppMobileVerification, useWhatsAppVerificationConfig } from "./use-mobile-verification";
+import { arrivedFromInstall } from "@/site/import/pending-install";
 
 function readSettled(userId: string): boolean {
     try {
@@ -22,6 +23,7 @@ function readSettled(userId: string): boolean {
     }
 }
 
+/** Remember that this account's first-profile dialog has been dismissed. */
 function writeSettled(userId: string) {
     try {
         localStorage.setItem(settledKey(userId), "1");
@@ -31,10 +33,22 @@ function writeSettled(userId: string) {
     }
 }
 
-/** Mounted once, above the app. Draws nothing unless `asksFirstProfile` says
- *  this person is new and missing something the step can supply. */
+/** Mounted once, above the app. Draws the first-profile dialog when
+ *  `asksFirstProfile` says this person is new and missing something the step
+ *  can supply; otherwise, for a new account still missing a timezone, writes
+ *  the browser's zone in the background so OAuth sign-ups are never left
+ *  without one. */
+function arrivedFromInstallHere(): boolean {
+    try {
+        return arrivedFromInstall(sessionStorage);
+    } catch {
+        return false;
+    }
+}
+
 export function FirstProfileStep() {
     const live = source.label !== "sample" && !isLandingPreview();
+    const queryClient = useQueryClient();
     const user = useQuery({
         queryKey: ["current-user"],
         queryFn: () => lemma().users.current(),
@@ -53,10 +67,34 @@ export function FirstProfileStep() {
     if (decision === null && ready && user.data) {
         const canWhatsApp = whatsApp.data?.available === true;
         setDecision({
-            open: asksFirstProfile(user.data, { whatsApp: canWhatsApp, settled: readSettled(user.data.id) }),
+            /* Not on the visit an install opens: that person came to use what
+               they installed, and is asked on their next visit instead. */
+            open: !arrivedFromInstallHere() && asksFirstProfile(user.data, { whatsApp: canWhatsApp, settled: readSettled(user.data.id) }),
             askPhone: firstProfileNeeds(user.data, { whatsApp: canWhatsApp }).phone,
         });
     }
+
+    /* Google (and similar) already supply a name, so the dialog never opens —
+       and until something writes a timezone, every schedule and run stamp is
+       wrong. `needsTimezoneSync` owns who qualifies; this only writes once. */
+    const syncedZone = useRef(false);
+    useEffect(() => {
+        if (!decision || !user.data || syncedZone.current) return;
+        if (!needsTimezoneSync(user.data, { dialogOpen: decision.open })) return;
+        const zone = localTimezone();
+        if (!zone) return;
+
+        syncedZone.current = true;
+        const stop = syncDetectedTimezone(
+            () => lemma().users.upsertProfile({ timezone: zone }),
+            (next) => { queryClient.setQueryData(["current-user"], next); },
+            () => { syncedZone.current = false; },
+        );
+        return () => {
+            stop();
+            syncedZone.current = false;
+        };
+    }, [decision, user.data, queryClient]);
 
     if (!decision?.open || !user.data) return null;
     const userId = user.data.id;
@@ -72,6 +110,7 @@ export function FirstProfileStep() {
     );
 }
 
+/** Collect the first-profile answers; every dismissal shares the same guard. */
 function FirstProfileDialog({
     user,
     askPhone,
@@ -82,16 +121,23 @@ function FirstProfileDialog({
     onDone: () => void;
 }) {
     const queryClient = useQueryClient();
+    const zones = useMemo(() => timezones(), []);
     const [first, setFirst] = useState(() => (user.first_name ?? "").trim());
     const [last, setLast] = useState(() => (user.last_name ?? "").trim());
+    const [timezone, setTimezone] = useState(() => (user.timezone ?? "").trim() || localTimezone());
 
     const save = useMutation({
         mutationFn: async () => {
             /* Against the user as it is now, not as it was when the dialog
                opened: verifying the phone rewrites the cached user, and only
-               the two name fields are this form's to change. */
+               the name and timezone fields are this form's to change. */
             const before = draftOf(user);
-            const patch = changes(before, { ...before, first_name: first, last_name: last });
+            const patch = changes(before, {
+                ...before,
+                first_name: first,
+                last_name: last,
+                timezone,
+            });
             if (Object.keys(patch).length === 0) return null;
             return lemma().users.upsertProfile(patch);
         },
@@ -100,12 +146,13 @@ function FirstProfileDialog({
             onDone();
         },
     });
+    const canDismiss = canDismissFirstProfile(save.isPending);
 
     return (
         <Modal
             title="Before you start"
             subtitle={`Your ${MATE}s call you by this name.`}
-            onClose={onDone}
+            onClose={() => { if (canDismiss) onDone(); }}
         >
             <form
                 className="profile-form firstprofile"
@@ -134,6 +181,23 @@ function FirstProfileDialog({
                     </label>
                 </div>
 
+                <label className="field">
+                    <span>Timezone</span>
+                    <select
+                        value={timezone}
+                        onChange={(event) => { save.reset(); setTimezone(event.target.value); }}
+                        required
+                    >
+                        {!timezone && <option value="" disabled>Select a timezone</option>}
+                        {timezone && !zones.includes(timezone) && (
+                            <option value={timezone}>{timezone}</option>
+                        )}
+                        {zones.map((zone) => (
+                            <option key={zone} value={zone}>{zone}</option>
+                        ))}
+                    </select>
+                </label>
+
                 {askPhone && <PhoneByWhatsApp />}
 
                 {save.isError && (
@@ -142,8 +206,8 @@ function FirstProfileDialog({
                     </p>
                 )}
                 <div className="modal__acts">
-                    <button className="linkish" type="button" onClick={onDone}>Skip for now</button>
-                    <button className="btn btn--primary" type="submit" disabled={!first.trim() || save.isPending}>
+                    <button className="linkish" type="button" onClick={onDone} disabled={!canDismiss}>Skip for now</button>
+                    <button className="btn btn--primary" type="submit" disabled={!first.trim() || !timezone || save.isPending}>
                         {save.isPending ? "Saving…" : "Continue"}
                     </button>
                 </div>

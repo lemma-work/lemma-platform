@@ -1192,8 +1192,10 @@ def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
     assert model is not None
     from app.modules.usage.infrastructure.metered_model import MeteredModel
 
+    from pydantic_ai.models.anthropic import AnthropicModel
+
     assert isinstance(model, MeteredModel)
-    assert type(model.wrapped).__name__ == "AnthropicModel"
+    assert isinstance(model.wrapped, AnthropicModel)
 
 
 def test_default_runtime_uses_system_profile(monkeypatch, tmp_path):

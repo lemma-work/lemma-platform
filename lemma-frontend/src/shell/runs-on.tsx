@@ -6,9 +6,12 @@ import {
     agentLogo,
     chosenModel,
     describeChoice,
+    offeredSelections,
+    optionsFor,
     sameChoice,
     saidAbout,
     shortModel,
+    type AgentOption,
     type Choice,
     type Runtime,
 } from "@/data";
@@ -71,6 +74,90 @@ function rowsOf(runtimes: Runtime[]): { runtime: Runtime; choice: Choice; label:
     });
 }
 
+/** The options a coding agent offers beside the model a choice runs, effort
+ *  first — empty for a provider key, for a choice that pins nothing, and
+ *  until the runtime's own read arrives.
+ *
+ *  Read off the profile on its own rather than the list, which carries no
+ *  harness: the options are whatever that computer publishes now, and they
+ *  move with the model. */
+function useAgentOptions(orgId: string, runtime: Runtime | undefined, choice: Choice | null) {
+    const agent = runtime?.kind === "agent" && choice?.runtimeId === runtime.id ? runtime : undefined;
+    const detail = useQuery({
+        queryKey: ["runtime", orgId, agent?.id],
+        queryFn: () => source.getRuntime(orgId, agent?.id ?? ""),
+        enabled: Boolean(agent),
+        staleTime: 60_000,
+    });
+    const sets = detail.data?.options;
+    const options = useMemo(
+        () => (agent && sets ? optionsFor(sets, chosenModel(agent, choice)) : []),
+        [agent, sets, choice],
+    );
+    return { options, sets, unreadable: detail.isError };
+}
+
+/** What a newly picked row keeps of the choice before it. Only the same
+ *  agent's selections, and only those the new model still offers — a value it
+ *  does not publish would be refused at the next run, and a pick on another
+ *  runtime has nothing to carry over. */
+function carried(next: Choice, before: Choice | null, runtime: Runtime | undefined, sets: Runtime["options"]): Choice {
+    if (!before?.selections || before.runtimeId !== next.runtimeId || runtime?.id !== next.runtimeId || !sets) return next;
+    const kept = offeredSelections(optionsFor(sets, chosenModel(runtime, next)), before.selections);
+    return Object.keys(kept).length ? { ...next, selections: kept } : next;
+}
+
+/** A coding agent's options, under the model: effort, mode and the rest, as
+ *  the agent named them. "Agent's default" is a real answer and the first
+ *  one — it sends nothing, and the agent runs as its computer has it. Compact
+ *  selects rather than rows: these are adjustments to the pick above, not
+ *  picks of their own. */
+function AgentOptionFields({ options, choice, disabled, onChange, className, unreadable }: {
+    options: AgentOption[];
+    choice: Choice;
+    disabled: boolean;
+    onChange: (next: Choice) => void;
+    className?: string;
+    /** The agent's options could not be read. Said, because nothing drawn
+     *  reads as "this agent has no options", which is a different thing. */
+    unreadable?: boolean;
+}) {
+    if (unreadable) {
+        return (
+            <p className="pick__note" role="status">
+                <WarningIcon size={13} /> Couldn’t read this agent’s options, so its effort stays as its computer has it.
+            </p>
+        );
+    }
+    if (options.length === 0) return null;
+    const selections = choice.selections ?? {};
+    const choose = (key: string, value: string) => {
+        const next = { ...selections };
+        if (value) next[key] = value;
+        else delete next[key];
+        onChange(Object.keys(next).length ? { ...choice, selections: next } : { runtimeId: choice.runtimeId, model: choice.model });
+    };
+    return (
+        <div className={"agentopts" + (className ? " " + className : "")}>
+            {options.map((option) => (
+                <label key={option.key} title={option.description || undefined}>
+                    <span>{option.label}</span>
+                    <select
+                        value={selections[option.key] ?? ""}
+                        disabled={disabled}
+                        onChange={(event) => choose(option.key, event.target.value)}
+                    >
+                        <option value="">Agent’s default</option>
+                        {option.choices.map((one) => (
+                            <option key={one.value} value={one.value}>{one.label}</option>
+                        ))}
+                    </select>
+                </label>
+            ))}
+        </div>
+    );
+}
+
 /** What this teammate runs on, read once for the picker and for the line
  *  about it on About's overview: the same three queries, the same sentence. */
 export function useRunsOn(podId: string, orgId: string) {
@@ -114,6 +201,7 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
     const queryClient = useQueryClient();
     const { open, setOpen, wrap, menuClass } = usePicker();
     const { runtimes, current, live, choice, chosen, inheritedName, setup, said } = useRunsOn(podId, orgId);
+    const { options, sets, unreadable } = useAgentOptions(orgId, chosen, choice);
 
     const set = useMutation({
         mutationFn: (choice: Choice | null) => source.setPodRuntime(podId, choice),
@@ -142,6 +230,10 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
                 <span className="pick__said">{current.isPending ? "Reading…" : said}</span>
                 <ChevronDownIcon size={14} />
             </button>
+
+            {choice && (
+                <AgentOptionFields options={options} choice={choice} disabled={set.isPending} onChange={(next) => set.mutate(next)} unreadable={unreadable} />
+            )}
 
             {/* A pin to something unreachable is the one case worth saying out
                 loud here: it is not broken *now*, and it will be the moment
@@ -219,7 +311,7 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
                                         className="pick__row"
                                         role="menuitem"
                                         key={row.choice.model || runtime.id}
-                                        onClick={() => { set.mutate(row.choice); setOpen(false); }}
+                                        onClick={() => { set.mutate(carried(row.choice, choice, chosen, sets)); setOpen(false); }}
                                     >
                                         <span className="pick__tick">{on && <CheckIcon size={13} />}</span>
                                         <span className="pick__body">
@@ -261,7 +353,8 @@ export function RunsOn({ podId, orgId }: { podId: string; orgId: string }) {
  *  itself is edited in Settings → Models, which the foot links to. */
 export function ModelChoice({ podId, orgId, orgName }: { podId: string; orgId: string; orgName: string }) {
     const queryClient = useQueryClient();
-    const { runtimes, current, live, choice, inheritedName, setup } = useRunsOn(podId, orgId);
+    const { runtimes, current, live, choice, chosen, inheritedName, setup } = useRunsOn(podId, orgId);
+    const { options, sets, unreadable } = useAgentOptions(orgId, chosen, choice);
     const set = useMutation({
         mutationFn: (next: Choice | null) => source.setPodRuntime(podId, next),
         onSuccess: (_answer, next) => {
@@ -326,7 +419,7 @@ export function ModelChoice({ podId, orgId, orgName }: { podId: string; orgId: s
                                 aria-checked={isOn(runtime, row.choice)}
                                 key={row.choice.model || runtime.id}
                                 disabled={set.isPending}
-                                onClick={() => set.mutate(row.choice)}
+                                onClick={() => set.mutate(carried(row.choice, choice, chosen, sets))}
                             >
                                 <span className="modelchoice__radio" aria-hidden="true" />
                                 <span className="modelchoice__body">
@@ -338,6 +431,18 @@ export function ModelChoice({ podId, orgId, orgName }: { podId: string; orgId: s
                                 {pending && sameChoice(pending, row.choice) && <span className="modelchoice__saving">Saving…</span>}
                             </button>
                         ))}
+                        {/* Under the group it belongs to, so it reads as
+                            part of this pick rather than a setting of its own. */}
+                        {choice?.runtimeId === runtime.id && (
+                            <AgentOptionFields
+                                className="agentopts--group"
+                                options={options}
+                                choice={choice}
+                                disabled={set.isPending}
+                                onChange={(next) => set.mutate(next)}
+                                unreadable={unreadable}
+                            />
+                        )}
                     </div>
                 ))}
             </div>

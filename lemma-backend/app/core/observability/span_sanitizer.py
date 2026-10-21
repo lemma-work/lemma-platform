@@ -191,6 +191,17 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         # Which worker queue a depth reading belongs to. Bounded by the Lane
         # enum.
         "lane",
+        # The work runtime's class (bounded by the WorkClass enum), kind
+        # (bounded by the handlers registered in the code) and why an item went
+        # dead (bounded by the runtime's own reasons). Never the namespace: a
+        # pod id as a label is the per-tenant series the tenancy rule forbids,
+        # so the busiest namespaces are logged instead.
+        "work_class",
+        "work_kind",
+        "error_class",
+        # Which of the platform's own databases a reading is about: ``main``
+        # or ``datastore``. Bounded by the code, never a host or a DSN.
+        "database",
         "execution_mode",
         "runtime_profile",
         "cold",

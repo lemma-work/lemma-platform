@@ -228,7 +228,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                         let scratch = paths.root.join("probe").join(&snapshot.harness_key);
                         match tokio::time::timeout(
                             std::time::Duration::from_secs(30),
-                            AcpDriver.probe(adapter, scratch),
+                            AcpDriver::default().probe(adapter, scratch),
                         )
                         .await
                         {
@@ -324,7 +324,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                 system_prompt_delivery: None,
                 pre_approvals: Vec::new(),
             };
-            let outcome = AcpDriver
+            let outcome = AcpDriver::default()
                 .run(
                     AcpRunRequest {
                         adapter,

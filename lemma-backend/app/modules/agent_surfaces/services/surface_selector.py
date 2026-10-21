@@ -41,6 +41,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ResolvedSurfaceUser,
     SurfacePlatform,
 )
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -48,11 +49,12 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
     SurfacePodMembershipPort,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     warn_if_tied_on_one_bot,
+)
+from app.modules.agent_surfaces.services.channel_places import (
+    ChannelSeats,
+    ChannelSeatsInDatabase,
 )
 from app.modules.agent_surfaces.services.saved_surface_default import (
     default_still_stands,
@@ -68,12 +70,14 @@ class SurfaceSelector:
     def __init__(
         self,
         *,
+        uow: SqlAlchemyUnitOfWork,
         surface_repository: SurfaceInstallationRepositoryPort,
-        conversation_link_repository: SurfaceConversationLinkRepository,
         pod_membership_port: SurfacePodMembershipPort,
+        seats: ChannelSeats | None = None,
     ) -> None:
+        self.uow = uow
+        self.seats = seats or ChannelSeatsInDatabase(uow)
         self.surface_repository = surface_repository
-        self.conversation_link_repository = conversation_link_repository
         self.pod_membership_port = pod_membership_port
 
     async def reachable_surface(
@@ -184,37 +188,44 @@ class SurfaceSelector:
     ) -> AgentSurfaceEntity | None:
         """The candidate this chat already lives on, if any.
 
-        Narrowed to the candidates, which changes an answer and not just a cost.
-        Unnarrowed the lookup returns the freshest link for this chat anywhere on
-        the platform, and the caller then keeps it only if it is a candidate -- so
-        a fresher link on a non-candidate surface returned an id that was
-        immediately discarded, and the person's real ongoing conversation on a
-        candidate surface was never looked for. The chat fell through to the
-        tiebreak and was answered by a different pod. See
-        `find_surface_id_for_external_thread`.
+        Narrowed to the candidates, which changes an answer and not just a
+        cost: unnarrowed, a place on a non-candidate surface would be found and
+        then discarded, and the person's real place on a candidate never
+        looked for -- the chat would fall to the tiebreak and be answered by a
+        different pod.
 
-        The exact key names a delivery address, which for a private chat is not
-        what makes it the same conversation, so a miss falls back to the same
-        person's latest private chat on a candidate -- see
-        `find_latest_dm_link_for_person`.
+        A group is the place hearing its chat. A private chat is the person's:
+        the place they last wrote to privately on a candidate, which is the
+        same conversation whatever number or thread they write from now.
+        Email is the exception -- an address is not a person's chat, so a new
+        email thread is placed afresh.
         """
-        links = self.conversation_link_repository
         surface_ids = list(candidates_by_id)
-        found = await links.find_surface_id_for_external_thread(
-            platform=platform,
-            external_channel_id=parsed.external_channel_id,
-            external_thread_id=parsed.external_thread_id,
-            external_user_id=parsed.sender_external_user_id,
-            surface_ids=surface_ids,
-        )
+        if not surface_ids:
+            return None
         person = parsed.sender_external_user_id
-        if found is None and surface_ids and parsed.is_dm and person:
-            if not parsed.platform.is_email:
-                earlier = await links.find_latest_dm_link_for_person(
-                    platform=platform, external_user_id=person, surface_ids=surface_ids
-                )
-                found = earlier.surface_id if earlier is not None else None
-        return candidates_by_id.get(found) if found is not None else None
+        if not parsed.is_dm:
+            if not parsed.external_channel_id:
+                return None
+            places = await self.seats.places_hearing(
+                platform=platform,
+                external_channel_id=parsed.external_channel_id,
+                surface_ids=surface_ids,
+            )
+        elif person and not parsed.platform.is_email:
+            places = await self.seats.person_places(
+                platform=platform,
+                external_user_id=person,
+                surface_ids=surface_ids,
+                limit=1,
+            )
+        else:
+            return None
+        for place in places:
+            found = candidates_by_id.get(place.surface_id) if place.surface_id else None
+            if found is not None:
+                return found
+        return None
 
     async def deliverable_default(
         self,

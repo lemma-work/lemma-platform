@@ -17,10 +17,11 @@ class FunctionExecutor:
             step.user_id,
             ctx=step.authz_ctx,
         )
-        # A dispatched run (any function type) suspends the workflow on its run id;
-        # the worker executes it and its completion event resumes the run. The
-        # adapter always dispatches, so function nodes uniformly suspend here — the
-        # engine never holds its run-row lock across the sandbox round-trip.
+        # A dispatched run (any function type) suspends the workflow on its run
+        # id. The run and its `function.run` item were written on this run's
+        # transaction; the run's terminal transition writes the
+        # `workflow.resume` that wakes this wait. The engine never holds its
+        # run-row lock across the sandbox round trip.
         if result.get("run_id") and result.get("status") in {"PENDING", "RUNNING"}:
             return Suspend(
                 wait=WaitRequest(

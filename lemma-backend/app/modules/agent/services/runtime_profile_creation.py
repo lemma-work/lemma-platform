@@ -35,6 +35,7 @@ from app.modules.agent.domain.agent_host_selections import (
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_profiles import (
     DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
+    HARNESS_KEY,
     with_reasoning_declared,
     checked_profile,
     AnthropicCompatibleRuntimeConfig,
@@ -161,13 +162,16 @@ class RuntimeProfileCreation:
             scope=scope,
         )
         config_options = list(harness.config_options or [])
-        selections = validate_agent_host_selections(
-            config_options=config_options,
-            selections=config_selections or {},
-        )
         selected_model = validate_agent_host_model(
             config_options=config_options,
             model_name=default_model_name,
+        )
+        # Against the chosen model's options: some values exist for one model
+        # only, and the machine's default model is not necessarily this one.
+        selections = validate_agent_host_selections(
+            config_options=config_options,
+            selections=config_selections or {},
+            model_name=selected_model,
         )
         profile = checked_profile(
             id=str(uuid7()),
@@ -196,7 +200,7 @@ class RuntimeProfileCreation:
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
                 "source": "AGENT_HOST",
-                "harness_key": harness.harness_key,
+                HARNESS_KEY: harness.harness_key,
             },
         )
         return await self.repository.create(profile)

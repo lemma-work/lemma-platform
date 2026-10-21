@@ -22,7 +22,7 @@ import { DocSpace, isDoc } from "@/docs/doc-space";
 import { CommentsButton } from "@/docpages/comments/button";
 import { DocAskContext } from "@/docs/doc-ask";
 import { AllView } from "@/space/all-view";
-import { SpaceNav } from "@/space/space-nav";
+import { SpaceNav, useContactsPlace } from "@/space/space-nav";
 import { ShareSheet, type ShareSubject } from "@/space/share-sheet";
 import { SIGN_IN_EVENT, type SignInRequest } from "@/computer/sign-in-bridge";
 import { SignInPane } from "@/computer/sign-in-pane";
@@ -30,9 +30,8 @@ import { AgentPage } from "@/space/agent-page";
 import { WorkflowPage } from "@/space/workflow-page";
 import { displayAgentName, isPodDefaultAgent } from "@/data/agent-names";
 import { WorkflowsPage } from "@/space/workflows-page";
-import { GroupsPage } from "@/space/groups-page";
+import { ChannelPage } from "@/channels/channel-page";
 import { ContactsPage } from "@/space/contacts-page";
-import { GroupPage } from "@/space/group-page";
 import { Home } from "@/space/home";
 import { ChatsPage } from "@/space/chats-page";
 import { RunPage } from "@/space/run-page";
@@ -60,7 +59,7 @@ import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-acces
 import { NotYours } from "./not-yours";
 import { Mark } from "./mark";
 import { Surfaces } from "./surfaces";
-import { Notifications } from "./notifications";
+import { WaitingBell } from "@/channels/waiting-panel";
 import { WaitingInbox, gather } from "@/workflow/waiting-inbox";
 import { SearchPalette } from "@/search/palette";
 import { useResourceConversation } from "@/thread/use-resource-conversation";
@@ -70,6 +69,7 @@ import { Modal } from "./modal";
 import { SettingsModal, type SettingsSection } from "@/settings/settings-modal";
 import { HiringView, type FirstMove } from "@/stage/hiring";
 import { ArrivalView } from "@/org/arrival-view";
+import { arrivedFromInstall } from "@/site/import/pending-install";
 import { NewOrgDialog } from "@/org/new-org-dialog";
 import { ConversationPane } from "@/thread/conversation";
 import { LiveConversation } from "@/thread/live-conversation";
@@ -98,7 +98,6 @@ import { HelpMenu } from "@/tour/help-menu";
 import { tourStops, type Stop } from "@/tour/stops";
 import { guideFor, placeOf } from "@/tour/guides";
 import { PlaceGuide } from "@/tour/place-guide";
-import { useFeature } from "@/site/analytics/flags";
 import { atHome, offersTour, readTourSeen, writeTourSeen } from "@/tour/when";
 import { humanizeName } from "@/schedule/schedules";
 
@@ -129,8 +128,8 @@ function homeListOf(tab: Tab): string | null {
         case "run":
         case "workflow":
             return "space:workflows";
-        case "group":
-            return "space:groups";
+        case "channel":
+            return "space:chats";
         default:
             return null;
     }
@@ -153,13 +152,27 @@ function Pane({ hidden, onStage, children, ...rest }: HTMLAttributes<HTMLDivElem
     return <div hidden={hidden} {...rest}><PaneVisibleContext.Provider value={!hidden && onStage}>{children}</PaneVisibleContext.Provider></div>;
 }
 
-const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["groups", "Groups"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
+/** A place behind a flag that is off, reached by its address: said, rather
+ *  than an empty pane nobody can tell from a broken one. */
+function NotSwitchedOn({ what }: { what: string }) {
+    return (
+        <section className="empty empty--compact" aria-label={what}>
+            <h2 className="empty__title">{what} isn’t switched on for this space yet.</h2>
+        </section>
+    );
+}
+
+/** Contacts, for whoever may look after contacts: a pod's editors and
+ *  admins. Reached by its address by anyone else, it says it is not on. */
+function ContactsPlace({ pod, onConnect }: { pod: Pod; onConnect: () => void }) {
+    return useContactsPlace(pod.id) ? <ContactsPage pod={pod} onConnect={onConnect} /> : <NotSwitchedOn what="Contacts" />;
+}
+
+const SPACE_TABS: Tab[] = ([["home", "Home"], ["pages", "Pages"], ["apps", "Apps"], ["tables", "Tables"], ["files", "Files"], ["chats", "Chats"], ["workflows", "Workflows"], ["channels", "Shared chats"], ["contacts", "Contacts"], ["about", "About"]] as [SpaceView, string][])
     .map(([view, label]) => ({ id: "space:" + view, kind: "space", label, view }));
 
 export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoStep?: number; demoRevision?: number; onPreviewPainted?: () => void } = {}) {
     const preview = isLandingPreview();
-    const groupsOn = useFeature("groups");
-    const contactsOn = useFeature("contacts");
     const [previewPod, setPreviewPod] = useState<string | null>("kit");
     const pathname = usePathname();
     const incoming = useSearchParams();
@@ -605,8 +618,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         : activeTab?.kind === "record" ? { kind: "table", name: activeTab.table, label: readableName(activeTab.table) }
         : null;
     const [shareOpen, setShareOpen] = useState(false);
-    /* Share opened to add somebody — a group page's Invite. */
-    const [shareAdding, setShareAdding] = useState(false);
     const shareSubject: ShareSubject = !chatResource ? { kind: "space" }
         : chatResource.kind === "file" ? { kind: "file", path: chatResource.name, label: chatResource.label }
         : { kind: chatResource.kind === "app" ? "app" : "table", label: chatResource.label };
@@ -776,9 +787,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         (name: string) => openTab({ id: "workflow:" + name, kind: "workflow", label: humanizeName(name), name }),
         [openTab],
     );
-    /* A group opens on its own page, with Groups one step back. */
-    const openGroup = useCallback(
-        (group: { id: string; title: string | null }) => openTab({ id: "group:" + group.id, kind: "group", label: group.title || "Group", groupId: group.id }, "space:groups"),
+    /* A channel opens on its own page, with Channels one step back. */
+    const openChannel = useCallback(
+        (channel: { id: string; title: string | null }) => openTab({ id: "channel:" + channel.id, kind: "channel", label: channel.title || "Chat", channelId: channel.id }, "space:chats"),
         [openTab],
     );
 
@@ -965,8 +976,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
 
         const known = allTabs.some((tab) => tab.id === wanted);
         const rebuilt = known ? null : tabFromId(wanted);
-        /* A group lives in Groups, whichever page linked to it. */
-        if (rebuilt) openTab(rebuilt, rebuilt.kind === "group" ? "space:groups" : undefined);
+        /* A channel lives in Channels, whichever page linked to it. */
+        if (rebuilt) openTab(rebuilt, rebuilt.kind === "channel" ? "space:chats" : undefined);
         /* Only a tab that will exist: one that never arrives would hold the
            mirror still for good. */
         if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
@@ -1196,6 +1207,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const meCreated = me.data?.created_at;
     useEffect(() => {
         if (preview || source.label !== "live" || !meId) return;
+        /* The visit an install opens is for what was installed; the tour
+           is offered on the next one. */
+        let fromInstall = false;
+        try { fromInstall = arrivedFromInstall(sessionStorage); } catch { /* no storage */ }
+        if (fromInstall) return;
         if (offersTour(meCreated, { seen: readTourSeen(meId) })) setTourWanted((was) => was ?? "offered");
     }, [preview, meId, meCreated]);
     const onHome = atHome(address.tabId, activeTabId);
@@ -1449,6 +1465,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 onWorkflows={() => { pickTab("space:workflows"); setMobileOpen(false); }}
                                 openChatId={openConversationId}
                                 onOpenChat={(id) => { setConversationId(id); pickTab("conversation"); setMobileOpen(false); }}
+                                onOpenChannel={(channel) => { openChannel(channel); setMobileOpen(false); }}
+                                onConnect={() => setReaching(true)}
                             />
                         </>}
                     </div>
@@ -1686,7 +1704,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             >
                                 <SearchIcon size={19} />
                             </button>
-                            {!preview && <Notifications podId={pod.id} />}
+                            {!preview && <WaitingBell podId={pod.id} />}
                             {/* Beside the bell, and not inside it. The panel
                                 next door is a log of things said to you, most
                                 of which are over; this is a queue of work with
@@ -1754,6 +1772,12 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             ) : <>
                                 <button type="button" className="crumb__up crumb__mate" onClick={() => pickTab("space:home")}>{pod.name}</button>
                                 <span className="crumb__sep">/</span>
+                                {/* A chat names itself in its own header: the
+                                    crumb ends at the list it is in, rather
+                                    than saying its name a second time. */}
+                                {activeTab?.kind === "channel" ? (
+                                    <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom?.id ?? "space:chats")}>{cameFrom?.label ?? "Chats"}</button>
+                                ) : <>
                                 {cameFrom && <>
                                     <button type="button" className="crumb__from" onClick={() => pickTab(cameFrom.id)}>{cameFrom.label}</button>
                                     <span className="crumb__sep crumb__sep--from">/</span>
@@ -1766,6 +1790,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                 </> : (
                                     <span className="crumb__here">{activeTab?.kind === "conversation" ? "Chat" : activeTab?.label ?? "Pages"}</span>
                                 )}
+                                </>}
                             </>}
                         </div>
                             {activeTab?.kind !== "space" && <ViewActions key={activeTab?.id} tab={activeTab} podId={pod.id}
@@ -1786,13 +1811,15 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             <button className="share-pill" data-tour="share" onClick={() => setShareOpen(true)} title={"Share " + (chatResource?.label ?? pod.name)}>Share</button>
                             {/* The header row is gone, as it is in Space; what it
                                 carried that is still owed to you lives here. */}
-                            {!preview && <Notifications podId={pod.id} />}
+                            {!preview && <WaitingBell podId={pod.id} />}
                             {!preview && <WaitingInbox pods={pods.data ?? []} />}
                         </div>
 
                         <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "") + (chat.open && chatResource ? " body--chat" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
                             {rightTab && <PaneDivider value={paneWidth} onChange={setPaneWidth} />}
-                            {pod && !stranger && !isVisible("conversation") && activeTab?.kind !== "profile" && activeTab?.kind !== "bot" && activeTab?.id !== "space:home" && activeTab?.id !== "space:about" && (
+                            {/* Not over a channel: it has a box of its own, and its
+                                agents answer there. */}
+                            {pod && !stranger && !isVisible("conversation") && activeTab?.kind !== "profile" && activeTab?.kind !== "bot" && activeTab?.kind !== "channel" && activeTab?.id !== "space:home" && activeTab?.id !== "space:about" && (
                                 <FloatingChat
                                     pod={pod}
                                     resource={chatResource}
@@ -1896,11 +1923,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         <Home
                                             pod={pod}
                                             pods={pods.data ?? []}
+                                            apps={allTabs.filter((each): each is Extract<Tab, { kind: "app" }> => each.kind === "app")}
+                                            onOpenApp={pickTab}
+                                            onOpenApps={() => pickTab("apps")}
                                             onNewPage={newPage}
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onAbout={() => openAbout(null)}
-                                            onAsk={(text, files) => startChat(text, undefined, files)}
+                                            onAsk={(text, files, model) => startChat(text, model ? { agent_runtime: { profile_id: model.runtimeId, model_name: model.model || null } } : undefined, files)}
                                         />
                                     ) : tab.view === "about" ? (
                                         <AboutPage
@@ -1919,9 +1949,13 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onFile={(path) => openFile(path, "space:about")}
                                             onDeleted={() => goToTeam(null)}
                                         />
-                                    ) : tab.view === "chats" ? (
+                                    ) : tab.view === "chats" || tab.view === "channels" ? (
                                         <ChatsPage
+                                            key={tab.view}
                                             pod={pod}
+                                            initialFilter={tab.view === "channels" ? "channels" : "all"}
+                                            onOpenChannel={(id) => openChannel({ id, title: null })}
+                                            onConnect={() => setReaching(true)}
                                             openId={openConversationId}
                                             onOpen={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onOpenRun={(runId) => openRun(runId, "Workflow run")}
@@ -1932,10 +1966,8 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                         />
                                     ) : tab.view === "workflows" ? (
                                         <WorkflowsPage pod={pod} pods={pods.data ?? []} onOpenWorkflow={openWorkflow} onOpenRun={openRun} onAsk={chat.prompt} onLearn={() => setGuideOpen(true)} />
-                                    ) : tab.view === "groups" ? (
-                                        groupsOn && <GroupsPage pod={pod} onOpenGroup={openGroup} onConnect={() => setReaching(true)} />
                                     ) : tab.view === "contacts" ? (
-                                        contactsOn && <ContactsPage pod={pod} />
+                                        <ContactsPlace pod={pod} onConnect={() => setReaching(true)} />
                                     ) : <AllView
                                         podId={pod.id}
                                         spaceName={pod.name}
@@ -1990,15 +2022,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                     </div>
                                 </Pane>
                             ))}
-                            {groupsOn && allTabs.filter((tab): tab is Extract<Tab, {kind: "group"}> => tab.kind === "group").map(tab => (
-                                <Pane className="pane group-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
-                                    <GroupPage
+                            {allTabs.filter((tab): tab is Extract<Tab, {kind: "channel"}> => tab.kind === "channel").map(tab => (
+                                <Pane className="pane channel-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
+                                    <ChannelPage
                                         pod={pod}
-                                        groupId={tab.groupId}
+                                        channelId={tab.channelId}
                                         visible={isVisible(tab.id)}
                                         onNamed={(title) => renameTab(tab.id, title)}
-                                        onOpenGroups={() => pickTab("space:groups")}
-                                        onInvite={() => { setShareAdding(true); setShareOpen(true); }}
+                                        onLeft={() => pickTab("space:chats")}
                                     />
                                 </Pane>
                             ))}
@@ -2072,7 +2103,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             </main>
 
             {reaching && pod && <ReachSheet pod={pod} onClose={() => setReaching(false)} />}
-            {shareOpen && pod && <ShareSheet pod={pod} orgId={activeOrgId} subject={shareSubject} adding={shareAdding} onClose={() => { setShareOpen(false); setShareAdding(false); }} />}
+            {shareOpen && pod && <ShareSheet pod={pod} orgId={activeOrgId} subject={shareSubject} onClose={() => setShareOpen(false)} />}
             {touring && pod && <AppTour stops={stops} onPrepare={prepareStop} onClose={endTour} />}
             {guideOpen && guide && !touring && <PlaceGuide guide={guide} onTry={guide.tryIt ? tryGuide : undefined} onClose={() => setGuideOpen(false)} />}
 

@@ -10,6 +10,7 @@ from app.modules.datastore.domain.datastore_entities import (
     DatastoreTableEntity,
 )
 from app.modules.datastore.domain.errors import DatastoreValidationError
+from app.modules.datastore.domain.row_security import RowPrincipal
 from app.modules.datastore.services.value_converter import ValueConverter
 
 
@@ -56,6 +57,9 @@ class TableContext:
     #: table, or as the function a contact called; this is what its events say
     #: instead of naming either.
     outside_actor: str | None = None
+    #: The contact a write to a contact-owned table is made for -- by a
+    #: function they called -- so the row policy reads the session as them.
+    for_contact: UUID | None = None
     _column_map: Dict[str, ColumnSchema] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
@@ -81,6 +85,25 @@ class TableContext:
             contact_owned=table.contact_owned,
             outside_actor=outside_actor,
         )
+
+    def row_principal(
+        self, user_id: UUID | None, *, is_pod_admin: bool = False
+    ) -> RowPrincipal | None:
+        """Who a record read or write names to this table's row policy, if any.
+
+        Both policies are forced on the table's owner and fail closed, so a
+        session that names nobody is refused every write and matches no row.
+        A per-user table names the member and whether they administer the pod.
+        A contact-owned one names the contact the work is for, or else the
+        member, whose audience sees every contact's rows.
+        """
+        if self.enable_rls:
+            return RowPrincipal.for_user(user_id, is_pod_admin=is_pod_admin)
+        if not self.contact_owned:
+            return None
+        if self.for_contact is not None:
+            return RowPrincipal.contact(self.for_contact)
+        return RowPrincipal.for_user(user_id, is_pod_admin=is_pod_admin)
 
     def get_column(self, name: str) -> Optional[ColumnSchema]:
         return self._column_map.get(name)

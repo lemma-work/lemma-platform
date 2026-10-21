@@ -82,6 +82,28 @@ class _Session:
         return None
 
 
+class _Changes:
+    """A change capture that appends nothing: the statement goes out as built."""
+
+    snapshot: frozenset[str] = frozenset()
+
+    async def prepare(self) -> None:
+        return None
+
+    async def begin(self, session) -> None:
+        del session
+
+    def wrap(self, sql, params, **kwargs):
+        del kwargs
+        return sql, params
+
+    def row(self, row) -> dict[str, object]:
+        return dict(row._mapping)
+
+    async def wake_handoff(self, session) -> None:
+        del session
+
+
 def _repository(session: _Session) -> DatastoreRecordRepository:
     @asynccontextmanager
     async def _session_factory():
@@ -107,6 +129,7 @@ class TestTheGuardReachesTheStatement:
             "t-1",
             {"status": "done"},
             uuid4(),
+            changes=_Changes(),  # type: ignore[arg-type]
             enforce_user_scope=False,
             expected_updated_at=_READ_AT,
         )
@@ -126,6 +149,7 @@ class TestTheGuardReachesTheStatement:
             "t-1",
             {"status": "done"},
             uuid4(),
+            changes=_Changes(),  # type: ignore[arg-type]
             enforce_user_scope=False,
         )
 
@@ -149,6 +173,7 @@ class TestAFailedGuardSaysWhichFailureItWas:
                 "t-1",
                 {"status": "done"},
                 uuid4(),
+                changes=_Changes(),  # type: ignore[arg-type]
                 enforce_user_scope=False,
                 expected_updated_at=_READ_AT,
             )
@@ -163,6 +188,7 @@ class TestAFailedGuardSaysWhichFailureItWas:
                 "t-1",
                 {"status": "done"},
                 uuid4(),
+                changes=_Changes(),  # type: ignore[arg-type]
                 enforce_user_scope=False,
                 expected_updated_at=_READ_AT,
             )
@@ -179,6 +205,7 @@ class TestAFailedGuardSaysWhichFailureItWas:
                 "t-1",
                 {"status": "done"},
                 uuid4(),
+                changes=_Changes(),  # type: ignore[arg-type]
                 enforce_user_scope=False,
             )
 
@@ -198,6 +225,7 @@ class TestATableWithNoTimestampRefusesTheGuard:
                 "t-1",
                 {"status": "done"},
                 uuid4(),
+                changes=_Changes(),  # type: ignore[arg-type]
                 enforce_user_scope=False,
                 expected_updated_at=_READ_AT,
             )
@@ -257,6 +285,7 @@ class TestTheProbeSeesTheSameRowsTheUpdateCould:
                 "t-1",
                 {"status": "done"},
                 user_id,
+                changes=_Changes(),  # type: ignore[arg-type]
                 expected_updated_at=_READ_AT,
             )
 

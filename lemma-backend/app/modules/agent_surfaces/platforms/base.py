@@ -18,6 +18,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceLifecycleEvent,
 )
 from app.modules.agent_surfaces.domain.groups import ParsedGroupUpdate
+from app.modules.agent_surfaces.domain.line_changes import ParsedLineChange
 from app.modules.agent_surfaces.domain.decision_card import (
     CardRetirement,
     DecisionCardHandle,
@@ -67,6 +68,11 @@ class BaseSurfaceAdapter(EnvelopeDeliveryMixin):
         self, payload: dict[str, object]
     ) -> list[ParsedGroupUpdate]:
         """What happened to groups themselves. Default: a bot that creates none."""
+        del payload
+        return []
+
+    def parse_line_changes(self, payload: dict[str, object]) -> list[ParsedLineChange]:
+        """Messages the platform says were edited or deleted. Default: none."""
         del payload
         return []
 

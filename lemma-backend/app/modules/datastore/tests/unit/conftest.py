@@ -11,6 +11,16 @@ from app.modules.datastore.services.table_service import TableService
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _no_search_scope_cache(monkeypatch):
+    """Unit tests compute every scope: the cache is Redis, and its e2e tests own it."""
+    from app.modules.datastore.config import datastore_settings
+
+    monkeypatch.setattr(
+        datastore_settings, "datastore_search_scope_cache_ttl_seconds", 0
+    )
+
+
 @pytest.fixture
 def table_repository_mock() -> AsyncMock:
     return AsyncMock()

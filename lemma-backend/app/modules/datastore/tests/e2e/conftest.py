@@ -15,12 +15,8 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.events.message_bus import get_message_bus
-from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
-from app.core.test_utils import shared_kreuzberg
-from app.modules.datastore.infrastructure.session import get_datastore_session_maker
-from app.modules.datastore.infrastructure.transactional_events import (
-    ensure_datastore_event_outbox,
+from app.core.test_shared_containers import (
+    shared_kreuzberg,
 )
 from app.modules.datastore.tests.e2e.harness import (
     DatastoreApi,
@@ -107,17 +103,6 @@ scenario = e2e_fixtures.scenario
 DocumentProcessorName = Literal["kreuzberg", "docling", "xberg"]
 
 
-@pytest_asyncio.fixture
-async def datastore_outbox_dispatcher(e2e_settings, db_manager):
-    """Run the production datastore outbox publisher for realtime API tests."""
-    del e2e_settings, db_manager
-    await ensure_datastore_event_outbox()
-    message_bus = get_message_bus()
-    await message_bus.connect()
-    async with outbox_dispatcher_lifespan(get_datastore_session_maker(), message_bus):
-        yield
-
-
 @pytest.fixture(autouse=True)
 def _forget_document_processor_traffic(request):
     """Give each test the shared fake with an empty ledger.
@@ -157,14 +142,21 @@ def document_worker(
             "E2E_DISABLE_WORKER_FILE_AUTOINDEX": "false",
             "DOCUMENT_PROCESSOR": processor,
             "KREUZBERG_URL": fake_document_processor_server.base_url,
-            "KREUZBERG_REQUEST_TIMEOUT_SECONDS": "1",
-            "KREUZBERG_CONNECT_TIMEOUT_SECONDS": "0.2",
+            # Generous on purpose. A client-side timeout is judged by the
+            # health check, so on a loaded runner a 1 s budget turned a fake
+            # that had already answered into "extractor down" whenever a test
+            # had the health check failing. The hang test sets its own.
+            "KREUZBERG_REQUEST_TIMEOUT_SECONDS": "10",
+            "KREUZBERG_CONNECT_TIMEOUT_SECONDS": "2",
             "KREUZBERG_TRANSIENT_RETRY_ATTEMPTS": "2",
             "KREUZBERG_TRANSIENT_RETRY_BASE_DELAY_SECONDS": "0.01",
             "KREUZBERG_CIRCUIT_FAILURE_THRESHOLD": "20",
             "DOCLING_SERVE_URL": fake_document_processor_server.base_url,
             "DOCLING_REQUEST_TIMEOUT_SECONDS": "2",
             "DOCUMENT_PROCESSING_DEBOUNCE_SECONDS": "0",
+            # One attempt, so a document failure is terminal within the test
+            # rather than after the production backoff.
+            "DOCUMENT_PROCESSING_MAX_ATTEMPTS": "1",
         }
         async with production_worker_process(
             e2e_settings,
@@ -184,7 +176,7 @@ def kreuzberg_url(tmp_path_factory, worker_id):
     """URL of the single Kreuzberg shared across all xdist workers + the worker.
 
     Shared so the heavy embedding container runs once (see
-    ``app.core.test_utils.shared_kreuzberg``). The streaq worker uses the same
+    ``app.core.test_shared_containers.shared_kreuzberg``). The streaq worker uses the same
     container via the ``worker`` fixture, which is why this lives in shared
     test_utils rather than inline here.
     """

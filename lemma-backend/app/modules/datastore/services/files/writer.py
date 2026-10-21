@@ -20,6 +20,8 @@ from app.modules.datastore.domain.ports import (
 )
 from app.modules.datastore.infrastructure.storage_paths import (
     build_datastore_folder_storage_prefix,
+    is_object_layout,
+    object_file_prefix,
 )
 from app.modules.datastore.services.files.authorizer import FileAuthorizer
 from app.modules.datastore.services.files.folder_creation import (
@@ -107,6 +109,7 @@ class FileWriter(FolderCreationMixin):
         )
 
         previous_search_enabled = file_entity.search_enabled
+        previous_sha256 = file_entity.content_sha256
         previous_path = file_entity.path
         previous_storage_key = (
             self.projection.storage_key(file_entity) if file_entity.is_file else None
@@ -158,6 +161,7 @@ class FileWriter(FolderCreationMixin):
             file_entity=file_entity,
             previous_path=previous_path,
             previous_search_enabled=previous_search_enabled,
+            previous_sha256=previous_sha256,
             previous_storage_key=previous_storage_key,
             new_storage_key=new_storage_key,
             has_content=has_content,
@@ -295,7 +299,11 @@ class FileWriter(FolderCreationMixin):
             file_entity,
             previous_search_enabled=plan.previous_search_enabled,
         ):
-            file_entity.mark_content_updated(plan.requester_user_id)
+            file_entity.mark_content_updated(
+                plan.requester_user_id,
+                previous_sha256=plan.previous_sha256,
+                inputs_changed=file_entity.id in plan.artifacts_to_regenerate,
+            )
         elif plan.previous_path != file_entity.path:
             # One event for the move, on the thing that moved -- see
             # `mark_moved`. The descendants below send none: the cache this
@@ -369,11 +377,16 @@ class FileWriter(FolderCreationMixin):
             key=lambda item: (item.path.count("/"), item.path),
             reverse=True,
         )
-        files: list[dict[str, str]] = [
+        files: list[dict[str, str | None]] = [
             {
                 "file_id": str(entity.id),
                 "path": entity.path,
                 "storage_key": self.projection.storage_key(entity),
+                "object_prefix": (
+                    object_file_prefix(entity.pod_id, entity.id)
+                    if is_object_layout(entity) and entity.id is not None
+                    else None
+                ),
             }
             for entity in doomed
             if entity.is_file
@@ -435,7 +448,7 @@ class FileWriter(FolderCreationMixin):
             path=normalized_path,
             requester_user_id=requester_user_id,
         )
-        await self._ensure_directory_path(
+        parent = await self._ensure_directory_path(
             pod_id,
             parent_path,
             requester_user_id=requester_user_id,
@@ -446,6 +459,7 @@ class FileWriter(FolderCreationMixin):
             path=normalized_path,
             exclude_file_id=file_entity.id,
         )
+        file_entity.parent_id = self._parent_row_id(pod_id, parent)
         file_entity.rename(new_name)
         file_entity.path = normalized_path
         # A rename can change the file's extension and therefore its type, which
@@ -494,5 +508,5 @@ class FileWriter(FolderCreationMixin):
                 continue
             suffix = descendant.path.removeprefix(plan.previous_path)
             descendant.path = f"{folder_entity.path}{suffix}"
-            descendant.mark_content_updated(plan.requester_user_id)
+            descendant.mark_content_updated(plan.requester_user_id, inputs_changed=True)
             await self.file_repository.update(descendant)

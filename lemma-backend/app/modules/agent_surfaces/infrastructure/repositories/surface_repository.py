@@ -5,7 +5,6 @@ from app.core.config import reveal_secret
 import hashlib
 
 from collections.abc import Collection
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select, text
@@ -60,11 +59,9 @@ def _identity_claim_lock_key(
 class SurfaceRepository(SurfaceInstallationRepositoryPort):
     """Repository for agent surface installations."""
 
-    def __init__(self, uow: IUnitOfWork, message_bus: Any = None):
+    def __init__(self, uow: IUnitOfWork):
         self.uow = uow
         self.session: Session = uow.session
-        if message_bus is not None:
-            self.uow.set_message_bus(message_bus)
 
     def _collect_events(self, entity: AgentSurfaceEntity) -> None:
         events = entity.collect_events()
@@ -173,6 +170,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
         surface_identity_id: str | None = None,
+        also_paused: bool = False,
         limit: int | None = None,
     ) -> list[AgentSurfaceEntity]:
         """The live surfaces an inbound event could be for; see `routing_surfaces`.
@@ -187,6 +185,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             external_workspace_id=external_workspace_id,
             system_credentials_only=system_credentials_only,
             surface_identity_id=surface_identity_id,
+            also_paused=also_paused,
         )
         if limit is not None:
             statement = statement.limit(limit)

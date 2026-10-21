@@ -14,6 +14,18 @@ here from what routing knows. Whatever the model put under that key is
 replaced, so a prompt cannot make a function act for somebody else. A function
 must declare ``contact_id`` in its input schema to be opened to contacts.
 
+A function that also declares ``contact`` is told who they are beyond an id:
+
+    {"id": ..., "emails": [...], "phones": [...], "telegram_ids": [...],
+     "host_ids": [...], "slack_ids": [...], "teams_ids": [...]}
+
+only the handles something proved they hold (``contacts/domain/verified``),
+so an order can be matched by the address it was placed with and not by an
+address somebody typed. ``id`` is the contact they are now: after a merge, the
+survivor, whose handles these are. ``contact`` is ``null`` for an anonymous
+form submission; a contact forgotten meanwhile has none to give either. The
+model's ``contact`` is dropped whether or not the function declares one.
+
 Three limits, each because a contact's conversation can ask on every turn:
 
 * a daily allowance per contact per function (``function_contact_calls_per_day``);
@@ -35,6 +47,10 @@ from sqlalchemy import select
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.contacts.contracts import (
+    VerifiedHandles,
+    verified_contact_handles,
+)
 from app.modules.function.config import function_settings
 from app.modules.function.domain.entities import (
     FunctionRunEntity,
@@ -49,8 +65,10 @@ from app.modules.function.infrastructure.contact_calls import (
     PriorCall,
 )
 from app.modules.function.infrastructure.models import FunctionModel
+from app.modules.function.services.contact_execution import CONTACT_HANDLES_KEY
 
 __all__ = [
+    "CONTACT_HANDLES_KEY",
     "CONTACT_INPUT_KEY",
     "ContactFunctionOutcome",
     "ContactFunctionUnavailable",
@@ -226,14 +244,33 @@ async def _start(
         )
     except ValidationError as exc:
         raise ContactFunctionUnavailable(f"Input for {name} is not JSON") from exc
+    contact: JsonObject | None = None
+    if contact_id is not None:
+        async with uow_factory() as uow:
+            handles = await verified_contact_handles(
+                uow, pod_id=pod_id, contact_id=contact_id
+            )
+        contact = _contact_input(handles) if handles is not None else None
     try:
         return await build_function_use_cases(
             uow_factory
         ).dispatch_function_for_contact(
-            pod_id=pod_id, name=name, input_data=payload, contact_id=contact_id
+            pod_id=pod_id,
+            name=name,
+            input_data=payload,
+            contact_id=contact_id,
+            contact=contact,
         )
     except FunctionDomainError as exc:
         raise ContactFunctionUnavailable(str(exc)) from exc
+
+
+def _contact_input(handles: VerifiedHandles) -> JsonObject:
+    """The ``contact`` a function is told: the handles, under ``id`` and lists."""
+    return {
+        "id": str(handles.contact_id),
+        **handles.model_dump(mode="json", exclude={"contact_id"}),
+    }
 
 
 async def _record_quietly(ledger: ContactCallLedger, claim: str, run_id: UUID) -> None:

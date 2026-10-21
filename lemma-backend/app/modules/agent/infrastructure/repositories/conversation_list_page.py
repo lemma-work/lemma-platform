@@ -36,6 +36,7 @@ def list_statement(
     parent_id: UUID | None,
     archived: bool,
     search: str | None,
+    in_channel: bool | None = None,
 ) -> Select[tuple[ConversationModel]]:
     # One list or the other, never both: the archive is a place you go, not
     # a tail on the end of the history. Equality rather than "not archived"
@@ -64,6 +65,14 @@ def list_statement(
             ConversationModel.agent_id, ConversationModel.pod_id
         )
         stmt = stmt.where(agent_scope_id == selected_agent_id)
+    if in_channel is not None:
+        # A channel's conversations are reached through their channel; the
+        # chats list is the ones of no channel.
+        stmt = stmt.where(
+            ConversationModel.channel_id.is_not(None)
+            if in_channel
+            else ConversationModel.channel_id.is_(None)
+        )
     if status is not None:
         stmt = stmt.where(ConversationModel.status == status.value)
     if conversation_type is not None:

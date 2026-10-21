@@ -275,8 +275,16 @@ class _SetupHarness(SurfaceSetupReadMixin, SurfaceConsentMixin):
     pass
 
 
-def _setup_harness(surface):
+def _setup_harness(surface, monkeypatch):
+    # Nothing has arrived through it, and nothing is wrong with it: the
+    # checklist is what is left to do.
+    setup_read = "app.modules.agent_surfaces.services.surface_setup_read"
+    monkeypatch.setattr(
+        f"{setup_read}.surface_heard_from", AsyncMock(return_value=False)
+    )
+    monkeypatch.setattr(f"{setup_read}.surface_problem", AsyncMock(return_value=None))
     harness = _SetupHarness()
+    harness.surface_repository = SimpleNamespace(uow=None)
     harness.get_surface_by_name_in_pod = AsyncMock(return_value=surface)
     harness.get_platform_setup_guide = lambda platform: None
     harness._surface_admin_consent = AsyncMock(return_value=None)
@@ -308,10 +316,10 @@ async def test_a_reader_who_cannot_change_the_surface_is_not_given_its_verify_to
         lambda: True,
     )
     pod_id = uuid4()
-    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id))
+    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id), monkeypatch)
 
     setup = await harness.get_surface_setup_by_name(
-        pod_id=pod_id, name="whatsapp", reveal_secrets=False
+        pod_id=pod_id, name="whatsapp", reveal_secrets=False, connection=None
     )
 
     assert _A_VERIFY_TOKEN not in _copyable_values(setup)
@@ -328,10 +336,10 @@ async def test_a_reader_who_can_change_the_surface_still_gets_the_verify_token(
         lambda: True,
     )
     pod_id = uuid4()
-    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id))
+    harness = _setup_harness(_whatsapp_surface(pod_id=pod_id), monkeypatch)
 
     setup = await harness.get_surface_setup_by_name(
-        pod_id=pod_id, name="whatsapp", reveal_secrets=True
+        pod_id=pod_id, name="whatsapp", reveal_secrets=True, connection=None
     )
 
     assert _A_VERIFY_TOKEN in _copyable_values(setup)

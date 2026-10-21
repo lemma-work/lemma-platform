@@ -12,9 +12,14 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.api.runtime_profile_schemas import (
+    AgentRuntimeProfileResponse,
+)
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
+from app.modules.agent.domain.organization_default import with_default_mark
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
+    HarnessRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
     RuntimeModelCatalogEntry,
     RuntimeProfileKind,
@@ -150,3 +155,40 @@ def test_an_edit_carrying_the_old_mask_is_refused(
             refresh_models=False,
             **request,
         )
+
+
+def test_the_listing_publishes_typed_fields_rather_than_the_metadata_bag() -> None:
+    """Internal bookkeeping stays in; the two facts clients read come out typed."""
+    profile = _profile(
+        OpenAICompatibleRuntimeConfig(base_url="https://api.example.com/v1")
+    ).with_changes(metadata={"source": "openai_compatible", "catalog_discovered": True})
+    marked = with_default_mark(profile, model_name=None)
+
+    unmarked_view = AgentRuntimeProfileResponse.model_validate(profile.public_dict())
+    marked_view = AgentRuntimeProfileResponse.model_validate(marked.public_dict())
+
+    assert "metadata" not in marked_view.model_dump()
+    assert "catalog_discovered" not in str(marked_view.model_dump())
+    assert unmarked_view.organization_default is False
+    assert marked_view.organization_default is True
+    assert marked_view.harness_key is None
+
+
+def test_an_agent_host_profile_publishes_the_coding_agent_it_runs() -> None:
+    profile = AgentRuntimeProfile(
+        id=str(uuid4()),
+        organization_id=uuid4(),
+        user_id=uuid4(),
+        harness_id=uuid4(),
+        scope=RuntimeProfileScope.PERSONAL,
+        kind=RuntimeProfileKind.HARNESS,
+        protocol=RuntimeProfileProtocol.AGENT_HOST,
+        name="Codex on my Mac",
+        config=HarnessRuntimeConfig(harness_snapshot_revision="r1"),
+        metadata={"source": "AGENT_HOST", "harness_key": "codex"},
+    )
+
+    view = AgentRuntimeProfileResponse.model_validate(profile.public_dict())
+
+    assert view.harness_key == "codex"
+    assert view.organization_default is False

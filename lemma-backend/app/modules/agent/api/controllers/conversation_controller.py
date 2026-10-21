@@ -18,8 +18,11 @@ from app.core.authorization.dependencies import (
 from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.domain.server_metadata import client_metadata
-from app.modules.agent.services.runtime_availability import check_runtime_for_pod
+from app.modules.agent.services.runtime_availability import (
+    check_conversation_runtime_for_pod,
+)
 from app.modules.agent.api.controllers.conversation_streaming import (
     load_authorized_agent_run,
     start_and_stream_run,
@@ -107,7 +110,7 @@ async def create_conversation(
     service: ConversationServiceDep,
 ) -> ConversationResponse:
     # Refused when saved, with the reason, rather than at the first turn.
-    await check_runtime_for_pod(
+    await check_conversation_runtime_for_pod(
         service.uow, data.agent_runtime, pod_id=pod_id, user_id=user.id
     )
     conversation = await service.create_conversation(
@@ -133,15 +136,14 @@ async def create_conversation(
     dependencies=[CONVERSATION_ENUMERATION],
     summary="List Pod Agent Conversations",
     description=(
-        "List root conversations for the current user in a pod. Omit "
-        "agent_name to list conversations across the pod, pass POD_DEFAULT "
-        "(or pod_default) to list default pod assistant conversations, or "
-        "pass a name to list conversations for a specific pod agent. Child "
-        "(sub-agent) conversations are omitted by default; pass parent_id to "
-        "list the children of a specific conversation instead. Archived "
-        "conversations are omitted; pass archived=true for the archive. "
-        "Pass search to keep only conversations whose title contains it "
-        "(case-insensitive). Ordered by last_activity_at, most recent first."
+        "List root conversations for the current user in a pod. Omit agent_name for "
+        "conversations across the pod, pass POD_DEFAULT (or pod_default) for the pod "
+        "assistant's, or a name for one pod agent's. Child (sub-agent) conversations "
+        "are omitted by default; pass parent_id to list one conversation's children "
+        "instead. Archived conversations are omitted; pass archived=true for the "
+        "archive. search keeps titles containing it (case-insensitive); "
+        "in_channel=false keeps conversations of no channel (the chats list), true "
+        "those in one. Ordered by last_activity_at, most recent first."
     ),
 )
 async def list_conversations(
@@ -155,6 +157,7 @@ async def list_conversations(
     parent_id: UUID | None = Query(default=None),
     archived: bool = Query(default=False),
     search: str | None = Query(default=None, min_length=1, max_length=200),
+    in_channel: bool | None = Query(default=None),
     page_token: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
@@ -172,6 +175,7 @@ async def list_conversations(
         search=search,
         cursor=parse_conversation_page_token(page_token),
         limit=limit,
+        in_channel=in_channel,
     )
     return ConversationListResponse(
         items=[ConversationResponse.model_validate(item) for item in conversations],
@@ -226,7 +230,7 @@ async def update_conversation(
     update_payload = data.model_dump(exclude_unset=True)
     if "agent_runtime" in update_payload:
         update_payload["agent_runtime"] = data.agent_runtime
-        await check_runtime_for_pod(
+        await check_conversation_runtime_for_pod(
             service.uow,
             data.agent_runtime,
             pod_id=pod_id,
@@ -339,9 +343,9 @@ async def resolve_approval(
     # its half-finished resume instead of erroring (status "reconciled"). A truly
     # unknown approval raises UnknownApprovalError -> 404 via the domain handler.
     #
-    # defer_reconciliation keeps the browser's timeout out of the equation: the
-    # decision commits here, and an approved tool (which may legitimately run for
-    # minutes) is handed to a worker job, answering with status "queued".
+    # The browser's timeout stays out of the equation: the decision commits
+    # here with an `agent.approval.execute` item, and an approved tool (which
+    # may legitimately run for minutes) runs in a worker -- status "queued".
     resolution = await service.resolve_user_approval(
         conversation_id=conversation_id,
         approval_id=approval_id,
@@ -349,7 +353,6 @@ async def resolve_approval(
         pod_id=pod_id,
         decision=data.decision,
         response=data.response,
-        defer_reconciliation=True,
     )
     return ApprovalDecisionResponse(
         approval_id=approval_id,
@@ -534,39 +537,41 @@ async def stream_conversation(
     except (AgentNotFoundError, ConversationNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
 
+    async def load(run_id: UUID | None) -> AgentRun | None:
+        async with pod_context_scope(
+            uow_factory, request=request, user_id=user.id, pod_id=pod_id
+        ) as scope:
+            service = _build_conversation_service(scope.uow)
+            if run_id is None:
+                return await service.queries.get_active_agent_run(
+                    conversation_id=conversation_id, user_id=user.id, pod_id=pod_id
+                )
+            return await load_authorized_agent_run(
+                service,
+                conversation_id=conversation_id,
+                agent_run_id=run_id,
+                user_id=user.id,
+                pod_id=pod_id,
+            )
+
     async def event_generator() -> AsyncGenerator[str, None]:
         async with channel_service.subscribe(
             [conversation_channel(conversation_id)]
         ) as iterator:
-            async with pod_context_scope(
-                uow_factory, request=request, user_id=user.id, pod_id=pod_id
-            ) as scope:
-                service = _build_conversation_service(scope.uow)
-                target_run = (
-                    await load_authorized_agent_run(
-                        service,
-                        conversation_id=conversation_id,
-                        agent_run_id=agent_run_id,
-                        user_id=user.id,
-                        pod_id=pod_id,
-                    )
-                    if agent_run_id is not None
-                    else await service.queries.get_active_agent_run(
-                        conversation_id=conversation_id,
-                        user_id=user.id,
-                        pod_id=pod_id,
-                    )
-                )
+            target_run = await load(agent_run_id)
             if target_run is None:
                 return
-
             terminal_chunk = terminal_run_chunk(target_run)
             if terminal_chunk is not None:
                 yield terminal_chunk
                 return
 
+            async def ended() -> str | None:
+                run = await load(target_run.id)
+                return terminal_run_chunk(run) if run is not None else None
+
             async for chunk in with_keepalive(
-                iter_subscription(iterator, target_run.id)
+                iter_subscription(iterator, target_run.id), on_idle=ended
             ):
                 yield chunk
 

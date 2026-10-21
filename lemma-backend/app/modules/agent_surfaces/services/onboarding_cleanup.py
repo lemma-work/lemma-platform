@@ -1,9 +1,6 @@
 """Expired signup content must disappear even when the sender never returns."""
 
-import asyncio
 from datetime import datetime, timedelta, timezone
-
-from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -52,12 +49,3 @@ async def purge_expired_onboarding(uows: UnitOfWorkFactory) -> None:
             grace=timedelta(seconds=PURGE_GRACE_SECONDS),
             attached_grace=timedelta(seconds=ATTACHED_PURGE_GRACE_SECONDS),
         )
-
-
-async def run_onboarding_cleanup(uows: UnitOfWorkFactory) -> None:
-    while True:
-        try:
-            await purge_expired_onboarding(uows)
-        except SQLAlchemyError:
-            logger.warning("agent_surfaces.onboarding_cleanup.failed", exc_info=True)
-        await asyncio.sleep(60)

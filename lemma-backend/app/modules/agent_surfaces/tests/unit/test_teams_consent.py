@@ -145,7 +145,7 @@ async def test_a_reader_who_cannot_change_the_surface_gets_no_consent_link(
     surface = _pending_teams_surface()
 
     setup = await _harness(surface).get_surface_setup_by_name(
-        pod_id=surface.pod_id, name=surface.name, reveal_secrets=False
+        pod_id=surface.pod_id, name=surface.name, reveal_secrets=False, connection=None
     )
 
     assert setup["admin_consent"]["required"] is True
@@ -158,7 +158,7 @@ async def test_an_editor_gets_the_consent_link(nonce_store):
     surface = _pending_teams_surface()
 
     setup = await _harness(surface).get_surface_setup_by_name(
-        pod_id=surface.pod_id, name=surface.name, reveal_secrets=True
+        pod_id=surface.pod_id, name=surface.name, reveal_secrets=True, connection=None
     )
 
     assert "adminconsent" in setup["admin_consent"]["consent_url"]
@@ -169,7 +169,7 @@ async def test_reading_setup_writes_nothing_to_the_surface(nonce_store):
     harness = _harness(surface)
 
     await harness.get_surface_setup_by_name(
-        pod_id=surface.pod_id, name=surface.name, reveal_secrets=True
+        pod_id=surface.pod_id, name=surface.name, reveal_secrets=True, connection=None
     )
 
     harness.surface_repository.update.assert_not_awaited()

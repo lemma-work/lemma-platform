@@ -30,6 +30,7 @@ from app.modules.datastore.services.wiring import (
     get_schema_manager,
 )
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
+from app.modules.test_support.e2e.row_bound_records import row_bound_records
 
 pytestmark = pytest.mark.e2e
 
@@ -296,3 +297,84 @@ async def test_a_contact_reads_only_the_chosen_columns_in_key_order(
     assert rows == [
         {"subject": row["subject"]} for row in by_key if row["subject"] != "Theirs"
     ]
+
+
+async def test_a_member_works_a_contact_owned_table_where_row_security_binds(
+    pod_api: DatastoreApi, db_session: AsyncSession
+):
+    """Every record call names the member, so every contact's row is theirs.
+
+    Under a role the policy binds, as a deployment's is. Once these named
+    nobody on a table that was not per-user, and the policy refused every
+    write and matched no row.
+    """
+    table = await _tickets(pod_api)
+    async with row_bound_records(UUID(pod_api.pod_id)):
+        mine = await pod_api.create_record(
+            table, {"subject": "Mine", "contact_id": str(MINE)}
+        )
+        theirs = await pod_api.create_record(
+            table, {"subject": "Theirs", "contact_id": str(THEIRS)}
+        )
+        assert (await pod_api.get_record(table, mine["id"]))["subject"] == "Mine"
+        updated = await pod_api.update_record(table, theirs["id"], {"cost_price": 2.5})
+        assert updated["cost_price"] == 2.5
+
+        await pod_api.bulk_create(
+            table,
+            [
+                {"subject": "Second", "contact_id": str(MINE)},
+                {"subject": "Unclaimed"},
+            ],
+        )
+        listed = (await pod_api.list_records(table))["items"]
+        by_subject = {row["subject"]: row for row in listed}
+        assert sorted(by_subject) == ["Mine", "Second", "Theirs", "Unclaimed"]
+        await pod_api.bulk_update(
+            table,
+            [{"id": by_subject[name]["id"], "cost_price": 1.0} for name in by_subject],
+        )
+
+        await pod_api.delete_record(table, theirs["id"])
+        await pod_api.bulk_delete(table, [by_subject["Unclaimed"]["id"]])
+        left = (await pod_api.list_records(table))["items"]
+        assert sorted(row["subject"] for row in left) == ["Mine", "Second"]
+        assert {row["cost_price"] for row in left} == {1.0}
+
+        async def subjects_of(contact_id: UUID) -> list[str]:
+            rows = await rows_for_contact(
+                _uow_factory(db_session),
+                pod_id=UUID(pod_api.pod_id),
+                table_name=table,
+                contact_id=contact_id,
+            )
+            return sorted(str(row["subject"]) for row in rows)
+
+        assert await subjects_of(MINE) == ["Mine", "Second"]
+        assert await subjects_of(THEIRS) == []
+
+
+async def test_per_user_rows_keep_to_their_writer_where_row_security_binds(
+    pod_api: DatastoreApi, member_users, async_client
+):
+    """What the contact-owned fix must not move: a per-user row is its writer's."""
+    table = _name("notes")
+    await pod_api.create_table(
+        {
+            "name": table,
+            "enable_rls": True,
+            "columns": [{"name": "body", "type": "TEXT"}],
+        }
+    )
+    editor = DatastoreApi(async_client, pod_api.pod_id, user=member_users["editor"])
+    async with row_bound_records(UUID(pod_api.pod_id)):
+        mine = await pod_api.create_record(table, {"body": "mine"})
+        theirs = await editor.create_record(table, {"body": "theirs"})
+        assert [row["id"] for row in (await pod_api.list_records(table))["items"]] == [
+            mine["id"]
+        ]
+        await pod_api.get_record(
+            table, theirs["id"], expected_status=status.HTTP_404_NOT_FOUND
+        )
+        everyone = await pod_api.list_records(table, mode="ADMIN")
+        assert {row["id"] for row in everyone["items"]} == {mine["id"], theirs["id"]}

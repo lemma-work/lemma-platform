@@ -40,7 +40,7 @@ async def send_reengage_template(
         or whatsapp.phone_number_id
     )
     recipient = whatsapp_recipient(
-        event.reply_target, fallback_wa_id=event.sender_phone
+        reply_target_as(event, WhatsAppReplyTarget), fallback_wa_id=event.sender_phone
     )
     if not phone_number_id or recipient is None or recipient.is_group:
         # A group has no reply window to reopen, and no template goes to one.

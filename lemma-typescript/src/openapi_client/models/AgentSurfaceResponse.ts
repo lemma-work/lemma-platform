@@ -20,6 +20,7 @@ export type AgentSurfaceResponse = {
     name: string;
     platform: SurfacePlatform;
     pod_id: string;
+    problem?: (string | null);
     reach?: (SurfaceReach | null);
     status?: AgentSurfaceStatus;
     surface_identity_email?: (string | null);

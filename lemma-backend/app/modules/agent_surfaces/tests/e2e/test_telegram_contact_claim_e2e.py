@@ -12,7 +12,6 @@ server that cannot send the email a stranger would otherwise be asked for.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,7 +20,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.composition import build_surface_turn_starter
 from app.modules.agent_surfaces.config import surface_settings
@@ -38,7 +36,7 @@ from app.modules.agent_surfaces.services.chat_onboarding import (
     ChatOnboardingCoordinator,
 )
 from app.modules.agent_surfaces.services.onboarding_contact import contact_owner
-from app.modules.agent_surfaces.services.onboarding_replay import replay_onboarding
+from app.modules.agent_surfaces.services.onboarding_replay import hand_off_onboarding
 from app.modules.agent_surfaces.services.onboarding_replies import (
     NO_EMAIL_SIGNUP_MESSAGE,
 )
@@ -172,11 +170,8 @@ async def test_an_unverified_profile_number_links_the_chat_and_reaches_the_agent
 
     pending = await chat.pending()
     assert pending.step == OnboardingStep.READY and pending.user_id == user_id
-    queue = AsyncMock(spec=SharedStreaqJobQueue)
-    await replay_onboarding(pending.id, uow_factory=chat.factory, job_queue=queue)
-    context = SurfaceChatContext.model_validate(
-        queue.enqueue.call_args.kwargs["payload"]["context"]
-    )
+    context = await hand_off_onboarding(chat.factory, pending.id)
+    assert isinstance(context, SurfaceChatContext)
     assert context.message_text == "Plan my week" and context.user_id == user_id
     with suppress_agent_run_enqueue():
         await build_surface_turn_starter(chat.factory).execute_chat(context)

@@ -22,15 +22,19 @@
       required — but a release commit whose CI run shows those suites as
       *skipped* is expected, not a finding.
 - [ ] Migration-first rolling sequence is in the release notes, along with what
-      a worker restart costs. streaq stops claiming new work the moment it sees
-      SIGTERM and gives in-flight tasks `WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS`
-      (10s) to finish — which is a drain, but a short one, and it has to stay
-      under the orchestrator's own termination grace period (Kubernetes
-      defaults to 30s) or the platform SIGKILLs the worker mid-task anyway.
-      A long agent run — up to `AGENT_RUN_JOB_TIMEOUT_SECONDS`, about four
-      hours — will not finish inside it. What bounds that is the job heartbeat:
-      a killed worker stops reporting within 90 seconds and the run is recovered
-      then, rather than at the four-hour orphan cutoff. Say in the notes whether
-      a release is expected to interrupt runs, not whether it drains.
+      a worker restart costs. The work runtime stops claiming the moment it
+      sees SIGTERM; each running job is handed back uncharged at its next safe
+      point, within its class's grace (90 s for agent turns, 20 s otherwise by
+      default), and resumes on another worker from its last committed step.
+      The orchestrator's termination grace must exceed the longest class grace
+      plus teardown, or it SIGKILLs the worker mid-drain and those items wait
+      out their leases (60 s for a turn) instead. Say in the notes whether a
+      release is expected to interrupt runs, not whether it drains.
+- [ ] A release that carries migrations `0054_work_runtime` to
+      `0056_agent_surface_bundle_work` is deployed with the previous release's
+      workers scaled to zero before the migrations run. The release notes say
+      that runs, turns and jobs in flight at the upgrade are failed, and that
+      nothing still queued on the old transport is replayed (see
+      [reliability operations](../../lemma-backend/docs/operators/reliability.md#cutover-from-the-old-transport-design-13)).
 - [ ] Every resolved issue entry contains implementation and exact test evidence.
 - [ ] Rollback, replay, DLQ, partial cancellation, and support guidance are ready.

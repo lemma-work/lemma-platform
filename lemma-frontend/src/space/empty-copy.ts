@@ -146,9 +146,9 @@ function chatsEmpty(filter: "all" | "chats" | "channels" | "automations" | "docs
     if (filter === "channels") {
         return {
             art: "chats",
-            title: "Nothing from channels yet",
-            line: "Once " + name + " is on a channel, the conversations there land here.",
-            primary: { kind: "reach", label: "Connect a channel" },
+            title: "No shared chats yet",
+            line: "Start one with people here from New, or bring " + name + " into a WhatsApp, Telegram or Slack group.",
+            primary: { kind: "reach", label: "Connect a group" },
             starters: [],
         };
     }
@@ -173,7 +173,7 @@ function chatsEmpty(filter: "all" | "chats" | "channels" | "automations" | "docs
     return {
         art: "chats",
         title: "No chats yet",
-        line: "Your conversations with " + name + " are kept here, with the ones a channel or a schedule starts.",
+        line: "Your chats with " + name + " are kept here, with the shared ones and the ones a schedule starts.",
         primary: { kind: "chat", label: "New chat" },
         starters: [],
     };

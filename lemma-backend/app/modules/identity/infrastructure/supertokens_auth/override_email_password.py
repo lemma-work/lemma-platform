@@ -10,7 +10,6 @@ from supertokens_python.recipe.emailpassword.interfaces import (
 from supertokens_python.recipe.session.interfaces import SessionContainer
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.domain.email import normalize_identity_email
@@ -74,12 +73,9 @@ def override_emailpassword_functions(
                 emails = result.user.emails
                 async with async_session_maker() as db_session:
                     uow = SqlAlchemyUnitOfWork(db_session)
-                    message_bus = get_message_bus()
                     user_service = UserService(
-                        user_repository=UserRepository(uow, message_bus=message_bus),
-                        organization_repository=OrganizationRepository(
-                            uow, message_bus=message_bus
-                        ),
+                        user_repository=UserRepository(uow),
+                        organization_repository=OrganizationRepository(uow),
                     )
                     await user_service.create_user(
                         UserEntity(

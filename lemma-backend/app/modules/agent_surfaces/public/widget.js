@@ -664,6 +664,13 @@
       if (busy) showTyping();
     } else if (frame.type === "fill") {
       onFill(frame);
+    } else if (frame.type === "error") {
+      /* The run failed: what was written stays, and the visitor is told a
+         person will answer. "done" follows. */
+      hideTyping();
+      if (live) live.finish();
+      live = null;
+      if (frame.text) new Reply(false).finish(frame.text);
     } else if (frame.type === "done") {
       if (live) live.finish();
       live = null;
@@ -849,7 +856,7 @@
     }
     var card = el("div", "lw-card");
     codeCard = card;
-    var says = el("p", null, "We'll email you a code, so replies can reach you.");
+    var says = el("p", null, "We'll email you a code. Then this chat is yours on any device, and replies reach you by email.");
     var form = el("form");
     var field = el("input");
     field.type = "email";
@@ -956,7 +963,7 @@
     compose.appendChild(input);
     compose.appendChild(sendButton);
     var meta = el("div", "lw-meta");
-    verifyLink = el("button", "lw-link", "Get replies by email");
+    verifyLink = el("button", "lw-link", "Keep this chat");
     var brand = el("a", "lw-brand", "Powered by Lemma");
     brand.href = "https://lemma.work";
     brand.target = "_blank";

@@ -206,7 +206,10 @@ async def test_a_resend_after_its_run_finished_streams_the_ending_and_closes(
     assert {frame["agent_run_id"] for frame in frames} == {first["agent_run_id"]}
 
 
+@pytest.mark.drives_work
 async def test_a_resend_while_its_run_is_working_follows_the_run(scenario):
+    """Held: the session worker must not pick up and stream the turn, whose
+    only frames here are the ones the test publishes."""
     seeded = await seeded_conversation(scenario)
     client_id = f"web-{uuid4()}"
     first = await _append(
@@ -238,5 +241,13 @@ async def test_a_resend_while_its_run_is_working_follows_the_run(scenario):
     )
     await publishing
 
-    assert [frame["type"] for frame in frames] == ["status", "completed"]
+    # The first send started a real run, which may stream while the re-send
+    # follows it. Those tokens are that run's, and seeing them is what
+    # following means -- requiring none failed whenever the run spoke first.
+    assert frames[0]["type"] == "status"
     assert frames[0]["data"] == {"started_new_run": False, "deduplicated": True}
+    assert frames[-1]["type"] == "completed"
+    assert all(
+        frame["type"] == "token" and frame.get("agent_run_id") == run_id
+        for frame in frames[1:-1]
+    ), frames

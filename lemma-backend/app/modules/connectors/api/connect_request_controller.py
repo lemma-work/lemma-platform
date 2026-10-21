@@ -11,7 +11,7 @@ from app.core.api.callback_page import (
     safe_provider_error,
     sentence,
 )
-from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import BrowserUserId, CurrentUser
 from app.core.config import settings
 from app.modules.connectors.contracts.github import (
     github_install_url,
@@ -39,6 +39,7 @@ from app.modules.connectors.services.followup_request import (
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
 
 router = APIRouter(prefix="/connectors/connect-requests", tags=["Connectors"])
 org_router = APIRouter(
@@ -255,6 +256,7 @@ async def initiate_install_request(
 )
 async def oauth_callback(
     request: Request,
+    browser_user_id: BrowserUserId,
     connector_service: ConnectorServiceDep,
     error: Optional[str] = Query(default=None),
     response_format: Optional[str] = Query(
@@ -264,6 +266,24 @@ async def oauth_callback(
     ),
 ) -> Response:
     wants_json = _wants_json(request, response_format)
+
+    redirect_uri = str(request.url)
+    state = request.query_params.get("state")
+    setup_action = request.query_params.get("setup_action")
+    logger.debug("connectors.connect_request_controller.state.observed")
+
+    # Read before the exchange claims and spends it. Two things the redirect
+    # afterwards needs are recorded on the request and gone once it is claimed:
+    # whether this leg *is* an install return, and where the person started --
+    # which a refusal on the provider's page goes back to as well, so somebody
+    # who cancels lands where they began rather than on the app root.
+    was_followup = False
+    came_from = None
+    if state:
+        pending = await peek_connect_request(connector_service, state)
+        if pending is not None:
+            was_followup = followup_account_id(pending) is not None
+            came_from = return_path(pending)
 
     if error:
         # Never reflect the provider's string back verbatim. OAuth error codes
@@ -284,23 +304,8 @@ async def oauth_callback(
             ERROR,
             code="OAUTH_PROVIDER_ERROR",
             reason=f"The provider ended the authorization with \u201c{safe_error}\u201d.",
+            came_from=came_from,
         )
-
-    redirect_uri = str(request.url)
-    state = request.query_params.get("state")
-    setup_action = request.query_params.get("setup_action")
-    logger.debug("connectors.connect_request_controller.state.observed")
-
-    # Read before the exchange claims and spends it. Two things the redirect
-    # afterwards needs are recorded on the request and gone once it is claimed:
-    # whether this leg *is* an install return, and where the person started.
-    was_followup = False
-    came_from = None
-    if state:
-        pending = await peek_connect_request(connector_service, state)
-        if pending is not None:
-            was_followup = followup_account_id(pending) is not None
-            came_from = return_path(pending)
 
     if not state and not wants_json and _is_install_return(request):
         # An install started from GitHub's own app page rather than from a link
@@ -316,6 +321,7 @@ async def oauth_callback(
         account = await connector_service.handle_oauth_callback(
             redirect_uri=redirect_uri,
             state=state,
+            browser_user_id=browser_user_id,
         )
     except ConnectorDomainError as exc:
         if wants_json:

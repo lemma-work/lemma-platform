@@ -4,9 +4,10 @@ This slice owns upload → plan → status. Each public method opens only SHORT
 units of work (authorize + stage + enqueue; or a pure Redis read) and never
 holds a pooled connection across the archive upload or the planning job.
 
-Single-writer contract: ``start_upload_import`` writes the initial ``QUEUED``
-state and enqueues with the dedup job id ``pod-import-plan:{import_id}``; from
-that point the ``plan_pod_import`` worker is the only writer of the state doc.
+Single-writer contract: starting an import writes the initial ``QUEUED`` state
+and its planning work item (dedup ``pod-import-plan:{import_id}``) in one
+transaction; from that point the planning job is the only writer of the state
+row, until the person applies or cancels.
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ from app.core.api.uploads import upload_source_size
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.domain.errors import (
@@ -39,6 +39,19 @@ from app.modules.pod_bundle.domain.state import (
     ImportStatus,
     StepStatus,
 )
+from app.modules.pod_bundle.events.work import (
+    APPLY,
+    IMPORT_GITHUB,
+    IMPORT_URL,
+    PLAN,
+    PLANNING_KINDS,
+    BundleJobQueue,
+    GithubImportJob,
+    ImportJob,
+    UrlImportJob,
+    apply_key,
+    plan_key,
+)
 from app.modules.pod_bundle.infrastructure.rate_limiter import (
     BundleRateLimiter,
     get_bundle_rate_limiter,
@@ -50,10 +63,10 @@ from app.modules.pod_bundle.infrastructure.state_store import (
     get_pod_bundle_state_store,
 )
 
-PLAN_JOB_NAME = "plan_pod_import"
-GITHUB_JOB_NAME = "import_pod_github"
-URL_JOB_NAME = "import_pod_url"
-APPLY_JOB_NAME = "apply_pod_import"
+PLAN_JOB_NAME = PLAN
+GITHUB_JOB_NAME = IMPORT_GITHUB
+URL_JOB_NAME = IMPORT_URL
+APPLY_JOB_NAME = APPLY
 
 
 def _require_import_variables(
@@ -77,7 +90,7 @@ logger = get_logger(__name__)
 
 
 def import_apply_job_id(import_id: UUID) -> str:
-    return f"pod-import:{import_id}"
+    return apply_key(import_id)
 
 
 # Local file signatures we accept as bundle archives (zip magic bytes). The deep
@@ -91,7 +104,7 @@ def _read_prefix(path: Path, size: int) -> bytes:
 
 
 def import_plan_job_id(import_id: UUID) -> str:
-    return f"pod-import-plan:{import_id}"
+    return plan_key(import_id)
 
 
 def _resolve_lemma_url(url: str) -> tuple[str, UUID]:
@@ -126,13 +139,13 @@ class ImportUseCases:
         *,
         state_store: PodBundleStateStore | None = None,
         staging: BundleStagingStorage | None = None,
-        job_queue=None,
+        job_queue: BundleJobQueue | None = None,
         rate_limiter: BundleRateLimiter | None = None,
     ):
         self._uow_factory = uow_factory
         self._state_store = state_store or get_pod_bundle_state_store()
         self._staging = staging or BundleStagingStorage()
-        self._job_queue = job_queue or get_streaq_job_queue()
+        self._job_queue = job_queue or BundleJobQueue()
         self._rate_limiter = rate_limiter or get_bundle_rate_limiter()
 
     async def stage_upload(
@@ -190,10 +203,10 @@ class ImportUseCases:
         """Single URL-based import entry point.
 
         ``URL``: verify the lemma signed download token (410 on bad/expired) and
-        enqueue ``import_pod_url`` with the resolved source object — the worker
-        reads it straight from object storage (no server-side fetch, no SSRF).
-        ``GITHUB``: parse the repo reference and enqueue ``import_pod_github``.
-        The request carries no bytes either way.
+        queue ``pod_bundle.import_url`` with the resolved source object — the
+        worker reads it straight from object storage (no server-side fetch, no
+        SSRF). ``GITHUB``: parse the repo reference and queue
+        ``pod_bundle.import_github``. The request carries no bytes either way.
         """
         await self._authorize(
             pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
@@ -221,17 +234,13 @@ class ImportUseCases:
                 status=ImportStatus.QUEUED,
                 source=BundleSource(kind=BundleSourceKind.URL, url=url),
             )
-            await self._state_store.save_import(state)
-            job = await self._job_queue.enqueue(
-                URL_JOB_NAME,
-                context={
-                    "import_id": str(import_id),
-                    "pod_id": str(pod_id),
-                    "user_id": str(user_id),
-                    "source_kind": src_kind,
-                    "source_id": str(src_id),
-                },
-                _job_id=import_plan_job_id(import_id),
+            kind: str = IMPORT_URL
+            job: ImportJob = UrlImportJob(
+                import_id=import_id,
+                pod_id=pod_id,
+                user_id=user_id,
+                source_kind=src_kind,
+                source_id=src_id,
             )
         else:  # GITHUB
             from app.modules.pod_bundle.infrastructure.github_fetcher import (
@@ -251,22 +260,23 @@ class ImportUseCases:
                     ref=ref,
                 ),
             )
-            await self._state_store.save_import(state)
-            job = await self._job_queue.enqueue(
-                GITHUB_JOB_NAME,
-                context={
-                    "import_id": str(import_id),
-                    "pod_id": str(pod_id),
-                    "user_id": str(user_id),
-                    "owner": owner,
-                    "repo": repo,
-                    "account_id": str(account_id) if account_id else None,
-                },
-                _job_id=import_plan_job_id(import_id),
+            kind = IMPORT_GITHUB
+            job = GithubImportJob(
+                import_id=import_id,
+                pod_id=pod_id,
+                user_id=user_id,
+                owner=owner,
+                repo=repo,
+                account_id=account_id,
             )
 
-        if job is None:
-            raise BundleJobConflictError("This import is already being planned.")
+        async with self._uow_factory() as uow:
+            await self._state_store.stage_import(uow, state)
+            if not await self._job_queue.queue_job(
+                uow, kind, job, pod_id=pod_id, dedup_key=plan_key(import_id)
+            ):
+                raise BundleJobConflictError("This import is already being planned.")
+            await uow.commit()
         return state
 
     async def get_import(
@@ -290,7 +300,7 @@ class ImportUseCases:
         confirm_destructive: bool = False,
     ) -> ImportState:
         """Validate the plan is ready + confirmed, persist the resolved variables,
-        and enqueue the apply job (dedup id doubles as the concurrency guard)."""
+        and queue the apply job with them (dedup key doubles as the guard)."""
         await self._authorize(
             pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
         )
@@ -328,21 +338,20 @@ class ImportUseCases:
         state.completed_at = None
         if retrying_failed_job:
             state.attempt += 1
-            await self._state_store.reopen_import(state)
-        else:
-            await self._state_store.save_import(state)
-
-        job = await self._job_queue.enqueue(
-            APPLY_JOB_NAME,
-            context={
-                "import_id": str(import_id),
-                "pod_id": str(pod_id),
-                "user_id": str(user_id),
-            },
-            _job_id=import_apply_job_id(import_id),
-        )
-        if job is None:
-            raise BundleJobConflictError("This import is already being applied.")
+        async with self._uow_factory() as uow:
+            if retrying_failed_job:
+                await self._state_store.stage_import(uow, state, reopen=True)
+            else:
+                await self._state_store.stage_import(uow, state)
+            if not await self._job_queue.queue_job(
+                uow,
+                APPLY,
+                ImportJob(import_id=import_id, pod_id=pod_id, user_id=user_id),
+                pod_id=pod_id,
+                dedup_key=apply_key(import_id),
+            ):
+                raise BundleJobConflictError("This import is already being applied.")
+            await uow.commit()
         return state
 
     async def replan_import(
@@ -372,26 +381,32 @@ class ImportUseCases:
         state.completed_at = None
         if retrying_failed_job:
             state.attempt += 1
-            await self._state_store.reopen_import(state)
-        else:
-            await self._state_store.save_import(state)
-        job = await self._job_queue.enqueue(
-            PLAN_JOB_NAME,
-            context={
-                "import_id": str(import_id),
-                "pod_id": str(pod_id),
-                "user_id": str(user_id),
-            },
-            _job_id=import_plan_job_id(import_id),
-        )
-        if job is None:
-            raise BundleJobConflictError("This import is already being planned.")
+        async with self._uow_factory() as uow:
+            if retrying_failed_job:
+                await self._state_store.stage_import(uow, state, reopen=True)
+            else:
+                await self._state_store.stage_import(uow, state)
+            if not await self._job_queue.queue_job(
+                uow,
+                PLAN,
+                ImportJob(import_id=import_id, pod_id=pod_id, user_id=user_id),
+                pod_id=pod_id,
+                dedup_key=plan_key(import_id),
+            ):
+                raise BundleJobConflictError("This import is already being planned.")
+            await uow.commit()
         return state
 
     async def cancel_import(
         self, *, pod_id: UUID, import_id: UUID, user_id: UUID
     ) -> ImportState:
-        """Persist a cancellation tombstone and request cooperative worker stop."""
+        """Persist a cancellation tombstone and request cooperative worker stop.
+
+        A job nothing is running ends here, in the same transaction: one
+        awaiting confirmation (no item), or one whose item was still queued
+        (the item is dropped). A running one sees the tombstone at its next
+        step boundary and finalizes itself.
+        """
         await self._authorize(
             pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
         )
@@ -403,16 +418,47 @@ class ImportUseCases:
         previous_status = state.status
         state.status = ImportStatus.CANCELLING
         state.cancel_requested_at = datetime.now(timezone.utc)
-        await self._state_store.save_import(state)
-
-        # Keep the accepted response stable even when an idle cancellation can
-        # reach its terminal state before this request returns.
-        accepted = state.model_copy(deep=True)
-        if previous_status == ImportStatus.AWAITING_CONFIRMATION:
-            state.status = ImportStatus.CANCELLED
-            state.current_step = None
-            state.completed_at = datetime.now(timezone.utc)
-            await self._state_store.save_import(state)
+        finalized = False
+        async with self._uow_factory() as uow:
+            await self._state_store.stage_import(uow, state)
+            # Keep the accepted response stable even when an idle cancellation
+            # reaches its terminal state before this request returns.
+            accepted = state.model_copy(deep=True)
+            idle = previous_status == ImportStatus.AWAITING_CONFIRMATION
+            if not idle:
+                idle = await self._job_queue.drop_queued(
+                    uow,
+                    (*PLANNING_KINDS, APPLY),
+                    pod_id=pod_id,
+                    dedup_key=(
+                        apply_key(import_id)
+                        if previous_status == ImportStatus.APPLYING
+                        else plan_key(import_id)
+                    ),
+                )
+            if idle:
+                state.status = (
+                    ImportStatus.PARTIALLY_CANCELLED
+                    if state.committed_steps
+                    else ImportStatus.CANCELLED
+                )
+                if state.status is ImportStatus.PARTIALLY_CANCELLED:
+                    # As the job says when it stops itself mid-apply: the
+                    # steps that landed were not undone.
+                    applied = len(state.committed_steps)
+                    total = len(state.plan.steps) if state.plan else 0
+                    state.error = (
+                        f"Cancelled after {applied} of {total} steps had been "
+                        "applied to this pod. Those changes were not undone; "
+                        "import the bundle again to finish, or remove what it "
+                        "created."
+                    )
+                state.current_step = None
+                state.completed_at = datetime.now(timezone.utc)
+                await self._state_store.stage_import(uow, state)
+                finalized = True
+            await uow.commit()
+        if finalized:
             try:
                 await self._staging.delete_archive("pod-imports", import_id)
             except ObjectStoreError:

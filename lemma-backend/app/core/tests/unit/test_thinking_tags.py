@@ -276,3 +276,15 @@ def test_many_fences_and_blocks_are_read_in_linear_time():
 
     assert "reasoning" not in stripped
     assert elapsed < 0.5
+
+
+def test_the_platforms_own_context_blocks_a_model_echoed_are_dropped():
+    from app.core.text.thinking_tags import strip_context_echo
+
+    echoed = (
+        '<memory>\n<index path="/memory/AGENTS.md">\n</index>\n</memory>\n\n'
+        '<memory path="/me/AGENTS.md">\nnotes\n</memory>\n\nYou chose blue.'
+    )
+    assert strip_context_echo(echoed) == "You chose blue."
+    assert strip_context_echo("a <b>memory</b> of it") == "a <b>memory</b> of it"
+    assert strip_context_echo("") == ""

@@ -106,7 +106,7 @@ class AgentToolDispatcher:
         agent_run_id: UUID | None = None,
         include_final_answer: bool = False,
         tool_call_id: str | None = None,
-        include_notification_tools: bool = False,
+        include_question_tools: bool = False,
         grants: AgentGrantSummary | None = None,
     ) -> object:
         async with AsyncExitStack() as exit_stack:
@@ -118,7 +118,7 @@ class AgentToolDispatcher:
                 agent_run_id=agent_run_id,
                 exit_stack=exit_stack,
                 include_final_answer=include_final_answer,
-                include_notification_tools=include_notification_tools,
+                include_question_tools=include_question_tools,
                 grants=grants,
                 only=name,
             )
@@ -148,7 +148,7 @@ class AgentToolDispatcher:
         exit_stack: AsyncExitStack,
         toolsets: list[object] | None = None,
         include_final_answer: bool = False,
-        include_notification_tools: bool = False,
+        include_question_tools: bool = False,
         grants: AgentGrantSummary | None = None,
         only: str | None = None,
     ) -> dict[str, PreparedTool]:
@@ -180,9 +180,10 @@ class AgentToolDispatcher:
                 # The Agent Host bridge is the caller that asks for
                 # `final_answer`, and it has no capability to carry these; the
                 # approval executor runs an approved answer to one of them.
-                include_notification_tools=(
-                    include_final_answer or include_notification_tools
-                ),
+                include_question_tools=(include_final_answer or include_question_tools),
+                # Decided per run, as the runner decides it: a run asked in
+                # Lemma has no platform's tools.
+                surface_platform=getattr(ctx, "surface_platform", None),
             )
         run_ctx = self._run_context(ctx, agent_run_id)
         prepared: dict[str, PreparedTool] = {}

@@ -18,6 +18,7 @@ import { modelSetupState } from "@/shell/runs-on-state";
 import { SetUpAiModelLink } from "@/desktop/set-up-on-this-mac";
 import { useThisMacAvailability } from "@/desktop/this-mac-settings";
 import { openSettings } from "@/desktop/open-settings";
+import { ResumeInstall } from "@/site/import/resume-install";
 
 /** One candidate.
  *
@@ -345,6 +346,7 @@ function Shelf({
     return (
         <div className="pane">
             <div className="shelf">
+                <ResumeInstall />
                 <div className="shelf__head">
                     <h1>What needs doing?</h1>
                     <p>Give a teammate its first responsibility. Choose a starting role or describe the job yourself.</p>

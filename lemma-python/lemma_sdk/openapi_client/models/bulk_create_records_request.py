@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..models.write_intent import WriteIntent
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
@@ -24,11 +25,13 @@ class BulkCreateRecordsRequest:
     Attributes:
         records (list[BulkCreateRecordsRequestRecordsItem]): List of record payload objects to insert. At most 1000 per
             request.
+        intent (WriteIntent | Unset):
         upsert (bool | Unset): When true, insert records and update existing rows that conflict on the table primary
             key. Default: False.
     """
 
     records: list[BulkCreateRecordsRequestRecordsItem]
+    intent: WriteIntent | Unset = UNSET
     upsert: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -37,6 +40,10 @@ class BulkCreateRecordsRequest:
         for records_item_data in self.records:
             records_item = records_item_data.to_dict()
             records.append(records_item)
+
+        intent: str | Unset = UNSET
+        if not isinstance(self.intent, Unset):
+            intent = self.intent.value
 
         upsert = self.upsert
 
@@ -47,6 +54,8 @@ class BulkCreateRecordsRequest:
                 "records": records,
             }
         )
+        if intent is not UNSET:
+            field_dict["intent"] = intent
         if upsert is not UNSET:
             field_dict["upsert"] = upsert
 
@@ -68,10 +77,18 @@ class BulkCreateRecordsRequest:
 
             records.append(records_item)
 
+        _intent = d.pop("intent", UNSET)
+        intent: WriteIntent | Unset
+        if isinstance(_intent, Unset):
+            intent = UNSET
+        else:
+            intent = WriteIntent(_intent)
+
         upsert = d.pop("upsert", UNSET)
 
         bulk_create_records_request = cls(
             records=records,
+            intent=intent,
             upsert=upsert,
         )
 

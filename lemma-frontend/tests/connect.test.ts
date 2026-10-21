@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { REDACTED, blank, fields, isSecretName, payload, problems, unchangedSecret } from "../src/connect/schema.ts";
 import {
-    canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName,
+    canBringOwnApp, canInstallWithDefaults, connectRoute, connectSchema, discoveryNote, freshInstallName, heldInstall,
     connectorProblem, installSchema, installTarget, isBringYourOwn, isStaleDefault, isTenantConfigured, kindFor, kindNamed, needsOwnApp, oauthAppMissing,
     ownAppKinds, ownKinds, primaryKind, registersLemmaRedirect, urlRefusal,
     type CatalogEntry, type ConnectorKind,
@@ -291,6 +291,34 @@ test("a second install of a connector is not given the first one's name", () => 
     assert.equal(freshInstallName("gmail", ["gmail", "gmail-2"]), "gmail-3");
 });
 
+test("an account is authorised against the default install, else the first active one", () => {
+    const installs = [
+        { id: "off", connector_id: "slack", kind: "http", name: "slack-old", status: "DISABLED", is_default: true },
+        { id: "first", connector_id: "slack", kind: "http", name: "slack", status: "ACTIVE" },
+        { id: "default", connector_id: "slack", kind: "http", name: "slack-2", status: "ACTIVE", is_default: true },
+        { id: "gh", connector_id: "github", kind: "http", name: "github", status: "ACTIVE", is_default: true },
+    ];
+    assert.equal(heldInstall(installs, "slack")?.id, "default");
+    assert.equal(heldInstall(installs.slice(0, 2), "slack")?.id, "first");
+    assert.equal(heldInstall(installs, "gmail"), null);
+});
+
+test("Lemma's own Slack app is never authorised on a teammate's own app install", () => {
+    // A teammate's own Slack app is an ORG_CUSTOM install of the same
+    // connector. Picked for the manager, it made an account the manager refused.
+    const teammates = [
+        { id: "mate", connector_id: "slack", kind: "http", name: "Ada (1.2)", status: "ACTIVE", config_source: "ORG_CUSTOM" },
+    ];
+    assert.equal(heldInstall(teammates, "slack", "SYSTEM_DEFAULT"), null);
+    const both = [
+        ...teammates,
+        { id: "lemma", connector_id: "slack", kind: "http", name: "slack", status: "ACTIVE", config_source: "SYSTEM_DEFAULT" },
+    ];
+    assert.equal(heldInstall(both, "slack", "SYSTEM_DEFAULT")?.id, "lemma");
+    // Unasked, the order is what it always was.
+    assert.equal(heldInstall(teammates, "slack")?.id, "mate");
+});
+
 test("a kind is only chosen when the choice is unambiguous", () => {
     const one: CatalogEntry = { id: "mcp", title: "MCP", kinds: [mcpKind] };
     const two: CatalogEntry = { id: "both", title: "Both", kinds: [mcpKind, composioManaged] };
@@ -369,6 +397,52 @@ test("the provider's tab is given a face before it is pointed anywhere", async (
     } finally {
         delete (globalThis as { window?: unknown }).window;
     }
+});
+
+test("an outcome reaches the tab that started the flow, however it can be reached", async () => {
+    const { deliverOutcome } = await import("../src/connect/round-trip.ts");
+    const outcome = { connect: "connected", connector: "gmail", account: "a1", reason: null };
+    const posted: { message: unknown; origin: string }[] = [];
+    const broadcast: unknown[] = [];
+    const opener = { closed: false, postMessage: (message: unknown, origin: string) => { posted.push({ message, origin }); } };
+
+    // An opener is direct, and is preferred over the channel even when both
+    // are available — one outcome, delivered once.
+    assert.equal(
+        deliverOutcome(outcome, { opener, origin: "https://app.test", waiting: true, broadcast: (o) => broadcast.push(o) }),
+        "opener",
+    );
+    assert.deepEqual(posted, [{ message: { source: "lemma-connect", ...outcome }, origin: "https://app.test" }]);
+    assert.deepEqual(broadcast, []);
+
+    // A popup whose opener the consent chain cut: the channel is the only way
+    // left, and it is used while a tab is still waiting.
+    assert.equal(
+        deliverOutcome(outcome, { opener: null, origin: "https://app.test", waiting: true, broadcast: (o) => broadcast.push(o) }),
+        "channel",
+    );
+    assert.deepEqual(broadcast, [outcome]);
+
+    // A closed opener is no opener, and a tab nobody is waiting in is not one
+    // to close on: the caller takes the person back itself instead.
+    assert.equal(
+        deliverOutcome(outcome, { opener: { ...opener, closed: true }, origin: "https://app.test", waiting: false, broadcast: (o) => broadcast.push(o) }),
+        "nowhere",
+    );
+    assert.equal(broadcast.length, 1);
+});
+
+test("a round trip is only still out for as long as one could be", async () => {
+    const { isWaiting } = await import("../src/connect/round-trip.ts");
+    const now = 1_700_000_000_000;
+    assert.equal(isWaiting(String(now - 60_000), now), true);
+    assert.equal(isWaiting(String(now), now), true);
+    // The window is minutes, not hours: past it a person who wandered off has
+    // the panel's own "Done?", and a focus is just a focus.
+    assert.equal(isWaiting(String(now - 16 * 60_000), now), false);
+    assert.equal(isWaiting(null, now), false);
+    assert.equal(isWaiting("not a time", now), false);
+    assert.equal(isWaiting("0", now), false);
 });
 
 test("the role refusal is said as the role it is", () => {

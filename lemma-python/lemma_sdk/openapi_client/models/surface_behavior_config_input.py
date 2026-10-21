@@ -28,9 +28,8 @@ class SurfaceBehaviorConfigInput:
         channels (list[SurfaceChannelRouteInput] | Unset):
         contacts (SurfaceContactsConfig | Unset): Whom the bot answers in private chats beyond the pod's members.
             Mirrored.
-        dm_conversation_reset_after_hours (int | None | Unset): Ignored. The DM reset window is a deployment-wide
-            setting (SURFACE_DM_CONVERSATION_RESET_AFTER_HOURS). Still accepted so existing pod bundles and clients keep
-            working.
+        dm_conversation_reset_after_hours (int | None | Unset): Ignored. A private chat is one conversation per agent
+            and person, however long it goes quiet. Still accepted so existing pod bundles and clients keep working.
         groups (SurfaceGroupsConfig | Unset): How the bot treats people outside the pod in its groups. Mirrored.
         identity (SurfaceIdentityConfigInput | Unset):
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.

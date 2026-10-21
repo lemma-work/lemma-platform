@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent_surfaces.tests.e2e.group_timeline import timeline
 from app.modules.agent_surfaces.composition import (
     build_app_event_handler,
     build_surface_ingress,
@@ -146,7 +147,7 @@ async def test_an_own_whatsapp_number_confirms_logs_and_answers_its_groups(
         db_session, user_id=fixed_test_user["id"], mobile_number=MEMBER
     )
     started = await authenticated_client.post(
-        f"/pods/{pod_id}/groups",
+        f"/pods/{pod_id}/channels/whatsapp-groups",
         json={"surface_name": surface["name"], "title": "Acme order 1182"},
     )
     assert started.status_code == 201, started.text
@@ -190,7 +191,7 @@ async def test_an_own_whatsapp_number_confirms_logs_and_answers_its_groups(
     )
     await uow.commit()
     assert context is None
-    lines = await SurfaceGroupRepository(db_session).recent_lines(group=group, limit=5)
+    lines = await timeline(db_session, group, limit=5)
     assert [line.text for line in lines] == ["Thanks all, talk at 3"]
 
     # A member who speaks to it by the pod's name is answered, as themselves.
@@ -291,10 +292,5 @@ async def test_an_own_telegram_bot_greets_once_and_answers_only_when_asked(
         surface_id=surface_id, external_channel_id=str(TELEGRAM_GROUP)
     )
     assert group is not None
-    said = [
-        line.text
-        for line in await SurfaceGroupRepository(db_session).recent_lines(
-            group=group, limit=10
-        )
-    ]
+    said = [line.text for line in await timeline(db_session, group, limit=10)]
     assert "proofs went out" in said

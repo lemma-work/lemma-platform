@@ -28,8 +28,9 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
     SurfacePodMembershipPort,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
-    SurfaceConversationLinkRepository,
+from app.modules.agent_surfaces.services.channel_places import (
+    ChannelSeats,
+    ChannelSeatsInDatabase,
 )
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
@@ -53,14 +54,13 @@ class SurfaceRouter:
         *,
         uow: SqlAlchemyUnitOfWork,
         surface_repository: SurfaceInstallationRepositoryPort,
-        conversation_link_repository: SurfaceConversationLinkRepository,
         pod_membership_port: SurfacePodMembershipPort,
         identity_service: SurfaceIdentityResolutionService,
         credential_resolver: SurfaceCredentialResolver,
+        seats: ChannelSeats | None = None,
     ) -> None:
         self.uow = uow
         self.surface_repository = surface_repository
-        self.conversation_link_repository = conversation_link_repository
         self.identity_service = identity_service
         self.credential_resolver = credential_resolver
         self.senders = SenderResolver(
@@ -68,9 +68,11 @@ class SurfaceRouter:
             pod_membership_port=pod_membership_port,
             identity_service=identity_service,
         )
+        self.seats = seats or ChannelSeatsInDatabase(uow)
         self.selector = SurfaceSelector(
+            uow=uow,
+            seats=self.seats,
             surface_repository=surface_repository,
-            conversation_link_repository=conversation_link_repository,
             pod_membership_port=pod_membership_port,
         )
         self.routes = RouteResolver(uow=uow)

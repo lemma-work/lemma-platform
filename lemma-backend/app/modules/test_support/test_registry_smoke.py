@@ -32,16 +32,13 @@ def test_oss_module_router_thunks_import() -> None:
             )
 
 
-def test_oss_module_event_and_streaq_thunks_import() -> None:
-    # event_routers / register_streaq are added in Phase 3; this stays correct
-    # before then (the guards simply skip) and starts covering them after.
+def test_oss_module_worker_thunks_import() -> None:
+    """Every module's work, periodic and projection thunks import cleanly."""
     for module in OSS_MODULES:
-        if module.register_streaq is not None:
-            module.register_streaq()
-        if module.event_routers is not None:
-            for router in module.event_routers():
-                assert (
-                    hasattr(router, "subscriber")
-                    or hasattr(router, "_handlers")
-                    or router is not None
-                )
+        for thunk in (
+            module.register_work,
+            module.register_periodic_work,
+            module.register_analytics,
+        ):
+            if thunk is not None:
+                thunk()

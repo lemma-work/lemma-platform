@@ -182,6 +182,20 @@ class FakeSlackServer:
         self._port: int | None = None
         self.chat_post_blocks_error: str | None = None
         self.conversations_open_error: str | None = None
+        #: Channels ``conversations.info`` answers as private (``is_private``).
+        self.private_channels: set[str] = set()
+        #: Channels ``conversations.info`` cannot answer for (``channel_not_found``).
+        self.unknown_channels: set[str] = set()
+        #: The next ``conversations.invite`` fails with this Slack error, once.
+        self.invite_error: str | None = None
+        #: ``users.info`` answers for these users with these fields instead of
+        #: the test user's: ``email`` and ``display_name`` go on the profile,
+        #: anything else (``is_restricted``, ``team_id``) on the user.
+        self.user_overrides: dict[str, dict[str, Any]] = {}
+        #: Users ``users.info`` cannot answer for (``user_not_found``).
+        self.unknown_users: set[str] = set()
+        #: What ``oauth.v2.access`` answers a code with; ``None`` refuses it.
+        self.oauth_access: dict[str, Any] | None = None
 
     async def start(self) -> None:
         app = web.Application()
@@ -214,8 +228,16 @@ class FakeSlackServer:
             "/api/assistant.threads.setSuggestedPrompts",
             self._assistant_threads_set_suggested_prompts,
         )
+        app.router.add_route("*", "/api/oauth.v2.access", self._oauth_v2_access)
         app.router.add_route("*", "/api/views.open", self._views_open)
         app.router.add_route("*", "/api/views.publish", self._views_publish)
+        app.router.add_route("*", "/api/views.update", self._views_update)
+        # A button's ``response_url``: Slack's, here so a test can read it.
+        app.router.add_route("POST", "/response/{key}", self._response_url)
+        app.router.add_route(
+            "*", "/api/conversations.invite", self._conversations_invite
+        )
+        app.router.add_route("*", "/api/conversations.leave", self._conversations_leave)
         app.router.add_route("*", "/api/conversations.info", self._conversations_info)
         app.router.add_route(
             "*", "/api/files.getUploadURLExternal", self._files_get_upload_url_external
@@ -270,15 +292,24 @@ class FakeSlackServer:
 
     async def _users_info(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)
+        user_id = params.get("user")
+        if user_id in self.unknown_users:
+            return web.json_response({"ok": False, "error": "user_not_found"})
+        override = dict(self.user_overrides.get(str(user_id), {}))
+        profile = {
+            "email": override.pop("email", self._test_user_email),
+            "display_name": override.pop("display_name", "Surface Test User"),
+        }
         return web.json_response(
             {
                 "ok": True,
                 "user": {
-                    "id": params.get("user"),
-                    "profile": {
-                        "email": self._test_user_email,
-                        "display_name": "Surface Test User",
-                    },
+                    "id": user_id,
+                    # A full member, as Slack says of everyone who is not a guest.
+                    "is_restricted": False,
+                    "is_ultra_restricted": False,
+                    **override,
+                    "profile": profile,
                 },
             }
         )
@@ -476,6 +507,12 @@ class FakeSlackServer:
             {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
         )
 
+    async def _oauth_v2_access(self, request: web.Request) -> web.Response:
+        self._store.add("SLACK_OAUTH_ACCESS", await self._collect_params(request))
+        if self.oauth_access is None:
+            return web.json_response({"ok": False, "error": "invalid_code"})
+        return web.json_response({"ok": True, **self.oauth_access})
+
     async def _views_publish(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)
         self._store.add("SLACK_VIEWS_PUBLISH", params)
@@ -483,6 +520,37 @@ class FakeSlackServer:
         return web.json_response(
             {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
         )
+
+    async def _views_update(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        self._store.add("SLACK_VIEWS_UPDATE", params)
+        view_id = str(params.get("view_id") or "V-UPDATED")
+        return web.json_response(
+            {"ok": True, "view": self._view_envelope(params.get("view"), view_id)}
+        )
+
+    async def _conversations_invite(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        params["token"] = request.headers.get("Authorization", "")
+        if self.invite_error is not None:
+            error, self.invite_error = self.invite_error, None
+            self._store.add("SLACK_INVITE_FAILED", {"error": error, **params})
+            return web.json_response({"ok": False, "error": error})
+        self._store.add("SLACK_INVITE", params)
+        return web.json_response({"ok": True, "channel": {"id": params.get("channel")}})
+
+    async def _conversations_leave(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        params["token"] = request.headers.get("Authorization", "")
+        self._store.add("SLACK_LEAVE", params)
+        return web.json_response({"ok": True})
+
+    async def _response_url(self, request: web.Request) -> web.Response:
+        self._store.add(
+            "SLACK_RESPONSE",
+            {"key": request.match_info["key"], **(await request.json())},
+        )
+        return web.Response(text="ok")
 
     def _view_envelope(self, raw_view: Any, view_id: str) -> dict[str, Any]:
         return {
@@ -515,6 +583,9 @@ class FakeSlackServer:
         params = await self._collect_params(request)
         self._store.add("SLACK_CHANNEL_INFO", params)
         channel_id = str(params.get("channel") or "C-SURFACE-E2E")
+        if channel_id in self.unknown_channels:
+            return web.json_response({"ok": False, "error": "channel_not_found"})
+        private = channel_id in self.private_channels
         return web.json_response(
             {
                 "ok": True,
@@ -522,9 +593,9 @@ class FakeSlackServer:
                     "id": channel_id,
                     "name": "support",
                     "is_channel": True,
-                    "is_group": False,
+                    "is_group": private,
                     "is_im": False,
-                    "is_private": False,
+                    "is_private": private,
                     "is_archived": False,
                     "is_member": True,
                 },
@@ -604,6 +675,8 @@ class FakeTeamsServer:
         self._site: web.TCPSite | None = None
         self._port: int | None = None
         self.graph_failure_status: int | None = None
+        #: Graph's ``membershipType`` per team channel id; ``standard`` otherwise.
+        self.channel_membership: dict[str, str] = {}
         self._oauth_error_code: str | None = None
         self._private_key = rsa.generate_private_key(
             public_exponent=65537, key_size=2048
@@ -640,6 +713,10 @@ class FakeTeamsServer:
         app.router.add_get(
             "/teams/v3/attachments/{attachment_id}/views/original",
             self._get_attachment,
+        )
+        app.router.add_get(
+            "/graph/v1.0/teams/{team_id}/channels/{channel_id}",
+            self._get_channel,
         )
         app.router.add_get(
             "/graph/v1.0/teams/{team_id}/channels/{channel_id}/messages",
@@ -900,6 +977,20 @@ class FakeTeamsServer:
             }
         )
 
+    async def _get_channel(self, request: web.Request) -> web.Response:
+        channel_id = request.match_info["channel_id"]
+        self._store.add(
+            "TEAMS_GRAPH_CHANNEL",
+            {"team_id": request.match_info["team_id"], "channel_id": channel_id},
+        )
+        return web.json_response(
+            {
+                "id": channel_id,
+                "displayName": "General",
+                "membershipType": self.channel_membership.get(channel_id, "standard"),
+            }
+        )
+
     async def _graph_shares_drive_item(self, request: web.Request) -> web.Response:
         token = request.match_info["token"]
         self._store.add(
@@ -1135,7 +1226,11 @@ class FakeTelegramServer:
 
     Captures outbound calls for assertion and remembers the registered webhook
     so getWebhookInfo confirms the URL (matching the real registration flow).
-    ``fail_next`` forces transient failures per method to exercise retries, and
+    ``fail_next`` forces transient failures per method to exercise retries
+    (429, asking for ``retry_after`` seconds), ``refuse_next`` a permanent 403,
+    ``unauthorized`` a 401 for a refused token, ``drop_answers`` a send that
+    is taken and whose answer never comes back
+    (the connection closes after the message is recorded), and
     ``unavailable`` makes a method answer 404 the way a bot API that does not
     carry it would — which is the condition `send_chunk`'s fallback from
     `sendRichMessage` to `sendMessage` exists for.
@@ -1148,7 +1243,12 @@ class FakeTelegramServer:
         self._port: int | None = None
         self._registered_webhook: dict | None = None
         self.fail_next: dict[str, int] = {}
+        self.retry_after = 0
+        self.refuse_next: dict[str, int] = {}
+        self.drop_answers: dict[str, int] = {}
         self.unavailable: set[str] = set()
+        #: Methods answered 401: the bot's token is refused.
+        self.unauthorized: set[str] = set()
         self._updates: list[dict[str, Any]] = []
         self._update_tokens: dict[int, str] = {}
 
@@ -1260,11 +1360,38 @@ class FakeTelegramServer:
                     "ok": False,
                     "error_code": 429,
                     "description": "Too Many Requests: retry later",
-                    "parameters": {"retry_after": 0},
+                    "parameters": {"retry_after": self.retry_after},
                 },
                 status=429,
             )
+        refused = self.refuse_next.get(method, 0)
+        if refused > 0:
+            self.refuse_next[method] = refused - 1
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error_code": 403,
+                    "description": "Forbidden: bot was blocked by the user",
+                },
+                status=403,
+            )
+        if method in self.unauthorized:
+            return web.json_response(
+                {"ok": False, "error_code": 401, "description": "Unauthorized"},
+                status=401,
+            )
         return None
+
+    def _drops(self, method: str, request: web.Request) -> bool:
+        """Whether this send's answer is lost: the message is kept, and the
+        connection closed before the platform says so."""
+        remaining = self.drop_answers.get(method, 0)
+        if remaining <= 0:
+            return False
+        self.drop_answers[method] = remaining - 1
+        if request.transport is not None:
+            request.transport.close()
+        return True
 
     async def _send_message(self, request: web.Request) -> web.Response:
         failure = self._maybe_fail("sendMessage")
@@ -1325,6 +1452,8 @@ class FakeTelegramServer:
         self._store.add(
             "TELEGRAM", {**body, "text": text, **_request_contract(request)}
         )
+        if self._drops("sendRichMessage", request):
+            return web.Response()
         return web.json_response(
             {
                 "ok": True,
@@ -1606,10 +1735,20 @@ class FakeTelegramServer:
 
 
 class FakeResendServer:
-    """Lightweight aiohttp server mimicking the Resend send API."""
+    """Lightweight aiohttp server mimicking the Resend send API.
+
+    Honours ``Idempotency-Key`` as Resend does. ``drop_answers`` sends the
+    next ones and drops the connection before answering -- the timeout after
+    acceptance a retry must not turn into a second email; after those,
+    ``fail_next`` answers the next sends with those statuses, sending nothing.
+    """
 
     def __init__(self, store: MockPlatformMessageStore):
         self._store = store
+        self._sent_by_key: dict[str, dict[str, str]] = {}
+        self.replayed_keys: list[str] = []
+        self.fail_next: list[int] = []
+        self.drop_answers = 0
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
         self._port: int | None = None
@@ -1635,10 +1774,32 @@ class FakeResendServer:
 
     async def _send_email(self, request: web.Request) -> web.Response:
         body = await request.json()
+        key = request.headers.get("Idempotency-Key")
+        if self.drop_answers:
+            # Took it, and the answer never reached the sender.
+            self.drop_answers -= 1
+            self._take(body, request, key)
+            if request.transport is not None:
+                request.transport.close()
+            return web.Response()
+        if self.fail_next:
+            status = self.fail_next.pop(0)
+            return web.json_response({"message": "unavailable"}, status=status)
+        # As Resend does: a request under a key it has seen is answered with
+        # the first one's result, and sends nothing.
+        if key and key in self._sent_by_key:
+            self.replayed_keys.append(key)
+            return web.json_response(self._sent_by_key[key])
+        return web.json_response(self._take(body, request, key))
+
+    def _take(
+        self, body: dict[str, Any], request: web.Request, key: str | None
+    ) -> dict[str, str]:
         self._store.add("RESEND", {**body, **_request_contract(request)})
-        return web.json_response(
-            {"id": f"resend-message-{len(self._store.get_all('RESEND'))}"}
-        )
+        sent = {"id": f"resend-message-{len(self._store.get_all('RESEND'))}"}
+        if key:
+            self._sent_by_key[key] = sent
+        return sent
 
 
 def build_slack_signature_headers(
@@ -1744,7 +1905,23 @@ def _slack_deliveries(store: MockPlatformMessageStore) -> list[tuple[dict, str]]
     """
     deliveries: list[tuple[dict, list[str]]] = []
     streams: dict[tuple[str, str], list[str]] = {}
+    # A live stream the run's display took down (``end_progress``: stopped,
+    # then deleted) is not on the person's screen: the answer arrives as the
+    # run's delivery instead, and counting both would see it twice.
+    deleted = {
+        (str(call.get("channel") or ""), str(call.get("ts") or ""))
+        for call in store.get_all("SLACK_DELETE")
+    }
     for platform, message in store.get_ordered("SLACK", "SLACK_STREAM_APPEND"):
+        if (
+            platform != "SLACK"
+            and (
+                str(message.get("channel") or ""),
+                str(message.get("ts") or ""),
+            )
+            in deleted
+        ):
+            continue
         text = _slack_reply_text(platform, message)
         if not text:
             continue

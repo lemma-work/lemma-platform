@@ -8,11 +8,10 @@ the sending half where a failure is the agent's problem to report.
 import asyncio
 from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic_ai.tools import RunContext
-from slack_sdk.errors import SlackApiError
-from slack_sdk.web.async_client import AsyncWebClient
+from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
@@ -27,7 +26,7 @@ from app.modules.agent.contracts.surface_prompts import (
     background_channel_context_note,
 )
 from app.modules.agent_surfaces.platforms.common import (
-    PLATFORM_TRANSPORT_ERRORS,
+    platform_transport_errors,
     UnsafeApiBaseError,
     channel_author_label,
     payload_first,
@@ -46,6 +45,10 @@ from app.modules.agent_surfaces.platforms.slack.models import (
     SlackSearchChannelMessagesResult,
 )
 from app.core.log.log import get_logger
+
+if TYPE_CHECKING:
+    from slack_sdk.errors import SlackApiError
+    from slack_sdk.web.async_client import AsyncWebClient
 
 logger = get_logger(__name__)
 
@@ -108,7 +111,7 @@ async def _display_name(client: AsyncWebClient, user_id: str) -> str | None:
     """A Slack user's shown name, or None when Slack will not say."""
     try:
         response = await client.users_info(user=user_id)
-    except (SlackApiError, *PLATFORM_TRANSPORT_ERRORS):
+    except (slack_api_error(), *platform_transport_errors()):
         logger.debug(
             "agent_surfaces.service.slack_get_user_display_name.observed",
             user_id=user_id,
@@ -253,7 +256,7 @@ class SlackChannelReadsMixin:
                     limit=200,
                     cursor=cursor,
                 )
-            except SlackApiError as exc:
+            except slack_api_error() as exc:
                 if not _retryable_without_private_channels(exc, channel_types):
                     raise
                 channel_types = "public_channel"
@@ -346,7 +349,11 @@ class SlackChannelReadsMixin:
         try:
             client = await build_slack_client(self.credentials)
             return await name_authors(messages, lookup=partial(_display_name, client))
-        except (SlackApiError, UnsafeApiBaseError, *PLATFORM_TRANSPORT_ERRORS) as exc:
+        except (
+            slack_api_error(),
+            UnsafeApiBaseError,
+            *platform_transport_errors(),
+        ) as exc:
             # Naming is a nicety on history already in hand; losing it is no
             # reason to lose the history.
             logger.warning(

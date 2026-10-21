@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -42,7 +43,10 @@ print(json.dumps(sorted({name.split(".")[0] for name in sys.modules})))
 """
 
 
-def _roots_loaded_by_app() -> set[str]:
+# Cached: every case asks the same question of the same fresh interpreter, and
+# each cold import of app.app costs seconds.
+@cache
+def _roots_loaded_by_app() -> frozenset[str]:
     completed = subprocess.run(
         [sys.executable, "-c", _PROBE],
         capture_output=True,
@@ -52,7 +56,7 @@ def _roots_loaded_by_app() -> set[str]:
     assert completed.returncode == 0, (
         f"importing app.app failed:\n{completed.stderr[-2000:]}"
     )
-    return set(json.loads(completed.stdout.splitlines()[-1]))
+    return frozenset(json.loads(completed.stdout.splitlines()[-1]))
 
 
 # Each entry: the library, and where it came from when it was last let in.
@@ -66,6 +70,14 @@ _MUST_STAY_LAZY = {
     "openai": (
         "not imported directly by us at all: it arrives inside composio, which "
         "imports its default provider. If composio is lazy this is too"
+    ),
+    "slack_sdk": (
+        "the Slack SDK, reached through the agent surface platforms -- "
+        "`platforms/common`'s transport-error family and every Slack module "
+        "that caught `SlackApiError`. Catch it with "
+        "`except slack_api_error():` (or `is_slack_api_error`) from "
+        "`platforms/slack/errors`, name the client under TYPE_CHECKING, and "
+        "import it inside the function that builds one"
     ),
     "sqlglot": (
         "the SQL parser, reached through the connector registry's SQL executor "

@@ -88,7 +88,7 @@ from app.modules.connectors.services.auth_install_resolver import (
 )
 from app.modules.connectors.services.connect_request_lifecycle import (
     pkce_verifier_for,
-    with_return_path,
+    request_attributes,
 )
 from app.modules.connectors.services.install_provisioning import (
     DiscoveryOutcome,
@@ -273,6 +273,14 @@ class ConnectorService:
         in `extra_headers`/`default_headers` -- so the read is levelled with
         the write and the mask is a second line, not the only one.
         """
+        return await self.may_manage_installs(
+            user_id=user_id, organization_id=organization_id
+        )
+
+    async def may_manage_installs(
+        self, *, user_id: UUID, organization_id: UUID
+    ) -> bool:
+        """Whether this member may add or remove the org's installs."""
         return await self.organization_access.user_has_organization_role(
             user_id=user_id,
             organization_id=organization_id,
@@ -344,7 +352,9 @@ class ConnectorService:
         kind: str | None = None,
         config: dict | None = None,
         name: str | None = None,
+        is_default: bool | None = None,
     ) -> AuthConfigEntity:
+        # `is_default=None`: the first install of a connector is the default.
         await self._require_org_member(
             user_id=user_id,
             organization_id=organization_id,
@@ -403,7 +413,7 @@ class ConnectorService:
             config=validated_config or None,
             name=name or connector_id,
             # First install of a connector answers a bare connector_id lookup.
-            is_default=is_first_install,
+            is_default=is_first_install if is_default is None else is_default,
             created_by_user_id=user_id,
             updated_by_user_id=user_id,
         )
@@ -613,6 +623,8 @@ class ConnectorService:
         auth_config_id: UUID | None = None,
         return_to: str | None = None,
         connection_fields: dict[str, object] | None = None,
+        purpose: str | None = None,
+        omit_authorize_params: frozenset[str] = frozenset(),
     ) -> ConnectRequestEntity:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
         auth_config = await self._resolve_auth_config(
@@ -622,7 +634,9 @@ class ConnectorService:
         )
         connector = await self.get_connector(auth_config.connector_id)
         provider_value = self._provider_value(auth_config)
-        auth_install = self._resolve_auth_install(connector, auth_config)
+        auth_install = self._resolve_auth_install(
+            connector, auth_config
+        ).without_authorize_params(omit_authorize_params)
         if provider_value == AuthProvider.LEMMA.value:
             # The *install's* scheme, not the catalog's. `mcp` is one catalog
             # entry standing for every server a tenant may point at, so whether
@@ -692,13 +706,8 @@ class ConnectorService:
             connector_id=connector.id,
             authorization_url=authorization_url,
             status=ConnectRequestStatus.PENDING,
-            attributes=with_return_path(
-                {
-                    "state": state,
-                    "provider_state": provider_state,
-                    **({"code_verifier": code_verifier} if code_verifier else {}),
-                },
-                return_to,
+            attributes=request_attributes(
+                state, provider_state, code_verifier, return_to, purpose
             ),
         )
         connect_request = await self.connect_request_repository.create(connect_request)
@@ -860,11 +869,11 @@ class ConnectorService:
         self,
         redirect_uri: str,
         state: Optional[str] = None,
+        browser_user_id: UUID | None = None,
     ) -> AccountEntity:
-        """See `oauth_callback`, which owns the resolve/release/call/persist
-        split this path needs and the request-scoped session cannot express
-        inline."""
-        return await handle_oauth_callback(self, redirect_uri=redirect_uri, state=state)
+        """See `oauth_callback`: it owns the resolve/release/call/persist split."""
+        callback = {"state": state, "browser_user_id": browser_user_id}
+        return await handle_oauth_callback(self, redirect_uri=redirect_uri, **callback)
 
     async def list_accounts(
         self,

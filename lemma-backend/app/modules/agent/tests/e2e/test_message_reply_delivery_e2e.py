@@ -12,6 +12,11 @@ that wrong, and each is a different answer:
 Against real repositories: these replaced tests that patched six collaborators
 inside the service and asserted the arguments of a mocked `start`, which could
 not see any of the three.
+
+The news itself is an `agent.replies_arrived` item, written once the last
+question of a batch a conversation put to people closes
+(`events/channel_question_work`); one test drives that item through the work
+runtime, the rest call the service it reaches.
 """
 
 from __future__ import annotations
@@ -23,6 +28,13 @@ import pytest
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.core.infrastructure.work import (
+    WorkClass,
+    WorkRegistry,
+    WorkWriter,
+    pod_namespace,
+)
+from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.agent.domain.pausing_tools import (
     USER_PAUSING_TOOL_NAMES,
     WAIT_TOOL_NAME,
@@ -32,6 +44,9 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
+from app.modules.agent.events.run_followup_work import register_run_followup_work
+from app.modules.agent.events.turn_payloads import RepliesArrived
+from app.modules.agent.events.work_kinds import AGENT_REPLIES_ARRIVED, replies_key
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitStatus,
@@ -82,7 +97,48 @@ async def test_a_finished_conversation_gets_the_news_as_its_next_turn(scenario):
     (started,) = await runs(seeded.conversation_id)
     (news,) = _news(await messages(seeded.conversation_id))
     assert news.agent_run_id == started.id
-    assert "check_messages" in (news.text or "")
+    assert "channel_read(asked_by_me=True)" in (news.text or "")
+
+
+@pytest.mark.drives_work
+async def test_a_settled_batch_brings_the_asking_conversation_back_once(scenario):
+    """The wake path end to end from the item: the agent's runtime turns it
+    into the conversation's next turn -- once per batch, however often it is
+    written or run."""
+    seeded = await seeded_conversation(scenario)
+    registry = WorkRegistry()
+    register_run_followup_work(registry)
+    settled = RepliesArrived(
+        conversation_id=seeded.conversation_id, pod_id=seeded.pod_id, batch_id="b-1"
+    )
+
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        writer = WorkWriter(uow.session)
+        for _ in range(2):
+            await writer.add(
+                AGENT_REPLIES_ARRIVED,
+                pod_namespace(seeded.pod_id),
+                settled,
+                dedup_key=replies_key("b-1"),
+            )
+        await uow.commit()
+    await run_until_idle(
+        async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+    )
+    # Delivered again after the first item ran: the batch's news is there.
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        assert (
+            await MessageReplyService(uow).deliver(
+                conversation_id=seeded.conversation_id,
+                pod_id=seeded.pod_id,
+                batch_id="b-1",
+            )
+            is False
+        )
+
+    (started,) = await runs(seeded.conversation_id)
+    (news,) = _news(await messages(seeded.conversation_id))
+    assert news.agent_run_id == started.id
 
 
 async def test_an_open_question_is_not_answered_by_the_news(scenario):

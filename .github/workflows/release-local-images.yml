@@ -1288,6 +1288,13 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      # For the downloadable `lemma` CLI below: its build installs the CLI's
+      # wheels with uv, as the host pack's does.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
       # Keyed on the lockfile alone, this changed only when a dependency did --
       # so an ordinary Rust edit restored a stale `desktop/target`, recompiled
       # anyway, and re-uploaded a multi-gigabyte cache of output it had just
@@ -1386,9 +1393,23 @@ jobs:
         # telemetry stays off -- which is the behaviour every local build gets
         # and a safe default, but it means a release built without the secret
         # reports nothing about installs that fail on a new macOS version.
+        #
+        # The Agent Host's CLI manifest URL is compiled in too
+        # (desktop/agent-host/src/lemma_cli/download.rs). A release build
+        # defaults to the stable release named by its version, which a nightly
+        # has none of; this points it at this run's own prerelease, where the
+        # "Build the downloadable lemma CLI" step below publishes the CLI. The
+        # host fills in `{platform}`. Fixed per binary, never from a server.
         env:
           LEMMA_TELEMETRY_KEY: ${{ secrets.LEMMA_TELEMETRY_KEY }}
-        run: desktop/scripts/build-sidecar.sh
+          LEMMA_AGENT_HOST_CLI_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.release_tag }}/lemma-cli-{platform}.json
+        run: |
+          set -euo pipefail
+          desktop/scripts/build-sidecar.sh
+          # `option_env!` is tracked by cargo, but a restored target directory
+          # is exactly where a stale constant would hide: prove it is this one.
+          grep -q -F "${LEMMA_AGENT_HOST_CLI_MANIFEST_URL}" \
+            desktop/binaries/lemma-agent-host-aarch64-apple-darwin
 
       - name: Sign virtualization helper with its entitlement
         shell: bash
@@ -1493,6 +1514,61 @@ jobs:
             --wait
           xcrun stapler staple "${dmg}"
 
+      # The CLI this nightly's Agent Host downloads for hosted runs, published
+      # to this run's prerelease (the manifest URL compiled in above). Same
+      # build and checks as release-desktop.yml. Versioned as the *runtime*
+      # version, because that is the Agent Host's `CARGO_PKG_VERSION`: the
+      # nightly suffix is only in the Tauri overlay, and the host refuses a
+      # manifest for any version but its own. Signed, not notarized; see
+      # release-desktop.yml for why.
+      - name: Build the downloadable lemma CLI
+        shell: bash
+        env:
+          VERSION: ${{ steps.app-version.outputs.runtime_version }}
+          TAG: ${{ steps.tag.outputs.release_tag }}
+          REPOSITORY: ${{ github.repository }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+        run: |
+          set -euo pipefail
+          staged="${RUNNER_TEMP}/lemma-cli"
+          artifacts="desktop/target/release/release-artifacts"
+          rm -rf "${staged}"
+          uv run --no-project python scripts/build_desktop_lemma_cli.py \
+            --output "${staged}" \
+            --sign "${APPLE_SIGNING_IDENTITY}" \
+            --archive "${artifacts}" \
+            --release-version "${VERSION}" \
+            --platform aarch64-apple-darwin \
+            --release-url "https://github.com/${REPOSITORY}/releases/download/${TAG}"
+          rm -rf "${staged}"
+
+      - name: Verify the downloadable lemma CLI
+        shell: bash
+        env:
+          VERSION: ${{ steps.app-version.outputs.runtime_version }}
+        run: |
+          set -euo pipefail
+          artifacts="desktop/target/release/release-artifacts"
+          manifest="${artifacts}/lemma-cli-aarch64-apple-darwin.json"
+          archive="${artifacts}/lemma-cli-aarch64-apple-darwin.tar.gz"
+          test "$(jq -r .version "${manifest}")" = "${VERSION}"
+          test "$(jq -r .size "${manifest}")" = "$(stat -f %z "${archive}")"
+          test "$(jq -r .sha256 "${manifest}")" = "$(shasum -a 256 "${archive}" | cut -d' ' -f1)"
+          unpacked="$(mktemp -d)"
+          tar -xzf "${archive}" -C "${unpacked}"
+          env -i PATH=/usr/bin:/bin HOME="$(mktemp -d)" "${unpacked}/bin/lemma" --version
+          signed=0
+          while IFS= read -r -d '' file; do
+            if [[ "$(head -c 4 "${file}" | xxd -p)" =~ ^(feedface|feedfacf|cefaedfe|cffaedfe|cafebabe)$ ]]; then
+              codesign --verify --strict "${file}"
+              codesign -dvv "${file}" 2>&1 | grep -q "^Authority=Developer ID Application:"
+              signed=$((signed + 1))
+            fi
+          done < <(find "${unpacked}" -type f -print0)
+          echo "verified ${signed} signed Mach-O files"
+          test "${signed}" -gt 0
+          rm -rf "${unpacked}"
+
       # Proved here so a tester never meets it as "Lemma is damaged".
       - name: Verify signature and notarization
         shell: bash
@@ -1551,7 +1627,9 @@ jobs:
             --app "desktop/target/release/bundle/macos/Lemma.app"
           python3 desktop/scripts/build_release_evidence.py "${artifacts}" \
             "${evidence[@]}" --verify
-          gh release upload "${TAG}" "${dmg}" "${artifacts}/release-evidence.json" --clobber
+          gh release upload "${TAG}" "${dmg}" "${artifacts}/release-evidence.json" \
+            "${artifacts}/lemma-cli-aarch64-apple-darwin.tar.gz" \
+            "${artifacts}/lemma-cli-aarch64-apple-darwin.json" --clobber
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "${dmg}")"
           {
             echo "### Lemma Desktop nightly"
@@ -1568,6 +1646,10 @@ jobs:
       # updates itself every night has more chances to prove it, not fewer.
       - name: Verify the updater payload is notarized
         shell: bash
+        env:
+          # Set only while the update signing key is rotated (desktop/README.md,
+          # "Rotating the update signing key"); the check then requires the mismatch.
+          LEMMA_UPDATER_KEY_ROTATION: ${{ vars.LEMMA_UPDATER_KEY_ROTATION }}
         run: |
           set -euo pipefail
           tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"

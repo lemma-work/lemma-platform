@@ -33,8 +33,9 @@ def channel_context_block(metadata: Mapping[str, object]) -> str | None:
     """
     channel_context = metadata.get("channel_context")
     withheld = metadata.get("channel_context_withheld")
+    view = metadata.get("channel_context_view")
     note = (
-        withheld_background_note(withheld)
+        withheld_background_note(withheld, view=view if isinstance(view, str) else None)
         if isinstance(withheld, int) and withheld > 0
         else None
     )

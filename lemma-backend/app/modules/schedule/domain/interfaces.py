@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Optional, Any, Dict, Protocol
+from typing import List, Optional, Any, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -228,39 +228,3 @@ class ExternalScheduleWriter(ABC):
     @abstractmethod
     async def delete_provider_trigger(self, schedule: ScheduleEntity) -> None:
         """Delete the external provider subscription associated with the schedule."""
-
-
-class ScheduleEventPublisher(ABC):
-    """Port for publishing ScheduleFired events."""
-
-    @abstractmethod
-    async def publish_schedule_fired(
-        self,
-        schedule: ScheduleEntity,
-        payload: Dict[str, Any],
-        source_event_id: str,
-        user_id: UUID,
-        metadata: Optional[Dict[str, Any]] = None,
-        llm_output: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Publish a ScheduleFired event."""
-
-
-class ScheduleFilterTaskQueue(ABC):
-    """Port for queueing deferred LLM filtering for schedules."""
-
-    @abstractmethod
-    async def enqueue(
-        self,
-        *,
-        schedule_id: UUID,
-        payload: Dict[str, Any],
-        metadata: Dict[str, Any],
-        source_event_id: str,
-        user_id: UUID | None = None,
-    ) -> None:
-        """Enqueue background LLM filter work for a schedule.
-
-        `user_id` is whose authority the fire runs with: the changed row's
-        owner for a table change, or None for the schedule owner.
-        """

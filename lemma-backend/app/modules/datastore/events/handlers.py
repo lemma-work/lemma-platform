@@ -1,52 +1,22 @@
+"""The datastore's signed-link retention, as periodic work.
+
+File processing, its dispatcher and recovery crons, and path cleanup moved to
+``file_work`` (``file.process`` / ``file.cleanup`` work items).
+"""
+
 from __future__ import annotations
 
-import math
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
-
-from faststream import Depends, Logger
-from faststream.redis import RedisRouter
 
 from app.modules.datastore.config import datastore_settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
 )
-from app.core.infrastructure.events.stream_subscriber import (
-    reliable_redis_stream_subscriber,
-)
-from app.core.infrastructure.events.inbox import (
-    EventInboxPort,
-    provide_domain_event_inbox,
-)
-from app.modules.datastore.api.dependencies import (
-    build_file_service,
-)
-from app.modules.datastore.domain.events import (
-    DATASTORE_EVENTS_STREAM,
-    DatastoreFileCreatedEvent,
-    DatastoreFileUpdatedEvent,
-)
-from app.modules.datastore.infrastructure.repositories import (
-    DatastoreFileRepository,
-)
 from app.modules.datastore.infrastructure.repositories.signed_link_repository import (
     SignedLinkRepository,
 )
-from app.modules.datastore.infrastructure.reindex_queue import (
-    get_datastore_reindex_queue,
-)
-from app.modules.datastore.composition import get_datastore_composition
-from app.modules.datastore.services.file_recovery_service import (
-    DatastoreFileRecoveryService,
-)
-from app.core.infrastructure.jobs.streaq_runtime import (
-    AppWorkerContext,
-    Lane,
-    streaq_cron,
-    streaq_task,
-    streaq_worker,
-)
+from app.core.infrastructure.work import periodic_job
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -55,237 +25,8 @@ logger = get_logger(__name__)
 # nights rather than holding the table for one very long run.
 _SIGNED_LINK_PURGE_CEILING = 50_000
 
-router = RedisRouter()
 
-
-def _content_update_defer_until(occurred_at: datetime) -> datetime | None:
-    debounce_seconds = max(0, datastore_settings.document_processing_debounce_seconds)
-    if debounce_seconds == 0:
-        return None
-
-    occurred_at_utc = occurred_at.astimezone(timezone.utc)
-    scheduled_epoch = (
-        math.ceil(occurred_at_utc.timestamp() / debounce_seconds) * debounce_seconds
-    )
-    scheduled_at = datetime.fromtimestamp(scheduled_epoch, tz=timezone.utc)
-    if scheduled_at <= occurred_at_utc:
-        scheduled_at = occurred_at_utc + timedelta(seconds=debounce_seconds)
-    return scheduled_at
-
-
-async def _enqueue_file_processing(
-    event: DatastoreFileCreatedEvent | DatastoreFileUpdatedEvent,
-    fs_logger: Logger,
-) -> None:
-    if datastore_settings.e2e_disable_worker_file_autoindex:
-        # e2e indexes explicitly in-process (index_file); skip the worker path so
-        # it doesn't double-index every upload and overwhelm the shared Kreuzberg.
-        return
-    defer_until = None
-    if event.event_type == DatastoreFileUpdatedEvent.get_event_type():
-        defer_until = _content_update_defer_until(event.occurred_at)
-
-    await get_datastore_reindex_queue().enqueue(
-        file_id=event.file_id,
-        pod_id=event.pod_id,
-        metadata=event.metadata,
-        defer_until=defer_until,
-    )
-
-
-@reliable_redis_stream_subscriber(
-    router,
-    DATASTORE_EVENTS_STREAM,
-    group="datastore-file-events",
-    consumer="datastore-file-events-consumer",
-)
-async def on_datastore_file_event(
-    event: dict,
-    fs_logger: Logger,
-    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
-):
-    # The unified datastore stream also carries table/record events; ignore
-    # everything that is not a file event.
-    event_type = event.get("event_type")
-    if event_type not in {
-        DatastoreFileCreatedEvent.get_event_type(),
-        DatastoreFileUpdatedEvent.get_event_type(),
-    }:
-        return
-
-    async def process() -> None:
-        event_class = (
-            DatastoreFileCreatedEvent
-            if event_type == DatastoreFileCreatedEvent.get_event_type()
-            else DatastoreFileUpdatedEvent
-        )
-        parsed = event_class.model_validate(event)
-        await _enqueue_file_processing(parsed, fs_logger)
-
-    await inbox.process("datastore.file-processing", event, process)
-
-
-# The datastore row state machine owns retries: a failure records FAILED and the
-# recovery cron re-drives it after backoff. An immediate Streaq retry would see a
-# non-PENDING row and no-op, so keep this task single-attempt.
-#
-# Runs on the BULK lane. Extraction concurrency is now the bulk lane's worker
-# concurrency (``WORKER_BULK_CONCURRENCY``) rather than a semaphore inside the
-# task: parking on a semaphore still held a worker slot, so a burst of uploads
-# consumed the capacity that agent runs and surface messages needed. Bounding it
-# at the queue means excess work simply stays queued.
-@streaq_task(name="process_datastore_file_task", max_tries=1, lane=Lane.BULK)
-async def process_datastore_file_task(
-    _task_context=None,
-    *,
-    file_id: str,
-    pod_id: str,
-    metadata: dict | None = None,
-):
-    try:
-        worker_ctx: AppWorkerContext | None = streaq_worker.context
-    except Exception:
-        worker_ctx = None
-    file_uuid = UUID(file_id)
-    pod_uuid = UUID(pod_id)
-
-    try:
-        # The service uses a uow_factory to open SHORT UoWs around each DB op,
-        # releasing the pooled connection during the slow storage downloads,
-        # document extraction, and uploads inside process_file_async.
-        uow_factory = (
-            worker_ctx.uow_factory
-            if worker_ctx is not None
-            else SessionUnitOfWorkFactory(async_session_maker)
-        )
-        service = get_datastore_composition().build_processing_service(
-            pod_uuid, uow_factory=uow_factory
-        )
-        await service.process_file_async(file_uuid, metadata or {})
-    except Exception:
-        logger.debug(
-            "datastore.handlers.process_datastore_file_task_s.propagated", exc_info=True
-        )
-        raise
-
-
-@streaq_task(name="cleanup_deleted_datastore_paths", lane=Lane.BULK)
-async def cleanup_deleted_datastore_paths_task(
-    _task_context=None,
-    *,
-    pod_id: str,
-    is_folder: bool,
-    folder_prefix: str | None = None,
-    files: list[dict] | None = None,
-):
-    """Purge storage bytes + search-index entries for file/folder rows that the
-    API already deleted in its short UoW. Builds the file service with a UoW that
-    is never queried (storage/search only), so no main pooled connection is held
-    during the (potentially many-object) cleanup."""
-    try:
-        worker_ctx: AppWorkerContext | None = streaq_worker.context
-    except Exception:
-        worker_ctx = None
-    uow_factory = (
-        worker_ctx.uow_factory
-        if worker_ctx is not None
-        else SessionUnitOfWorkFactory(async_session_maker)
-    )
-    pod_uuid = UUID(pod_id)
-    try:
-        async with uow_factory() as uow:
-            service = build_file_service(uow)
-            await service.cleanup_deleted_paths(
-                pod_uuid,
-                is_folder=is_folder,
-                folder_prefix=folder_prefix,
-                files=files or [],
-            )
-        logger.debug(
-            "datastore.handlers.finished_cleanup_deleted_datastore_paths.observed"
-        )
-    except Exception:
-        logger.debug(
-            "datastore.handlers.cleanup_deleted_datastore_paths_pod.propagated",
-            exc_info=True,
-        )
-        raise
-
-
-@streaq_cron("* * * * *", name="dispatch_pending_datastore_files", lane=Lane.BULK)
-async def dispatch_pending_datastore_files() -> None:
-    """Meter the PENDING backlog into the bulk queue, fairly across pods.
-
-    Uploads past a pod's in-flight allowance are intentionally not enqueued (see
-    ``RedisDatastoreReindexQueue.enqueue``); their PENDING rows are the durable
-    backlog. This runs every minute and drains that backlog round-robin, so one
-    tenant uploading a thousand papers cannot starve anyone else and every file
-    is still processed eventually.
-    """
-    worker_ctx: AppWorkerContext = streaq_worker.context
-    try:
-        async with worker_ctx.uow() as uow:
-            dispatch_service = DatastoreFileRecoveryService(
-                file_repository=DatastoreFileRepository(uow),
-                reindex_queue=get_datastore_reindex_queue(),
-                uow=uow,
-            )
-            summary = await dispatch_service.dispatch_pending_files()
-
-        if summary.enqueued_count:
-            logger.debug(
-                "datastore.handlers.dispatched_pending_datastore_files.observed",
-                enqueued_count=summary.enqueued_count,
-                pod_count=summary.pod_count,
-            )
-    except Exception:
-        logger.error(
-            "datastore.handlers.pending_file_dispatch_cron.failed", exc_info=True
-        )
-
-
-@streaq_cron("8-59/15 * * * *", name="recover_stuck_processing_files", lane=Lane.BULK)
-async def recover_stuck_processing_files() -> None:
-    """
-    Find files stuck in PENDING or PROCESSING and make sure they get queued.
-
-    This is necessary because files can get stranded in PENDING before a worker picks them up,
-    and the queue does not auto-recover jobs from crashed workers that leave rows in PROCESSING.
-    The cron re-enqueues stale PENDING files and resets stale PROCESSING files back to PENDING
-    before re-enqueueing them.
-
-    PENDING files are retried after 15 minutes. PROCESSING files are only reclaimed after
-    35 minutes, which preserves a 5-minute buffer beyond the worker's in-progress timeout.
-    """
-    worker_ctx: AppWorkerContext = streaq_worker.context
-    try:
-        async with worker_ctx.uow() as uow:
-            recovery_service = DatastoreFileRecoveryService(
-                file_repository=DatastoreFileRepository(uow),
-                reindex_queue=get_datastore_reindex_queue(),
-                uow=uow,
-            )
-            summary = await recovery_service.recover_stale_files(
-                now=datetime.now(timezone.utc)
-            )
-
-        if summary.terminal_count:
-            logger.warning(
-                "datastore.handlers.datastore_file_recovery_terminally_d.degraded",
-                terminal_count=summary.terminal_count,
-            )
-
-        if summary.examined_count == 0:
-            logger.debug("datastore.handlers.no_stale_datastore_files_re.observed")
-            return
-
-    except Exception:
-        logger.error(
-            "datastore.handlers.stuck_file_recovery_cron_s.failed", exc_info=True
-        )
-
-
-@streaq_cron("41 4 * * *", name="purge_expired_signed_links", lane=Lane.BULK)
+@periodic_job("datastore.signed_links_purge", every=timedelta(days=1))
 async def purge_expired_signed_links() -> None:
     """Delete short-link rows whose links expired.
 

@@ -59,7 +59,10 @@ from app.modules.agent_surfaces.services.onboarding_pod_choice import (
     candidate_pods,
     has_somewhere_to_talk,
 )
-from app.modules.agent_surfaces.services.onboarding_transport import OnboardingTransport
+from app.modules.agent_surfaces.services.onboarding_transport import (
+    OnboardingTransport,
+    among_the_workspaces_people,
+)
 from app.modules.agent_surfaces.services.personal_dm_routes import (
     PersonalRouteUnavailable,
     prepare_personal_dm_context,
@@ -311,6 +314,10 @@ async def recognize_sender(
                     or event.sender_display_name,
                 }
             )
+    if await among_the_workspaces_people(uows, transport):
+        # Somebody the system does not know, in a workspace the organization
+        # holds: theirs to answer as a contact, not a stranger to sign up.
+        return OnboardingIngressResult(False)
     return await create_pending(uows, transport, event)
 
 

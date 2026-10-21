@@ -256,7 +256,7 @@ async def test_finishing_signup_says_so(whatsapp_signup, message_store) -> None:
     """Success was the only outcome with nothing to show for it.
 
     The payoff was the replayed request coming back answered, and
-    `replay_onboarding` raises in several places that dead-letter after their
+    `prepare_onboarding_replay` raises in several places that dead-letter after their
     retries -- so a person who had just proved their email could be left with no
     acknowledgement and no answer, which from inside the chat is indistinguish-
     able from having been ignored.

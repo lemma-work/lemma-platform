@@ -2774,6 +2774,7 @@ dependencies = [
  "lemma-private-file",
  "portable-pty",
  "predicates",
+ "reqwest",
  "rusqlite",
  "rustix",
  "semver",

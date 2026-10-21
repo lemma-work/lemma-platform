@@ -166,7 +166,7 @@ test("the detail reads the runtime, the schemas and the grants", () => {
     });
 
     assert.equal(detail.instruction, "You are a researcher.\n\nAlways cite.");
-    assert.deepEqual(detail.runtime, { profile: "anthropic-key", model: "sonnet", settings: {} });
+    assert.deepEqual(detail.runtime, { profile: "anthropic-key", model: "sonnet", settings: {}, selections: {} });
     assert.equal(runtimeLine(detail), "anthropic-key · sonnet");
     assert.deepEqual(detail.input?.fields, ["topic", "depth"]);
     assert.deepEqual(detail.input?.required, ["topic"]);
@@ -179,7 +179,7 @@ test("a runtime profile with no model named is still a pinned runtime", () => {
     // missing key and an empty string are the same fact: the profile decides.
     const detail = readAgentDetail({ name: "a", agent_runtime: { profile_id: "house" } });
 
-    assert.deepEqual(detail.runtime, { profile: "house", model: "", settings: {} });
+    assert.deepEqual(detail.runtime, { profile: "house", model: "", settings: {}, selections: {} });
     assert.equal(runtimeLine(detail), "house");
 });
 
@@ -200,7 +200,7 @@ function runtimeOf(over: Partial<Runtime>): Runtime {
 
 test("a pinned runtime is named the way the model picker names it, not by its id", () => {
     const runtimes = [runtimeOf({ id: "7f3c-profile" })];
-    const pinned = (model: string) => ({ runtime: { profile: "7f3c-profile", model, settings: {} } });
+    const pinned = (model: string) => ({ runtime: { profile: "7f3c-profile", model, settings: {}, selections: {} } });
 
     assert.equal(runtimeLine(pinned("sonnet"), runtimes), "Anthropic · Sonnet");
     assert.equal(runtimeLine(pinned(""), runtimes), "Anthropic · Sonnet", "the profile's own default, named");
@@ -211,17 +211,17 @@ test("an agent pinned to a retired runtime says so, by name", () => {
     // without them a retired pin was a bare id, and the one thing worth
     // knowing about it — that it cannot take a run — went unsaid.
     const runtimes = [runtimeOf({ id: "old-key", name: "Old key", archived: true })];
-    const detail = { runtime: { profile: "old-key", model: "sonnet", settings: {} } };
+    const detail = { runtime: { profile: "old-key", model: "sonnet", settings: {}, selections: {} } };
 
     assert.equal(runtimeLine(detail, runtimes), "Old key (retired) · Sonnet");
     assert.equal(
-        runtimeLine({ runtime: { profile: "old-key", model: "", settings: {} } }, [runtimeOf({ id: "old-key", name: "Old key", archived: true, models: [], defaultModel: "" })]),
+        runtimeLine({ runtime: { profile: "old-key", model: "", settings: {}, selections: {} } }, [runtimeOf({ id: "old-key", name: "Old key", archived: true, models: [], defaultModel: "" })]),
         "Old key (retired)",
     );
 });
 
 test("a runtime not in the list, or before the list loads, falls back to its id", () => {
-    const detail = { runtime: { profile: "someone-elses", model: "sonnet", settings: {} } };
+    const detail = { runtime: { profile: "someone-elses", model: "sonnet", settings: {}, selections: {} } };
     assert.equal(runtimeLine(detail, []), "someone-elses · sonnet");
     assert.equal(runtimeLine(detail, undefined), "someone-elses · sonnet");
 });
@@ -264,7 +264,7 @@ test("a PATCH carries only what changed", () => {
 });
 
 test("a cleared description is an explicit null, so it actually clears", () => {
-    const before = { description: "Plans meals.", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", runtime: null };
+    const before = { description: "Plans meals.", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null };
 
     assert.deepEqual(agentChanges(before, { ...before, description: "   " }), { description: null });
 });
@@ -272,7 +272,7 @@ test("a cleared description is an explicit null, so it actually clears", () => {
 test("an emptied instruction is not sent, because the API will not take it", () => {
     // `UpdateAgentRequest.instruction` has min_length=1; sending "" is a 422,
     // and the form should say so rather than find out.
-    const before = { description: "", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", runtime: null };
+    const before = { description: "", instruction: "You plan meals.", reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null };
 
     assert.deepEqual(agentChanges(before, { ...before, instruction: "  " }), {});
     assert.equal(agentProblems({ ...before, instruction: "  " }).instruction,
@@ -290,8 +290,8 @@ test("an instruction is a document, so its blank lines survive a round trip", ()
 test("an instruction past the limit is refused before the round trip", () => {
     const over = "x".repeat(MAX_INSTRUCTION + 1);
 
-    assert.match(agentProblems({ description: "", instruction: over, reasoningEffort: "", maxOutputTokens: "", runtime: null }).instruction ?? "", /the limit is 60,000/);
-    assert.equal(agentProblems({ description: "", instruction: "x".repeat(MAX_INSTRUCTION), reasoningEffort: "", maxOutputTokens: "", runtime: null }).instruction, undefined);
+    assert.match(agentProblems({ description: "", instruction: over, reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null }).instruction ?? "", /the limit is 60,000/);
+    assert.equal(agentProblems({ description: "", instruction: "x".repeat(MAX_INSTRUCTION), reasoningEffort: "", maxOutputTokens: "", selections: {}, runtime: null }).instruction, undefined);
 });
 
 /* ── what deleting breaks ──────────────────────────────────────── */
@@ -378,4 +378,29 @@ test("an output cap has to be a whole number", () => {
     assert.ok(agentProblems({ ...draft, maxOutputTokens: "lots" }).maxOutputTokens);
     assert.ok(agentProblems({ ...draft, maxOutputTokens: "0" }).maxOutputTokens);
     assert.equal(agentProblems({ ...draft, maxOutputTokens: "4096" }).maxOutputTokens, undefined);
+});
+
+test("a coding agent's selections ride on the runtime, and are written back whole", () => {
+    const agent = {
+        name: "coder",
+        instruction: "You write code.",
+        agent_runtime: { profile_id: "me:claude-code", model_name: "opus", config_selections: { effort: "high", odd: 3 } },
+    };
+    const before = draftOfAgent(readAgentDetail(agent));
+    assert.deepEqual(before.selections, { effort: "high" });
+    assert.deepEqual(agentChanges(before, before), {}, "an untouched form sends no runtime");
+
+    assert.deepEqual(agentChanges(before, { ...before, selections: { effort: "max" } }).agent_runtime, {
+        profile_id: "me:claude-code",
+        model_name: "opus",
+        settings: null,
+        config_selections: { effort: "max" },
+    });
+    // "Agent's default" is the key gone, and the last one gone is no map at all.
+    assert.equal(agentChanges(before, { ...before, selections: { effort: "" } }).agent_runtime?.config_selections, undefined);
+    // Any other runtime edit still carries the selections, or the PATCH would erase them.
+    assert.deepEqual(
+        agentChanges(before, { ...before, reasoningEffort: "low" }).agent_runtime?.config_selections,
+        { effort: "high" },
+    );
 });

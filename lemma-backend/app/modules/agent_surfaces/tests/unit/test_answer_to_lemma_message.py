@@ -16,7 +16,6 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -27,10 +26,17 @@ from app.modules.agent_surfaces.platforms.telegram.message_experience import (
     reply_parameters,
 )
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
+from app.modules.agent_surfaces.tests.unit.surface_doubles import (
+    AnsweredAt,
+    answer_at,
+    surface_conversation,
+)
+from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 
 pytestmark = pytest.mark.unit
 
 _CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_CONVERSATION = uuid4()
 _LAST_INBOUND = datetime(2026, 10, 2, 11, 30, tzinfo=timezone.utc)
 
 
@@ -52,7 +58,7 @@ def conversation(monkeypatch):
     """The conversation's owner, doubled on `agent`'s contract: it reads a row."""
     monkeypatch.setattr(
         f"{_CONVERSATIONS}.surface_conversation",
-        AsyncMock(return_value=SimpleNamespace(user_id=uuid4(), pod_id=uuid4())),
+        AsyncMock(return_value=surface_conversation()),
     )
 
 
@@ -76,22 +82,26 @@ def _delivery(*, kind: str) -> SurfaceDelivery:
     )
     surfaces = AsyncMock()
     surfaces.get.return_value = surface
-    links = AsyncMock()
-    links.get_by_conversation_id.return_value = AgentSurfaceConversationLink(
-        id=uuid4(),
-        surface_id=surface.id,
-        conversation_id=uuid4(),
-        platform="TELEGRAM",
-        external_channel_id="-100",
-        external_thread_id="-100",
-        conversation_kind=kind,
-        last_event=_group_message().model_dump(mode="json"),
-        last_inbound_at=_LAST_INBOUND,
+    seats = InMemoryChannelSeats()
+    answer_at(
+        seats,
+        AnsweredAt(
+            surface_id=surface.id,
+            conversation_id=_CONVERSATION,
+            platform="TELEGRAM",
+            external_channel_id="-100",
+            external_thread_id="-100",
+            external_user_id=_group_message().sender_external_user_id,
+            conversation_kind=kind,
+            last_event=_group_message().model_dump(mode="json"),
+            last_inbound_at=_LAST_INBOUND,
+        ),
+        [surface],
     )
     return SurfaceDelivery(
         uow=SimpleNamespace(session=None),
         surface_repository=surfaces,
-        conversation_link_repository=links,
+        seats=seats,
         adapter_registry=SimpleNamespace(get=lambda platform: AsyncMock()),
         credential_resolver=SimpleNamespace(
             for_surface=AsyncMock(return_value={"bot_token": "t"})
@@ -100,7 +110,7 @@ def _delivery(*, kind: str) -> SurfaceDelivery:
 
 
 async def _event(*, kind: str = "CHANNEL") -> ParsedInboundSurfaceEvent:
-    target = await _delivery(kind=kind).resolve_egress_target(uuid4())
+    target = await _delivery(kind=kind).resolve_egress_target(_CONVERSATION)
     assert target is not None
     return target.event
 

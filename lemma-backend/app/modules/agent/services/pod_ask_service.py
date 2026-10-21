@@ -33,7 +33,12 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.outsiders import run_audience
-from app.modules.agent.domain.pod_ask_rules import AskingRun, open_modes, plan_ask
+from app.modules.agent.domain.pod_ask_rules import (
+    AskingRun,
+    closed_reason,
+    open_modes,
+    plan_ask,
+)
 from app.modules.agent.domain.pod_asks import (
     ASK_KEY,
     ASK_SOURCE,
@@ -237,6 +242,19 @@ class PodAskService:
             )
         modes = open_modes(_asking_run(deps, asking, latest_turn_source=source))
         return [one for one in (narrowed(t, modes) for t in teammates) if one]
+
+    async def unreachable_reason(self, deps: BaseAgentContext) -> str | None:
+        """Why this run can ask no pod at all, or ``None`` when it could."""
+        async with self.uow_factory() as uow:
+            asking = await ConversationRepository(uow).get_conversation(
+                deps.conversation_id
+            )
+            source = await PodAskQueries(uow).latest_turn_source(
+                conversation_id=deps.conversation_id
+            )
+        if asking is None:
+            return None
+        return closed_reason(_asking_run(deps, asking, latest_turn_source=source))
 
     async def ensure_may_ask(
         self, deps: BaseAgentContext, *, teammate: Teammate

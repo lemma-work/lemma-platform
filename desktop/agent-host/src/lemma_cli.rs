@@ -12,12 +12,16 @@
 //!   server somewhere else. A path it names is a path on *its* machine, and
 //!   letting a remote server pick which binary on this Mac runs unasked is
 //!   exactly what must not happen. Those runs get the CLI Lemma Desktop ships
-//!   inside the app, beside this binary, or none.
+//!   inside the app, beside this binary; failing that, the one this host
+//!   downloaded for its own release (`download`); or none.
 //!
-//! Either way the folder has to pass `seatbelt::lemma_cli_root`, the rule host
-//! execution applies to every folder it widens commands to. A folder that does
-//! not is no CLI at all: the agent gets no allow rule rather than one naming
-//! something else.
+//! So the order is: the local install's named CLI (local pairing only), the
+//! bundled one, the downloaded one, none. Either way the folder has to pass
+//! `seatbelt::lemma_cli_root`, the rule host execution applies to every folder
+//! it widens commands to. A folder that does not is no CLI at all: the agent
+//! gets no allow rule rather than one naming something else.
+
+pub mod download;
 
 use std::path::{Path, PathBuf};
 
@@ -80,15 +84,49 @@ pub fn cli_root(
 }
 
 /// The `bin/` of the CLI for a run on this pairing, as `cli_root` decides it
-/// from the run's MCP configuration, this binary's location and `$HOME`.
-#[must_use]
-pub fn cli_bin_for_run(local_pairing: bool, mcp: &Value) -> Option<PathBuf> {
+/// from the run's MCP configuration, this binary's location and `$HOME`, and
+/// failing those, the CLI downloaded into `data_dir`.
+///
+/// Only a hosted run waits for a download, and only briefly
+/// (`download::RUN_START_WAIT`); the local pairing takes a downloaded CLI only
+/// if one is already there, since its server names its own.
+pub async fn cli_bin_for_run(local_pairing: bool, mcp: &Value, data_dir: &Path) -> Option<PathBuf> {
     let home = std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)?;
     let home = std::fs::canonicalize(&home).unwrap_or(home);
     let named = mcp.get("lemma_cli").and_then(Value::as_str);
-    cli_root(local_pairing, named, &bundled_cli_candidates(), &home).map(|root| root.join("bin"))
+    if let Some(root) = cli_root(local_pairing, named, &bundled_cli_candidates(), &home) {
+        return Some(root.join("bin"));
+    }
+    let fetcher = download::Downloader::shared(data_dir);
+    let downloaded = if local_pairing {
+        fetcher.installed_dir()
+    } else {
+        let Some(root) = fetcher.ready_within(download::RUN_START_WAIT).await else {
+            if fetcher.enabled() {
+                tracing::warn!(
+                    "this run has no lemma CLI: none is bundled with the app and the download is not ready"
+                );
+            }
+            return None;
+        };
+        root
+    };
+    cli_root(false, None, &[downloaded], &home).map(|root| root.join("bin"))
+}
+
+/// Starts downloading the CLI for a hosted pairing when the app carries none,
+/// so it is usually there before the pairing's first run.
+pub fn prefetch_for_hosted_pairing(data_dir: &Path) {
+    let bundled = bundled_cli_candidates();
+    if bundled
+        .iter()
+        .any(|candidate| candidate.join("bin/lemma").is_file())
+    {
+        return;
+    }
+    download::Downloader::shared(data_dir).prefetch();
 }
 
 /// Where this process's bundled CLI may be: the development override, when
@@ -208,6 +246,63 @@ mod tests {
         let mac = machine();
         let inside_secrets = cli_at(&mac.home.join(".ssh/lemma-cli"));
         assert_eq!(cli_root(false, None, &[inside_secrets], &mac.home), None);
+    }
+
+    /// Where the host keeps a downloaded CLI by default: inside Lemma's own
+    /// application data, which is denied to commands except for this folder.
+    fn downloaded_at(home: &Path) -> PathBuf {
+        cli_at(
+            &home
+                .join(crate::host_exec::seatbelt::DOWNLOADED_CLI_EXCEPTION)
+                .join("9.8.7"),
+        )
+    }
+
+    /// Named (local pairing only), then bundled, then downloaded, then none.
+    #[test]
+    fn the_resolution_order_is_named_bundled_downloaded() {
+        let mac = machine();
+        let downloaded = downloaded_at(&mac.home);
+        let both = [mac.bundled.clone(), downloaded.clone()];
+        assert_eq!(
+            cli_root(true, mac.named.to_str(), &both, &mac.home),
+            Some(mac.named.clone())
+        );
+        assert_eq!(
+            cli_root(false, mac.named.to_str(), &both, &mac.home),
+            Some(mac.bundled.clone())
+        );
+        let absent = mac.bundled.with_file_name("not-there");
+        assert_eq!(
+            cli_root(
+                false,
+                mac.named.to_str(),
+                &[absent.clone(), downloaded.clone()],
+                &mac.home
+            ),
+            Some(downloaded.clone())
+        );
+        assert_eq!(
+            cli_root(
+                true,
+                Some("/does/not/exist"),
+                &[absent, downloaded.clone()],
+                &mac.home
+            ),
+            Some(downloaded)
+        );
+    }
+
+    /// The rest of Lemma's application data stays refused: only the
+    /// downloaded CLIs' own folder is carved out of it.
+    #[test]
+    fn only_the_download_folder_is_carved_out_of_lemmas_data() {
+        let mac = machine();
+        let beside = cli_at(
+            &mac.home
+                .join("Library/Application Support/Lemma/agent-host/adapters/x"),
+        );
+        assert_eq!(cli_root(false, None, &[beside], &mac.home), None);
     }
 
     #[test]

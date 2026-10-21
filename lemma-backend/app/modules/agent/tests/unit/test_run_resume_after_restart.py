@@ -1,15 +1,15 @@
 """A release should not end every conversation in flight.
 
 A worker on its way out used to finalize each in-flight run FAILED, and because
-`process_agent_run` swallowed the CancelledError, streaq saw a task that
-returned and XACKed it — so nothing redelivered it either. Shipping a version
+the task swallowed the CancelledError, the queue saw a task that returned and
+acknowledged it — so nothing redelivered it either. Shipping a version
 terminated every agent run on the box and each person had to ask again.
 
-Nothing needs re-doing to fix that, and nothing needs building: streaq already
-relinquishes a task cancelled by the shutdown grace period, leaving it in the
-pending list for the next worker's XAUTOCLAIM. Messages are persisted as they
-stream and history is rebuilt from the database on every run, so the worker that
-reclaims the job reconstructs exactly the context the interrupted one had.
+A turn is a work item now: a shutdown yields it at a step boundary, and a
+cancellation past the grace releases it, and either way the next worker
+resumes it. Messages are persisted as they stream and history is rebuilt from
+the database on every run, so the worker that reclaims the turn reconstructs
+exactly the context the interrupted one had.
 
 All this takes is letting the cancellation out.
 """
@@ -30,17 +30,16 @@ from app.modules.agent.domain.value_objects import (
 pytestmark = pytest.mark.unit
 
 
-class TestTheCancellationReachesStreaq:
-    def test_the_task_handler_does_not_catch_it(self) -> None:
-        """A `except asyncio.CancelledError` here is the whole bug: streaq only
-        relinquishes a task that was actually cancelled."""
-        from app.modules.agent.events import handlers
+class TestTheCancellationReachesTheRuntime:
+    def test_the_turn_handler_does_not_catch_it(self) -> None:
+        """A `except asyncio.CancelledError` here is the whole bug: the work
+        runtime releases a turn whose job was actually cancelled (a lost lease,
+        a shutdown past its grace), and the next worker resumes it."""
+        from app.modules.agent.events import turn_work
 
-        # Parsed, not grepped: the comment above the call says the word too, and
-        # a substring check would pass with the handler right back in place.
-        tree = ast.parse(
-            textwrap.dedent(inspect.getsource(handlers.process_agent_run.fn))
-        )
+        # Parsed, not grepped: a substring check would pass with the handler
+        # right back in place.
+        tree = ast.parse(textwrap.dedent(inspect.getsource(turn_work._turn_handler)))
         caught = {
             name.id
             for node in ast.walk(tree)
@@ -55,6 +54,7 @@ class TestTheCancellationReachesStreaq:
         }
 
         assert "CancelledError" not in caught
+        assert "BaseException" not in caught
 
     async def test_execute_lets_it_out(self, monkeypatch) -> None:
         from app.modules.agent.services import agent_runner_service as module
@@ -72,9 +72,7 @@ class TestTheCancellationReachesStreaq:
         assert AgentRunStatus.RUNNING in ACTIVE_AGENT_RUN_STATUSES
 
     def test_there_is_no_resume_sweep_left(self) -> None:
-        """The queue redelivers. A cron that re-enqueues duplicates it, and the
-        one that existed could silently enqueue nothing: streaq publishes with
-        `SET NX`, so re-enqueueing under a finished job's id is dropped."""
+        """The work item redelivers; a cron that re-enqueued duplicated it."""
         import importlib.util
 
         assert importlib.util.find_spec("app.modules.agent.services.run_resume") is None

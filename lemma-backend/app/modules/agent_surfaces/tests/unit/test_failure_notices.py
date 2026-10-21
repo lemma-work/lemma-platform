@@ -16,7 +16,8 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from app.core.domain.errors import DomainError
-from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
+from app.modules.agent.contracts.run_failures import user_safe_stored_reason
+from app.modules.agent.services.run_finalizer import run_failure_message
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -33,6 +34,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
 )
 from app.modules.agent_surfaces.services import telegram_command_service
 from app.modules.agent_surfaces.services.egress_progress import SurfaceProgress
+from app.modules.agent_surfaces.services.progress_events import failure_notice
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
@@ -58,99 +60,79 @@ class _UowFactory:
         return None
 
 
-class _Egress:
-    def __init__(self) -> None:
-        self.sent: list[dict] = []
-        self.progress = SimpleNamespace(clear_progress=AsyncMock())
+def _notice(error: BaseException, platform: str) -> str:
+    """The notice a failed run's delivery carries, from what the finalize stored.
 
-    async def send_agent_message_for_conversation(self, **kwargs):
-        self.sent.append(kwargs)
-        return True
-
-
-def _observer(egress: _Egress) -> SurfaceAgentRunProgressObserver:
-    return SurfaceAgentRunProgressObserver(
-        uow_factory=_UowFactory(), egress_factory=lambda _uow: egress
-    )
-
-
-def _conversation(platform: str) -> SimpleNamespace:
-    return SimpleNamespace(id=uuid4(), metadata={"surface_platform": platform})
+    The run row keeps ``run_failure_message(exc)`` as its error, and the
+    delivery's sender renders it with ``failure_notice`` for the platform.
+    """
+    return failure_notice(user_safe_stored_reason(run_failure_message(error)), platform)
 
 
 @pytest.mark.parametrize("platform", [*_NATIVE_RETRY, "RESEND"])
-async def test_a_failed_run_says_why_and_offers_only_what_works_there(platform):
-    egress = _Egress()
-    observer = _observer(egress)
-    conversation = _conversation(platform)
+def test_a_failed_run_says_why_and_offers_only_what_works_there(platform):
     reason = "Ollama isn't running on this computer. Start it, then try again."
 
-    await observer.on_event(
-        AgentEvent(type=AgentEventType.ERROR, data=reason),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
-    )
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
+    message = failure_notice(reason, platform)
 
-    [sent] = egress.sent
-    assert sent["message"].startswith(reason)
-    assert "without resending" not in sent["message"]
-    assert "“retry”" in sent["message"]
+    assert message.startswith(reason)
+    assert "without resending" not in message
+    assert "“retry”" in message
     if platform in _NATIVE_RETRY:
-        assert "Tap Try again" in sent["message"]
+        assert "Tap Try again" in message
     else:
         # Email has no button; offering one is advice nobody can follow.
-        assert "Tap" not in sent["message"]
-    assert sent["metadata"] == {"retry_action": True}
+        assert "Tap" not in message
 
 
-async def test_a_failure_before_the_harness_names_a_spent_quota():
-    egress = _Egress()
-
-    await _observer(egress).on_run_failed(
-        _conversation("SLACK"), UsageLimitExceededError()
-    )
-
-    assert "usage allowance" in egress.sent[0]["message"]
+def test_a_failure_before_the_harness_names_a_spent_quota():
+    assert "usage allowance" in _notice(UsageLimitExceededError(), "SLACK")
 
 
-async def test_a_failure_with_a_written_reason_carries_it():
-    egress = _Egress()
+def test_a_failure_with_a_written_reason_carries_it():
     error = DomainError("The model this teammate uses was archived.", code="X")
 
-    await _observer(egress).on_run_failed(_conversation("TELEGRAM"), error)
-
-    assert egress.sent[0]["message"].startswith(
+    assert _notice(error, "TELEGRAM").startswith(
         "The model this teammate uses was archived."
     )
 
 
-async def test_an_unknown_failure_keeps_the_plain_apology():
-    egress = _Egress()
+def test_an_unknown_failure_keeps_the_plain_apology():
+    message = _notice(RuntimeError("Traceback: internal detail"), "SLACK")
 
-    await _observer(egress).on_run_failed(
-        _conversation("SLACK"), RuntimeError("Traceback: internal detail")
-    )
-
-    message = egress.sent[0]["message"]
     assert message.startswith("I couldn’t finish that request.")
     assert "internal detail" not in message
 
 
-async def test_a_reason_that_quotes_a_credential_is_masked():
-    egress = _Egress()
+def test_a_reason_that_quotes_a_credential_is_masked():
     secret = "sk-" + "a1b2c3d4" * 3
-    conversation = _conversation("SLACK")
-    observer = _observer(egress)
 
-    await observer.on_event(
-        AgentEvent(type=AgentEventType.ERROR, data=f"Provider refused key {secret}"),
-        conversation,
-        SimpleNamespace(agent_run_id=None),
+    assert secret not in failure_notice(f"Provider refused key {secret}", "SLACK")
+
+
+async def test_the_observer_says_nothing_itself_when_a_run_fails():
+    """The notice is the run's delivery row; the observer only takes display down."""
+    sent: list[dict] = []
+    egress = SimpleNamespace(
+        progress=SimpleNamespace(clear_progress=AsyncMock()),
+        send_agent_message_for_conversation=AsyncMock(
+            side_effect=lambda **kwargs: sent.append(kwargs)
+        ),
     )
-    await observer.on_run_finished(conversation, SimpleNamespace(agent_run_id=None))
 
-    assert secret not in egress.sent[0]["message"]
+    observer = SurfaceAgentRunProgressObserver(
+        contact_gate=_no_contact_refuses,
+        uow_factory=_UowFactory(),
+        egress_factory=lambda _uow: egress,
+    )
+    await observer.on_run_failed(
+        SimpleNamespace(
+            id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
+        ),
+        UsageLimitExceededError(),
+    )
+
+    assert sent == []
 
 
 # ── the "Try again" control on each platform, and its tap ───────────────────
@@ -246,6 +228,7 @@ def test_a_notice_too_long_for_a_whatsapp_button_goes_as_text():
 
 def _chat_context(text: str, *, outsider: bool = False):
     from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+    from app.modules.agent.contracts.audience import Audience
     from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 
     return SurfaceChatContext(
@@ -256,7 +239,7 @@ def _chat_context(text: str, *, outsider: bool = False):
         message_text=text,
         message_metadata=SurfaceMessageMetadata(surface_platform="RESEND"),
         message_user_id=uuid4(),
-        answers_outsider=outsider,
+        audience=Audience.contact(uuid4()) if outsider else Audience.member(),
         event=ParsedInboundSurfaceEvent(
             platform="RESEND",
             conversation_type=ConversationType.EXTERNAL_DM,
@@ -336,3 +319,8 @@ def test_a_plan_item_never_shows_reasoning_or_a_credential():
     assert secret not in drawn
     assert "should I?" not in drawn
     assert "Open the PR" in drawn
+
+
+async def _no_contact_refuses(_conversation_id) -> bool:
+    """No contact here refuses the answer (``contact_stream_gate``)."""
+    return False

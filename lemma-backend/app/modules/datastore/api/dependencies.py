@@ -6,7 +6,6 @@ from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.datastore.application.file_use_cases import FileUseCases
 from app.modules.datastore.infrastructure.repositories import DatastoreFileRepository
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
@@ -45,9 +44,8 @@ SchemaManagerDep = Annotated[SchemaManager, Depends(get_schema_manager)]
 
 def build_file_service(uow) -> DatastoreFileService:
     """Construct a DatastoreFileService from a unit of work (single wiring source)."""
-    message_bus = get_message_bus()
     return DatastoreFileService(
-        file_repository=DatastoreFileRepository(uow, message_bus=message_bus),
+        file_repository=DatastoreFileRepository(uow),
         storage=create_datastore_storage(),
         authorization_service=create_authorization_data_service(uow),
         search_service_factory=get_datastore_composition().build_search_service,

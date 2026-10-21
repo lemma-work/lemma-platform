@@ -765,9 +765,11 @@ fn progress_text(update: &Map<String, Value>) -> Option<String> {
 }
 
 fn usage_payload(usage: &Value) -> Option<UsagePayload> {
+    // A count sent as `12.0` is still a count, and one that is not a count is
+    // left out rather than failing the rest.
     let number = |keys: &[&str]| {
         keys.iter()
-            .find_map(|key| usage.get(*key).and_then(Value::as_u64))
+            .find_map(|key| usage.get(*key).and_then(crate::acp::whole_count))
     };
     let payload = UsagePayload {
         input_tokens: number(&["inputTokens", "input_tokens"]),

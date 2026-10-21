@@ -775,7 +775,7 @@ async def _wait_run(
 @pytest.mark.asyncio
 async def test_manual_job_function_workflow_completes_full_real(full_stack):
     """A JOB function node suspends the workflow, the real function executes in
-    Docker, and the real FunctionRunCompletedEvent wakes the run to completion.
+    Docker, and the run's end -- its ``workflow.resume`` item -- wakes the run.
 
     This is the end-to-end proof of the workflow-wake fix and the cold-sandbox
     readiness probe (the first execute must not 502).

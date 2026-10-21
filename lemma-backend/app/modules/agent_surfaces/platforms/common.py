@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import Any, Iterable, TypeVar
 from urllib.parse import urlparse
@@ -399,6 +400,10 @@ def text_or_none(value: Any) -> str | None:
 #
 # Import errors are tolerated so a deployment without an optional SDK still
 # loads; a platform whose SDK is missing cannot be reached anyway.
+#
+# Slack's are not in this tuple: `slack_sdk` is ~43 modules an API process need
+# not load to start, so it is imported on first use (`platforms/slack/errors`)
+# and `platform_transport_errors()` adds its errors once it has been.
 def _platform_transport_errors() -> tuple[type[BaseException], ...]:
     import httpx
 
@@ -414,12 +419,6 @@ def _platform_transport_errors() -> tuple[type[BaseException], ...]:
 
         errors.append(aiohttp.ClientError)
     except ImportError:  # pragma: no cover - aiohttp ships with the backend
-        pass
-    try:
-        from slack_sdk.errors import SlackApiError, SlackClientError
-
-        errors.extend((SlackApiError, SlackClientError))
-    except ImportError:  # pragma: no cover
         pass
     try:
         from app.modules.agent_surfaces.platforms.telegram.client import (
@@ -443,6 +442,21 @@ def _platform_transport_errors() -> tuple[type[BaseException], ...]:
     return tuple(errors)
 
 
-PLATFORM_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
-    _platform_transport_errors()
-)
+_TRANSPORT_ERRORS_WITHOUT_SLACK = _platform_transport_errors()
+
+
+def platform_transport_errors() -> tuple[type[BaseException], ...]:
+    """The transport family, Slack's errors included once Slack is loaded.
+
+    A call, not a constant, so naming the family does not import ``slack_sdk``.
+    Read where an error is matched -- ``except platform_transport_errors():``
+    is evaluated after the raise -- never ahead of the code that may raise:
+    until something has imported ``slack_sdk.errors`` no Slack error can exist,
+    so leaving them out before then misses nothing, but a tuple taken before a
+    call that loads Slack would miss what that call raises.
+    """
+    if "slack_sdk.errors" not in sys.modules:
+        return _TRANSPORT_ERRORS_WITHOUT_SLACK
+    from slack_sdk.errors import SlackApiError, SlackClientError
+
+    return (*_TRANSPORT_ERRORS_WITHOUT_SLACK, SlackApiError, SlackClientError)

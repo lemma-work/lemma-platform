@@ -10,10 +10,17 @@ from __future__ import annotations
 import pytest
 
 from app.modules.agent_surfaces.domain.addressing import names_the_agent
+from app.modules.agent_surfaces.domain.entities import (
+    ConversationType,
+    ParsedInboundSurfaceEvent,
+    SurfacePlatform,
+)
+from app.modules.agent_surfaces.domain.reply_targets import copied_on_reply
 from app.modules.agent_surfaces.platforms.resend.email_recipients import (
     MAX_REPLY_CC,
     other_people,
     pod_was_addressed,
+    reply_all_recipients,
 )
 from app.modules.agent_surfaces.platforms.resend.parser import (
     ResendInboundParser,
@@ -205,3 +212,28 @@ def test_a_refusal_goes_to_the_sender_alone():
 
     assert refused.reply_target["cc"] == []
     assert refused.reply_target["recipient_email"] == "client@northwind.test"
+
+
+def test_reply_all_recipients_are_the_others_copied_on_the_thread():
+    parsed = ResendInboundParser().parse(
+        _payload(to=[POD, "arjun@acme.test"], cc=["priya@acme.test"])
+    )
+    assert parsed is not None
+
+    assert reply_all_recipients(parsed) == ["arjun@acme.test", "priya@acme.test"]
+    assert reply_all_recipients(to_sender_alone(parsed)) == []
+
+
+def test_a_chat_event_copies_nobody_whatever_its_reply_target_holds():
+    """Only an email reply copies anyone; a stray ``cc`` on a chat event is not
+    read as a reply-all."""
+    chat = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.SLACK,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="t-1",
+        message_text="hi",
+        reply_target={"channel": "D1", "cc": ["someone@acme.test"]},
+    )
+
+    assert copied_on_reply(chat) == ()
+    assert to_sender_alone(chat) is chat

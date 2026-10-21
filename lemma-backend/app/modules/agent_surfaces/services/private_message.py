@@ -32,7 +32,6 @@ from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 logger = get_logger(__name__)
 
 #: The conversation kind of a chat several people read (a group, a channel).
-_GROUP_CONVERSATION_KIND = "CHANNEL"
 
 
 class PrivateSend(StrEnum):
@@ -69,7 +68,7 @@ class PrivateMessage:
         target = await self.egress.delivery.resolve_egress_target(conversation_id)
         if target is None:
             return PrivateSend.NOT_DELIVERED
-        if target.link.conversation_kind != _GROUP_CONVERSATION_KIND:
+        if not target.is_group or target.surface.surface_type.is_email:
             # An email thread with other people on it is a group too, but one
             # that can be answered privately: the same thread, to the sender
             # alone, without the copies a reply-all carries.
@@ -90,6 +89,6 @@ class PrivateMessage:
             return PrivateSend.NO_PRIVATE_CHAT
         return _outcome(
             await self.egress.send_agent_message_for_conversation(
-                conversation_id=private.conversation_id, message=message
+                conversation_id=private, message=message
             )
         )

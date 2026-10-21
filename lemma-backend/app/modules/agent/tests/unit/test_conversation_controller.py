@@ -549,6 +549,35 @@ class TestASilentStreamStillSendsSomething:
         await stream.aclose()
 
     @pytest.mark.asyncio
+    async def test_an_ending_lost_in_a_reconnect_still_ends_the_stream(
+        self,
+    ) -> None:
+        """The run finished while the subscription was reconnecting, so its
+        `completed` was never heard. The idle check reads the run instead of
+        sending keepalives forever."""
+        from app.modules.agent.api.controllers.shared import (
+            KEEPALIVE_FRAME,
+            with_keepalive,
+        )
+
+        checks = 0
+
+        async def ended() -> str | None:
+            nonlocal checks
+            checks += 1
+            return "data: completed\n\n" if checks > 1 else None
+
+        stream = with_keepalive(
+            self._slow_then_done(asyncio.Event()),
+            interval_seconds=0.01,
+            on_idle=ended,
+        )
+        assert [frame async for frame in stream] == [
+            KEEPALIVE_FRAME,
+            "data: completed\n\n",
+        ]
+
+    @pytest.mark.asyncio
     async def test_a_busy_stream_gets_no_keepalives(self) -> None:
         from app.modules.agent.api.controllers.shared import (
             KEEPALIVE_FRAME,

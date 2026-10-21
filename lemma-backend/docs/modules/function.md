@@ -28,5 +28,23 @@ execution service or fallback path.
 | `function_revisions` | One built, executable revision. The artifact and source bytes were always content-addressed; this row is what makes them findable, and it snapshots the schemas so promoting an old revision restores the contract its code actually implements |
 | `function_runs` | One durable attempt: input/output, status, logs, error, deadline, and job handle. The foreign key to `functions` is `SET NULL`, because a run is the record of what the function did and must outlive the definition; the delete path refuses while any run is still in flight |
 
+## Runs on the work runtime
+
+| Kind | Class | Written by | Does |
+| --- | --- | --- | --- |
+| `function.run` (JOB) | automation | The transaction that creates an asynchronous run | Starts it under the pod's gate and invokes the sandbox |
+| `function.deadline` (FAST) | events | The start (and the creation of a synchronous run) | Fails a run still open past its deadline plus the callback grace |
+| `function.cancel` (JOB) | automation | Cancelling a started run from a workflow | Asks the sandbox to stop it |
+
+The per-pod gate is the RUNNING rows: the start counts the pod's running runs
+under a lock on the pod and refuses past
+`FUNCTION_RUNTIME_MAX_CONCURRENT_RUNS_PER_POD`. A queued run turned away is
+deferred without charge; a synchronous caller waits up to its start deadline. A
+sandbox that cannot be reached before the start is waited out, uncharged, for
+at most the run's start window. Once a run is RUNNING it is never invoked
+again: a reclaimed item finds it started and leaves it to its callback or its
+deadline. Every terminal transition emits `FunctionRunFinished`
+(`contracts/run_facts.py`) in its own transaction.
+
 The table list is inventory, not a runtime contract. Attempt, retry, queue, and
 artifact rules live in the canonical design set above.

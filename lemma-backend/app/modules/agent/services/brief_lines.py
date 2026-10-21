@@ -151,7 +151,9 @@ def run_source_of(agent_run) -> str | None:
     return source_of(getattr(agent_run, "metadata", None))
 
 
-def run_framing(conversation, *, run_source: str | None = None) -> str:
+def run_framing(
+    conversation, *, run_source: str | None = None, platform: str | None = None
+) -> str:
     """Say what started **this run**, and whether anybody is waiting on it.
 
     Changes from run to run, so it goes in the run's context part rather than
@@ -172,14 +174,16 @@ def run_framing(conversation, *, run_source: str | None = None) -> str:
 
     So: the conversation says how it began, ``run_source`` says what started this
     turn, and the unattended claim needs the source to be positively known
-    automatic. Anything unrecognised is not called unattended.
+    automatic. Anything unrecognised is not called unattended. ``platform`` is
+    the one the run talks over (``surface_context_for_run``), never the
+    conversation's: a member's conversation in a channel was last heard on
+    WhatsApp as often as not when they ask in Lemma.
     """
     metadata = getattr(conversation, "metadata", None)
     metadata = metadata if isinstance(metadata, dict) else {}
     started_by_schedule = str(metadata.get("started_by") or "").upper() == "SCHEDULE"
     unattended = run_is_unattended(run_source)
-    platform = metadata.get("surface_platform")
-    where = f" from {str(platform).lower()}" if platform else ""
+    where = f" from {platform.lower()}" if platform else ""
 
     if run_source == RESUMED_BY_PERSON:
         return _with_budget(

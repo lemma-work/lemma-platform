@@ -210,10 +210,21 @@ async def test_a_reclaimed_run_records_each_event_once(db_session, scenario):
         entries = await stream.xrange(run_events_stream_key(run_id))
         return lease.consumed_stream_id, entries
 
+    # The cursor is written after each entry that puts a message on the record,
+    # so it passes through the tool call's entry on its way to the tool
+    # result's. Waiting only for "trimmed to the cursor" caught it between the
+    # two whenever the worker was slower than the probe. What the worker can
+    # reach before it has to wait for more words is the tool result.
+    last_persistable = "5"
     cursor, remaining = await eventually(
         label="the first worker records how far it persisted, and trims below it",
         probe=progress,
-        done=lambda seen: seen[0] is not None and seen[1][0][0] == seen[0],
+        done=lambda seen: (
+            seen[0] is not None
+            and bool(seen[1])
+            and seen[1][0][0] == seen[0]
+            and seen[1][0][1]["sequence"] == last_persistable
+        ),
     )
     worker.cancel()
     with contextlib.suppress(asyncio.CancelledError):

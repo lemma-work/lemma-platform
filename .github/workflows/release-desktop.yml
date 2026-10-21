@@ -165,6 +165,13 @@ jobs:
         with:
           python-version: "3.14"
 
+      # For the downloadable `lemma` CLI below: its build installs the CLI's
+      # wheels with uv, as the host pack's does.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.98.0
         with:
@@ -390,6 +397,69 @@ jobs:
             --wait
           xcrun stapler staple "${dmg}"
 
+      # The online app does not carry the `lemma` CLI -- about 90 MiB of
+      # standalone Python, over check_online_payload.py's gate -- so this
+      # release's Agent Host downloads it the first time a hosted workspace's
+      # run needs one (desktop/agent-host/src/lemma_cli/download.rs). The host
+      # asks for `lemma-cli-aarch64-apple-darwin.json` from exactly this
+      # release, refuses an archive anywhere else, and checks its SHA-256.
+      #
+      # Every Mach-O is signed with the app's Developer ID, hardened runtime
+      # and timestamp. Not notarized: this pipeline notarizes the app and the
+      # DMG, never loose binaries, and a file the host downloads itself
+      # carries no quarantine attribute for Gatekeeper to check. Written into
+      # release-artifacts after the DMG step empties it, so the evidence
+      # manifest below records the archive and its manifest too.
+      - name: Build the downloadable lemma CLI
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+        run: |
+          set -euo pipefail
+          staged="${RUNNER_TEMP}/lemma-cli"
+          artifacts="desktop/target/release/release-artifacts"
+          rm -rf "${staged}"
+          uv run --no-project python scripts/build_desktop_lemma_cli.py \
+            --output "${staged}" \
+            --sign "${APPLE_SIGNING_IDENTITY}" \
+            --archive "${artifacts}" \
+            --release-version "${VERSION}" \
+            --platform aarch64-apple-darwin \
+            --release-url "https://github.com/${REPOSITORY}/releases/download/v${VERSION}"
+          rm -rf "${staged}"
+
+      # What the host will do with it, from the published files alone: the
+      # digest matches the manifest, it unpacks to a `lemma` that runs, and
+      # every Mach-O in it carries this release's Developer ID signature.
+      - name: Verify the downloadable lemma CLI
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          artifacts="desktop/target/release/release-artifacts"
+          manifest="${artifacts}/lemma-cli-aarch64-apple-darwin.json"
+          archive="${artifacts}/lemma-cli-aarch64-apple-darwin.tar.gz"
+          test "$(jq -r .version "${manifest}")" = "${VERSION}"
+          test "$(jq -r .size "${manifest}")" = "$(stat -f %z "${archive}")"
+          test "$(jq -r .sha256 "${manifest}")" = "$(shasum -a 256 "${archive}" | cut -d' ' -f1)"
+          unpacked="$(mktemp -d)"
+          tar -xzf "${archive}" -C "${unpacked}"
+          env -i PATH=/usr/bin:/bin HOME="$(mktemp -d)" "${unpacked}/bin/lemma" --version
+          signed=0
+          while IFS= read -r -d '' file; do
+            if [[ "$(head -c 4 "${file}" | xxd -p)" =~ ^(feedface|feedfacf|cefaedfe|cffaedfe|cafebabe)$ ]]; then
+              codesign --verify --strict "${file}"
+              codesign -dvv "${file}" 2>&1 | grep -q "^Authority=Developer ID Application:"
+              signed=$((signed + 1))
+            fi
+          done < <(find "${unpacked}" -type f -print0)
+          echo "verified ${signed} signed Mach-O files"
+          test "${signed}" -gt 0
+          rm -rf "${unpacked}"
+
       - name: Verify Developer ID signatures and notarization staples
         shell: bash
         # Every check here used to be a bare `test`/`codesign` line under
@@ -552,6 +622,9 @@ jobs:
       - name: Publish the update feed
         shell: bash
         env:
+          # Set only while the update signing key is rotated (desktop/README.md,
+          # "Rotating the update signing key"); the check then requires the mismatch.
+          LEMMA_UPDATER_KEY_ROTATION: ${{ vars.LEMMA_UPDATER_KEY_ROTATION }}
           VERSION: ${{ steps.version.outputs.version }}
           REPOSITORY: ${{ github.repository }}
           PRERELEASE: ${{ github.event.release.prerelease }}
@@ -679,6 +752,8 @@ jobs:
             desktop/target/release/release-artifacts/Lemma_*_aarch64.app.tar.gz.sig
             desktop/target/release/release-artifacts/latest.json
             desktop/target/release/release-artifacts/release-evidence.json
+            desktop/target/release/release-artifacts/lemma-cli-aarch64-apple-darwin.tar.gz
+            desktop/target/release/release-artifacts/lemma-cli-aarch64-apple-darwin.json
 
       # The feed is only real once it is fetchable at the URL every installed
       # app polls. A malformed or unreachable one is silent: installs simply

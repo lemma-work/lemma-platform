@@ -59,8 +59,8 @@ from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
 from app.modules.agent.services.approval_reconciliation import (
-    queue_approval_reconciliation,
-    should_defer_approved_tool,
+    runs_in_worker,
+    stage_approval_execution,
 )
 from app.modules.agent.services.pause_resume import PauseResume
 from app.modules.agent.services.pause_supersession import (
@@ -68,19 +68,6 @@ from app.modules.agent.services.pause_supersession import (
 )
 
 logger = get_logger(__name__)
-
-#: How long an execution claim can be held before its holder is presumed dead.
-#: The reconcile job's own ceiling (``JOB_TIMEOUT_SECONDS``) plus a margin: past
-#: it streaq has killed the job, so nothing can still be running the approved
-#: tool under that claim. Anything shorter risks declaring a live command
-#: abandoned and writing a "could not confirm" return that then blocks the real
-#: result.
-#:
-#: Written out rather than imported: ``streaq_runtime`` builds a broker and a
-#: worker at module scope, and this module is on the API's import path --
-#: ``streaq_job_queue`` defers its own import of it for exactly that reason.
-#: ``test_settle_stuck_stops`` holds the two numbers together instead.
-_ABANDONED_EXECUTION_SECONDS = 2100
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +110,6 @@ class ApprovalCoordinator:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
-        defer_reconciliation: bool = False,
     ) -> ApprovalResolution:
         """Resume a paused run for an already-authorized + loaded conversation.
 
@@ -136,22 +122,24 @@ class ApprovalCoordinator:
             self-heal path) instead of erroring.
 
         The reconcile step is safe to call repeatedly: the approved tool runs at
-        most once (guarded by an existing tool return) and the resume run starts
-        at most once. Callers MUST have authorized the resolver against this
-        conversation first. The caller's current auth context must be the
-        conversation owner's, since an approved ``request_approval`` runs the
-        wrapped tool with that authority.
+        most once (guarded by an execution claim and an existing tool return)
+        and the resume run starts at most once. Callers MUST have authorized the
+        resolver against this conversation first.
 
-        ``defer_reconciliation`` is for callers under a deadline (an HTTP
-        request, a platform webhook): the decision still commits here, but the
-        slow half is handed to a worker job and the status comes back
-        ``"queued"``.
+        An approved ``request_approval`` runs its wrapped tool, which can take
+        minutes, so it never runs here: the decision's transaction writes an
+        ``agent.approval.execute`` item and the status comes back ``"queued"``
+        (``approval_work`` runs it with the conversation owner's authority).
+        Everything else -- answers, denials, Agent Host permissions -- is
+        database work and finishes inline.
         """
+        # The approvals list's `id` is the message's; accept it for the call.
+        approval_id = await self._canonical_approval_id(conversation.id, approval_id)
         decision_row = await self.conversation_repository.get_approval_decision(
             conversation_id=conversation.id,
             approval_id=approval_id,
         )
-        paused = await self._paused_call_from_messages(
+        paused = await self.paused_call(
             conversation_id=conversation.id,
             approval_id=approval_id,
         )
@@ -193,7 +181,6 @@ class ApprovalCoordinator:
                 response=response or {},
                 resolved_by_user_id=user_id,
             )
-            await self.uow.commit()
             if recorded:
                 effective_decision, effective_response, status = (
                     decision,
@@ -218,40 +205,34 @@ class ApprovalCoordinator:
             effective_decision, effective_response = decision_row
             status = ApprovalResolutionStatus.RECONCILED
 
-        existing_return = (
-            await self.conversation_repository.get_tool_return(
-                conversation_id=conversation.id,
-                tool_call_id=approval_id,
-            )
-            if defer_reconciliation
-            else None
+        existing_return = await self.conversation_repository.get_tool_return(
+            conversation_id=conversation.id,
+            tool_call_id=approval_id,
         )
-        if should_defer_approved_tool(
-            defer_reconciliation=defer_reconciliation,
+        if runs_in_worker(
             kind=kind,
             tool_args=tool_args,
             decision=effective_decision,
             has_tool_return=existing_return is not None,
         ):
-            # Deferred to after the commit, for two reasons. The connection is
-            # the smaller one: enqueuing is a Redis round trip and this runs
-            # inside the caller's transaction. The larger one is ordering -- an
-            # enqueue that happens before the commit queues a job against state
-            # that a rollback would erase, and the worker would then reconcile
-            # an approval the database never accepted.
-            self.uow.after_commit(
-                lambda: queue_approval_reconciliation(
-                    conversation_id=conversation.id,
-                    approval_id=approval_id,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                )
+            # In the decision's transaction, so the two commit together: the
+            # old post-commit enqueue could die between the commit and Redis
+            # and leave a decision nothing would ever carry out. A second
+            # decider's item coalesces with the first while it is queued.
+            await stage_approval_execution(
+                self.uow,
+                conversation_id=conversation.id,
+                approval_id=approval_id,
+                user_id=user_id,
+                pod_id=pod_id,
             )
+            await self.uow.commit()
             return ApprovalResolution(
                 status=ApprovalResolutionStatus.QUEUED, decision=effective_decision
             )
+        await self.uow.commit()
 
-        await self._reconcile_resume(
+        await self.reconcile_resume(
             conversation=conversation,
             approval_id=approval_id,
             paused_run_id=paused_run_id,
@@ -265,28 +246,7 @@ class ApprovalCoordinator:
         )
         return ApprovalResolution(status=status, decision=effective_decision)
 
-    async def _claim_execution(
-        self, *, conversation_id: UUID, approval_id: str
-    ) -> bool:
-        """Take the right to run this approval's tool, durably, before running it.
-
-        Committed immediately and on its own. An uncommitted claim is not a
-        claim: the whole point is that a worker killed mid-execution leaves
-        evidence behind, and evidence inside a transaction that dies with the
-        worker is no evidence at all.
-
-        Returns False when somebody already holds it, which is how a retried
-        reconcile job skips an execution that already happened.
-        """
-        claimed = await self.conversation_repository.claim_approval_execution(
-            conversation_id=conversation_id,
-            approval_id=approval_id,
-        )
-        if claimed:
-            await self.uow.commit()
-        return claimed
-
-    async def _reconcile_resume(
+    async def reconcile_resume(
         self,
         *,
         conversation: Conversation,
@@ -300,13 +260,14 @@ class ApprovalCoordinator:
         pod_id: UUID,
         agent_name: str | None,
     ) -> None:
-        """Finish (or re-finish) an approval's resume; safe to call repeatedly.
+        """Finish (or re-finish) a decision that runs nothing; safe to repeat.
 
         Two idempotent halves:
-          1. Synthesize + persist the paused call's tool return exactly once. If a
-             return already exists the approved tool has already run, so we skip
-             the rebuild entirely — re-executing it (e.g. re-deploying an app, or
-             re-recording session grants) would be a correctness bug.
+          1. Synthesize + persist the paused call's tool return exactly once.
+             Only decisions that run nothing reach here -- an answer, a denial,
+             an Agent Host permission (a queued command), or one whose return
+             already exists; an approved tool is the worker's
+             (``runs_in_worker``).
           2. Start the resume run only once every pausing call in the paused run is
              resolved and no run is already active. The conversation lock
              serializes this so two near-simultaneous resolves don't each start a
@@ -315,52 +276,53 @@ class ApprovalCoordinator:
         A resolve that died mid-flight (decision committed, return not appended,
         or run not started) self-heals when this runs again on the user's retry.
         """
+        # Two resolvers adopting one decision (a tap and a click) both get here;
+        # the conversation lock makes the second see the first one's return.
+        await self.conversation_repository.lock_conversation(conversation.id)
         existing_return = await self.conversation_repository.get_tool_return(
             conversation_id=conversation.id,
             tool_call_id=approval_id,
         )
         if existing_return is None:
-            if await self._claim_execution(
-                conversation_id=conversation.id, approval_id=approval_id
-            ):
-                # Build the return the resumed run will replay. This runs the
-                # wrapped tool as the user, so it must happen at most once —
-                # hence a claim above rather than only the read below it. The
-                # append re-checks cheaply and closes the remaining window.
-                return_tool_name, tool_result = await self.resume_returns.build(
-                    conversation=conversation,
-                    user_id=user_id,
-                    kind=kind,
-                    tool_args=tool_args,
-                    decision=decision,
-                    response=response,
-                    paused_agent_run_id=paused_run_id,
-                    tool_call_id=approval_id,
-                )
-                await self.pauses.append_pause_tool_return(
-                    conversation=conversation,
-                    paused_run_id=paused_run_id,
-                    tool_call_id=approval_id,
-                    tool_name=return_tool_name,
-                    tool_result=tool_result,
-                )
-            elif not await self._close_an_abandoned_execution(
+            return_tool_name, tool_result = await self.resume_returns.build(
                 conversation=conversation,
-                approval_id=approval_id,
-                paused_run_id=paused_run_id,
+                user_id=user_id,
                 kind=kind,
+                tool_args=tool_args,
                 decision=decision,
                 response=response,
-            ):
-                # Somebody holds the claim and may still be running the approved
-                # tool. Falling through would start the resume run against a
-                # history with this call unanswered, and the rebuild drops such a
-                # call — so the agent would carry on as though it had never
-                # asked, while the person believes their approval was carried
-                # out. Stop instead: the approval card keys on the missing
-                # return, so it stays up and a retry finishes this.
-                return
+                paused_agent_run_id=paused_run_id,
+                tool_call_id=approval_id,
+            )
+            await self.pauses.append_pause_tool_return(
+                conversation=conversation,
+                paused_run_id=paused_run_id,
+                tool_call_id=approval_id,
+                tool_name=return_tool_name,
+                tool_result=tool_result,
+            )
+        await self.resume_after_return(
+            conversation=conversation,
+            approval_id=approval_id,
+            paused_run_id=paused_run_id,
+            tool_args=tool_args,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
+        )
 
+    async def resume_after_return(
+        self,
+        *,
+        conversation: Conversation,
+        approval_id: str,
+        paused_run_id: UUID,
+        tool_args: JsonObject,
+        user_id: UUID,
+        pod_id: UUID,
+        agent_name: str | None,
+    ) -> None:
+        """Start the resume run for a pause whose return is now written."""
         host_permission = agent_host_permission_request(tool_args) is not None
         if host_permission and not await self._turn_ended_while_parked(paused_run_id):
             # An Agent Host pauses *inside* a live run: the decision was just
@@ -390,41 +352,31 @@ class ApprovalCoordinator:
         run = await self.conversation_repository.get_agent_run(paused_run_id)
         return run is not None and parked_suspension_of(run.metadata) is not None
 
-    async def _close_an_abandoned_execution(
+    async def record_unconfirmed_execution(
         self,
         *,
         conversation: Conversation,
         approval_id: str,
-        paused_run_id: UUID,
-        kind: str,
+        paused: PausedCall,
         decision: AgentRunApprovalDecision,
         response: JsonObject,
+        claimed: bool,
     ) -> bool:
-        """Write the honest record for a claim whose executor never came back.
+        """Write the honest return for an approval whose execution never reported.
 
-        The execution claim is one-shot by design: an approved ``request_approval``
-        runs the wrapped tool with the user's authority, so it must never be
-        retried. The cost is that a worker killed between taking the claim and
-        writing the return leaves an approval nothing can finish, and the tool
-        return is the only record the resumed run replays.
+        ``claimed``: an executor took the one-shot claim and then lost its
+        lease -- killed, out of memory, partitioned -- so the tool may or may
+        not have run, and it is never run again: an approved tool runs with a
+        person's authority, and running it twice is worse than saying so.
+        Unclaimed: it kept failing before it started, so nothing ran.
 
-        Past the reconcile job's own timeout nothing can still be executing under
-        that claim, so what happened is written down rather than lost. Before
-        then the holder may genuinely be mid-command — an approved command can
-        legitimately run for minutes — and this reports False so the caller
-        leaves the pause alone.
+        Returns whether this wrote the return (False: one already existed).
         """
-        expired = await self.conversation_repository.approval_execution_claim_expired(
-            conversation_id=conversation.id,
-            approval_id=approval_id,
-            stale_after_seconds=_ABANDONED_EXECUTION_SECONDS,
-        )
-        if not expired:
-            return False
         logger.error(
             "agent.conversation_approvals.approved_tool_never_confirmed.failed",
             conversation_id=str(conversation.id),
             approval_id=approval_id,
+            claimed=claimed,
         )
         # Lazy: the tool models import the tool registry, which imports back
         # through this module's reconciliation helpers.
@@ -432,24 +384,29 @@ class ApprovalCoordinator:
             RequestApprovalResponse,
         )
 
-        await self.pauses.append_pause_tool_return(
+        error = (
+            "This was approved, but the worker running it stopped before it "
+            "reported a result, and Lemma cannot re-run an approved action. "
+            "Check whether it took effect before asking again."
+            if claimed
+            else (
+                "This was approved, but Lemma could not start it, so it did not "
+                "run. Ask again if it is still needed."
+            )
+        )
+        return await self.pauses.append_pause_tool_return(
             conversation=conversation,
-            paused_run_id=paused_run_id,
+            paused_run_id=paused.agent_run_id,
             tool_call_id=approval_id,
-            tool_name=kind,
+            tool_name=paused.kind.value,
             tool_result=RequestApprovalResponse(
                 success=False,
-                error=(
-                    "This was approved, but the worker running it stopped before "
-                    "it reported a result, and Lemma cannot re-run an approved "
-                    "action. Check whether it took effect before asking again."
-                ),
+                error=error,
                 decision=decision,
                 executed=False,
                 response=response,
             ).model_dump(mode="json"),
         )
-        return True
 
     async def supersede_stale_pending_interactions(
         self,
@@ -457,15 +414,88 @@ class ApprovalCoordinator:
         conversation: Conversation,
         user_id: UUID,
     ) -> list[Message]:
-        """DENY every pause nobody decided; see ``pause_supersession``."""
-        return await supersede_stale_pending_interactions(
+        """DENY every pause nobody decided; see ``pause_supersession``.
+
+        A ``wait_for`` the person typed past is cancelled first, with its timer,
+        in the same (caller's) transaction: left ACTIVE, its timer would later
+        fire into a conversation that had moved on and start a resume nobody
+        asked for.
+        """
+        cancelled = await self._cancel_superseded_wait(conversation)
+        superseded = await supersede_stale_pending_interactions(
             repository=self.conversation_repository,
             resume_returns=self.resume_returns,
             conversation=conversation,
             user_id=user_id,
         )
+        return [*cancelled, *superseded]
 
-    async def _paused_call_from_messages(
+    async def _cancel_superseded_wait(
+        self, conversation: Conversation
+    ) -> list[Message]:
+        # Lazy: the wait service reaches the conversation service, which
+        # constructs this coordinator.
+        from app.core.infrastructure.work import WorkWriter
+        from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
+        from app.modules.agent.domain.value_objects import MessageDraft
+        from app.modules.agent.domain.wait import AgentWaitWakeReason
+        from app.modules.agent.infrastructure.wait_repository import (
+            AgentConversationWaitRepository,
+        )
+        from app.modules.agent.services.wait_timers import disarm_wait
+        from app.modules.agent.tools.waiting.models import (
+            build_wait_result,
+            elapsed_seconds,
+        )
+
+        waits = AgentConversationWaitRepository(self.uow)
+        active = await waits.find_active_for_conversation(conversation.id)
+        if active is None:
+            return []
+        # Conversation, then wait: the order every wait ending takes.
+        await self.conversation_repository.lock_conversation(conversation.id)
+        wait = await waits.claim(active.id)
+        if wait is None or not wait.cancel():
+            return []
+        await waits.update(wait)
+        await disarm_wait(WorkWriter.of(self.uow), wait)
+        existing = await self.conversation_repository.get_tool_return(
+            conversation_id=conversation.id, tool_call_id=wait.tool_call_id
+        )
+        if existing is not None:
+            return []
+        spec = wait.wait_spec
+        saved = await self.conversation_repository.append_message(
+            conversation_id=conversation.id,
+            agent_run_id=wait.agent_run_id,
+            draft=MessageDraft.of_tool_return(
+                tool_call_id=wait.tool_call_id,
+                tool_name=WAIT_TOOL_NAME,
+                tool_result=build_wait_result(
+                    wait_type=wait.wait_type,
+                    reason=AgentWaitWakeReason.CANCELLED,
+                    waited_seconds=elapsed_seconds(spec.started_at),
+                    note_to_self=spec.note_to_self,
+                ),
+            ),
+        )
+        return [saved]
+
+    async def _canonical_approval_id(
+        self, conversation_id: UUID, approval_id: str
+    ) -> str:
+        """``approval_id``, or the call's tool_call_id when it names the call's
+        message instead -- what the approvals list hands out as `id`."""
+        try:
+            message_id = UUID(approval_id)
+        except ValueError:
+            return approval_id
+        found = await self.conversation_repository.tool_call_id_of_message(
+            conversation_id=conversation_id, message_id=message_id
+        )
+        return found or approval_id
+
+    async def paused_call(
         self,
         *,
         conversation_id: UUID,

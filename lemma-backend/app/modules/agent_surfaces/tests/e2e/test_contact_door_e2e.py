@@ -10,12 +10,19 @@ fail open if they are wrong:
   a day;
 * unauthenticated email is never answered but parked, a few notes an hour;
 * mail a machine sent is neither answered nor parked;
-* "STOP" unsubscribes, and is not the contact opting back in;
-* where the turn runs -- the contact's own conversation, owned by the member
-  who looks after contacts, marked so the run authorizes as nobody.
+* "STOP" opts the handle out before anything else is asked -- with nobody
+  looking after contacts, from a stranger, from a machine, but never from mail
+  nothing vouched for, which is parked -- and only "START" or a message the
+  person typed opts it back in, never an auto-reply or mail nothing vouched
+  for;
+* where the turn runs -- the contact's own conversation, looked after by the
+  member who looks after contacts, naming the contact so the run authorizes
+  as them.
 """
 
 from __future__ import annotations
+
+from app.modules.agent_surfaces.services.conversation_binder import BoundThread
 
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -35,17 +42,16 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.groups import contact_link_user
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (  # noqa: E501
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
-from app.modules.agent_surfaces.infrastructure.models import NotificationModel
 from app.modules.agent_surfaces.platforms.email_authentication import (
     EmailAuthenticationVerdict,
 )
 from app.modules.agent_surfaces.services.contact_windows import ContactWindows
 from app.modules.agent_surfaces.services.contacts import ContactDoor
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import direct_lines
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -54,11 +60,24 @@ from app.modules.contacts.contracts import (
     IdentityStrength,
     open_contact,
 )
-from app.modules.contacts.infrastructure.models import ContactIdentityModel
+from app.modules.contacts.domain.handles import handle_hash
+from app.modules.contacts.infrastructure.models import (
+    ContactIdentityModel,
+    ContactSuppressionModel,
+)
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
 
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
+
 PHONE = "447700900123"
+#: How contacts spells it: E.164.
+PHONE_E164 = "+447700900123"
 EMAIL = "dana@client.example"
 
 
@@ -68,7 +87,11 @@ class _Binder:
 
     async def bind_conversation(self, **kwargs):
         self.seen = kwargs
-        return SimpleNamespace(conversation_id=uuid4()), "Where is my order?"
+        return BoundThread(
+            conversation_id=uuid4(),
+            source_id=uuid4(),
+            created_title="Where is my order?",
+        )
 
 
 class _Limiter:
@@ -144,15 +167,31 @@ class _Pod:
         )
 
     async def prepare(self, surface, event, *, binder=None, **door):
-        return await self.door(**door).prepare(
+        """The door as ``answer_outside_the_pod`` asks it: what the message
+        says about hearing from the pod first, then whether it runs."""
+        contact_door = self.door(**door)
+        sender = ResolvedSurfaceUser(
+            external_user_id=event.sender_external_user_id, display_name="Dana"
+        )
+        if await contact_door.preferences(surface=surface, parsed=event, sender=sender):
+            return None
+        return await contact_door.prepare(
             surface=surface,
             parsed=event,
-            sender=ResolvedSurfaceUser(
-                external_user_id=event.sender_external_user_id, display_name="Dana"
-            ),
+            sender=sender,
             route=self.route(),
             binder=binder or _Binder(),
         )
+
+    async def opted_out(self, kind: IdentityKind, value: str) -> bool:
+        found = await self.db.scalar(
+            select(ContactSuppressionModel.reason).where(
+                ContactSuppressionModel.pod_id == self.pod_id,
+                ContactSuppressionModel.kind == kind.value,
+                ContactSuppressionModel.value_hash == handle_hash(kind, value),
+            )
+        )
+        return found is not None
 
     async def known(self, kind: IdentityKind, value: str):
         return await open_contact(
@@ -174,13 +213,10 @@ class _Pod:
         )
 
     async def notes(self) -> list[str]:
-        return list(
-            await self.db.scalars(
-                select(NotificationModel.title)
-                .where(NotificationModel.pod_id == self.pod_id)
-                .order_by(NotificationModel.created_at)
-            )
-        )
+        """What the owner was told, each note's first line, from their own
+        channel."""
+        lines = await direct_lines(self.db, pod_id=self.pod_id, user_id=self.owner)
+        return [line.body.split("\n", 1)[0] for line in lines]
 
 
 @pytest.fixture
@@ -234,7 +270,12 @@ async def test_a_strangers_first_message_makes_them_a_contact(pod):
 
     assert context is not None
     [handle] = await pod.handles()
-    assert (handle.kind, handle.value, handle.strength) == ("PHONE", PHONE, "CHANNEL")
+    assert (handle.kind, handle.value, handle.strength) == (
+        "PHONE",
+        PHONE_E164,
+        "CHANNEL",
+    )
+    assert handle.value_raw == PHONE_E164
     # And their writing is noted: it is what lets the pod write back.
     assert handle.last_inbound_at is not None
 
@@ -261,7 +302,7 @@ async def test_a_known_contact_is_answered_by_a_bot_for_known_contacts(pod):
     context = await pod.prepare(pod.surface(answer="known"), _event(), binder=binder)
 
     assert context is not None
-    assert binder.seen["for_contact"] == known.id
+    assert binder.seen["contact_id"] == known.id
 
 
 async def test_past_the_days_new_contacts_a_stranger_is_not_met(pod):
@@ -373,47 +414,172 @@ async def test_mail_a_machine_sent_is_neither_answered_nor_parked(
 
 
 @pytest.mark.parametrize("text", ["STOP", " stop ", "Unsubscribe.", "STOPALL"])
-async def test_stop_unsubscribes_the_handle_and_starts_nothing(pod, text):
+async def test_stop_opts_the_handle_out_and_starts_nothing(pod, text):
     await pod.known(IdentityKind.PHONE, PHONE)
     binder = _Binder()
 
     context = await pod.prepare(pod.surface(), _event(text=text), binder=binder)
 
     assert context is None
+    assert await pod.opted_out(IdentityKind.PHONE, PHONE)
     [handle] = await pod.handles()
-    assert handle.unsubscribed_at is not None
     # Not noted as writing again, which is how a contact opts back in.
     assert handle.last_inbound_at is None
     assert binder.seen == {}
 
 
-async def test_stop_from_a_stranger_makes_no_contact(pod):
+async def test_stop_from_a_stranger_opts_them_out_and_makes_no_contact(pod):
     context = await pod.prepare(pod.surface(), _event(text="stop"))
 
     assert context is None
     assert await pod.handles() == []
+    # Kept by the handle, so the stranger is not written to once they are known.
+    assert await pod.opted_out(IdentityKind.PHONE, "+44 7700 900123")
 
 
-async def test_a_sentence_with_stop_in_it_is_a_question_not_an_unsubscribe(pod):
+async def test_stop_holds_with_nobody_looking_after_contacts(pod):
+    """The member who looked after them left: nobody answers, STOP still holds."""
+    await pod.known(IdentityKind.PHONE, PHONE)
+
+    context = await pod.prepare(
+        pod.surface(looked_after_by=uuid4()), _event(text="STOP")
+    )
+
+    assert context is None
+    assert await pod.opted_out(IdentityKind.PHONE, PHONE)
+
+
+async def test_stop_holds_where_the_bot_answers_no_contacts(pod):
+    context = await pod.prepare(pod.surface(answer="off"), _event(text="STOP"))
+
+    assert context is None
+    assert await pod.opted_out(IdentityKind.PHONE, PHONE)
+
+
+async def test_an_email_whose_subject_is_unsubscribe_opts_out(pod):
+    """What a mail client sends to the ``List-Unsubscribe`` mailto, with a
+    body in its own words."""
+    context = await pod.prepare(
+        pod.surface(platform=SurfacePlatform.RESEND),
+        _email(
+            text="This message was automatically generated.",
+            metadata={"subject": "unsubscribe"},
+        ),
+    )
+
+    assert context is None
+    assert await pod.opted_out(IdentityKind.EMAIL, EMAIL)
+
+
+@pytest.mark.parametrize(
+    "verdict", [EmailAuthenticationVerdict.FAIL, EmailAuthenticationVerdict.UNKNOWN]
+)
+async def test_a_stop_nothing_vouched_for_is_parked_not_honoured(pod, verdict):
+    """Anybody can send "STOP" under somebody else's address: honoured, it cut
+    the real person off from the pod's mail. It is parked for the member who
+    looks after contacts instead, who decides."""
+    context = await pod.prepare(
+        pod.surface(platform=SurfacePlatform.RESEND),
+        _email(text="STOP", authentication=verdict),
+    )
+
+    assert context is None
+    assert not await pod.opted_out(IdentityKind.EMAIL, EMAIL)
+    assert await pod.notes() == [f"Unverified email from {EMAIL}"]
+
+
+async def test_stop_from_a_machine_still_opts_out(pod):
+    """Opting out is never the wrong way to fail."""
+    await pod.prepare(
+        pod.surface(platform=SurfacePlatform.RESEND),
+        _email(text="STOP", metadata={"automated": "auto_submitted"}),
+    )
+
+    assert await pod.opted_out(IdentityKind.EMAIL, EMAIL)
+
+
+async def test_a_sentence_with_stop_in_it_is_a_question_not_an_opt_out(pod):
     context = await pod.prepare(pod.surface(), _event(text="Stop the order please"))
 
     assert context is not None
+    assert not await pod.opted_out(IdentityKind.PHONE, PHONE)
+
+
+async def test_start_opts_them_back_in_and_starts_nothing(pod):
+    await pod.known(IdentityKind.PHONE, PHONE)
+    binder = _Binder()
+    await pod.prepare(pod.surface(), _event(text="STOP"))
+
+    context = await pod.prepare(pod.surface(), _event(text="Start"), binder=binder)
+
+    assert context is None
+    assert binder.seen == {}
+    assert not await pod.opted_out(IdentityKind.PHONE, PHONE)
+
+
+async def test_a_message_they_typed_opts_them_back_in_and_is_answered(pod):
+    await pod.known(IdentityKind.PHONE, PHONE)
+    await pod.prepare(pod.surface(), _event(text="STOP"))
+
+    context = await pod.prepare(pod.surface(), _event(text="Where is my order?"))
+
+    assert context is not None
+    assert not await pod.opted_out(IdentityKind.PHONE, PHONE)
     [handle] = await pod.handles()
-    assert handle.unsubscribed_at is None
+    assert handle.last_inbound_at is not None
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"automated": "auto_submitted", "subject": "Out of office"},
+        {"automated": "auto_reply", "subject": "Automatic reply: Order 1182"},
+        {"automated": "bulk", "subject": "Re: Order 1182"},
+    ],
+    ids=["auto-submitted", "auto-reply", "precedence-bulk"],
+)
+async def test_an_auto_reply_never_opts_them_back_in(pod, metadata):
+    await pod.prepare(pod.surface(platform=SurfacePlatform.RESEND), _email(text="STOP"))
+
+    await pod.prepare(
+        pod.surface(platform=SurfacePlatform.RESEND),
+        _email(text="I am away until Monday.", metadata=metadata),
+    )
+
+    assert await pod.opted_out(IdentityKind.EMAIL, EMAIL)
+
+
+async def test_mail_nothing_vouched_for_never_opts_them_back_in(pod):
+    """A forged sender could otherwise opt somebody back in to the pod's mail."""
+    surface = pod.surface(platform=SurfacePlatform.RESEND)
+    await pod.prepare(surface, _email(text="STOP"))
+
+    await pod.prepare(
+        surface,
+        _email(text="START", authentication=EmailAuthenticationVerdict.FAIL),
+    )
+    await pod.prepare(
+        surface,
+        _email(text="Hello again", authentication=EmailAuthenticationVerdict.FAIL),
+    )
+
+    assert await pod.opted_out(IdentityKind.EMAIL, EMAIL)
 
 
 # ------------------------------------------------------------ where it runs
 
 
-async def test_a_contacts_turn_runs_in_their_own_conversation_as_nobody(pod):
+async def test_a_contacts_turn_runs_in_their_own_conversation_as_them(pod):
     binder = _Binder()
 
     context = await pod.prepare(pod.surface(), _event(), binder=binder)
 
-    contact_id = binder.seen["for_contact"]
+    contact_id = binder.seen["contact_id"]
     assert binder.seen["resolved_user"].internal_user_id == pod.owner
-    assert binder.seen["resolved_user"].external_user_id == contact_link_user(
-        contact_id
+    # Their own id on the platform: it keys the place they wrote from.
+    assert (
+        binder.seen["resolved_user"].external_user_id
+        == _event().sender_external_user_id
     )
     assert context is not None
     assert context.audience.is_contact is True

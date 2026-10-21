@@ -1,4 +1,4 @@
-"""A ceiling on how often one pod may message one person.
+"""Ceilings on how often a pod reaches people outside the app.
 
 The expected failure this guards is not malice, it is a badly-prompted agent in
 a retry loop putting forty messages on a colleague's phone in a minute. Schedules
@@ -43,95 +43,75 @@ DEFAULT_MAX_EMAILS_PER_POD_PER_DAY = 200
 _DAY_SECONDS = 86_400
 
 
-class NotificationRateLimitExceeded(AgentSurfaceError):
-    def __init__(self, limit: int):
-        super().__init__(
-            message=(
-                f"This pod has already sent {limit} notifications to this person "
-                "in the past hour."
-            ),
-            code="NOTIFICATION_RATE_LIMIT_EXCEEDED",
-            status_code=429,
-        )
-
-
 class EmailSendLimitExceeded(AgentSurfaceError):
-    """Distinct from the per-recipient limit: different budget, different fix.
-
-    Not raised out of ``notify``. Running out of email budget is a *delivery*
-    outcome — the notification is still real and still in the person's inbox —
-    so it reads as an undeliverable reason rather than a failed tool call.
-    """
+    """Running out of email budget is a delivery outcome -- the line is still
+    in the person's channel -- so it reads as a reason it was not emailed."""
 
     def __init__(self, limit: int):
         super().__init__(
             message=(
-                f"This pod has already sent {limit} emails today. The "
-                "notification is in their Lemma inbox."
+                f"This pod has already sent {limit} emails today. It is in "
+                "their channel in Lemma."
             ),
             code="EMAIL_SEND_LIMIT_EXCEEDED",
             status_code=429,
         )
 
 
-class NotificationRateLimiter:
-    def __init__(
-        self,
-        *,
-        limit: int = DEFAULT_MAX_PER_RECIPIENT_PER_HOUR,
-        email_limit: int = DEFAULT_MAX_EMAILS_PER_POD_PER_DAY,
-        redis=None,
-    ):
-        self._limit = limit
-        self._email_limit = email_limit
+class _Window:
+    def __init__(self, redis=None) -> None:
         self._redis = redis
 
-    async def _count(self, key: str, ttl: int) -> int | None:
+    async def count(self, key: str, ttl: int) -> int | None:
         """Increment a fixed window, or None when Redis could not be reached.
 
-        Fails **open** — see ``check``. One INCR plus a first-write EXPIRE, so a
-        window costs a single round trip after it opens.
+        Fails **open**: a ceiling on a runaway loop is not worth everybody
+        hearing nothing while Redis is down.
         """
         client = self._redis or get_redis()
         try:
-            count = await incr_with_ttl(client, key, ttl)
+            return await incr_with_ttl(client, key, ttl)
         except (RedisError, OSError) as exc:
             logger.warning(
                 "agent_surfaces.notification_rate_limiter.unavailable.degraded",
                 error=str(exc),
             )
             return None
-        return count
 
-    async def check_email(self, *, pod_id: UUID) -> None:
-        """Count this outbound email against the pod's day, and refuse over it.
 
-        Called at the point of an email send rather than in ``notify``: a
-        notification that lands on Slack costs the shared sending domain
-        nothing, and should not spend a budget that exists to protect it.
-        """
-        count = await self._count(f"notify:rate:email:{pod_id}", _DAY_SECONDS)
-        if count is not None and count > self._email_limit:
+class EmailBudget:
+    """How many emails one pod may send a day from the shared domain."""
+
+    def __init__(self, *, limit: int = DEFAULT_MAX_EMAILS_PER_POD_PER_DAY, redis=None):
+        self._limit = limit
+        self._window = _Window(redis)
+
+    async def check(self, *, pod_id: UUID) -> None:
+        """Count this outbound email against the pod's day, and refuse over it."""
+        count = await self._window.count(f"notify:rate:email:{pod_id}", _DAY_SECONDS)
+        if count is not None and count > self._limit:
             logger.warning(
                 "agent_surfaces.notification_rate_limiter.email_exceeded.degraded",
                 pod_id=str(pod_id),
-                limit=self._email_limit,
+                limit=self._limit,
             )
-            raise EmailSendLimitExceeded(self._email_limit)
+            raise EmailSendLimitExceeded(self._limit)
 
-    async def check(self, *, pod_id: UUID, recipient_user_id: UUID) -> None:
-        """Count this send, and refuse it if the hour's budget is spent.
 
-        Fails **open** if Redis is unreachable — and *only* then: a bug in this
-        method should surface, not silently disable the limiter. The limiter exists to bound a
-        runaway agent, and trading "some pods can be spammed while Redis is down"
-        for "nobody can be told anything while Redis is down" is the wrong side
-        to fail on for a notification system whose entire premise is that people
-        get told.
-        """
-        # Pod-scoped: two pods messaging the same person are two different
-        # relationships, and one pod's runaway loop should not mute the other.
-        count = await self._count(
+class PushBudget:
+    """How often one pod may push a line to one person's phone in an hour.
+
+    Never a refusal of the line: it is in their channel whatever this says.
+    What it bounds is the platform push -- a badly-prompted agent in a retry
+    loop putting forty messages on a colleague's phone in a minute.
+    """
+
+    def __init__(self, *, limit: int = DEFAULT_MAX_PER_RECIPIENT_PER_HOUR, redis=None):
+        self._limit = limit
+        self._window = _Window(redis)
+
+    async def allows(self, *, pod_id: UUID, recipient_user_id: UUID) -> bool:
+        count = await self._window.count(
             f"notify:rate:{pod_id}:{recipient_user_id}", _WINDOW_SECONDS
         )
         if count is not None and count > self._limit:
@@ -141,4 +121,5 @@ class NotificationRateLimiter:
                 recipient_user_id=str(recipient_user_id),
                 limit=self._limit,
             )
-            raise NotificationRateLimitExceeded(self._limit)
+            return False
+        return True

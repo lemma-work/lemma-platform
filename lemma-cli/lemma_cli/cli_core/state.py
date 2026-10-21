@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator, NoReturn
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from lemma_sdk.auth import refresh_cli_session
 from lemma_sdk.errors import LemmaAPIError
@@ -120,7 +121,9 @@ def fail(message: str, *, code: int = 1) -> NoReturn:
     # error in the CLI, so printing it on stdout put a non-JSON line into the
     # stream `--output json` promises is parseable — every `| jq` and every
     # agent driving the CLI broke on exactly the failures it needed to read.
-    err_console.print(f"[red]{message}[/red]")
+    # Escaped: the message carries the server's words and the names in them,
+    # and a `[...]` in a name must print, not style the line.
+    err_console.print(f"[red]{escape(message)}[/red]")
     raise typer.Exit(code=code)
 
 

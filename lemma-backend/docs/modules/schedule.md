@@ -12,10 +12,10 @@ execute the fire.
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Pod schedule CRUD and public webhook ingress/verification |
-| Redis consumers | Schedule commands, datastore events, pod deletion, scheduler notifications |
-| streaq task | Judge webhook events against a schedule's filter, as a decision, off-request |
-| Worker poller | Claims due TIME schedules with `FOR UPDATE SKIP LOCKED` and advances their cursor |
-| Published stream | `schedule_events` |
+| Work kinds | `schedule.fire` and `schedule.arm` (a TIME schedule's next occurrence, one item per schedule), `schedule.filter` (judge an event against the filter, off-request), `schedule.start_target`, `schedule.paused_notice`, `schedule.pod_deleted`, `schedule.trigger_defaults` |
+| Fact subscriptions | `AgentRunFinished` -> `schedule.agent_finished`; `WorkflowRunFinished` and `WorkflowStartRefused` -> `schedule.workflow_finished` / `schedule.workflow_refused`; `schedule.outcome` records the run's result |
+| Change-log subscriber | DATASTORE triggers read their pod's record change log by cursor |
+| Periodic work | `schedule.runs_prune` (hourly), `schedule.mcp_listening_reconcile` (15 min) |
 
 ## Data and schedule types
 
@@ -43,7 +43,7 @@ events of every MCP server the caller connected, each with the schedule type
 that serves it.
 
 A DATASTORE schedule can narrow what fires it with `when` conditions over the
-written row (`domain/match_conditions.py`: equals, not equals, in, not in,
+written row (`app/core/domain/record_conditions.py`, shared with live subscriptions: equals, not equals, in, not in,
 changed, written, from, to). They are checked before any LLM filter, so a row
 that fails them costs no model call.
 
@@ -63,6 +63,14 @@ case-insensitive filesystem.
 
 The poller owns the concrete time job set: `next_fire_at` is the whole index,
 claimed with `FOR UPDATE SKIP LOCKED` and advanced in the claiming transaction.
+
+`trigger_skips` records what a DATASTORE trigger let pass without firing --
+the changes of a bulk write or import it skips, or fires past its daily
+ceiling -- one row per delivered page and reason with a count, so a bulk write
+of thousands of rows is a handful of rows; `GET .../schedules/{id}/skips`
+pages them for run history. `trigger_batches` holds each window a `batch`-mode
+trigger planned before firing it, so a replay after a crash fires that same
+window rather than a differently cut one.
 
 ## API groups
 
@@ -166,7 +174,7 @@ flowchart LR
     H["Webhook"] --> M["Match source + metadata"] --> N
     D["Datastore event"] --> Q["Match table + operation"] --> N
     N --> F{"Filter?"}
-    F -- no --> E["schedule.fired stream"]
+    F -- no --> E["schedule.start_target item"]
     F -- yes --> J["decision: should_proceed?"]
     J -- yes --> E
     J -- no or can't tell --> K["FILTERED run, with the answers"]
@@ -179,7 +187,7 @@ The service mirrors provider-backed webhook schedules into the connector through
 an adapter. Editing such a schedule's config makes a new subscription from it
 before the row is written and drops the old one after the commit
 (`services/trigger_resubscription.py`); keys provisioning wrote into the config
-(`provider_trigger_id`, a GitHub routing key) survive an edit that left them out. Each `schedule.fired` trigger claims one durable schedule run;
+(`provider_trigger_id`, a GitHub routing key) survive an edit that left them out. Each fire claims one durable schedule run;
 PostgreSQL deduplicates target dispatch and tracks retry/dead-letter state.
 `DISPATCHED` means the target run was created, not that the target completed.
 Consecutive-failure policy is durable on the schedule row, and a
@@ -187,7 +195,7 @@ deactivation event is staged in the same transaction as that state change —
 including the poller's own retirements, so no schedule goes inactive silently.
 A schedule whose target was deleted keeps its row (`workflow_id` and `agent_id`
 are `SET NULL`) and records each firing as failed saying the target is missing.
-Publishers use the shared transactional outbox/core Redis Streams bus.
+Every item a fire needs is written in the transaction that claims it.
 
 ### Filters
 
@@ -196,11 +204,11 @@ question -- `should_proceed`, a yes or no -- together with any closed questions
 the schedule's `filter_output_schema` declares (free-text and open-ended fields
 are left out and logged). The answers become the fire's `llm_output`, with a
 `_decision` block naming the provider, the model, whether it could not tell, and
-each answer's confidence. Every filter is judged in the `handle_llm_filter_task`
-streaq task, whichever way its event arrived: a webhook event straight from the
-webhook handler, a table change from the datastore consumer once its `when`
+each answer's confidence. Every filter is judged in a `schedule.filter` work
+item, whichever way its event arrived: a webhook event straight from the
+webhook handler, a table change from the change-log delivery once its `when`
 conditions match, carrying the changed row's owner so the fire runs as them.
-No event stream waits on a model, and both paths get the outcomes below.
+No request or delivery waits on a model, and both paths get the outcomes below.
 
 The provider is the deployment's (`DECISION_PROVIDER`); with no Typesafe key
 it is the deployment's own model, so filters need nothing beyond a configured
@@ -212,14 +220,15 @@ model.
 | No, or could not tell | a `FILTERED` run carrying the answers; `last_fire_status` `FILTERED` |
 | Provider unavailable or rate-limited | retried with backoff (up to six tries), then `DEAD_LETTERED` as `ScheduleFilterUnavailable` -- never `FAILED`, which run recovery would send past the filter |
 | Spend limit, event too large, no provider, invalid questions | `DEAD_LETTERED` at once (`ScheduleFilterQuotaExhausted`, `ScheduleFilterEventTooLarge`, `ScheduleFilterNotConfigured`, `ScheduleFilterInvalid`) |
+| Interrupted after the question was asked (a crash, a lost lease, Lemma's database unreachable while the verdict was recorded) | asked once more -- the question has no effect until its verdict commits, so the only cost of asking again is a second billed call; interrupted again, `DEAD_LETTERED` as `ScheduleFilterInterrupted` |
 
 A redelivered event that already has a run is not judged again. (Two
 deliveries racing each other can both be judged, and billed, within the length
 of one decision; only one run is kept.) The failure breaker passes over
-`FILTERED` runs and over `ScheduleFilterUnavailable` and
-`ScheduleFilterNotConfigured` dead letters: a skip is not a failure, and a
-provider outage or a deployment with no provider is the operator's to fix, not
-the schedule's -- counting either would switch off every filtered schedule at
+`FILTERED` runs and over `ScheduleFilterUnavailable`,
+`ScheduleFilterNotConfigured` and `ScheduleFilterInterrupted` dead letters: a
+skip is not a failure, and a provider outage, an interruption or a deployment
+with no provider is the operator's to fix, not the schedule's -- counting either would switch off every filtered schedule at
 once. A spent budget, an event too large to judge and an invalid filter are the
 pod's or the schedule's, and are counted. The run list takes `status` and `skipped` filters; partial indexes
 on `status <> 'FILTERED'` keep the breaker's streak and a history without skips

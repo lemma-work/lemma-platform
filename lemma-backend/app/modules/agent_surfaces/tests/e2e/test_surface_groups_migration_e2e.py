@@ -1,4 +1,9 @@
-"""The group tables come and go with their migration, and only with it."""
+"""The group tables come and go with their migration, and only with it.
+
+They lasted until channels (``0058_channels``), which keep a group as a place of
+its own channel and drop the notifications table its columns were added to; at
+head both are gone.
+"""
 
 import os
 import subprocess
@@ -9,7 +14,10 @@ import pytest
 
 from app.core.test_utils import get_postgres_container, get_postgres_url
 
-pytestmark = pytest.mark.e2e
+# Walking the Alembic chain from the base costs every one of these tests
+# ten-odd seconds, so they run in the weekly protected lane. The pull-request
+# lane keeps one round trip, `app/core/tests/e2e/test_work_migration_e2e.py`.
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
 BEFORE = "0042_mcp_access"
@@ -71,5 +79,6 @@ def test_the_group_tables_upgrade_and_roll_back_cleanly() -> None:
         assert origin_columns() == set()
 
         migrate("upgrade", "head")
-        assert tables() == ("agent_surface_groups", "agent_surface_group_messages")
-        assert origin_columns() == everything
+        assert tables() == (None, None)
+        # The notifications those columns were on went with ``0058_channels``.
+        assert origin_columns() == set()

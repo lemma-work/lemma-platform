@@ -12,6 +12,8 @@ counted however fast they come, and a deployment with public web switched off.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import asyncio
 import base64
 import hashlib
@@ -20,7 +22,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import jwt
 import pytest
@@ -31,32 +33,54 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api.dependencies import get_uow_factory
 from app.core.config import settings
 from app.core.public_web import public_web_settings
-from app.modules.agent.domain.outsiders import (
-    AUDIENCE_KEY,
-    CONTACT,
-    CONTACT_KEY,
-    OUTSIDERS,
+from app.modules.datastore.events.contact_merged_work import (
+    register_contact_merged_work as register_datastore_contact_merged_work,
 )
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.events.visitor_retention import sweep_web_visitors
+from app.modules.agent_surfaces.services.channel_deliveries import WAITS_IN_WEB_CHAT
 from app.modules.agent_surfaces.tests.e2e.helpers import _messages_for_conversation
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     run_scripted_agent_run,
     script_text,
     script_tool_call,
 )
+from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
+    contact_channel_id,
+    send_deliveries,
+    deliveries_of_line,
+    member_writes,
+)
 from app.modules.agent_surfaces.tests.e2e.test_telegram_group_outsiders_e2e import (
     _table,
 )
-from app.modules.contacts.infrastructure.models import ContactIdentityModel
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.work import WorkClass, WorkRegistry
+from app.core.infrastructure.work.testing import run_until_idle
+from app.modules.agent.events.contact_merged_work import register_contact_merged_work
+from app.modules.channels.events.contact_merged_work import (
+    register_contact_merged_work as register_channels_contact_merged_work,
+)
+from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
+from app.modules.contacts.infrastructure.models import (
+    ContactIdentityModel,
+    ContactModel,
+)
 from app.modules.contacts.infrastructure.visitor_sessions import (
     VisitorCodeModel,
     VisitorSessionModel,
 )
 from app.modules.test_support.e2e.scripted_model import script_thinking
+from app.modules.test_support.e2e import fixtures as e2e_fixtures
 
 pytestmark = pytest.mark.e2e
+
+# One user and organization for the whole module, reset to exactly their rows
+# before each test; each test isolates itself with the pod it creates.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
+fixed_test_org = e2e_fixtures.module_test_org
 
 SHOP = "https://shop.example"
 
@@ -143,11 +167,24 @@ async def _say(
     return conversation_id
 
 
-async def _metadata(db_session: AsyncSession, conversation_id: UUID) -> dict:
+async def _contact_of(db_session: AsyncSession, conversation_id: UUID) -> UUID | None:
+    """The contact a conversation answers: its column, which only the server writes."""
     db_session.expire_all()
     conversation = await db_session.get(ConversationModel, conversation_id)
     assert conversation is not None
-    return conversation.conversation_metadata or {}
+    return conversation.contact_id
+
+
+async def _handles_of(
+    db_session: AsyncSession, contact_id: UUID
+) -> set[tuple[str, str]]:
+    db_session.expire_all()
+    rows = await db_session.execute(
+        select(ContactIdentityModel.kind, ContactIdentityModel.strength).where(
+            ContactIdentityModel.contact_id == contact_id
+        )
+    )
+    return {(kind, strength) for kind, strength in rows}
 
 
 def _host_token(secret: str, key: str, *, subject: str, lifetime: int = 300) -> str:
@@ -211,7 +248,10 @@ async def test_an_anonymous_visitor_is_answered_from_what_is_public(
             ),
         ],
     )
-    assert (await _metadata(db_session, conversation_id)).get(AUDIENCE_KEY) == OUTSIDERS
+    # Answered as a contact nobody has vouched for: known by the browser alone.
+    visitor_contact = await _contact_of(db_session, conversation_id)
+    assert visitor_contact is not None
+    assert await _handles_of(db_session, visitor_contact) == {("WEB", "SESSION")}
 
     history = await authenticated_client.get(
         f"/public/web/{key}/history", headers=_as(visitor)
@@ -222,6 +262,31 @@ async def test_an_anonymous_visitor_is_answered_from_what_is_public(
         ("user", "What do you sell?"),
         ("assistant", "Here is our price list."),
     ]
+
+    # Both sides are lines of the visitor's contact channel, on its web chat,
+    # the answer said for them -- the timeline the pod's members read.
+    listed = await authenticated_client.get(
+        f"/pods/{pod_id}/channels", params={"kind": "CONTACT"}
+    )
+    [channel] = [
+        c
+        for c in listed.json()["items"]
+        if (c["person"] or {}).get("id") == str(visitor_contact)
+    ]
+    timeline = await authenticated_client.get(
+        f"/pods/{pod_id}/channels/{channel['id']}/messages"
+    )
+    lines = timeline.json()["items"]
+    assert [(line["sender"]["kind"], line["text"]) for line in lines] == [
+        ("CONTACT", "What do you sell?"),
+        ("AGENT", "Here is our price list."),
+    ]
+    assert lines[1]["on_behalf_of"] == {
+        "kind": "CONTACT",
+        "id": str(visitor_contact),
+        "name": None,
+    }
+    assert len({line["source_id"] for line in lines}) == 1
 
     messages = await _messages_for_conversation(
         authenticated_client, pod_id=pod_id, conversation_id=str(conversation_id)
@@ -289,8 +354,7 @@ async def test_a_signed_in_customer_of_the_shop_is_answered_as_a_contact(
         pod_id=pod_id,
         script=[script_text("Let me check.")],
     )
-    metadata = await _metadata(db_session, conversation_id)
-    assert metadata.get(AUDIENCE_KEY) == CONTACT
+    contact_id = await _contact_of(db_session, conversation_id)
     identity = (
         await db_session.execute(
             select(ContactIdentityModel).where(
@@ -299,10 +363,13 @@ async def test_a_signed_in_customer_of_the_shop_is_answered_as_a_contact(
             )
         )
     ).scalar_one()
-    # Keyed by the pod, so another of its widgets meets the same contact.
-    assert identity.value == "host:cust-42"
+    # Keyed by the pod and the product the widget speaks for, so another of
+    # its widgets for that product meets the same contact.
+    assert widget["host_issuer"] == "default"
+    assert identity.value == "host:default:cust-42"
+    assert identity.issuer == "default"
     assert identity.strength == "HOST"
-    assert str(identity.contact_id) == metadata.get(CONTACT_KEY)
+    assert identity.contact_id == contact_id
 
     other = await _widget(authenticated_client, pod_id, name="Help centre")
     again = await _session(
@@ -322,6 +389,39 @@ async def test_a_signed_in_customer_of_the_shop_is_answered_as_a_contact(
             )
         )
     ).scalars().all() == [identity]
+
+    # Another product's user 42 is somebody else.
+    elsewhere = await _widget(
+        authenticated_client, pod_id, name="Partner app", host_issuer="Partner-App"
+    )
+    assert elsewhere["host_issuer"] == "partner-app"
+    partner = await _session(
+        authenticated_client,
+        elsewhere["public_key"],
+        host_token=_host_token(
+            elsewhere["signing_secret"], elsewhere["public_key"], subject="cust-42"
+        ),
+    )
+    assert partner["is_contact"] is True
+    db_session.expire_all()
+    hosts = (
+        await db_session.execute(
+            select(ContactIdentityModel.value, ContactIdentityModel.contact_id).where(
+                ContactIdentityModel.pod_id == UUID(pod_id),
+                ContactIdentityModel.kind == "HOST",
+            )
+        )
+    ).all()
+    assert {value for value, _ in hosts} == {
+        "host:default:cust-42",
+        "host:partner-app:cust-42",
+    }
+    assert len({contact for _, contact in hosts}) == 2
+    unnamed = await authenticated_client.post(
+        f"/pods/{pod_id}/web-widgets",
+        json={"name": "Bad issuer", "host_issuer": "two words"},
+    )
+    assert unnamed.status_code == 422, unnamed.text
 
     # Rotating the secret retires every token signed with the old one, and the
     # sessions they opened.
@@ -418,7 +518,9 @@ async def test_a_visitor_who_proves_an_email_becomes_a_contact_in_the_same_chat(
         pod_id=pod_id,
         script=[script_text("Hello!")],
     )
-    assert (await _metadata(db_session, conversation_id)).get(AUDIENCE_KEY) == OUTSIDERS
+    anonymous = await _contact_of(db_session, conversation_id)
+    assert anonymous is not None
+    assert await _handles_of(db_session, anonymous) == {("WEB", "SESSION")}
 
     email = f"visitor-{widget['id'][:8]}@client.example"
     sent = await authenticated_client.post(
@@ -458,16 +560,13 @@ async def test_a_visitor_who_proves_an_email_becomes_a_contact_in_the_same_chat(
         "is_contact"
     ]
 
-    # The conversation they already had is now theirs, as a contact.
-    metadata = await _metadata(db_session, conversation_id)
-    assert metadata.get(AUDIENCE_KEY) == CONTACT
-    identity = (
-        await db_session.execute(
-            select(ContactIdentityModel).where(ContactIdentityModel.value == email)
-        )
-    ).scalar_one()
-    assert identity.strength == "CODE"
-    assert str(identity.contact_id) == metadata.get(CONTACT_KEY)
+    # The address joined the contact they already were: the same conversation,
+    # the same contact, confirmed now.
+    assert await _contact_of(db_session, conversation_id) == anonymous
+    assert await _handles_of(db_session, anonymous) == {
+        ("WEB", "SESSION"),
+        ("EMAIL", "CODE"),
+    }
 
     # One session is one person: another address starts another chat.
     another = await authenticated_client.post(
@@ -607,7 +706,7 @@ async def test_a_page_knows_its_own_message_by_the_name_it_gave_it(
     ]
 
     # It is the page's bookkeeping, not what was said: an export leaves it out.
-    contact_id = (await _metadata(db_session, conversation_id))[CONTACT_KEY]
+    contact_id = await _contact_of(db_session, conversation_id)
     exported = await authenticated_client.get(
         f"/pods/{pod_id}/contacts/{contact_id}/export"
     )
@@ -641,6 +740,35 @@ async def test_a_new_widget_answers_nobody_and_names_only_real_origins(
         "http://localhost:5173",
         "https://shop.example:8443",
     ]
+
+
+async def test_a_widget_name_the_pod_already_has_is_refused_not_a_server_error(
+    authenticated_client: AsyncClient, test_pod, fixed_test_org
+):
+    """One name is one widget in a pod; another pod may use it."""
+    pod_id = test_pod["id"]
+    first = await _widget(authenticated_client, pod_id, name="Shop chat")
+
+    again = await authenticated_client.post(
+        f"/pods/{pod_id}/web-widgets", json={"name": "  Shop chat "}
+    )
+
+    assert again.status_code == 409, again.text
+    assert again.json()["code"] == "widget_name_taken"
+    assert "INSERT" not in again.text and "lsenc" not in again.text
+    listed = (await authenticated_client.get(f"/pods/{pod_id}/web-widgets")).json()
+    assert [w["id"] for w in listed["items"] if w["name"] == "Shop chat"] == [
+        first["id"]
+    ]
+    other = await authenticated_client.post(
+        "/pods",
+        json={
+            "organization_id": fixed_test_org["id"],
+            "name": f"Other shop {uuid4().hex[:6]}",
+        },
+    )
+    assert other.status_code == 201, other.text
+    await _widget(authenticated_client, other.json()["id"], name="Shop chat")
 
 
 async def test_nothing_is_served_while_public_web_is_switched_off(
@@ -748,7 +876,8 @@ async def test_the_live_stream_needs_a_session_and_a_conversation(
     assert visitor["title"]
 
 
-async def test_a_follow_up_waits_in_a_web_contacts_chat(
+@pytest.mark.drives_work
+async def test_a_members_line_waits_in_a_web_contacts_chat(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -774,22 +903,32 @@ async def test_a_follow_up_waits_in_a_web_contacts_chat(
         "items"
     ][0]["id"]
 
-    sent = await authenticated_client.post(
-        f"/pods/{pod_id}/contacts/{contact}/messages",
-        json={"message": "It's back in stock."},
+    # A member writes in their channel; there is nobody to hand it to, so it
+    # waits in their web chat for their next visit.
+    channel = await contact_channel_id(authenticated_client, pod_id, contact)
+    # The member looking after the widget hears of a new contact without
+    # joining their channel.
+    shown = await authenticated_client.get(f"/pods/{pod_id}/channels/{channel}")
+    assert shown.json()["joined"] is True, shown.text
+    assert shown.json()["unread"]["lines"] >= 1, shown.text
+    written = await member_writes(
+        authenticated_client, pod_id, channel, "It's back in stock."
     )
-    assert sent.status_code == 200, sent.text
-    assert sent.json() | {"conversation_id": None} == {
-        "conversation_id": None,
-        "platform": "WEB",
-        "delivered": False,
-    }
+    await send_deliveries()
+    [delivery] = await deliveries_of_line(written["id"])
+    assert (delivery.platform, delivery.status.value) == ("WEB", "SENT")
+    # Said as it is: in their chat, not in front of them.
+    assert delivery.reason == WAITS_IN_WEB_CHAT
     history = await authenticated_client.get(
         f"/public/web/{key}/history", headers=_as(visitor)
     )
-    assert ("assistant", "It's back in stock.") in [
-        (m["role"], m["text"]) for m in history.json()["messages"]
+    # A person wrote it, and the visitor's chat can say so; the bot's own
+    # answer is the bot's.
+    said = [
+        (m["role"], m["text"], m["from_person"]) for m in history.json()["messages"]
     ]
+    assert ("assistant", "It's back in stock.", True) in said
+    assert ("assistant", "I'll check.", False) in said
 
     # Forgetting the contact ends the session that named them.
     forgotten = await authenticated_client.delete(f"/pods/{pod_id}/contacts/{contact}")
@@ -800,23 +939,24 @@ async def test_a_follow_up_waits_in_a_web_contacts_chat(
     assert after.status_code == 401
 
 
-async def test_the_sweep_clears_what_visitors_left_behind(
+async def test_the_sweep_clears_ended_sessions_and_keeps_what_visitors_said(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
 ):
+    """A session is a credential and goes when it ends; a conversation is a
+    contact's, anonymous or not, and stays until a member deletes it."""
     pod_id = test_pod["id"]
     widget = await _widget(authenticated_client, pod_id, name="Sweep")
     key = widget["public_key"]
     gone_by = await _session(authenticated_client, key)
-    idle = await _session(authenticated_client, key)
     kept = await _session(authenticated_client, key)
     idle_conversation = await _say(
         authenticated_client,
         db_session,
         key=key,
-        visitor=idle,
+        visitor=gone_by,
         text="Anyone there?",
         owner=UUID(fixed_test_user["id"]),
         pod_id=pod_id,
@@ -835,9 +975,9 @@ async def test_the_sweep_clears_what_visitors_left_behind(
     )
     await db_session.commit()
 
-    codes, sessions, conversations = await sweep_web_visitors(get_uow_factory())
+    codes, sessions = await sweep_web_visitors(get_uow_factory())
 
-    assert sessions >= 1 and conversations >= 1 and codes >= 0
+    assert sessions >= 1 and codes >= 0
     db_session.expire_all()
     remaining = set(
         (
@@ -848,9 +988,464 @@ async def test_the_sweep_clears_what_visitors_left_behind(
             )
         ).scalars()
     )
-    # The ended session went; the idle conversation took its session with it.
     assert remaining == {_session_id(kept)}
-    assert await db_session.get(ConversationModel, idle_conversation) is None
+    # What they said, and who they were, outlive the session.
+    assert await db_session.get(ConversationModel, idle_conversation) is not None
+    assert await _contact_of(db_session, idle_conversation) is not None
+
+
+@dataclass(frozen=True)
+class _Merged:
+    customer: UUID
+    anonymous: UUID
+    conversation_id: UUID
+    visitor: dict
+    key: str
+
+
+async def _visitor_merged_into_a_customer(
+    client: AsyncClient, db_session: AsyncSession, *, pod_id: str, owner: UUID
+) -> _Merged:
+    """A visitor who chatted and wrote a row as who they were then, and then
+    proved the email of a contact the pod already had."""
+    created = await client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "orders",
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "contact_owned": True,
+            "contact_columns": ["item"],
+            "columns": [
+                {"name": "id", "type": "UUID", "required": True, "auto": True},
+                {"name": "item", "type": "TEXT", "required": True},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    widget = await _widget(client, pod_id, name="Merge")
+    key = widget["public_key"]
+    email = f"returning-{widget['id'][:8]}@client.example"
+    async with get_uow_factory()() as uow:
+        customer = await open_contact(
+            uow,
+            pod_id=UUID(pod_id),
+            kind=IdentityKind.EMAIL,
+            value=email,
+            strength=IdentityStrength.CHANNEL,
+            display_name="Dana",
+        )
+        await uow.commit()
+
+    visitor = await _session(client, key)
+    conversation_id = await _say(
+        client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Is my order shipped?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Let me look.")],
+    )
+    anonymous = await _contact_of(db_session, conversation_id)
+    assert anonymous is not None and anonymous != customer.id
+    # A row of theirs, as the visitor they were then.
+    ordered = await client.post(
+        f"/pods/{pod_id}/datastore/tables/orders/records",
+        json={"data": {"item": "Blue kettle", "contact_id": str(anonymous)}},
+    )
+    assert ordered.status_code == 201, ordered.text
+
+    sent = await client.post(
+        f"/public/web/{key}/code", json={"email": email}, headers=_as(visitor)
+    )
+    assert sent.status_code == 200, sent.text
+    verified = await client.post(
+        f"/public/web/{key}/code/verify",
+        json={"email": email, "code": _latest_code(email)},
+        headers=_as(visitor),
+    )
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["is_contact"] is True
+    assert verified.json()["display_name"] == "Dana"
+
+    return _Merged(customer.id, anonymous, conversation_id, visitor, key)
+
+
+@pytest.mark.drives_work
+async def test_a_visitor_who_proves_an_older_contacts_email_becomes_that_contact(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """One person, one contact: the visitor's chat and rows follow them to the
+    contact the pod already had, and the anonymous one is left pointing there
+    -- until that person is forgotten, and goes with them."""
+    pod_id = test_pod["id"]
+    proved = await _visitor_merged_into_a_customer(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        owner=UUID(fixed_test_user["id"]),
+    )
+    customer_id, anonymous = proved.customer, proved.anonymous
+    conversation_id, visitor = proved.conversation_id, proved.visitor
+    db_session.expire_all()
+    merged = await db_session.get(ContactModel, anonymous)
+    assert merged is not None and merged.merged_into_id == customer_id
+    session_contact = await db_session.scalar(
+        select(VisitorSessionModel.contact_id).where(
+            VisitorSessionModel.id == _session_id(visitor)
+        )
+    )
+    assert session_contact == customer_id
+    # The browser's handle moved with them; the old contact holds nothing.
+    assert await _handles_of(db_session, customer_id) == {
+        ("EMAIL", "CHANNEL"),
+        ("WEB", "SESSION"),
+    }
+    assert await _handles_of(db_session, anonymous) == set()
+
+    # The conversation and the row follow, by the work the merge wrote with it.
+    registry = WorkRegistry()
+    register_contact_merged_work(registry)
+    register_datastore_contact_merged_work(registry)
+    await run_until_idle(
+        async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+    )
+    assert await _contact_of(db_session, conversation_id) == customer_id
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert [(r["item"], r["contact_id"]) for r in rows.json()["items"]] == [
+        ("Blue kettle", str(customer_id))
+    ]
+
+    # The pod lists one person, not two; the old id still leads to them.
+    listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")
+    assert listed.status_code == 200, listed.text
+    ids = {item["id"] for item in listed.json()["items"]}
+    assert str(customer_id) in ids and str(anonymous) not in ids
+    followed = await authenticated_client.get(f"/pods/{pod_id}/contacts/{anonymous}")
+    assert followed.status_code == 200, followed.text
+    assert followed.json()["id"] == str(customer_id)
+
+    # Forgetting them forgets the row they wrote as a visitor, and the contact
+    # they were then does not come back as an empty one.
+    forgotten = await authenticated_client.delete(
+        f"/pods/{pod_id}/contacts/{customer_id}"
+    )
+    assert forgotten.status_code in (200, 204), forgotten.text
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert rows.json()["items"] == []
+    listed = await authenticated_client.get(f"/pods/{pod_id}/contacts")
+    assert str(anonymous) not in {item["id"] for item in listed.json()["items"]}
+    db_session.expire_all()
+    assert await db_session.get(ContactModel, anonymous) is None
+
+
+@pytest.mark.drives_work
+async def test_forgetting_a_person_before_their_merge_is_carried_out_takes_it_all(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """The row and the chat move to the person in queued work after the merge.
+    Forgotten before that work runs, they go anyway: under the visitor's old
+    id, which forgetting the person reaches too."""
+    pod_id = test_pod["id"]
+    proved = await _visitor_merged_into_a_customer(
+        authenticated_client,
+        db_session,
+        pod_id=pod_id,
+        owner=UUID(fixed_test_user["id"]),
+    )
+
+    forgotten = await authenticated_client.delete(
+        f"/pods/{pod_id}/contacts/{proved.customer}"
+    )
+
+    assert forgotten.status_code in (200, 204), forgotten.text
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert rows.json()["items"] == []
+    db_session.expire_all()
+    assert await db_session.get(ConversationModel, proved.conversation_id) is None
+    assert await db_session.get(ContactModel, proved.anonymous) is None
+    # The work the merge queued then finds nothing to move, and fails nothing.
+    registry = WorkRegistry()
+    register_contact_merged_work(registry)
+    register_datastore_contact_merged_work(registry)
+    await run_until_idle(
+        async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+    )
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert rows.json()["items"] == []
+
+
+async def test_a_session_whose_conversation_names_nobody_is_given_its_own(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """A session's conversation is continued only while it answers the
+    visitor. One that names nobody -- as a conversation from before contacts
+    were a column does -- would answer them with the keeper's authority."""
+    pod_id = test_pod["id"]
+    owner = UUID(fixed_test_user["id"])
+    key = (await _widget(authenticated_client, pod_id, name="Older"))["public_key"]
+    visitor = await _session(authenticated_client, key)
+    first = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Hello?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Hi.")],
+    )
+    contact = await _contact_of(db_session, first)
+    await db_session.execute(
+        update(ConversationModel)
+        .where(ConversationModel.id == first)
+        .values(contact_id=None)
+    )
+    await db_session.commit()
+
+    again = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Still there?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Yes.")],
+    )
+
+    assert again != first
+    assert await _contact_of(db_session, again) == contact
+
+
+@pytest.mark.drives_work
+async def test_a_visitor_writing_right_after_proving_who_they_are_keeps_their_chat(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """Their conversation still names the contact they were until the merge's
+    queued work moves it; it is theirs all the same, and is continued."""
+    pod_id = test_pod["id"]
+    owner = UUID(fixed_test_user["id"])
+    proved = await _visitor_merged_into_a_customer(
+        authenticated_client, db_session, pod_id=pod_id, owner=owner
+    )
+    again = await _say(
+        authenticated_client,
+        db_session,
+        key=proved.key,
+        visitor=proved.visitor,
+        text="And the blue one?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Shipped too.")],
+    )
+
+    assert again == proved.conversation_id
+
+    # Once the merge's work has run, the contact they were has no channel left;
+    # the customer had no chat of their own, so this one takes its seat in
+    # theirs rather than a new one being opened beside it.
+    await _carry_out_merges()
+    later = await _say(
+        authenticated_client,
+        db_session,
+        key=proved.key,
+        visitor=proved.visitor,
+        text="And the red one?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Not yet.")],
+    )
+    assert later == proved.conversation_id
+    db_session.expire_all()
+    seated = await db_session.get(ConversationModel, later)
+    assert seated is not None and seated.channel_id is not None
+
+
+@pytest.mark.drives_work
+async def test_two_browsers_that_prove_one_email_carry_on_in_one_conversation(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+):
+    """Two browsers chat, then both prove one email: one contact, one channel,
+    and one conversation in it. The second browser's conversation lost its seat
+    to the first's when their channels became one; its next word continues the
+    conversation that holds the seat, rather than claiming it a second time."""
+    pod_id = test_pod["id"]
+    owner = UUID(fixed_test_user["id"])
+    widget = await _widget(authenticated_client, pod_id, name="Two browsers")
+    key = widget["public_key"]
+    email = f"two-{widget['id'][:8]}@client.example"
+    laptop = await _session(authenticated_client, key)
+    phone = await _session(authenticated_client, key)
+    on_laptop = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=laptop,
+        text="Hi from my laptop",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Hello.")],
+    )
+    on_phone = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=phone,
+        text="Hi from my phone",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Hello again.")],
+    )
+    assert on_phone != on_laptop
+    for visitor in (laptop, phone):
+        sent = await authenticated_client.post(
+            f"/public/web/{key}/code", json={"email": email}, headers=_as(visitor)
+        )
+        assert sent.status_code == 200, sent.text
+        verified = await authenticated_client.post(
+            f"/public/web/{key}/code/verify",
+            json={"email": email, "code": _latest_code(email)},
+            headers=_as(visitor),
+        )
+        assert verified.status_code == 200, verified.text
+    await _carry_out_merges()
+
+    again = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=phone,
+        text="Still me",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Yes.")],
+    )
+
+    assert again == on_laptop
+    db_session.expire_all()
+    seated = await db_session.get(ConversationModel, on_laptop)
+    assert seated is not None and seated.channel_id is not None
+    in_channel = await db_session.scalars(
+        select(ConversationModel.id).where(
+            ConversationModel.channel_id == seated.channel_id
+        )
+    )
+    assert list(in_channel) == [on_laptop]
+    # What the phone said before is still in its chat, and in the one the
+    # agent answers from: the conversation that kept the seat holds it too.
+    history = await authenticated_client.get(
+        f"/public/web/{key}/history", headers=_as(phone)
+    )
+    assert history.status_code == 200, history.text
+    texts = [message["text"] for message in history.json()["messages"]]
+    for said in ("Hi from my laptop", "Hi from my phone", "Hello again.", "Still me"):
+        assert said in texts, (said, texts)
+    assert texts.count("Hi from my phone") == 1
+
+
+async def _carry_out_merges() -> None:
+    """Run the work each module queued when two contacts became one."""
+    registry = WorkRegistry()
+    register_contact_merged_work(registry)
+    register_datastore_contact_merged_work(registry)
+    register_channels_contact_merged_work(registry)
+    await run_until_idle(
+        async_session_maker, registry=registry, classes=[WorkClass.EVENTS]
+    )
+
+
+@pytest.mark.drives_work
+async def test_forgetting_a_person_reaches_every_contact_merged_into_them(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    monkeypatch,
+):
+    """However many contacts became this one, each one's rows go: they are
+    read a page at a time, and none is left for the cascade to strand."""
+    from app.modules.contacts.infrastructure import repository as contacts_repo
+    from app.modules.contacts.services import forget as forget_service
+
+    monkeypatch.setattr(contacts_repo, "ABSORBED_PAGE", 1)
+    monkeypatch.setattr(forget_service, "ABSORBED_PAGE", 1)
+    pod_id = test_pod["id"]
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "orders",
+            "primary_key_column": "id",
+            "enable_rls": False,
+            "contact_owned": True,
+            "contact_columns": ["item"],
+            "columns": [
+                {"name": "id", "type": "UUID", "required": True, "auto": True},
+                {"name": "item", "type": "TEXT", "required": True},
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    async with get_uow_factory()() as uow:
+        people = [
+            await open_contact(
+                uow,
+                pod_id=UUID(pod_id),
+                kind=IdentityKind.EMAIL,
+                value=f"many-{n}@client.example",
+                strength=IdentityStrength.CHANNEL,
+                display_name=None,
+            )
+            for n in range(4)
+        ]
+        await uow.commit()
+    survivor, absorbed = people[0], people[1:]
+    for contact in absorbed:
+        await db_session.execute(
+            update(ContactModel)
+            .where(ContactModel.id == contact.id)
+            .values(merged_into_id=survivor.id)
+        )
+        ordered = await authenticated_client.post(
+            f"/pods/{pod_id}/datastore/tables/orders/records",
+            json={"data": {"item": "kettle", "contact_id": str(contact.id)}},
+        )
+        assert ordered.status_code == 201, ordered.text
+    await db_session.commit()
+
+    forgotten = await authenticated_client.delete(
+        f"/pods/{pod_id}/contacts/{survivor.id}"
+    )
+
+    assert forgotten.status_code in (200, 204), forgotten.text
+    rows = await authenticated_client.get(
+        f"/pods/{pod_id}/datastore/tables/orders/records"
+    )
+    assert rows.json()["items"] == []
 
 
 async def test_hosted_pages_live_on_their_own_origin_when_one_is_set(
@@ -884,6 +1479,64 @@ async def test_hosted_pages_live_on_their_own_origin_when_one_is_set(
     assert from_api.status_code == 403
     assert from_pages.status_code == 200, from_pages.text
     assert from_pages.headers["access-control-allow-origin"] == "https://pages.example"
+
+
+async def test_a_hosted_page_keeps_its_visitors_chat_in_a_cookie_of_its_own(
+    authenticated_client: AsyncClient, test_pod, monkeypatch
+):
+    """Safari clears what a script stores after a week; a first-party HttpOnly
+    cookie set by Lemma's own pages host it keeps. A widget on somebody else's
+    site gets no cookie: there it would be a third party's."""
+    widget = await _widget(authenticated_client, test_pod["id"], name="Kept")
+    key = widget["public_key"]
+    monkeypatch.setattr(
+        public_web_settings, "public_pages_url", "https://pages.example"
+    )
+    on_pages = {
+        "Host": "pages.example",
+        "Origin": "https://pages.example",
+        "Authorization": "",
+    }
+    cookie = f"lemma_chat_{UUID(widget['id']).hex}"
+
+    first = await authenticated_client.post(
+        f"/public/web/{key}/session", json={}, headers=on_pages
+    )
+    assert first.status_code == 200, first.text
+    set_cookie = first.headers["set-cookie"]
+    assert set_cookie.startswith(f"{cookie}=")
+    assert "HttpOnly" in set_cookie and "Secure" in set_cookie
+    assert "Path=/public/web" in set_cookie
+    # Sealed, never the secret itself.
+    sealed = first.cookies.get(cookie) or set_cookie.split(";")[0].split("=", 1)[1]
+    assert first.json()["secret"] not in set_cookie
+
+    # The page lost its storage; the cookie brings the visitor back.
+    back = await authenticated_client.post(
+        f"/public/web/{key}/session",
+        json={},
+        headers={**on_pages, "Cookie": f"{cookie}={sealed}"},
+    )
+    assert back.status_code == 200, back.text
+    assert _session_id(back.json()) == _session_id(first.json())
+
+    # A cookie this deployment did not seal is as if there were none: the
+    # bare secret, or anything else, starts a new chat.
+    for forged in (first.json()["secret"], "not-a-live-secret"):
+        fresh = await authenticated_client.post(
+            f"/public/web/{key}/session",
+            json={},
+            headers={**on_pages, "Cookie": f"{cookie}={forged}"},
+        )
+        assert fresh.status_code == 200, fresh.text
+        assert _session_id(fresh.json()) != _session_id(first.json())
+
+    monkeypatch.setattr(public_web_settings, "public_pages_url", None)
+    embedded = await authenticated_client.post(
+        f"/public/web/{key}/session", json={}, headers=_page()
+    )
+    assert embedded.status_code == 200, embedded.text
+    assert "set-cookie" not in embedded.headers
 
 
 def _solved(challenge: dict) -> str:

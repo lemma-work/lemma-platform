@@ -15,10 +15,12 @@ from app.core.api.uploads import (
 from app.core.authorization.context import Context
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import (
     DatastoreFileNotFoundError,
     DatastoreInfrastructureError,
     DatastoreObjectNotFoundError,
+    DatastoreRetryTooSoonError,
     DatastoreValidationError,
 )
 from app.modules.datastore.domain.file_entities import (
@@ -31,10 +33,10 @@ from app.modules.datastore.domain.indexing_policy import (
     normalize_mime_type,
 )
 from app.modules.datastore.infrastructure.storage_paths import (
-    build_datastore_child_artifact_key,
-    build_datastore_child_user_markdown_key,
-    build_datastore_file_storage_key,
+    content_keys,
+    new_file_storage_layout,
 )
+from app.modules.datastore.services.files.retry_gate import claim_retry_slot
 from app.modules.datastore.services.files.write_plans import (
     CreateFilePlan,
     MarkdownAttachPlan,
@@ -122,6 +124,7 @@ class FileTransactionWriter:
         directory_path: str = "/",
         search_enabled: bool = True,
         visibility: str | None = None,
+        rename_on_conflict: bool = False,
     ) -> CreateFilePlan:
         directory_path = self.paths._resolve_api_path(
             directory_path, requester_user_id=requester_user_id
@@ -141,16 +144,29 @@ class FileTransactionWriter:
         file_name = self.paths._normalize_name(name)
         path = self.paths._join_child_path(directory_path, file_name)
         self.system_skill_files.ensure_writable(path)
-        await self.lookup.ensure_path_available(pod_id=pod_id, path=path)
+        # Hashed before the name is chosen, so a renaming upload does not hold
+        # its directory's lock while it reads the whole file.
+        content_sha256 = await run_blocking(upload_source_sha256, file_content)
+        if rename_on_conflict:
+            # An upload names its own file, and a name it cannot have is not a
+            # reason to refuse the upload: take the next free one. Ordinary
+            # rather than exotic -- every clipboard image is `image.png`. The
+            # renamed path is in the same directory, so the writability checked
+            # above still covers it.
+            file_name, path = await self.lookup.available_path(
+                pod_id, directory_path=directory_path, name=file_name
+            )
+        else:
+            await self.lookup.ensure_path_available(pod_id=pod_id, path=path)
         resolved_visibility = self.paths._resolve_visibility_for_path(
             path, requester_user_id, visibility
         )
         mime_type = self.paths._get_content_type(file_name)
-        draft_status = (
-            FileStatus.PENDING
-            if search_enabled and is_indexable_mime_type(mime_type, file_name)
-            else FileStatus.NOT_REQUIRED
-        )
+        # Not PENDING until the bytes are stored: the write that finishes the
+        # upload decides (``mark_created``) and enqueues processing with it.
+        # A draft whose upload never finishes is then a row nothing waits on,
+        # rather than a PENDING one nothing will ever process.
+        draft_status = FileStatus.NOT_REQUIRED
         draft = DatastoreFileEntity(
             pod_id=pod_id,
             owner_user_id=requester_user_id,
@@ -164,11 +180,12 @@ class FileTransactionWriter:
             search_enabled=search_enabled,
             status=draft_status,
             metadata=metadata,
+            parent_id=self._parent_row_id(pod_id, directory),
+            storage_layout=new_file_storage_layout(),
         )
-        content_sha256 = await run_blocking(upload_source_sha256, file_content)
         draft.content_sha256 = content_sha256
-        storage_key = build_datastore_file_storage_key(pod_id, path)
         entity = await self.file_repository.create(draft)
+        storage_key = content_keys(entity).original
         return CreateFilePlan(
             entity=entity,
             storage_key=storage_key,
@@ -277,14 +294,14 @@ class FileTransactionWriter:
             raise DatastoreValidationError("Markdown content cannot be empty")
         entity = plan.entity
         await self.storage.upload_file(
-            build_datastore_child_user_markdown_key(entity.pod_id, entity.path),
+            content_keys(entity).user_markdown,
             markdown_content,
         )
         asset_names: list[str] = []
         for filename, content in images or []:
             name = _safe_asset_name(filename)
             await self.storage.upload_file(
-                build_datastore_child_artifact_key(entity.pod_id, entity.path, name),
+                content_keys(entity).child(name),
                 content,
             )
             if name not in asset_names:
@@ -317,7 +334,7 @@ class FileTransactionWriter:
         else:
             metadata.pop(_MARKDOWN_ASSET_NAMES_KEY, None)
         entity.update_metadata(metadata)
-        entity.mark_content_updated(plan.requester_user_id)
+        entity.mark_content_updated(plan.requester_user_id, inputs_changed=True)
         return await self.file_repository.update(entity)
 
     async def detach_user_markdown(
@@ -343,9 +360,7 @@ class FileTransactionWriter:
         # on both sides of it.
         async with connection_released(getattr(self.file_repository, "session", None)):
             try:
-                await self.storage.delete_file(
-                    build_datastore_child_user_markdown_key(pod_id, entity.path)
-                )
+                await self.storage.delete_file(content_keys(entity).user_markdown)
             except DatastoreObjectNotFoundError:
                 pass
             except Exception:
@@ -359,7 +374,7 @@ class FileTransactionWriter:
         if not had_flag:
             return entity
         entity.update_metadata(metadata)
-        entity.mark_content_updated(requester_user_id)
+        entity.mark_content_updated(requester_user_id, inputs_changed=True)
         return await self.file_repository.update(entity)
 
     async def retry_processing(
@@ -384,8 +399,13 @@ class FileTransactionWriter:
             message="Only pod editors and admins can retry shared pod files",
             ctx=ctx,
         )
-        if not entity.mark_retry_requested(requester_user_id):
+        if entity.status not in (FileStatus.FAILED, FileStatus.FAILED_PERMANENT):
             return entity
+        if not await claim_retry_slot(entity.id):
+            raise DatastoreRetryTooSoonError(
+                datastore_settings.document_processing_retry_cooldown_seconds
+            )
+        entity.mark_retry_requested(requester_user_id)
         return await self.file_repository.update(entity)
 
     async def _ensure_directory_path(
@@ -396,4 +416,9 @@ class FileTransactionWriter:
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
     ) -> DatastoreFileEntity | None:
+        raise NotImplementedError
+
+    def _parent_row_id(
+        self, pod_id: UUID, parent: DatastoreFileEntity | None
+    ) -> UUID | None:
         raise NotImplementedError

@@ -30,8 +30,10 @@ from app.modules.datastore.domain.file_entities import (
     DatastoreFileUpdateEntity,
 )
 from app.modules.datastore.domain.errors import DatastoreDomainError
-from app.modules.datastore.infrastructure.reindex_queue import (
-    enqueue_datastore_path_cleanup,
+from app.core.authorization.authz_epoch import bump_pod_files_epoch
+from app.modules.datastore.events.file_work import (
+    cleanup_payload,
+    add_file_cleanup_work,
 )
 from app.modules.datastore.services.file_service import DatastoreFileService
 from app.modules.datastore.services.files.http_cache import (
@@ -94,9 +96,14 @@ class FileUseCases:
         directory_path: str = "/",
         search_enabled: bool = True,
         visibility: str | None = None,
+        rename_on_conflict: bool = False,
     ) -> DatastoreFileEntity:
         """Persist draft -> upload bytes -> finalize, with no DB connection
-        held while object storage receives the file."""
+        held while object storage receives the file.
+
+        ``rename_on_conflict`` is for uploads, whose name is chosen by whoever
+        is uploading rather than by the caller: a name already in the folder
+        becomes ``name (1).ext`` instead of a refusal."""
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
@@ -110,6 +117,7 @@ class FileUseCases:
                 directory_path=directory_path,
                 search_enabled=search_enabled,
                 visibility=visibility,
+                rename_on_conflict=rename_on_conflict,
             )
 
         storage_written = False
@@ -227,8 +235,8 @@ class FileUseCases:
         request: Request,
         user_id: UUID,
     ) -> DatastoreFileEntity:
-        """Authorize + re-open a failed document in one short UoW; the worker
-        picks it up from the event the row write publishes."""
+        """Authorize + re-open a failed document in one short UoW; the row
+        write enqueues its ``file.process`` in the same transaction."""
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
@@ -245,37 +253,34 @@ class FileUseCases:
         request: Request,
         user_id: UUID,
     ) -> None:
-        """Authorize + delete the rows (short UoW), then offload the storage +
-        search-index purge to the worker so the API never holds a connection
-        across the (potentially many-object) cleanup. If the enqueue is disabled
-        or fails, clean up in-process (still no connection held) so deleted rows
-        never leave orphaned blobs."""
+        """Delete the rows and, in the same transaction, the work that purges them.
+
+        The storage and search-index purge runs in a worker as ``file.cleanup``,
+        so the API holds no connection across a many-object cleanup, and it is
+        committed with the rows -- a delete cannot happen without its purge
+        being owed.
+        """
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
             service = self._build(scope.uow)
             cleanup = await service.resolve_delete_path(pod_id, path, ctx=scope.ctx)
-
-        files = list(cleanup.files)
-        enqueued = False
-        if not datastore_settings.e2e_disable_worker_file_autoindex:
-            # When the worker file-path is active, offload the purge; otherwise
-            # (e2e without a datastore worker) fall through to in-process cleanup.
-            try:
-                enqueued = await enqueue_datastore_path_cleanup(
+            in_process = datastore_settings.e2e_disable_worker_file_autoindex
+            if not in_process:
+                await add_file_cleanup_work(
+                    scope.uow,
                     pod_id=cleanup.pod_id,
-                    is_folder=cleanup.is_folder,
-                    folder_prefix=cleanup.folder_prefix,
-                    files=files,
+                    payload=cleanup_payload(cleanup),
                 )
-            except Exception:
-                enqueued = False
-        if not enqueued:
+            scope.uow.after_commit(lambda: bump_pod_files_epoch(pod_id))
+        if in_process:
+            # e2e runs no ingestion worker for this; purge here, still with no
+            # connection held.
             await service.cleanup_deleted_paths(
                 cleanup.pod_id,
                 is_folder=cleanup.is_folder,
                 folder_prefix=cleanup.folder_prefix,
-                files=files,
+                files=list(cleanup.files),
             )
 
     async def download_file(

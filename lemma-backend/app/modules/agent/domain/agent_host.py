@@ -11,8 +11,19 @@ from enum import Enum
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
+from app.modules.agent.domain.agent_host_options import (
+    agent_host_option_is_selectable,
+    agent_host_option_type,
+    bounded_agent_text,
+)
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
@@ -127,6 +138,9 @@ class AgentHostHarnessCapabilities(BaseModel):
 
 
 class AgentHostConfigOption(BaseModel):
+    # ``id`` and ``category`` are how a selection names the option, so one that
+    # does not fit is not shortened into a different name: the option is
+    # dropped instead (``AgentHostHarnessSnapshot._settle_config_options``).
     id: str = Field(min_length=1, max_length=255)
     category: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=255)
@@ -135,8 +149,23 @@ class AgentHostConfigOption(BaseModel):
     options: list[JsonObject] = Field(default_factory=list)
     metadata: JsonObject = Field(default_factory=dict)
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def bound_name(cls, value: object) -> object:
+        return bounded_agent_text(value, 255)
+
 
 class AgentHostHarnessSnapshot(BaseModel):
+    """One harness as a host reports it.
+
+    The envelope -- key, health, revision, freshness -- is the host's own
+    protocol and is held strictly. What is inside ``config_options`` and
+    ``upstream_version`` is the *agent's*, released on its own schedule: an
+    option this build cannot read, or of a type it cannot offer, is dropped
+    and named in ``skipped_config_options`` for the caller to log, so one new
+    option does not cost the harness every other one.
+    """
+
     harness_key: str = Field(min_length=1, max_length=128)
     display_name: str = Field(min_length=1, max_length=255)
     adapter_version: str = Field(min_length=1, max_length=128)
@@ -149,6 +178,40 @@ class AgentHostHarnessSnapshot(BaseModel):
     config_options: list[AgentHostConfigOption] = Field(default_factory=list)
     stale_after: datetime
     stale_reason: str | None = None
+    #: Why each dropped option was dropped: ``type:<name>`` for a type Lemma
+    #: cannot offer, ``invalid`` for one it could not read. Set here, never by
+    #: the host, and not stored.
+    skipped_config_options: list[str] = Field(default_factory=list, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _settle_config_options(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        raw_options = data.get("config_options")
+        skipped: list[str] = []
+        if isinstance(raw_options, list):
+            kept: list[object] = []
+            for raw in raw_options:
+                if isinstance(raw, AgentHostConfigOption):
+                    kept.append(raw)
+                    continue
+                if not agent_host_option_is_selectable(raw):
+                    skipped.append(f"type:{str(agent_host_option_type(raw))[:64]}")
+                    continue
+                try:
+                    kept.append(AgentHostConfigOption.model_validate(raw))
+                except ValidationError:
+                    skipped.append("invalid")
+            data["config_options"] = kept
+        data["skipped_config_options"] = skipped
+        return data
+
+    @field_validator("upstream_version", mode="before")
+    @classmethod
+    def bound_upstream_version(cls, value: object) -> object:
+        return bounded_agent_text(value, 128) or None
 
     @field_validator("harness_key")
     @classmethod
@@ -348,6 +411,13 @@ class AgentHostToolRef(BaseModel):
     server: str | None = Field(default=None, max_length=255)
     title: str | None = None
     kind: str | None = Field(default=None, max_length=64)
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def bound_kind(cls, value: object) -> object:
+        # The adapter's own word, for display; a longer one than any ACP
+        # defines is cut rather than costing the card.
+        return bounded_agent_text(value, 64)
 
 
 class AgentHostToolCallPayload(BaseModel):

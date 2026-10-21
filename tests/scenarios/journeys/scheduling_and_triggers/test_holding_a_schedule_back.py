@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from harness import capability, covers, journey, proves, scenario
+from harness.drivers.api import UnexpectedResponse
 from harness.steps.datastore import column
 from harness.waiting import eventually, UNTIL_BACKGROUND_WORK_LANDS
 
@@ -71,6 +72,21 @@ async def _history(alice, schedule, pod, *, settles_on, describe: str) -> list[d
     )
 
 
+async def _the_run_if_there(alice, run_id, pod) -> dict | None:
+    """The schedule's run, or None while it is not there to open yet.
+
+    The history can say a firing dispatched a moment before the run it started
+    answers to its id. Waiting through that is a wait like any other; anything
+    but "not found" is still a failure.
+    """
+    try:
+        return await alice.opens_run({"id": run_id}, in_pod=pod)
+    except UnexpectedResponse as refused:
+        if "answered 404," in str(refused):
+            return None
+        raise
+
+
 @scenario("A firing that finds the schedule full is skipped, and says why")
 @proves("PS-SCHED-024")
 @covers("schedule.create", "schedule.run.list", "schedule.get", "record.create")
@@ -118,8 +134,8 @@ async def test_a_finished_run_makes_room(capped):
         describe="the first firing to start its run",
     )
     waiting = await eventually(
-        lambda: alice.opens_run({"id": first["target_run_id"]}, in_pod=pod),
-        lambda run: run.get("status") == "WAITING",
+        lambda: _the_run_if_there(alice, first["target_run_id"], pod),
+        lambda run: run is not None and run.get("status") == "WAITING",
         describe="the scheduled run to stop on the person it asks",
         timeout=UNTIL_BACKGROUND_WORK_LANDS,
     )

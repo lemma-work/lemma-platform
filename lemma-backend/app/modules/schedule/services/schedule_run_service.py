@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+from datetime import datetime
 from uuid import UUID
 
 from app.core.authorization.context import Context, ResourceRef
+from app.core.domain.errors import BadRequestError
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.schedule.domain.events.schedule import ScheduleFired
+from app.core.infrastructure.work import WorkWriter
 from app.modules.schedule.domain.errors import (
     ScheduleNotFoundError,
     ScheduleRunNotRetryableError,
@@ -24,6 +28,11 @@ from app.modules.schedule.domain.schedule import (
 from app.modules.schedule.repositories.schedule_run_repository import (
     ScheduleRunRepository,
 )
+from app.modules.schedule.repositories.trigger_records import (
+    SkipRecord,
+    TriggerRecords,
+)
+from app.modules.schedule.services.trigger_fire import add_start_work
 
 
 class ScheduleRunService:
@@ -66,6 +75,33 @@ class ScheduleRunService:
             skipped=skipped,
         )
 
+    async def list_trigger_skips(
+        self,
+        *,
+        pod_id: UUID,
+        schedule_id: UUID,
+        ctx: Context,
+        limit: int,
+        page_token: str | None,
+    ) -> tuple[list[SkipRecord], str | None]:
+        """What the trigger let pass without firing, newest first, a page at a time.
+
+        Skip rows carry counts and log positions, never record contents, so
+        anyone who may read the schedule may read them.
+        """
+        schedule = await self.schedule_repository.get(schedule_id, ctx=ctx)
+        if schedule is None or schedule.pod_id != pod_id:
+            raise ScheduleNotFoundError()
+        await ctx.require(
+            Permissions.SCHEDULE_READ, ResourceRef.schedule(pod_id, schedule_id)
+        )
+        skips = await TriggerRecords(self.uow.session).list_skips(
+            schedule_id, limit=limit + 1, before=decode_skip_page_token(page_token)
+        )
+        if len(skips) <= limit:
+            return skips, None
+        return skips[:limit], encode_skip_page_token(skips[limit - 1])
+
     async def _visible_run_user_id(
         self, *, schedule, pod_id: UUID, ctx: Context
     ) -> UUID | None:
@@ -104,21 +140,22 @@ class ScheduleRunService:
             raise ScheduleRunNotRetryableError()
         schedule_run, created = result
         if created:
-            self.uow.collect_events(
-                [
-                    ScheduleFired(
-                        schedule_id=schedule.id,
-                        user_id=schedule_run.user_id,
-                        schedule_type=schedule.schedule_type,
-                        pod_id=schedule.pod_id,
-                        account_id=schedule.account_id,
-                        payload=schedule_run.payload,
-                        metadata=schedule_run.metadata,
-                        llm_output=schedule_run.llm_output,
-                        scheduled_at=schedule_run.source_occurred_at,
-                        source_event_id=schedule_run.source_event_id,
-                        causation_id=schedule_run.id,
-                    )
-                ]
-            )
+            await add_start_work(WorkWriter.of(self.uow), schedule, schedule_run.id)
         return schedule_run
+
+
+def encode_skip_page_token(skip: SkipRecord) -> str:
+    raw = f"{skip.at.isoformat()}|{skip.id}".encode()
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def decode_skip_page_token(page_token: str | None) -> tuple[datetime, UUID] | None:
+    if not page_token:
+        return None
+    try:
+        at, skip_id = (
+            base64.urlsafe_b64decode(page_token.encode("ascii")).decode().split("|")
+        )
+        return datetime.fromisoformat(at), UUID(skip_id)
+    except (binascii.Error, UnicodeError, ValueError) as exc:
+        raise BadRequestError("Invalid page_token") from exc

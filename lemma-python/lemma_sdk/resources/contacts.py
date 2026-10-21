@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-from typing import Literal
 from uuid import UUID
 
+from ..openapi_client.api.contact_outreach import contact_outreach_send
 from ..openapi_client.api.contacts import (
     contact_delete,
     contact_export,
-    contact_follow_up,
     contact_get,
     contact_list,
     contact_update,
 )
 from ..openapi_client.models.contact_export_response import ContactExportResponse
 from ..openapi_client.models.contact_list_response import ContactListResponse
-from ..openapi_client.models.follow_up_request import FollowUpRequest
-from ..openapi_client.models.follow_up_response import FollowUpResponse
 from ..openapi_client.models.contact_response import ContactResponse
 from ..openapi_client.models.contact_update_request import ContactUpdateRequest
+from ..openapi_client.models.outreach_request import OutreachRequest
+from ..openapi_client.models.outreach_response import OutreachResponse
 from ..openapi_client.types import UNSET
 from .base import BoundResource, as_uuid
 
@@ -32,18 +31,18 @@ class PodContacts(BoundResource):
     """
 
     def list(
-        self, *, limit: int = 50, before: str | None = None
+        self, *, limit: int = 50, cursor: str | None = None
     ) -> ContactListResponse:
         """The pod's contacts, newest first.
 
-        Page by passing the last page's ``next_before`` as ``before``; it is
+        Page by passing the last page's ``next_cursor`` as ``cursor``; it is
         opaque, and absent on the last page.
         """
         return self._call(
             contact_list,
             self._pod_uuid(),
             limit=limit,
-            before=before if before is not None else UNSET,
+            cursor=cursor if cursor is not None else UNSET,
         )
 
     def get(self, contact_id: str | UUID) -> ContactResponse:
@@ -62,31 +61,38 @@ class PodContacts(BoundResource):
             body_model=ContactUpdateRequest,
         )
 
-    def follow_up(
+    def outreach(
         self,
         contact_id: str | UUID,
-        message: str,
         *,
-        channel: Literal["latest", "email"] = "latest",
-    ) -> FollowUpResponse:
-        """Write to a contact in their latest conversation, where the channel allows.
+        handle: str,
+        text: str,
+        kind: str | None = None,
+        client_message_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> OutreachResponse:
+        """Write to a contact first, on one of their handles.
 
-        ``channel="email"`` sends to their verified email address instead: from
-        the pod's email address that answers contacts, in a new thread, when
-        their latest conversation is a web chat or another platform's.
-
-        Takes ``contact.message`` (editors and up). Refused when they
-        unsubscribed there, when WhatsApp's 24-hour window has closed, when
-        they never wrote to the pod, or past the day's follow-ups to them; for
-        email, when they have no verified address or the pod has no email
-        address answering contacts.
+        Email any time; WhatsApp only within 24 hours of their last message
+        there; never a handle that asked the pod to stop. The line goes in the
+        contact's channel at that handle's place -- opened if new -- and is
+        sent from there: the response is the line and its delivery, ``PENDING``
+        until it goes. ``kind`` (``EMAIL``, ``PHONE``, ...) only when the value
+        could name two handles; the same ``client_message_id`` (or
+        ``idempotency_key`` from the same caller) twice is one line.
         """
+        body: dict[str, object] = {"handle": handle, "text": text}
+        if kind is not None:
+            body["kind"] = kind
+        if client_message_id is not None:
+            body["client_message_id"] = client_message_id
         return self._call(
-            contact_follow_up,
+            contact_outreach_send,
             self._pod_uuid(),
             as_uuid(contact_id),
-            body={"message": message, "channel": channel},
-            body_model=FollowUpRequest,
+            body=body,
+            body_model=OutreachRequest,
+            idempotency_key=(idempotency_key if idempotency_key is not None else UNSET),
         )
 
     def export(

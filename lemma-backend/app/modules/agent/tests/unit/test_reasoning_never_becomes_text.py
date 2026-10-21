@@ -213,7 +213,10 @@ def test_a_thought_the_run_never_followed_is_dropped():
     )
 
     _assert_no_reasoning_in_content(payload)
-    assert [entry["role"] for entry in payload] == ["user"]
+    # Nothing is left in history: the person's turn, with only the dropped
+    # thought after it, is the prompt -- which is what lets a run that failed
+    # after only thinking be retried from that turn.
+    assert payload == []
 
 
 def test_the_wire_assertion_catches_the_shape_that_shipped():

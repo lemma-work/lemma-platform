@@ -26,6 +26,13 @@ RENAMED_ENV_VARS = {
     "DATASTORE_SEARCH_VISIBILITY_ID_SOFT_LIMIT": (
         "DATASTORE_SEARCH_READABLE_ID_PUSHDOWN_LIMIT"
     ),
+    # Processing moved onto the work runtime: per-pod fairness is the
+    # ingestion class's per-namespace cap, and the dispatcher and recovery
+    # crons these tuned are gone.
+    "DATASTORE_RECOVERY_MAX_ATTEMPTS": "DOCUMENT_PROCESSING_MAX_ATTEMPTS",
+    "DATASTORE_PER_POD_MAX_INFLIGHT": "WORK_MAX_RUNNING_JSON (ingestion)",
+    "DATASTORE_DISPATCH_GLOBAL_BATCH": "WORK_SLOTS_JSON (ingestion)",
+    "RECOVERY_ENQUEUE_BATCH_SIZE": "WORK_SLOTS_JSON (ingestion)",
 }
 
 

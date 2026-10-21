@@ -358,7 +358,14 @@ async def verify_auth(connection: HTTPConnection):
 
         if session:
             user_id = session.get_user_id()
-            parsed_user_id = UUID(user_id)
+            try:
+                parsed_user_id = UUID(user_id)
+            except ValueError as exc:
+                # The session checked out but names no user this service has:
+                # that is the token's content, not this deployment failing, so
+                # it is a 401 the caller can clear by signing in again -- never
+                # the 503 below, which would never clear.
+                raise HTTPException(status_code=401, detail="Unauthorized") from exc
             payload = session.get_access_token_payload() or {}
 
             try:
@@ -405,12 +412,17 @@ async def verify_auth(connection: HTTPConnection):
         # bury the arm below, which is the one worth reading.
         raise HTTPException(status_code=401, detail="Unauthorized") from e
     except Exception as e:
-        # Everything else is this deployment failing, not the caller: the
-        # SuperTokens core unreachable, a JWKS fetch that did not come back, a
-        # key that does not match. It still answers 401, because a request
-        # whose identity could not be established must not proceed -- but the
-        # client's reaction to a 401 is to discard a working session and ask
-        # for a new one, so the server has to be the one that knows better.
+        # Everything else is this deployment failing to *check* the session,
+        # not the caller: the SuperTokens core unreachable or failing (its
+        # database down), a JWKS fetch that did not come back, a key that does
+        # not match, or the database behind the post-verification lookups
+        # (``resolve_delegated_principal``) unavailable. Failures about the
+        # token's own content are classified as 401/403 above. The request
+        # must not proceed -- its identity could not be established -- but it
+        # must not answer 401 either: a client's reaction to a 401 is to throw
+        # away a working session and ask for a new one, so a database blip
+        # signed people out of the web app and the CLI. It answers 503 with a
+        # Retry-After instead, which every client treats as "try again".
         #
         # This was `logger.debug` with no exception, on the hottest path in the
         # service. At LOG_LEVEL=INFO the record was dropped before formatting,
@@ -422,7 +434,24 @@ async def verify_auth(connection: HTTPConnection):
             exc_info=True,
         )
         # `from e` so the traceback keeps the frame that actually failed.
-        raise HTTPException(status_code=401, detail="Unauthorized") from e
+        raise auth_unavailable() from e
+
+
+#: Seconds a client should wait before retrying a request whose session could
+#: not be checked. Short: the cause is usually a core or database restart.
+AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS = 2
+
+
+def auth_unavailable() -> HTTPException:
+    """The answer when a session could not be *checked*, as opposed to rejected."""
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "AUTH_UNAVAILABLE",
+            "message": "Sign-in could not be checked right now. Try again shortly.",
+        },
+        headers={"Retry-After": str(AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS)},
+    )
 
 
 async def supertokens_core_reachable() -> bool:

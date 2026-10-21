@@ -194,6 +194,14 @@ class PlatformCapabilities:
     # than a quick answer it went dark exactly where it was the only sign of
     # life.
     typing_refresh_seconds: float | None = None
+    # Does the platform deliver the bot's own posts back to it as inbound
+    # events, keyed on the bot's own user id? True for Slack, whose Events API
+    # sends a ``message`` for everything in a channel the app is in, including
+    # what the app itself wrote. Where it does, an event whose sender is the
+    # surface's own identity is the agent hearing itself and is dropped, or a
+    # reply would answer the reply. Email has the same echo, keyed on the
+    # address instead (``SenderResolver.is_self_addressed``).
+    echoes_own_messages: bool = False
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -294,6 +302,7 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         soft_char_limit=3000,
         progress_style=ProgressStyle.STREAM,
         supports_native_retry=True,
+        echoes_own_messages=True,
     ),
     "TEAMS": PlatformCapabilities(
         platform="TEAMS",
@@ -425,6 +434,12 @@ def bot_creates_groups_on(platform: str | None) -> bool:
     """Is every group this platform's bot is in one it created? (WhatsApp)"""
     capabilities = get_platform_capabilities(platform)
     return capabilities is not None and capabilities.bot_creates_groups
+
+
+def echoes_own_messages(platform: str | None) -> bool:
+    """Does the platform hand the bot its own posts back as inbound events?"""
+    capabilities = get_platform_capabilities(platform)
+    return capabilities is not None and capabilities.echoes_own_messages
 
 
 def dm_address_may_move(platform: str | None) -> bool:

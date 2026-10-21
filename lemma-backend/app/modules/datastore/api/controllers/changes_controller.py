@@ -1,188 +1,80 @@
-"""WebSocket endpoint streaming live datastore record changes to a user.
+"""``/pods/{pod_id}/datastore/changes``: the previous change socket, kept as a shim.
 
-Clients connect to ``/pods/{pod_id}/datastore/changes`` and receive a JSON frame
-for every record insert/update/delete in the pod they are allowed to see. The
-endpoint is read-only and one-directional (server → client); any inbound frames
-are ignored and only serve to detect disconnects.
+Superseded by ``/pods/{pod_id}/live`` (``app/core/live``). It stays for
+one release so app bundles built against the previous SDK keep working: the
+socket is one implicit subscription on the same per-process pod hub, framed the
+way those bundles read it -- a ``ready`` with ``since``, then one frame per
+change carrying ``stream_id``.
 
-Design notes
-------------
-* **Source.** Record writes transactionally stage ``DatastoreRecordEvent`` in
-  the outbox. The worker publishes those events to the unified
-  ``datastore.events`` Redis stream, which this handler tails directly (per
-  connection) via :class:`RedisStreamReader`.
-* **Auth.** ``verify_auth`` skips this path for websockets (it cannot run the
-  session machinery without an HTTP response), so the session is resolved here
-  manually — from a bearer ``Authorization`` header (CLI/SDK), the SuperTokens
-  access-token cookie (browser), or an ``access_token`` query param fallback.
-* **Rejections.** The handshake is accepted *before* auth runs, and every
-  rejection is a close after accept. A close before ``accept()`` never reaches
-  a browser as a close frame — it sees the failed upgrade as 1006 and cannot
-  tell an expired session from a network drop. Auth failures close with
-  ``CLOSE_UNAUTHENTICATED`` (4401) so the client knows to refresh its token.
-* **Visibility.** At connect we snapshot the set of tables the user can read
-  (``list_tables`` already filters to visible tables). RLS row scoping needs no
-  database read on the hot path: each event carries ``owner_user_id`` (the row
-  owner for RLS tables, ``None`` for shared/non-RLS tables), so a set owner is
-  delivered only to that user while a ``None`` owner fans out to every reader.
-  Tables created *after* connect are not streamed until the client reconnects.
+Differences a previous client can notice, all of them safe for it:
+
+* ``stream_id`` is now a change-log cursor. A Redis stream id it saved before
+  the upgrade reads as expired; the socket answers with a fresh ``ready`` and
+  continues from now.
+* A burst too large to send row by row, or a socket that falls behind, gets a
+  fresh ``ready`` at the new position instead of every row.
+* A delete carries an empty ``payload``.
+* Losing access to what it watches closes the socket with ``4403``, and the
+  session ending closes it with ``4401``, rather than leaving it open and
+  silent.
 """
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-from typing import Iterable
 from uuid import UUID
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
-from supertokens_python.recipe.session.asyncio import (
-    get_session_without_request_response,
-)
-from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
+from fastapi import APIRouter, Query, WebSocket, status
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.authorization.context import Context, ResourceRef
+from app.core.authorization.context import ResourceRef
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.service import AuthorizationDataService
+from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.live.config import live_settings
+from app.core.live.connection import LiveConnection
+from app.core.live.protocol import (
+    CLOSE_FORBIDDEN,
+    CLOSE_UNAUTHENTICATED,
+    LiveAccessDenied,
+    LiveUnavailable,
+)
+from app.core.live.sessions import SessionWatch, end_for_session
+from app.core.live.socket import accept_and_authenticate, close_code_for, serve
 from app.core.log.log import get_logger
-from app.core.request_context import create_inherited_task
-from app.core.pubsub.subscriber import RedisStreamReader
-from app.modules.datastore.api.dependencies import build_table_service
-from app.core.domain.errors import DomainError
-from app.modules.datastore.domain.events import DATASTORE_EVENTS_STREAM
+from app.modules.datastore.domain.live import LiveCursorExpired, SubscribeRequest
+from app.modules.datastore.services.live import live_hubs
+from app.modules.datastore.services.live.subscription import LegacyFrames
+from app.modules.datastore.services.wiring import build_table_service
 
 logger = get_logger(__name__)
 
 router = APIRouter(tags=["datastore-changes"])
 
-_RECORD_EVENT_PREFIX = "datastore.record."
-
 # Path used by ``verify_auth`` to allowlist this websocket. Kept here so the two
 # stay in sync; the security layer matches ``/pods/{uuid}/datastore/changes``.
 DATASTORE_CHANGES_WS_SUFFIX = "/datastore/changes"
 
-# The session is missing, invalid or expired: refresh the token and reconnect.
-# Same code as the browser-view socket and the SDK's datastore-changes client.
-CLOSE_UNAUTHENTICATED = 4401
+__all__ = ["CLOSE_UNAUTHENTICATED", "DATASTORE_CHANGES_WS_SUFFIX", "router"]
+
+_LEGACY_SUBSCRIPTION = "changes"
 
 
-async def _resolve_session(websocket: WebSocket):
-    """Resolve a SuperTokens session from a websocket handshake.
-
-    Tries, in order: ``Authorization: Bearer`` (CLI/SDK), the access-token
-    cookie (browser cookie sessions), then an ``access_token`` query parameter
-    (for browser clients that cannot attach the cookie cross-site).
-    """
-    token: str | None = None
-    authorization = websocket.headers.get("authorization") or ""
-    scheme, _, raw = authorization.partition(" ")
-    if scheme.lower() == "bearer" and raw.strip():
-        token = raw.strip()
-    if token is None:
-        token = (
-            websocket.cookies.get("sAccessToken")
-            or websocket.cookies.get("st-access-token")
-            or websocket.query_params.get("access_token")
+async def _authorize(pod_id: UUID, user_id: UUID, table: str | None) -> None:
+    """Refuse up front, with the close codes the previous SDK stops on."""
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        ctx = await AuthorizationDataService(uow.session).build_user_context(
+            user_id=user_id, pod_id=pod_id
         )
-    if not token:
-        raise PermissionError("Datastore changes websocket requires a session token.")
-    return await get_session_without_request_response(
-        token,
-        anti_csrf_check=False,
-        session_required=True,
-    )
-
-
-async def _visible_table_names(table_service, pod_id: UUID, ctx: Context) -> set[str]:
-    """Snapshot every table name the caller can currently read in the pod."""
-    names: set[str] = set()
-    cursor: str | None = None
-    while True:
-        tables, cursor = await table_service.list_tables(
-            pod_id, ctx, limit=200, cursor=cursor
-        )
-        names.update(table.table_name for table in tables)
-        if not cursor:
-            break
-    return names
-
-
-def _record_frame(
-    event: dict,
-    *,
-    pod_id: UUID,
-    user_id: UUID,
-    allowed_tables: Iterable[str],
-) -> dict | None:
-    """Build a client frame from a stream event, or ``None`` to drop it.
-
-    Drops anything that is not a record event, is for another pod, is for a
-    table the caller cannot see, or — for RLS tables — belongs to another user.
-    """
-    event_type = event.get("event_type", "")
-    if not event_type.startswith(_RECORD_EVENT_PREFIX):
-        return None
-    if str(event.get("pod_id")) != str(pod_id):
-        return None
-    table_name = event.get("table_name")
-    if table_name not in allowed_tables:
-        return None
-    # RLS row scoping: a set owner means a per-user (RLS) row — deliver only to
-    # its owner. ``None`` means a shared/non-RLS row — deliver to every reader.
-    owner_user_id = event.get("owner_user_id")
-    if owner_user_id is not None and str(owner_user_id) != str(user_id):
-        return None
-    return {
-        "type": event_type,
-        "pod_id": str(pod_id),
-        "table_name": table_name,
-        "record_id": event.get("record_id"),
-        "operation": event.get("operation"),
-        "payload": event.get("payload") or {},
-        # An oversized row body is dropped upstream rather than shipped. Say so,
-        # so a client reads the record instead of trusting an empty payload.
-        "payload_truncated": bool(event.get("payload_truncated")),
-        "occurred_at": event.get("occurred_at"),
-        "stream_id": event.get("_stream_id"),
-    }
-
-
-async def _forward_changes(
-    websocket: WebSocket,
-    *,
-    pod_id: UUID,
-    user_id: UUID,
-    allowed_tables: set[str],
-    since: str | None,
-) -> None:
-    """Tail the datastore stream and forward matching frames to the client.
-
-    Anchors the read at the stream's current last id (or ``since`` for a resume)
-    and announces it in a ``ready`` frame, so the client knows the stream is live
-    and holds a resume cursor before any change frames arrive.
-    """
-    subscriber = RedisStreamReader(DATASTORE_EVENTS_STREAM)
-    async with subscriber:
-        start_id = since or await subscriber.current_last_id()
-        await websocket.send_json({"type": "ready", "since": start_id})
-        async for event in subscriber.subscribe(start_id=start_id):
-            frame = _record_frame(
-                event,
-                pod_id=pod_id,
-                user_id=user_id,
-                allowed_tables=allowed_tables,
+        if table is not None:
+            entity = await build_table_service(uow).get_table(pod_id, table, ctx)
+            # Seeing the table is not reading its rows; the frames carry rows.
+            await ctx.require(
+                Permissions.DATASTORE_RECORD_READ, ResourceRef.table(pod_id, entity.id)
             )
-            if frame is not None:
-                await websocket.send_json(frame)
-
-
-async def _wait_for_disconnect(websocket: WebSocket) -> None:
-    """Drain inbound frames so a client disconnect is noticed promptly."""
-    with contextlib.suppress(WebSocketDisconnect):
-        while True:
-            await websocket.receive()
+        else:
+            await ctx.require(Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id))
 
 
 @router.websocket("/pods/{pod_id}/datastore/changes")
@@ -199,111 +91,61 @@ async def datastore_changes_ws(
     since: str | None = Query(
         default=None,
         description=(
-            "Resume after a previously seen Redis stream id (the `stream_id` "
-            "field of an earlier frame) to replay missed changes. Omit to start "
-            "from new changes only."
+            "Resume after a previously seen cursor (the `stream_id` field of an "
+            "earlier frame) to replay missed changes. Omit to start from new "
+            "changes only."
         ),
     ),
 ) -> None:
-    # Accept before authenticating: only a close sent after accept reaches the
-    # client with its code, and the client needs 4401 to know to refresh.
-    try:
-        await websocket.accept()
-    except RuntimeError:
-        # Client disconnected before we could accept (race on connect).
+    session = await accept_and_authenticate(websocket)
+    if session is None:
         return
-
+    user_id = session.user_id
     try:
-        session = await _resolve_session(websocket)
-    except TryRefreshTokenError:
-        await websocket.close(
-            code=CLOSE_UNAUTHENTICATED,
-            reason="Access token expired. Refresh your session and reconnect.",
-        )
-        return
-    except Exception:
-        logger.debug(
-            "datastore.changes_controller.session_resolution_datastore_changes_websocket.diagnostic",
-            exc_info=True,
-        )
-        await websocket.close(
-            code=CLOSE_UNAUTHENTICATED,
-            reason="Unauthorized datastore changes websocket.",
-        )
-        return
-
-    user_id = UUID(session.get_user_id())
-    uow_factory = SessionUnitOfWorkFactory(async_session_maker)
-
-    # Authorize and snapshot visibility within a short-lived session, then close
-    # it: the streaming loop below needs no database access.
-    try:
-        async with uow_factory() as uow:
-            ctx = await AuthorizationDataService(uow.session).build_user_context(
-                user_id=user_id,
-                pod_id=pod_id,
-            )
-            table_service = build_table_service(uow)
-            if table is not None:
-                # get_table enforces table read and existence in one step.
-                entity = await table_service.get_table(pod_id, table, ctx)
-                allowed_tables = {entity.table_name}
-            else:
-                await ctx.require(
-                    Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id)
-                )
-                allowed_tables = await _visible_table_names(table_service, pod_id, ctx)
-    # The base class, not DatastoreDomainError: a missing pod permission is
-    # raised by core authorization as a plain 403 DomainError. Caught as the
-    # datastore subclass only, it fell to the 1011 branch below -- a close
-    # every client retries -- so a browser watching a pod it cannot access
-    # reconnected forever instead of stopping on 4403.
+        await _authorize(pod_id, user_id, table)
+    # The base class: a missing pod permission is raised by core authorization
+    # as a plain 403 DomainError, and a client must stop on 4403 rather than
+    # retry a 1011 forever.
     except DomainError as exc:
-        await websocket.close(
-            code=_close_code_for(exc.status_code),
-            reason=exc.message,
-        )
+        await websocket.close(code=close_code_for(exc.status_code), reason=exc.message)
         return
-    except Exception:
-        logger.debug(
-            "datastore.changes_controller.rejected_datastore_changes_websocket.diagnostic",
-            pod_id=str(pod_id),
-            user_id=str(user_id),
-            exc_info=True,
+
+    connection = LiveConnection(
+        pod_id=pod_id,
+        user_id=user_id,
+        send_text=websocket.send_text,
+        queue_bytes=live_settings.live_socket_queue_bytes,
+        frames=LegacyFrames(),
+        # Its client has no frame for "unsubscribed": losing access to what it
+        # watches closes the socket (4403), which that client stops on.
+        ends_with_subscription=True,
+    )
+    hub = await live_hubs().hub(pod_id)
+    try:
+        await hub.subscribe(
+            connection,
+            SubscribeRequest(id=_LEGACY_SUBSCRIPTION, table=table, since=since),
+            legacy=True,
+        )
+    except LiveAccessDenied as denied:
+        # Access checked above and lost since: stop, as the old SDK does on 4403.
+        connection.close()
+        await websocket.close(code=CLOSE_FORBIDDEN, reason=denied.message)
+        return
+    except SQLAlchemyError, OSError, LiveCursorExpired, LiveUnavailable:
+        connection.close()
+        logger.error(
+            "datastore.live.socket_rejected", pod_id=str(pod_id), exc_info=True
         )
         await websocket.close(
             code=status.WS_1011_INTERNAL_ERROR,
-            reason="Internal error while authorizing datastore changes websocket.",
+            reason="Internal error while starting the datastore changes websocket.",
         )
         return
+    watch = SessionWatch(session)
 
-    forwarder = create_inherited_task(
-        _forward_changes(
-            websocket,
-            pod_id=pod_id,
-            user_id=user_id,
-            allowed_tables=allowed_tables,
-            since=since,
-        )
-    )
-    disconnect = create_inherited_task(
-        _wait_for_disconnect(websocket), name="datastore-changes-disconnect"
-    )
-    try:
-        await asyncio.wait({forwarder, disconnect}, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for task in (forwarder, disconnect):
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
-        with contextlib.suppress(Exception):
-            await websocket.close()
+    async def keep() -> None:
+        if not await watch.still_valid():
+            end_for_session(connection)
 
-
-def _close_code_for(status_code: int) -> int:
-    """Map a datastore HTTP status to a websocket close code."""
-    if status_code == 404:
-        return 4404
-    if status_code == 403:
-        return 4403
-    return status.WS_1008_POLICY_VIOLATION
+    await serve(websocket, connection, handle=None, session=session, keep=keep)

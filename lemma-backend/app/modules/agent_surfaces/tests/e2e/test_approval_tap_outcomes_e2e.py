@@ -7,8 +7,8 @@ Two ways the answer to a tap used to be wrong:
   their behalf. The card is still on their screen, and tapping Approve on it
   was answered "Done" while the action had not run and never would.
 - **The work behind "running it now" failed.** An approved action is handed to
-  a worker job, and the tap is answered before that job runs. When the job
-  failed, nobody was told.
+  a worker (an ``agent.approval.execute`` item), and the tap is answered before
+  it runs. When it failed, nobody was told.
 
 Driven through the real interaction path against Postgres, on Telegram, where
 the fake records what a tap is answered with.
@@ -16,16 +16,14 @@ the fake records what a tap is answered with.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.infrastructure.db.session import async_session_maker
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.events.approval_jobs import reconcile_reporting_failure
+from app.core.infrastructure.work import WorkRegistry
+from app.modules.agent.events import approval_work
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.tests.e2e.helpers import _messages_for_conversation
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
@@ -36,6 +34,7 @@ from app.modules.agent_surfaces.tests.e2e.surface_journey import (
     SurfaceStage,
     stage_surface,
 )
+from app.modules.test_support.e2e.agent_work import run_approval_work
 
 pytestmark = pytest.mark.e2e
 
@@ -140,26 +139,7 @@ async def test_approve_after_moving_on_says_cancelled_and_runs_nothing(
     assert result["executed"] is False
 
 
-class _FirstOpenFails:
-    """The database refusing the reconcile job's connection, then recovering.
-
-    Only the first scope fails: that is the job's own, and the notice that
-    follows opens a second one, as it would once the blip had passed.
-    """
-
-    def __init__(self) -> None:
-        self._real = SessionUnitOfWorkFactory(async_session_maker)
-        self._opened = 0
-
-    @asynccontextmanager
-    async def __call__(self):
-        self._opened += 1
-        if self._opened == 1:
-            raise OperationalError("SELECT 1", {}, Exception("connection refused"))
-        async with self._real() as uow:
-            yield uow
-
-
+@pytest.mark.drives_work
 async def test_a_failed_job_after_running_it_now_is_reported_on_the_platform(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -180,19 +160,26 @@ async def test_a_failed_job_after_running_it_now_is_reported_on_the_platform(
         message_store=message_store,
         monkeypatch=monkeypatch,
     )
-    context = await stage.say("please show the widget", script=_approval_then("Shown."))
+    await stage.say("please show the widget", script=_approval_then("Shown."))
     await stage.press(await stage.control("Approve"))
     assert _last_tap_answer(message_store) == "Approved — running it now."
 
-    with pytest.raises(OperationalError):
-        await reconcile_reporting_failure(
-            {
-                "conversation_id": str(context.conversation_id),
-                "approval_id": TOOL_CALL_ID,
-                "pod_id": str(context.pod_id),
-            },
-            uow_factory=_FirstOpenFails(),
-        )
+    # The item's last attempt fails before it can run anything: the database
+    # refused its connection.
+    async def _refused(ctx, payload) -> None:
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    failing = WorkRegistry()
+    approval_work.register_approval_work(failing, execute=_refused)
+    await db_session.execute(
+        text(
+            "UPDATE work_items SET attempts = :last "
+            "WHERE kind = 'agent.approval.execute'"
+        ),
+        {"last": approval_work.APPROVAL_RETRY.max_attempts - 1},
+    )
+    await db_session.commit()
+    await run_approval_work(registry=failing)
 
     assert await stage.saw("may not have happened"), (
         "the job failed after the tap was told it was running, and nobody heard"

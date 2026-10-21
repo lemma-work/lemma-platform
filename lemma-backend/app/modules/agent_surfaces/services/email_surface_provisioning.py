@@ -37,6 +37,7 @@ from uuid import UUID
 from httpx import HTTPError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.errors import (
@@ -110,6 +111,7 @@ async def _insert_on_first_free_address(
     credential_mode: SurfaceCredentialMode | None,
     account_id: UUID | None = None,
     ctx: Any = None,
+    name_is_chosen: bool = False,
 ) -> AgentSurfaceEntity | None:
     """Insert on the first candidate the database will accept.
 
@@ -132,7 +134,6 @@ async def _insert_on_first_free_address(
     and a unique violation aborts a Postgres transaction outright — so without
     one, the second attempt raises PendingRollbackError, the commit fails, and
     *creating an agent* returns 500 because two of them wanted the same address.
-    Same reasoning, and the same shape, as `notification_repository.create`.
     """
     domain = surface_settings.resend_inbound_domain or ""
     addresses = candidate_addresses(
@@ -146,7 +147,16 @@ async def _insert_on_first_free_address(
                     pod_id=pod_id,
                     platform=SurfacePlatform.RESEND,
                     agent_id=agent_id,
-                    name=_name_for_attempt(name, address=address, attempt=attempt),
+                    # A chosen name holds on every attempt, the IntegrityError
+                    # retry included: only the address is a candidate then.
+                    # Varying it there created `support-p7k3` for a caller who
+                    # asked for `support`, which the bundle applier -- keyed on
+                    # the name -- could not find again on its next apply.
+                    name=(
+                        name
+                        if name_is_chosen
+                        else _name_for_attempt(name, address=address, attempt=attempt)
+                    ),
                     config=config,
                     credential_mode=credential_mode,
                     account_id=account_id,
@@ -168,12 +178,22 @@ async def _insert_on_first_free_address(
                     attempt=attempt,
                 )
             return surface
-        except IntegrityError, AgentSurfaceAlreadyExistsError:
+        except AgentSurfaceAlreadyExistsError:
+            # A name the caller chose is theirs, not a candidate to vary. Varying
+            # it turned `resend-assistant` into `resend-assistant-p7k3`, which
+            # then lost to the one-mailbox-per-agent rule -- whose refusal told
+            # the caller to name the surface `resend-assistant`, which is what
+            # they had just done. The surface exists, and that is the answer.
+            if name_is_chosen:
+                raise
+            continue
+        except IntegrityError:
             # The address or the surface name is taken. `create_surface` checks
-            # the name up front and raises before inserting, so that arrives as
-            # AgentSurfaceAlreadyExistsError rather than as the IntegrityError
-            # the index would have produced; both mean "try the next
-            # candidate", and the savepoint leaves the outer transaction usable.
+            # the name up front and raises before inserting, so a derived name
+            # arrives as AgentSurfaceAlreadyExistsError above rather than as the
+            # IntegrityError the index would have produced; both mean "try the
+            # next candidate", and the savepoint leaves the outer transaction
+            # usable.
             continue
 
     logger.warning(
@@ -239,6 +259,7 @@ async def provision_email_surface(
             credential_mode=SurfaceCredentialMode.SYSTEM,
         )
     except (AgentSurfaceError, HTTPError, OSError, SQLAlchemyError) as exc:
+        raise_if_database_unavailable(exc)
         # Deliberately not a bare ``Exception``. These are the mail system or
         # the database saying no — a refused domain, Resend unreachable, a name
         # already taken, a savepoint that cannot open on a transaction another
@@ -285,6 +306,7 @@ async def create_surface_on_minted_address(
     credential_mode: SurfaceCredentialMode | None,
     account_id: UUID | None = None,
     ctx: Any = None,
+    contacts_chosen: bool | None = None,
 ) -> AgentSurfaceEntity:
     """``create_surface``, with a readable inbound address when it needs one.
 
@@ -325,6 +347,7 @@ async def create_surface_on_minted_address(
             credential_mode=credential_mode,
             account_id=account_id,
             ctx=ctx,
+            contacts_chosen=contacts_chosen,
         )
 
     # The inbound domain alone, deliberately not ``email_is_configured()``.
@@ -371,6 +394,7 @@ async def create_surface_on_minted_address(
         # `surface_name_for` is the same name the eager and lazy paths pick, so
         # all three agree, and the retry loop suffixes it if it is taken.
         name=name or surface_name_for(agent_name),
+        name_is_chosen=bool(name),
         config=config,
         credential_mode=credential_mode,
         account_id=account_id,

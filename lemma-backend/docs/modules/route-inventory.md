@@ -53,14 +53,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| DELETE | `/pods/{pod_id}/surface-setup/slack/app-creation/{team_id}` | `agent.surface.slack_app_creation.forget` | Forget Slack Configuration Token |
 | DELETE | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.delete` | Delete Surface |
 | DELETE | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.delete` | Delete Widget |
 | GET | `/pods/{pod_id}/available-surfaces` | `agent.surface.available` | List Available Surfaces |
-| GET | `/pods/{pod_id}/groups` | `agent.group.list` | List Groups |
-| GET | `/pods/{pod_id}/groups/{group_id}` | `agent.group.get` | Get Group |
-| GET | `/pods/{pod_id}/groups/{group_id}/timeline` | `agent.group.timeline` | Group Timeline |
-| GET | `/pods/{pod_id}/notifications` | `notification.list` | List My Notifications |
-| GET | `/pods/{pod_id}/notifications/unread-count` | `notification.unread_count` | Count My Unread Notifications |
+| GET | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | `channel.source.get` | Get Source |
+| GET | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.list` | List Slack App Workspaces |
+| GET | `/pods/{pod_id}/surface-setup/slack/manager` | `agent.surface.slack_manager.list` | List Slack Managed Workspaces |
 | GET | `/pods/{pod_id}/surface-setup/{platform}` | `agent.surface.setup_guide` | Get Surface Setup Guide |
 | GET | `/pods/{pod_id}/surfaces` | `agent.surface.list` | List Surfaces |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.get` | Get Surface |
@@ -73,22 +72,21 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/public/web/{public_key}/rows` | `public.web.rows.read` | Web Read Rows |
 | GET | `/public/web/{public_key}/stream` | `public.web.stream.read` | Web Stream Answers |
 | GET | `/public/web/{public_key}/table` | `public.web.table.read` | Web Read Table |
+| GET | `/surface-setup/slack/install` | `agent.surface.slack_install.availability` | Slack Install Availability |
 | GET | `/surface-setup/slack/manifest` | `agent.surface.slack_manifest` | Get Slack App Manifest |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
 | GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.verify_whatsapp_number` | Verify a pooled WhatsApp number's own callback URL |
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
 | GET | `/surfaces/{surface_id}/webhook` | `surface.webhook.verify_surface` | Verify surface webhook using a surface-level callback URL |
-| PATCH | `/pods/{pod_id}/groups/{group_id}` | `agent.group.update` | Update Group |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/sources/{source_id}` | `channel.source.update` | Update Source |
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
 | PATCH | `/pods/{pod_id}/web-widgets/{widget_id}` | `agent.web_widget.update` | Update Widget |
-| POST | `/pods/{pod_id}/groups` | `agent.group.start` | Start Group |
-| POST | `/pods/{pod_id}/groups/links` | `agent.group.link` | Group Link |
-| POST | `/pods/{pod_id}/notifications` | `notification.send` | Notify A Pod Member |
-| POST | `/pods/{pod_id}/notifications/read-all` | `notification.mark_all_read` | Mark All My Notifications Read |
-| POST | `/pods/{pod_id}/notifications/{notification_id}/acknowledge` | `notification.acknowledge` | Acknowledge A Notification |
-| POST | `/pods/{pod_id}/notifications/{notification_id}/read` | `notification.mark_read` | Mark Notification Read |
-| POST | `/pods/{pod_id}/notifications/{notification_id}/respond` | `notification.respond` | Respond To A Notification |
+| POST | `/pods/{pod_id}/channels/telegram-links` | `channel.telegram_link.create` | Telegram Link |
+| POST | `/pods/{pod_id}/channels/whatsapp-groups` | `channel.whatsapp_group.start` | Start Whatsapp Group |
+| POST | `/pods/{pod_id}/contacts/{contact_id}/outreach` | `contact.outreach.send` | Send Outreach |
+| POST | `/pods/{pod_id}/members/{member}/notices` | `agent.notice.send` | Send Notice |
+| POST | `/pods/{pod_id}/surface-setup/slack/apps` | `agent.surface.slack_app.create` | Create Slack App |
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
@@ -99,10 +97,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/public/web/{public_key}/messages` | `public.web.message.send` | Web Send Message |
 | POST | `/public/web/{public_key}/rows` | `public.web.row.add` | Web Add Row |
 | POST | `/public/web/{public_key}/session` | `public.web.session.start` | Web Start Session |
+| POST | `/surface-setup/slack/install` | `agent.surface.slack_install.start` | Start Slack Install Flow |
+| POST | `/surface-setup/slack/people/sign-in` | `agent.surface.slack_person.sign_in` | Start Slack Sign In |
 | POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | `surface.webhook.handle_whatsapp_number` | Handle a webhook delivered to one pooled WhatsApp number |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |
 | POST | `/surfaces/{surface_id}/webhook` | `surface.webhook.handle_surface` | Handle surface-level webhook |
+| PUT | `/pods/{pod_id}/surface-setup/slack/app-creation` | `agent.surface.slack_app_creation.save` | Save Slack Configuration Token |
+| PUT | `/pods/{pod_id}/surface-setup/slack/manager` | `agent.surface.slack_manager.bind` | Bind Slack Manager |
 | PUT | `/surfaces/me/default` | `agent.surface.set_my_default` | Set My Default Surface |
 
 ## apps
@@ -122,6 +124,39 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/apps/from-widget` | `app.create_from_widget` | Save Widget As App |
 | POST | `/pods/{pod_id}/apps/{app_name}/bundle` | `app.bundle.upload` | Upload App Bundle |
 | POST | `/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote` | `app.release.promote` | Promote App Release |
+
+## channels
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}` | `channel.delete` | Delete Channel |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.leave` | Leave Channel |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | `channel.member.remove` | Remove Member |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Message |
+| GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
+| GET | `/pods/{pod_id}/channels/me` | `channel.me.get` | Get My Channel |
+| GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
+| GET | `/pods/{pod_id}/channels/{channel_id}/cases` | `channel.case.list` | List Cases |
+| GET | `/pods/{pod_id}/channels/{channel_id}/members` | `channel.member.list` | List Members |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.list` | List Messages |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | `channel.delivery.list` | List Deliveries |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}` | `channel.message.file` | Line File |
+| GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | `channel.message.thread` | List Thread |
+| GET | `/pods/{pod_id}/inbox` | `channel.inbox.get` | Get Inbox |
+| GET | `/pods/{pod_id}/search` | `channel.search` | Search |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}` | `channel.update` | Update Channel |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.me_update` | Update My Membership |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | `channel.member.update` | Update Member |
+| PATCH | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.update` | Edit Message |
+| POST | `/pods/{pod_id}/channels` | `channel.create` | Create Channel |
+| POST | `/pods/{pod_id}/channels/me` | `channel.me.create` | Create My Channel |
+| POST | `/pods/{pod_id}/channels/{channel_id}/members` | `channel.member.add` | Add Members |
+| POST | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.join` | Join Channel |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages` | `channel.message.post` | Post Message |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/answer` | `channel.message.answer` | Answer Question |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry` | `channel.delivery.retry` | Retry Delivery |
+| POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share` | `channel.message.share` | Share Message |
+| POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.read` | Mark Read |
 
 ## connectors
 
@@ -164,7 +199,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/contacts/{contact_id}` | `contact.get` | Get Contact |
 | GET | `/pods/{pod_id}/contacts/{contact_id}/export` | `contact.export` | Export Contact |
 | PATCH | `/pods/{pod_id}/contacts/{contact_id}` | `contact.update` | Update Contact |
-| POST | `/pods/{pod_id}/contacts/{contact_id}/messages` | `contact.follow_up` | Follow Up Contact |
 
 ## datastore
 
@@ -343,6 +377,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/schedules` | `schedule.list` | List Schedules |
 | GET | `/pods/{pod_id}/schedules/{schedule_id}` | `schedule.get` | Get Schedule |
 | GET | `/pods/{pod_id}/schedules/{schedule_id}/runs` | `schedule.run.list` | List Schedule Runs |
+| GET | `/pods/{pod_id}/schedules/{schedule_id}/skips` | `schedule.skip.list` | List Schedule Skips |
 | PATCH | `/pods/{pod_id}/schedules/{schedule_id}` | `schedule.update` | Update Schedule |
 | POST | `/pods/{pod_id}/schedules` | `schedule.create` | Create Schedule |
 | POST | `/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry` | `schedule.run.retry` | Retry Schedule Run |

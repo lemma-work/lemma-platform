@@ -51,6 +51,9 @@ class _Provider:
     def __init__(self) -> None:
         self.completions: list[dict[str, object]] = []
         self.base_url = ""
+        #: Answer a request carrying ``reasoning_effort`` with a 400, as a
+        #: strict endpoint does for a model that does not reason.
+        self.refuses_effort = False
 
 
 def _sse(chunks: list[dict[str, object]]) -> bytes:
@@ -129,10 +132,14 @@ def provider() -> Iterator[_Provider]:
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
             recorded.completions.append(body)
+            if recorded.refuses_effort and "reasoning_effort" in body:
+                error = {"error": {"message": "Unknown field: reasoning_effort"}}
+                self._reply("application/json", json.dumps(error).encode(), 400)
+                return
             self._reply(*_answer(body))
 
-        def _reply(self, content_type: str, payload: bytes) -> None:
-            self.send_response(200)
+        def _reply(self, content_type: str, payload: bytes, status: int = 200) -> None:
+            self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
@@ -353,16 +360,16 @@ async def test_a_workflow_steps_settings_win_and_stay_on_its_conversation(
 
 
 @pytest.mark.asyncio
-async def test_a_title_on_a_plain_model_sends_no_reasoning_effort(
+async def test_a_title_asks_every_model_not_to_think_and_retries_a_refusal_plainly(
     provider: _Provider,
     real_model_calls: None,
     fixed_test_org: dict,
     fixed_test_user: dict,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The title call used to send `reasoning_effort: none` to whatever model
-    resolved, and a strict endpoint refuses it on a model that does not
-    reason. It still asks a reasoning model not to think."""
+    """A reasoning model nobody declared thinks at its default for a few words,
+    so `reasoning_effort: none` is asked of every model. A strict endpoint that
+    refuses the field is asked once more without it, and the title stands."""
     monkeypatch.setenv("LEMMA_OPENAI_BASE_URL", provider.base_url)
     monkeypatch.setattr(agent_settings, "conversation_title_model", None)
 
@@ -379,12 +386,18 @@ async def test_a_title_on_a_plain_model_sends_no_reasoning_effort(
 
     monkeypatch.setattr(agent_settings, "lemma_openai_reasoning_effort", None)
     monkeypatch.setattr(agent_settings, "lemma_openai_reasoning_model_names", "")
-    assert "reasoning_effort" not in await title()
+    assert (await title())["reasoning_effort"] == "none"
 
     monkeypatch.setattr(
         agent_settings, "lemma_openai_reasoning_effort", ReasoningEffort.MEDIUM
     )
     assert (await title())["reasoning_effort"] == "none"
+
+    provider.refuses_effort = True
+    asked = len(provider.completions)
+    assert "reasoning_effort" not in await title()
+    refused, plain = provider.completions[asked:]
+    assert refused["reasoning_effort"] == "none" and "reasoning_effort" not in plain
 
 
 @pytest.mark.asyncio

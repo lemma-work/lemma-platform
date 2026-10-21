@@ -13,7 +13,7 @@ from pydantic import (
 )
 from app.core.authorization.context import ResourceType
 from app.core.domain.entity import Entity
-from app.modules.schedule.domain.match_conditions import (
+from app.core.domain.record_conditions import (
     ColumnCondition,
     parse_match_conditions,
 )
@@ -136,6 +136,19 @@ class WebhookScheduleConfig(ScheduleRunCapConfig):
     # but source is required.
 
 
+class TriggerWriteMode(str, Enum):
+    """What a DATASTORE trigger does with a bulk or import write's changes.
+
+    ``skip`` records them as skipped, aggregated; ``each`` fires once per
+    matching change like a single write; ``batch`` fires once per planned batch
+    with the changes as a list.
+    """
+
+    SKIP = "skip"
+    EACH = "each"
+    BATCH = "batch"
+
+
 class DatastoreScheduleConfig(ScheduleRunCapConfig):
     """Configuration for datastore-based schedules."""
 
@@ -149,6 +162,23 @@ class DatastoreScheduleConfig(ScheduleRunCapConfig):
         description=(
             "Optional match conditions keyed by column name. Every condition "
             "must hold for the trigger to fire. Omit to fire on every row."
+        ),
+    )
+
+    bulk_writes: TriggerWriteMode | None = Field(
+        default=None,
+        description=(
+            "What a bulk write (bulk create, update or delete) does to this "
+            "trigger: skip (recorded as skipped), each (fire per matching row) "
+            "or batch (one fire with the rows as a list). Omitted means the "
+            "pod's `triggers.bulk_writes_default`, else skip."
+        ),
+    )
+    import_writes: TriggerWriteMode | None = Field(
+        default=None,
+        description=(
+            "What an import or sync does to this trigger: skip, each or batch. "
+            "Omitted means skip."
         ),
     )
 
@@ -237,6 +267,12 @@ def normalize_datastore_schedule_config(
         "table_name": cfg.table_name,
         "operations": [op.value for op in cfg.operations],
     }
+    for key, mode in (
+        ("bulk_writes", cfg.bulk_writes),
+        ("import_writes", cfg.import_writes),
+    ):
+        if mode is not None:
+            normalized[key] = mode.value
     if cfg.when is not None:
         # Store the expanded form so the saved config reads the same whether
         # the author wrote the `{"status": "approved"}` shorthand or spelled
@@ -259,6 +295,9 @@ class ScheduleFireStatus(str, Enum):
 
 class ScheduleRunStatus(str, Enum):
     RECEIVED = "RECEIVED"
+    #: An LLM filter claimed this event and is asking the model. Written before
+    #: the call, so a replay finds it and does not ask -- and bill -- twice.
+    FILTERING = "FILTERING"
     PROCESSING = "PROCESSING"
     DISPATCHED = "DISPATCHED"
     COMPLETED = "COMPLETED"
@@ -338,6 +377,9 @@ class ScheduleEntity(Entity):
     last_fire_status: ScheduleFireStatus | None = None
     last_error: str | None = None
     consecutive_failures: int = 0
+    #: Why the platform paused it (``fire_cap``, ``consecutive_failures``, ...);
+    #: ``None`` when it is running or a person paused it.
+    paused_reason: str | None = None
 
     @property
     def time_config(self) -> TimeScheduleConfig | None:

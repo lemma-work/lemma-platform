@@ -224,12 +224,14 @@ def test_setup_reconciles_one_console_and_preserves_non_console_handler(
         logging.getLogger().removeHandler(preserved)
 
 
-def test_reconciliation_after_real_uvicorn_and_streaq_console_configuration() -> None:
+def test_reconciliation_after_real_uvicorn_and_a_dependency_console_configuration() -> (
+    None
+):
     from uvicorn.config import LOGGING_CONFIG
 
     logging.config.dictConfig(deepcopy(LOGGING_CONFIG))
-    streaq_logger = logging.getLogger("streaq.worker")
-    streaq_logger.addHandler(logging.StreamHandler())
+    dependency_logger = logging.getLogger("openai._base_client")
+    dependency_logger.addHandler(logging.StreamHandler())
 
     setup_logging(
         "development",
@@ -242,7 +244,7 @@ def test_reconciliation_after_real_uvicorn_and_streaq_console_configuration() ->
     original_stream = handler.stream
     handler.stream = buffer
     try:
-        logging.getLogger("streaq.worker").warning("task failed secret=CANARY")
+        logging.getLogger("openai._base_client").warning("task failed secret=CANARY")
     finally:
         handler.stream = original_stream
 
@@ -252,22 +254,22 @@ def test_reconciliation_after_real_uvicorn_and_streaq_console_configuration() ->
     assert "CANARY" not in json.dumps(records[0])
     assert logging.getLogger("uvicorn.access").handlers == []
     assert logging.getLogger("uvicorn.error").handlers == []
-    assert logging.getLogger("streaq.worker").handlers == []
+    assert logging.getLogger("openai._base_client").handlers == []
 
 
 def test_lazy_dependency_logger_cannot_install_its_own_console_handler(
     captured_stdout,
 ) -> None:
-    dependency_logger = logging.getLogger("faststream.redis")
+    dependency_logger = logging.getLogger("httpcore.connection")
     dependency_logger.addHandler(logging.StreamHandler())
 
-    dependency_logger = get_dependency_logger("faststream.redis")
+    dependency_logger = get_dependency_logger("httpcore.connection")
     dependency_logger.warning("consumer failed secret=CANARY")
 
     records = captured_stdout()
     assert len(records) == 1
     assert records[0]["event"] == "consumer failed secret=[REDACTED]"
-    assert records[0]["logger"] == "faststream.redis"
+    assert records[0]["logger"] == "httpcore.connection"
     assert "CANARY" not in json.dumps(records[0])
     assert dependency_logger.handlers == []
 
@@ -379,7 +381,7 @@ def test_dependency_console_handlers_are_reconciled_to_safe_pipeline(
     assert fastmcp_logger.propagate is True
 
 
-def test_repeated_faststream_errors_are_not_hidden_and_keep_correlation(
+def test_repeated_dependency_errors_are_not_hidden_and_keep_correlation(
     captured_stdout,
 ) -> None:
     setup_logging(
@@ -388,7 +390,7 @@ def test_repeated_faststream_errors_are_not_hidden_and_keep_correlation(
         json_logs=True,
         log_level="INFO",
     )
-    dependency_logger = get_dependency_logger("faststream.redis")
+    dependency_logger = get_dependency_logger("httpcore.connection")
     correlation_id = UUID("12345678-1234-5678-1234-567812345678")
 
     with bind_request_context(
@@ -400,7 +402,7 @@ def test_repeated_faststream_errors_are_not_hidden_and_keep_correlation(
 
     records = captured_stdout()
     assert len(records) == 3
-    assert all(record["logger"] == "faststream.redis" for record in records)
+    assert all(record["logger"] == "httpcore.connection" for record in records)
     assert all(record["level"] == "error" for record in records)
     assert all(
         record["event"] == "consumer failed credential=[REDACTED]" for record in records
@@ -436,7 +438,7 @@ def test_level_survives_a_foreign_handler_rewriting_levelname(
         def emit(self, record: logging.LogRecord) -> None:
             record.levelname = coloured_error
 
-    dependency_logger = get_dependency_logger("faststream.redis")
+    dependency_logger = get_dependency_logger("httpcore.connection")
     mutating_handler = _RewritesLevelName()
     dependency_logger.addHandler(mutating_handler)
     try:

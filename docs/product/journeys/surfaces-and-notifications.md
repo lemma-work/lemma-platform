@@ -249,9 +249,14 @@ it is asked, not skipped.
 ### PS-SURF-013 — A thread on the platform is a conversation in the pod
 **Status:** covered
 
-- When a person replies in a thread, the system shall continue the same
-  conversation rather than starting a new one.
-- When a person starts a new thread, the system shall start a new conversation.
+- When a person writes to an agent again -- in the same thread or a new one,
+  from another of the pod's numbers or bots, on another platform, after any
+  length of quiet -- the system shall continue their one conversation with
+  that agent rather than starting a new one.
+- When a different agent answers them, the system shall keep that agent's
+  conversation with them apart.
+- In a group, the system shall give each person their own conversation with
+  the agent there, apart from their private one.
 - The system shall make the conversation readable in the workspace, with the
   surface and thread it came from recorded on it.
 
@@ -278,7 +283,8 @@ it is asked, not skipped.
 
 A group chat holds people who are not in the pod: a vendor, a client, a
 colleague from another team. Members of the pod are answered there as
-themselves, exactly as in private. Everybody else is answered *for the pod*.
+themselves, exactly as in private. Everybody else is a contact of the pod, and
+is answered *for the pod*.
 
 - When a member of the pod who may configure the bot adds it to a group, the
   system shall make them the person who answers for that group's people from
@@ -286,14 +292,20 @@ themselves, exactly as in private. Everybody else is answered *for the pod*.
 - Where a group has somebody answering for it and has not been closed to
   outsiders, when somebody outside the pod addresses the bot there, the system
   shall answer them in the group.
+- The system shall make each of them a contact of the pod, known by the handle
+  the platform vouched for -- their Telegram account, their WhatsApp number,
+  their Slack account in the other company -- and shall make the same person
+  the same contact every time.
 - The system shall answer them from the conversation and from what the pod has
   marked Public, and from nothing else — not the pod's other data, not the
-  answering member's own access, files, memory or connected accounts.
+  answering member's own access, files, memory or connected accounts, and not
+  the rows the pod keeps about them, which the whole group would read.
 - The system shall show, on the group's page, the files and tables the pod has
   marked Public — including files shared with anyone with a Lemma account,
   which carry the same mark — read as the run answering an outsider reads them.
-- The system shall keep their questions in one conversation per group that
-  belongs to the member answering for it, and shall show who asked each one.
+- The system shall keep each person's questions in a conversation of their
+  own, looked after by the member answering for the group, so one person's
+  history never shapes the answer to another.
 - The system shall never take anything somebody outside the pod types as that
   member deciding something: no approval, no answer to a question the bot asked
   the member.
@@ -313,8 +325,8 @@ themselves, exactly as in private. Everybody else is answered *for the pod*.
 - The system shall treat a group on a pod's own bot or number exactly as one on
   a shared bot.
 
-**Contracts:** `surface.webhook.handle_platform`, `agent.group.list`,
-`agent.group.update`
+**Contracts:** `surface.webhook.handle_platform`, `channel.list`,
+`channel.source.update`
 
 ### PS-SURF-016 — The bot remembers what was said in a group
 **Status:** planned
@@ -323,7 +335,9 @@ themselves, exactly as in private. Everybody else is answered *for the pod*.
 
 - Where a platform will not let the bot read a group's history, the system shall
   keep its own record of what the bot heard in a group the pod knows, and of
-  what the bot said there.
+  what the bot said there, each line said by the member or contact who said it
+  -- making somebody outside the pod a contact the first time they speak, even
+  where the bot does not answer them.
 - When the bot answers in such a group, the system shall show it the recent
   record as background, marking what was said by people outside the pod.
 - When the bot answers in any group or channel, the system shall tell it that
@@ -405,7 +419,7 @@ by its link.
 
 - When a member asks the bot, in their own chat with it, to open a group, the
   system shall create the group and hand back the link people join by.
-- When a member who may configure the bot starts a group from the pod's groups
+- When a member who may configure the bot starts a group from the pod's channels
   in Lemma, the system shall do the same, show the group as waiting for
   WhatsApp until WhatsApp confirms it, and then show the link.
 - The system shall make that member the person who answers for the group's
@@ -419,8 +433,8 @@ by its link.
 - The system shall send a group only what a group can show: questions,
   approvals and links as words.
 
-**Contracts:** `surface.webhook.handle_platform`, `agent.group.list`,
-`agent.group.start`
+**Contracts:** `surface.webhook.handle_platform`, `channel.list`,
+`channel.whatsapp_group.start`
 
 ---
 
@@ -518,40 +532,40 @@ by its link.
 **Status:** covered
 
 - When something in a pod needs a person's attention, the system shall put it in
-  their notifications for that pod.
-- The system shall show a person how many notifications they have not read,
-  without them opening the list.
-- The system shall group a thread of related notifications as one item, rather
-  than one item per message.
-- If someone who does not belong to the pod asks for its notifications, then the
+  their inbox for that pod.
+- The system shall show a person how much they have not read, without them
+  opening the list.
+- The system shall show what is new in one channel as one item, rather than one
+  item per line.
+- If someone who does not belong to the pod asks for its inbox, then the
   system shall refuse, as it refuses every other read in that pod.
 
-**Contracts:** `notification.list`, `notification.unread_count`, `notification.send`
+**Contracts:** `channel.inbox.get`, `channel.list`, `agent.notice.send`
 
 ### PS-SURF-031 — A person clears what they have dealt with
 **Status:** covered
 
-- When a person reads a notification, the system shall mark it read and shall
-  reflect that in the unread count.
-- When a person marks everything read, the system shall clear the unread count
-  for that pod.
+- When a person reads a channel, the system shall mark it read up to the
+  newest line they have seen, never back, and shall reflect that in its unread
+  count and the pod's.
 - The system shall keep read state per person, so one person reading something
   does not clear it for everyone.
+- A question waiting on a person stays waiting until they answer it, whether
+  or not they have read the channel it is in.
 
-**Contracts:** `notification.mark_read`, `notification.mark_all_read`, `notification.unread_count`
+**Contracts:** `channel.read`, `channel.list`, `channel.inbox.get`
 
-### PS-SURF-032 — A person can answer from the notification
+### PS-SURF-032 — A person can answer from their inbox
 **Status:** covered
 
-- Where a notification asks something, the system shall let a person answer it
+- Where a line asks a person something, the system shall let them answer it
   directly and shall carry the answer back to whatever is waiting.
-- When a person answers or acknowledges a notification, the system shall stop
-  asking.
+- When a person answers a question, the system shall stop asking.
 - If a person answers something that has already been answered or has expired,
   then the system shall say so rather than accepting an answer that goes
   nowhere.
 
-**Contracts:** `notification.respond`, `notification.acknowledge`
+**Contracts:** `channel.message.answer`, `channel.inbox.get`
 
 ### PS-SURF-033 — What is meant for one person is not said in a group
 **Status:** planned
@@ -559,11 +573,11 @@ by its link.
 > Proven at module level by `agent_surfaces/tests/e2e/test_member_reach_private_e2e.py`
 > and `agent_surfaces/tests/e2e/test_group_private_send_e2e.py`.
 
-- The system shall deliver a notification meant for one person only somewhere
-  private to them.
+- The system shall deliver a line meant for one person only somewhere private
+  to them.
 - Where the only place a person has spoken to the bot is a group, the system
-  shall reach them another way -- email, or their Lemma inbox -- rather than in
-  front of the group.
+  shall reach them another way -- email, or their own channel in Lemma --
+  rather than in front of the group.
 - When the agent sends the person it is working for something mid-task from a
   group chat, the system shall deliver it to that person's own chat with the bot
   in the same pod.
@@ -577,7 +591,7 @@ by its link.
   email thread that copies other people, the system shall send it to that
   person alone.
 
-**Contracts:** `notification.send`
+**Contracts:** `agent.notice.send`
 
 ---
 
@@ -595,17 +609,32 @@ remember where the bot is, who is in there, or what is waiting on them.
 > A scenario needs the forged chats to create and speak in groups, which they
 > do not yet.
 
-- The system shall list, for every member of the pod, each group its bots are
-  in: the platform, the group's name, who answers for its people outside the
-  pod, how many people in and outside the pod have spoken there, when it was
-  last active, and how many questions are waiting on the member looking.
+- The system shall list each group its bots are in to every member of the pod
+  who may see it -- every member for a public group, its own people for a
+  private one: the platform, the group's name, who answers for its people
+  outside the pod, how many people in and outside the pod have spoken there,
+  when it was last active, and how many questions are waiting on the member
+  looking.
+- Where a bot is in a private group that a pod admin or editor is not in, the
+  system shall list it on that bot's settings for them, marked as not joined
+  and without anything said there, and shall let them join it on request,
+  recording that they did.
 - Where the pod keeps its own record of a group, the system shall show a member
   what was said there, marking who is in the pod, and for each of the bot's
   answers, whom it answered and whether it answered from what the pod made
-  Public. An answer made with one member's own access shall show its words to
-  that member alone.
-- The system shall keep its record of a group for 90 days, and the bot shall say
-  so in the group when it arrives.
+  Public.
+- When the bot answers one member in a group with that member's own access,
+  the system shall show its words to everybody in the group, since they asked
+  in front of it.
+- Where a group is set to keep such answers to whoever asked, the system shall
+  show an answer's words to that member alone, and to the others only that it
+  was given and for whom, until that member shares it.
+- The system shall let only a member who may change a group choose whether it
+  keeps answers to whoever asked.
+- If a member who may not change a group asks to change whether it keeps
+  answers to whoever asked, then the system shall refuse the request.
+- The system shall keep its record of a group, and the bot shall say so in the
+  group when it arrives.
 - The system shall never show a member's private conversation with the bot, or
   a note written to the agent in Lemma, as part of a group.
 - When the member who answers for a group switches its people outside the pod
@@ -616,20 +645,32 @@ remember where the bot is, who is in there, or what is waiting on them.
   the pod, change it or take it over, and shall tell that member when an admin
   does.
 
-**Contracts:** `agent.group.list`, `agent.group.get`, `agent.group.timeline`,
-`agent.group.update`
+**Contracts:** `channel.list`, `channel.source.get`, `channel.message.list`,
+`channel.source.update`, `channel.update`
 
-### PS-SURF-041 — The member answering for a group sees what its people are waiting on
+### PS-SURF-041 — A member steps in for somebody outside the pod the bot cannot help
 **Status:** planned
 
-> Proven at module level by `agent_surfaces/tests/e2e/test_space_groups_e2e.py`.
+> Proven at module level by `agent_surfaces/tests/e2e/test_contact_care_e2e.py`
+> and `test_contact_acknowledgement_e2e.py`.
 
-- When the bot passes on a question it could not answer somebody outside the
-  pod, the system shall show it on that group's page, to the member it was
-  passed to, until they answer it.
-- When the member answers, the system shall relay the answer in the group.
+- When the bot cannot give somebody outside the pod what they need, the system
+  shall flag that person's channel as waiting on a person and tell the member
+  who answers for them where to look, without quoting them.
+- When a member writes in that channel, the system shall carry it to the
+  person, clear the flag, and keep the bot from answering there while the
+  member is in the conversation; once the member has not written there for the
+  channel's hand-back window, the bot shall answer again and tell them.
+- Where a member switches the channel's agent off, the system shall start no
+  run for that person, and shall flag the channel as waiting on a reply, until
+  a member switches it on again -- which hands the person back to the bot at
+  once.
+- While the agent is off, the system shall tell the person nothing unless the
+  pod set a line to say then; that line it shall say once, until a member
+  writes to them or the channel is closed, and never to a handle that asked the
+  pod to stop.
 
-**Contracts:** `agent.group.get`, `notification.respond`
+**Contracts:** `channel.update`, `channel.message.post`, `pod.update`
 
 ### PS-SURF-042 — A member adds the pod's Telegram bot to a group from Lemma
 **Status:** planned
@@ -646,7 +687,7 @@ remember where the bot is, who is in there, or what is waiting on them.
 - The system shall not take the Telegram account that used a link for the
   member it was made for: a link is easily passed on.
 
-**Contracts:** `agent.group.link`, `surface.webhook.handle_platform`
+**Contracts:** `channel.telegram_link.create`, `surface.webhook.handle_platform`
 
 ### PS-SURF-043 — A Slack channel shared with another company answers that company for the pod
 **Status:** planned
@@ -659,9 +700,10 @@ remember where the bot is, who is in there, or what is waiting on them.
   company addresses the bot, the system shall answer them for the pod from what
   it made Public, as in any group opened to people outside the pod.
 - The system shall never answer somebody from the pod's own Slack workspace as
-  an outsider; one who is not in the pod is told how to join it instead.
+  an outsider; one who is not in the pod is told how to join it instead --
+  unless the pod's organization holds the workspace (PS-SURF-053).
 
-**Contracts:** `surface.webhook.handle_platform`, `agent.group.list`
+**Contracts:** `surface.webhook.handle_platform`, `channel.list`
 
 ### PS-SURF-044 — People in a group ask the bot by the name they see
 **Status:** planned
@@ -699,17 +741,17 @@ Public, the way a group's people from outside it are.
   the pod's existing contacts and nobody else.
 - Where the bot is set to answer nobody outside the pod, which is how a bot
   starts, the system shall answer only members, as before.
-- The system shall never take somebody writing to Lemma's shared bot for a
-  contact of any pod.
+- The system shall never take somebody writing privately to Lemma's shared bot
+  for a contact of any pod: they may be a person signing up for Lemma.
 - The system shall answer a contact in a conversation of their own, which
   belongs to the member who looks after the bot's contacts -- whoever turned
   contacts on, unless somebody else was named -- and shall pass on what it
   cannot answer to that member.
 - The system shall answer a contact's email to them alone, copying nobody else
   on the thread.
-- The system shall treat a contact who writes in a group as one of the group's
-  people from outside the pod, never as a contact: everyone in a group reads the
-  answer.
+- The system shall treat a contact who writes in a group as the same contact,
+  answered there as one of the group's people from outside the pod: everyone in
+  a group reads the answer, so nothing the pod keeps about them is used there.
 
 **Contracts:** `surface.webhook.handle_platform`, `agent.surface.update`,
 `contact.list`, `contact.get`
@@ -750,18 +792,31 @@ Public, the way a group's people from outside it are.
 `contact.export`
 
 ### PS-SURF-049 — A web widget answers visitors on the pod's behalf
-**Status:** planned
+**Status:** gap
 
 > Proven at module level by `agent_surfaces/tests/e2e/test_web_widgets_e2e.py`
 > and at unit level by `agent_surfaces/tests/unit/test_web_widgets.py`.
+>
+> **Gap:** a row sent from a page that never opened a chat is kept, but its
+> visitor does not become a contact. A message, and a row from a page with a
+> chat open, do make them one. See DEV-SURF-004.
 
 - The system shall let a pod's editors put its chat on a web page with a
   public key, or share it as a page Lemma hosts, and shall show its signing
   secret once, when it is made or rotated.
-- The system shall answer an anonymous visitor from what the pod made Public,
-  and shall answer a visitor named by a token the page's server signed with the
-  widget's secret, or who entered a code sent to their email, as a contact --
-  keeping a conversation they had already started.
+- The system shall make an anonymous visitor a contact of the pod the first
+  time they write something -- a message, a row -- and never for reading a
+  page: one known only by their browser, and answered from what the pod made
+  Public.
+- The system shall answer a visitor named by a token the page's server signed
+  with the widget's secret, or who entered a code sent to their email, as a
+  confirmed contact -- keeping the conversation they had already started, and
+  the contact they already were.
+- Where the email or the token names a contact the pod already had, the system
+  shall make the visitor that contact, with their earlier conversations, rather
+  than keep two contacts for one person.
+- The system shall keep a visitor's conversation until a member deletes it,
+  whether or not anybody ever vouched for them.
 - The system shall refuse a token signed with anything else, meant for another
   widget, or living longer than ten minutes, and shall stop accepting tokens
   signed with a secret once it is rotated.
@@ -779,11 +834,15 @@ Public, the way a group's people from outside it are.
 **Status:** planned
 
 > Proven at module level by `agent_surfaces/tests/e2e/test_email_contacts_e2e.py`,
-> `test_web_widgets_e2e.py` and `test_contact_email_follow_ups_e2e.py`, and at
-> unit level by `agent_surfaces/tests/unit/test_contact_follow_ups.py`.
+> `test_web_widgets_e2e.py` and `test_contact_outreach_e2e.py`.
 
 - The system shall let a member write to a contact in the contact's most recent
   conversation, on the channel it lives on.
+- The system shall let a member start a contact's conversation on any handle
+  the contact has where its platform allows it -- email any time, WhatsApp
+  where they wrote within 24 hours -- and shall refuse, saying why and posting
+  nothing, a handle that is not theirs, one that asked the pod to stop, or one
+  a bot cannot write to first.
 - The system shall write on WhatsApp only within 24 hours of the contact's last
   message there, and shall leave a web visitor's message for their next visit.
 - When the member asks for email, the system shall send the follow-up to the
@@ -795,7 +854,7 @@ Public, the way a group's people from outside it are.
 - The system shall not unsubscribe anybody for opening the link; only the
   button on the page it opens does.
 
-**Contracts:** `contact.follow_up`
+**Contracts:** `channel.message.post`, `contact.outreach.send`
 
 ### PS-SURF-051 — People outside the pod add rows to a table it opened to them
 **Status:** planned
@@ -809,8 +868,9 @@ Public, the way a group's people from outside it are.
   columns, and shall refuse to open a per-member table or to leave closed a
   column the table cannot do without.
 - The system shall let any page holding a widget's public key learn the open
-  columns and add one row, as the member who opened the table, and shall
-  ignore every column that is not open and read nothing back.
+  columns and add one row, under the grant of the member who opened the table
+  and named for the contact who wrote it, and shall ignore every column that is
+  not open and read nothing back.
 - The system shall ask a stranger to confirm their email before they add a row
   to a table open to contacts only, and shall name a confirmed sender on a
   contact-owned table itself, whatever the page sent.
@@ -834,11 +894,109 @@ Public, the way a group's people from outside it are.
 - The system shall let an organization's owners and editors set, read and clear
   a monthly cap on that cost, and shall stop answering contacts for the rest of
   the month once it is reached.
+- The system shall let an organization's owners set how many contacts its bots
+  may answer, counting the people an agent has answered rather than everybody
+  the pod has seen, and shall hand anybody past it to a member rather than
+  answer them.
 - The system shall let a pod's admins forget a contact, with every handle they
   are known by.
 
 **Contracts:** `usage.organization.contacts_cap.get`,
 `usage.organization.contacts_cap.update`, `contact.update`, `contact.delete`
+
+---
+
+### PS-SURF-052 — Lemma's own Slack app sets a workspace's teammates up, and answers nobody
+**Status:** planned
+
+> Proven at module level by `agent_surfaces/tests/e2e/test_slack_manager_e2e.py`
+> and `connectors/tests/e2e/test_account_connected_fact_e2e.py`. A scenario
+> needs a forged Slack workspace that signs as Lemma's own app and completes
+> Sign in with Slack, which the forged chats do not yet.
+
+- When an owner or editor installs Lemma's own app in a Slack workspace from
+  their own signed-in browser, the system shall make that workspace their
+  organization's.
+- If a second organization installs Lemma's own app in a workspace that is
+  already an organization's, then the system shall refuse it, leaving the
+  workspace with the organization that has it.
+- If a grant of Lemma's own app was finished in a browser signed in as somebody
+  other than the person binding it, then the system shall bind no workspace
+  with it.
+- When a workspace becomes an organization's, the system shall know the Slack
+  user that Slack names as its installer as the person who installed it.
+- When a person finishes Sign in with Slack, started from their own Home tab,
+  in the same Lemma session and as the Slack user that Home tab was for, the
+  system shall know that Slack user as them.
+- If Sign in with Slack finishes in another Lemma session than the one that
+  started it, or with no Lemma session, then the system shall refuse it,
+  knowing nobody by it.
+- If Sign in with Slack names a different Slack user than the one its link was
+  for, then the system shall refuse it, knowing nobody by it.
+- The system shall never know a Slack user as a Lemma person by their Slack
+  profile email.
+- The system shall show each known person, on Lemma's Home tab in Slack, the
+  teammates they can see in the organization, one per agent.
+- The system shall offer "Add to Slack" on that Home tab for each teammate not
+  in the workspace yet.
+- When Slack's Allow comes back for a teammate added from the Home tab, the
+  system shall finish adding that teammate without a visit to Lemma.
+- When Lemma's app is invited to a channel, the system shall ask the inviter
+  which teammate joins.
+- When the inviter picks a teammate, the system shall bring that teammate into
+  the channel under its own name.
+- When a teammate is brought into a channel, the system shall say the group
+  hello there as that teammate.
+- When a teammate is brought into a channel, the system shall keep the channel
+  as private as Slack says it is.
+- When the teammate it asked about is in the channel, the system shall take
+  Lemma's own app out of it.
+- If somebody asks Lemma's own app a question, then the system shall point them
+  at the workspace's teammates instead of answering it.
+- If somebody says something to Lemma's own app, then the system shall pass
+  none of it to a pod.
+
+**Contracts:** `agent.surface.slack_manager.list`,
+`agent.surface.slack_manager.bind`, `agent.surface.slack_person.sign_in`
+
+---
+
+### PS-SURF-053 — A Slack workspace the organization holds: its people are contacts
+**Status:** planned
+
+> Proven at module level by
+> `agent_surfaces/tests/e2e/test_slack_workspace_contacts_e2e.py`. A scenario
+> needs the forged Slack workspace PS-SURF-052 does.
+
+- Where Lemma's own app holds a Slack workspace for the pod's organization, when
+  somebody in that workspace who is not a member of the pod writes privately to
+  one of the pod's teammates there, and the teammate answers contacts, the
+  system shall answer them as a contact of the pod, known by their Slack
+  account, without asking them to sign up first.
+- The system shall answer a Slack guest -- somebody let into a channel or two,
+  not into the workspace -- as a contact in a group open to people outside the
+  pod.
+- If a Slack guest writes privately to one of the pod's teammates, then the
+  system shall not answer them as a contact.
+- If Slack does not say whether a person who writes privately is a guest, then
+  the system shall not answer them as a contact.
+- Where a group a teammate is in is open to people outside the pod, the system
+  shall answer the workspace's people there as its contacts; where it is not,
+  shall tell them privately how to join, as before.
+- The system shall route a person Slack proved to be a member as that member,
+  whatever their Slack profile email says.
+- If another Slack user's profile carries a proven member's email, then the
+  system shall not route that user as the member.
+- When a teammate's own app is added to such a workspace, the system shall set
+  it to answer anyone, looked after by whoever connected it, unless somebody
+  set its contacts already.
+- Where the workspace is held by another organization, the system shall treat
+  the pod's teammate there as it treats any bot in a workspace nobody holds.
+- When a member forgets such a contact, the system shall forget the Slack
+  profile it kept for them.
+
+**Contracts:** `surface.webhook.handle_platform`, `agent.surface.create`,
+`contact.delete`
 
 ---
 

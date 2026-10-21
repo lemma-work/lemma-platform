@@ -3,7 +3,7 @@
 ``PS-AGENT-023`` promises that when the limit passes the run resumes and the
 agent is told the wait *expired* -- not that what it waited on finished. The
 rule is a pure function and tested as one; what only a database can show is the
-whole path: the sweep finds the overdue wait, reads a child run that is still
+whole path: the wait's deadline item fires, reads a child run that is still
 going, closes the wait as DEADLINE and resumes the parent with that message,
 while the child is left alone to finish.
 """
@@ -30,10 +30,9 @@ from app.modules.agent.domain.wait import (
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.services.wait_reconcile_service import (
-    RECONCILE_AFTER,
-    WaitReconcileService,
-)
+from app.core.infrastructure.work import WorkWriter
+from app.modules.agent.services.wait_timers import arm_wait
+from app.modules.test_support.e2e.agent_work import run_wait_work
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     finish,
     messages,
@@ -46,6 +45,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
 pytestmark = [pytest.mark.e2e]
 
 
+@pytest.mark.drives_work
 async def test_a_wait_past_its_deadline_resumes_saying_the_wait_expired(
     scenario,
 ) -> None:
@@ -61,9 +61,8 @@ async def test_a_wait_past_its_deadline_resumes_saying_the_wait_expired(
         tool_args={"subagent_run_id": str(still_going)},
     )
     await finish(waiting, conversation_status=ConversationStatus.WAITING)
-    # Armed long ago, its limit already behind it, and its timer lost -- so the
-    # sweep, not the timer, is what has to notice.
-    armed = datetime.now(timezone.utc) - RECONCILE_AFTER - timedelta(hours=1)
+    # Armed long ago, its limit already behind it: its item is due.
+    armed = datetime.now(timezone.utc) - timedelta(hours=1)
     async with create_uow_from_session_maker(async_session_maker) as uow:
         wait = await AgentConversationWaitRepository(uow).create(
             AgentConversationWaitEntity(
@@ -83,9 +82,10 @@ async def test_a_wait_past_its_deadline_resumes_saying_the_wait_expired(
                 },
             )
         )
+        await arm_wait(WorkWriter.of(uow), wait, wait.scheduled_at)
         await uow.commit()
 
-    await WaitReconcileService().reconcile_due_waits()
+    assert await run_wait_work() == 1
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
         closed = await AgentConversationWaitRepository(uow).get(wait.id)

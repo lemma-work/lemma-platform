@@ -42,6 +42,7 @@ _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
 _MEMORY_PROMPT_PATH = _PROMPT_DIR / "memory.md"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 _MESSAGING_PROMPT_PATH = _PROMPT_DIR / "messaging.md"
+_SUBAGENTS_PROMPT_PATH = _PROMPT_DIR / "subagents.md"
 _USER_INTERACTION_PROMPT_PATH = _PROMPT_DIR / "user_interaction.md"
 _AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
 _AGENT_HOST_HOST_EXECUTION_PROMPT_PATH = _PROMPT_DIR / "agent_host_host_execution.md"
@@ -68,6 +69,12 @@ FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     AgentToolset.TODO: _TODO_PROMPT_PATH,
     AgentToolset.MEMORY: _MEMORY_PROMPT_PATH,
     AgentToolset.MESSAGING: _MESSAGING_PROMPT_PATH,
+    # A coding agent on Agent Host met `lemma_spawn_subagent` as one MCP tool
+    # beside its own Task/Agent tool and never used it: nothing said to, and
+    # its own system prompt says delegate with the native one, whose work Lemma
+    # never sees. The spawn -> wait_for -> end-the-turn loop is not in any one
+    # tool's description either.
+    AgentToolset.SUBAGENTS: _SUBAGENTS_PROMPT_PATH,
     # `display_resource` had no fragment on either path for a long time, on the
     # theory that the tool's own description was enough. It is enough for an
     # in-process run, where that description is a first-class tool definition
@@ -175,6 +182,10 @@ def load_todo_prompt() -> str:
 
 def load_messaging_prompt() -> str:
     return _read_required_prompt(_MESSAGING_PROMPT_PATH)
+
+
+def load_subagents_prompt() -> str:
+    return _read_required_prompt(_SUBAGENTS_PROMPT_PATH)
 
 
 def load_speech_prompt() -> str:

@@ -11,14 +11,26 @@ Laid out exactly as the host pack lays out its CLI, by the same steps, so one
 launcher serves both: ``python/`` (a standalone CPython), ``cli/`` (the CLI
 and its locked dependencies) and ``bin/lemma``. The interpreter keeps only what
 a command-line client imports; the pack's backend needs the rest.
+
+The online app is too small to carry it, so a release also publishes it on its
+own (``--archive``): a gzipped tar of the same tree and a manifest beside it,
+``{version, platform, url, sha256, size}``. The Agent Host of that release
+downloads it the first time a hosted run needs a CLI the app does not carry
+(``desktop/agent-host/src/lemma_cli/download.rs``), from a manifest URL compiled
+into the host -- so the manifest's name and the archive's place beside it are a
+contract with that file.
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
+import hashlib
+import json
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -111,6 +123,86 @@ def sign(root: Path, identity: str) -> int:
     return len(files)
 
 
+def archive_name(platform: str) -> str:
+    return f"lemma-cli-{platform}.tar.gz"
+
+
+def manifest_name(platform: str) -> str:
+    """What the Agent Host asks its release for (`RELEASE_MANIFEST_URL`)."""
+    return f"lemma-cli-{platform}.json"
+
+
+def write_archive(root: Path, output: Path) -> tuple[str, int]:
+    """A gzipped tar of everything under ``root``, at its top level.
+
+    Deterministic, so the same tree is the same digest: sorted entries, no
+    owner, a fixed timestamp, and no name or time in the gzip header. Symbolic
+    links stay links (the interpreter's ``python3`` is one) and modes are kept,
+    which is what makes ``bin/lemma`` runnable once unpacked. Returns the
+    archive's SHA-256 and size.
+    """
+
+    def normalize(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        info.uid = info.gid = 0
+        info.uname = info.gname = ""
+        info.mtime = 0
+        return info
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped:
+            with tarfile.open(
+                fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT
+            ) as tar:
+                for path in sorted(root.rglob("*")):
+                    tar.add(
+                        path,
+                        arcname=path.relative_to(root).as_posix(),
+                        recursive=False,
+                        filter=normalize,
+                    )
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    return digest, output.stat().st_size
+
+
+def release_manifest(
+    *, version: str, platform: str, release_url: str, sha256: str, size: int
+) -> dict[str, object]:
+    """The manifest the Agent Host checks before it installs the archive.
+
+    The archive's URL is in the same release folder as the manifest: the host
+    refuses one anywhere else, so a manifest cannot send it to another release
+    or another host.
+    """
+    base = release_url.rstrip("/")
+    return {
+        "version": version.removeprefix("v"),
+        "platform": platform,
+        "url": f"{base}/{archive_name(platform)}",
+        "sha256": sha256,
+        "size": size,
+    }
+
+
+def publish(
+    root: Path, directory: Path, *, version: str, platform: str, release_url: str
+) -> Path:
+    """Write the archive and its manifest into ``directory``; return the manifest."""
+    if not (root / "bin" / "lemma").is_file():
+        raise SystemExit(f"not a staged CLI (no bin/lemma): {root}")
+    sha256, size = write_archive(root, directory / archive_name(platform))
+    manifest = release_manifest(
+        version=version,
+        platform=platform,
+        release_url=release_url,
+        sha256=sha256,
+        size=size,
+    )
+    path = directory / manifest_name(platform)
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
 def build(
     output: Path, version: str, python_root: Path | None, identity: str | None
 ) -> int:
@@ -153,9 +245,34 @@ def main() -> None:
         metavar="IDENTITY",
         help="codesign every Mach-O with this identity (`-` for ad hoc)",
     )
+    parser.add_argument(
+        "--archive",
+        type=Path,
+        metavar="DIRECTORY",
+        help="also write the release archive and its manifest into this directory",
+    )
+    parser.add_argument("--release-version", help="with --archive: e.g. 0.9.0")
+    parser.add_argument("--platform", default="aarch64-apple-darwin")
+    parser.add_argument(
+        "--release-url",
+        help="with --archive: the release's download folder, "
+        "e.g. https://github.com/OWNER/REPO/releases/download/v0.9.0",
+    )
     args = parser.parse_args()
-    size = build(args.output.resolve(), args.python, args.python_root, args.sign)
+    if args.archive and not (args.release_version and args.release_url):
+        parser.error("--archive needs --release-version and --release-url")
+    output = args.output.resolve()
+    size = build(output, args.python, args.python_root, args.sign)
     print(f"  {size / (1024 * 1024):.1f} MiB", flush=True)
+    if args.archive:
+        manifest = publish(
+            output,
+            args.archive.resolve(),
+            version=args.release_version,
+            platform=args.platform,
+            release_url=args.release_url,
+        )
+        print(f"  wrote {manifest}:", manifest.read_text(encoding="utf-8"), flush=True)
 
 
 if __name__ == "__main__":

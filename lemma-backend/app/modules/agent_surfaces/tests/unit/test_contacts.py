@@ -29,9 +29,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.email_authentication import (
     EmailAuthenticationVerdict,
 )
+from app.modules.agent_surfaces.services.sender_handles import private_handle
 from app.modules.agent_surfaces.services.contacts import (
     ContactDoor,
-    contact_handle,
     is_pods_own_bot,
     parked_mail_notice,
 )
@@ -179,7 +179,7 @@ def test_only_an_authenticated_email_address_is_vouched_for():
         (EmailAuthenticationVerdict.UNKNOWN, False),
         (None, False),
     ):
-        handle = contact_handle(
+        handle = private_handle(
             _event(platform=SurfacePlatform.RESEND, authentication=verdict)
         )
         assert handle is not None
@@ -190,7 +190,7 @@ def test_only_an_authenticated_email_address_is_vouched_for():
 # ------------------------------------------------------------ unverified email
 
 
-def test_the_parked_mail_notice_names_the_sender_and_asks_nothing():
+def test_the_parked_mail_notice_names_the_sender_and_what_they_wrote():
     surface = _surface(platform=SurfacePlatform.RESEND)
     notice = parked_mail_notice(
         surface=surface,
@@ -202,10 +202,55 @@ def test_the_parked_mail_notice_names_the_sender_and_asks_nothing():
         member_id=uuid4(),
     )
 
-    assert notice.recipient_user_id == OWNER
-    assert notice.title == "Unverified email from dana@client.example"
-    assert "Subject: Order 1182" in notice.body
-    assert notice.expects_response is False
+    assert notice.startswith("Unverified email from dana@client.example\n\n")
+    assert "Subject: Order 1182" in notice
+    assert "Where is my order?" in notice
+
+
+async def test_unverified_mail_is_a_note_to_the_member_alone(monkeypatch):
+    """Told in their own channel as a members-only line, never asked or pushed.
+
+    The note quotes mail from an address nobody could verify: it is for the
+    member to read, not a question that waits on them or a push to their phone.
+    """
+    from app.modules.agent_surfaces.services import contacts
+
+    told: list[dict] = []
+
+    async def tell_member(_uow, **kwargs):
+        told.append(kwargs)
+
+    async def member_id(_uow, _pod_id, _user_id):
+        return uuid4()
+
+    monkeypatch.setattr(contacts, "tell_member", tell_member)
+    monkeypatch.setattr(contacts, "pod_member_id", member_id)
+
+    async def first_time(*_args):
+        return True
+
+    async def one_note(*_args):
+        return 1
+
+    door = ContactDoor(
+        uow=SimpleNamespace(),
+        membership=SimpleNamespace(),
+        windows=SimpleNamespace(parked_sender=first_time, parked_note=one_note),
+    )
+    surface = _surface(platform=SurfacePlatform.RESEND)
+
+    await door._park(
+        surface=surface,
+        parsed=_event(
+            platform=SurfacePlatform.RESEND,
+            authentication=EmailAuthenticationVerdict.FAIL,
+        ),
+        owner=OWNER,
+    )
+
+    [note] = told
+    assert (note["pod_id"], note["user_id"]) == (POD, OWNER)
+    assert note["text"].startswith("Unverified email from dana@client.example")
 
 
 # ------------------------------------------------------------ handles
@@ -216,7 +261,7 @@ async def test_a_handle_with_nothing_left_once_normalised_names_nobody():
         update={"sender_phone": "+ -", "sender_external_user_id": "+ -"}
     )
 
-    assert contact_handle(event) is None
+    assert private_handle(event) is None
     assert not await _door().applies(
         surface=_surface(), parsed=event, sender=_stranger()
     )

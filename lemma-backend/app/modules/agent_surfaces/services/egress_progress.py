@@ -26,19 +26,18 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
-from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
+from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 
 logger = get_logger(__name__)
 
+
 # The database work around a platform call, plus the platform family itself. A
 # live-message verb that lets either escape takes the run's delivery down with
 # it: the observer's callbacks run once, and the answer is sent by the last one.
-_PROGRESS_ERRORS: tuple[type[BaseException], ...] = (
-    SQLAlchemyError,
-    *PLATFORM_TRANSPORT_ERRORS,
-)
+def _progress_errors() -> tuple[type[BaseException], ...]:
+    return (SQLAlchemyError, *platform_transport_errors())
 
 
 class SurfaceProgress:
@@ -120,7 +119,7 @@ class SurfaceProgress:
                     text=text,
                     metadata=metadata,
                 )
-        except _PROGRESS_ERRORS:
+        except _progress_errors():
             # Debug on purpose: a dropped delta loses nothing, since the final
             # answer is delivered whole, and a dead platform would otherwise
             # warn once per flush.
@@ -167,7 +166,7 @@ class SurfaceProgress:
                     message=clean_message,
                     metadata=message_metadata,
                 )
-            except _PROGRESS_ERRORS:
+            except _progress_errors():
                 # Slack answers here with a timeout as readily as with a
                 # `SlackApiError`, and the stream is now in an unknown state. The
                 # caller falls back to a plain message, so what is lost without
@@ -229,7 +228,7 @@ class SurfaceProgress:
                     event=target.event,
                     metadata=indicator_metadata,
                 )
-        except _PROGRESS_ERRORS:
+        except _progress_errors():
             # The only verb here that was not best-effort, and the one that
             # could least afford it. `on_run_started` awaits this, and
             # `notify_run_started` turns any escape into "the observer never

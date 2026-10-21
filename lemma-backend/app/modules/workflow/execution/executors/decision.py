@@ -3,8 +3,8 @@
 A question is not answered here. The executor resolves the evidence, writes
 everything the question needs onto a DECISION wait, and suspends -- the same
 shape as a function node, so the engine never holds its run-row lock across a
-model call. A job asks the question once the wait is committed and resumes the
-run on the answer's route.
+model call. The ``workflow.decide`` item it writes commits with the wait; that
+job asks the question and resumes the run on the answer's route.
 """
 
 from uuid import uuid4
@@ -14,6 +14,7 @@ from app.modules.workflow.domain.nodes import DecisionNode, DecisionQuestion
 from app.modules.workflow.domain.wait import WaitRequest, WorkflowRunWaitType
 from app.modules.workflow.execution.outcome import Branch, NodeOutcome, Suspend
 from app.modules.workflow.execution.step_context import StepContext
+from app.modules.workflow.execution.wait_work import write_decision
 
 _EVIDENCE = "evidence"
 
@@ -21,7 +22,7 @@ _EVIDENCE = "evidence"
 class DecisionExecutor:
     async def execute(self, node: DecisionNode, step: StepContext) -> NodeOutcome:
         if node.config.question is not None:
-            return self._ask(node.id, node.config.question, step)
+            return await self._ask(node.id, node.config.question, step)
         for rule in node.config.rules:
             # Evaluation errors propagate and fail the run loudly; conditions
             # were compile-checked at save time, so a failure here is a
@@ -35,14 +36,16 @@ class DecisionExecutor:
         return Branch(next_node_id=None, output={"matched_condition": None})
 
     @staticmethod
-    def _ask(node_id: str, question: DecisionQuestion, step: StepContext) -> Suspend:
+    async def _ask(
+        node_id: str, question: DecisionQuestion, step: StepContext
+    ) -> Suspend:
         # Resolved like any node input: a required expression that finds
         # nothing fails the run here, naming the path, before anything is asked.
         evidence = step.context.resolve_inputs({_EVIDENCE: question.evidence})[
             _EVIDENCE
         ]
         external_ref = str(uuid4())
-        step.decision.ask_once_committed(external_ref)
+        await write_decision(step.work, pod_id=step.pod_id, external_ref=external_ref)
         return Suspend(
             wait=WaitRequest(
                 wait_type=WorkflowRunWaitType.DECISION,

@@ -7,12 +7,18 @@ driving a run once those are settled.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
+from app.core.log.log import get_logger
+from app.modules.agent.domain.agent_host_selections import (
+    carry_agent_host_selections,
+)
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import JsonObject
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,10 +48,48 @@ def agent_host_run_config[DepsT](options: HarnessOptions[DepsT]) -> AgentHostRun
     return AgentHostRunConfig(
         harness_id=snapshot.harness_uuid(),
         runtime_profile_id=UUID(snapshot.profile_id),
-        config_selections=dict(config.config_selections),
+        # The profile's, then the run's own (pod default, teammate,
+        # conversation -- layered when the turn started), narrowest per key.
+        # Not yet checked against the harness: `offered_selections` drops what
+        # it no longer offers once dispatch has read it.
+        config_selections={
+            **config.config_selections,
+            **snapshot.selection_overrides,
+        },
         wait_timeout_seconds=config.host_wait_timeout_seconds,
         model_name=model_name or None,
     )
+
+
+def offered_selections(
+    run_config: AgentHostRunConfig,
+    *,
+    config_options: list[object],
+    agent_run_id: UUID,
+) -> AgentHostRunConfig:
+    """``run_config`` keeping only the selections the harness offers right now.
+
+    For the run's model: an effort one model offers and another does not is
+    dropped when the run is on the other. Dropped, not refused -- a selection
+    saved against an earlier publish is news about the harness, not a mistake
+    by the person sending this message, and the host reports one it cannot
+    apply as ``selection_unavailable`` anyway.
+    """
+    carried = carry_agent_host_selections(
+        config_options=config_options,
+        selections=run_config.config_selections,
+        model_name=run_config.model_name,
+    )
+    dropped = sorted(set(run_config.config_selections) - set(carried))
+    if not dropped:
+        return run_config
+    logger.info(
+        "agent.harnesses.agent_host.selections_dropped",
+        agent_run_id=str(agent_run_id),
+        runtime_profile_id=str(run_config.runtime_profile_id),
+        dropped_selections=dropped,
+    )
+    return replace(run_config, config_selections=carried)
 
 
 def resolve_pod_cwd(conversation: Conversation) -> str:

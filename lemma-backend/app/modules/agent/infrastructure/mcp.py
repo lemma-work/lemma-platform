@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
+
 LEMMA_MCP_SERVER_NAME = "lemma_tools"
 LEMMA_TOOL_PREFIX = "lemma_"
 LEMMA_MCP_TOKEN_ENV = "LEMMA_MCP_TOKEN"
@@ -53,6 +56,36 @@ def strip_provider_namespace(tool_name: str) -> str:
         if without_separator != remainder:
             return without_separator
     return tool_name
+
+
+# What Claude and OpenAI accept as a tool name: `^[A-Za-z0-9_-]{1,64}$`. The
+# name a coding agent's model actually sees is the longest form, the one its
+# runtime namespaces (`mcp__lemma_tools__lemma_<name>`), so that is what the
+# limit is measured against.
+_TOOL_NAME_LIMIT = 64
+_NAMESPACED_OVERHEAD = len(f"mcp__{LEMMA_MCP_SERVER_NAME}__{LEMMA_TOOL_PREFIX}")
+MAX_LOCAL_TOOL_NAME_LENGTH = _TOOL_NAME_LIMIT - _NAMESPACED_OVERHEAD
+_UNSAFE_TOOL_NAME_CHARACTERS = re.compile(r"[^A-Za-z0-9_-]")
+_NAME_DIGEST_LENGTH = 8
+
+
+def resource_tool_name(prefix: str, resource_name: str) -> str:
+    """A valid tool name for a pod resource exposed as a tool (`agent_<name>`).
+
+    Resource names are free text up to 255 characters, and a tool name is not:
+    a long or unusual name made the provider reject the whole request, on both
+    harnesses. A name that is already valid is kept as it is. Any other is
+    sanitized and cut to fit, then suffixed with a digest of the original, so
+    two names that sanitize alike still get two tools. Both harnesses build the
+    name here and look the tool up by it, so nothing maps it back.
+    """
+    plain = f"{prefix}{resource_name}"
+    safe = _UNSAFE_TOOL_NAME_CHARACTERS.sub("_", plain)
+    if safe == plain and len(plain) <= MAX_LOCAL_TOOL_NAME_LENGTH:
+        return plain
+    digest = hashlib.sha256(resource_name.encode("utf-8")).hexdigest()
+    suffix = f"_{digest[:_NAME_DIGEST_LENGTH]}"
+    return safe[: MAX_LOCAL_TOOL_NAME_LENGTH - len(suffix)] + suffix
 
 
 def exported_tool_name(tool_name: str) -> str:

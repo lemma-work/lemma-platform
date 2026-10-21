@@ -9,6 +9,8 @@ from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
 from app.core.log.log import get_logger
+from app.modules.agent.domain.entities import AgentRun
+from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
@@ -148,3 +150,26 @@ def title_updated_payload(
             "title": title,
         },
     }
+
+
+def run_ending_payload(agent_run: AgentRun) -> dict[str, object] | None:
+    """A finished run's ending, as its stream said it -- ``completed``,
+    ``error`` or ``stopped`` -- for a client that joins after; ``None`` while
+    it runs. What the SSE stream replays, and the live socket too."""
+    if agent_run.status == AgentRunStatus.FAILED:
+        return {
+            "type": "error",
+            "agent_run_id": str(agent_run.id),
+            "data": agent_run.error or "Agent run failed",
+        }
+    if agent_run.status not in (AgentRunStatus.STOPPED, AgentRunStatus.COMPLETED):
+        return None
+    data: dict[str, object] = {
+        "conversation_id": str(agent_run.conversation_id),
+        "status": agent_run.status.value,
+    }
+    if agent_run.status == AgentRunStatus.COMPLETED:
+        if agent_run.output_data is not None:
+            data["output_data"] = agent_run.output_data
+        return {"type": "completed", "agent_run_id": str(agent_run.id), "data": data}
+    return {"type": "stopped", "agent_run_id": str(agent_run.id), "data": data}

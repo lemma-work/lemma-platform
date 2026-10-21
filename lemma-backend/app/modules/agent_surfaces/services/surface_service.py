@@ -29,6 +29,7 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceRuntimeUnsupportedError,
     AgentSurfaceAlreadyExistsError,
     AgentSurfaceNotFoundError,
+    AgentSurfacePlatformError,
     AgentSurfaceValidationError,
 )
 from app.modules.agent_surfaces.domain.ports import (
@@ -49,9 +50,6 @@ from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_unique_org_credential_binding,
     ensure_unique_platform_identity,
 )
-from app.modules.agent_surfaces.services.event_receiver_service import (
-    notify_surface_receiver_config_changed,
-)
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     sync_telegram_mini_app,
 )
@@ -65,7 +63,8 @@ from app.modules.agent_surfaces.services.surface_telegram_webhook import (
 from app.modules.agent_surfaces.services.surface_consent import (
     SurfaceConsentMixin,
 )
-from app.core.infrastructure.db.session_uow import active_uow
+from app.core.infrastructure.db.session_uow import active_uow, commit_now
+from app.modules.agent_surfaces.services.surface_problems import clear_problem
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -75,6 +74,9 @@ if TYPE_CHECKING:
     from app.modules.agent_surfaces.domain.models import SurfaceChannelInfo
     from app.modules.agent_surfaces.services.credential_resolver import (
         SurfaceCredentialResolver,
+    )
+    from app.modules.agent_surfaces.services.slack_workspace_people import (
+        WorkspacePeople,
     )
 
 
@@ -92,6 +94,7 @@ class AgentSurfaceService(
         auth_config_port: SurfaceAuthConfigPort | None = None,
         credential_resolver: "SurfaceCredentialResolver | None" = None,
         adapter_registry: "SurfacePlatformAdapterRegistry | None" = None,
+        workspace_people: "WorkspacePeople | None" = None,
     ):
         self.surface_repository = surface_repository
         self.account_binding_resolver = account_binding_resolver
@@ -99,6 +102,7 @@ class AgentSurfaceService(
         self._auth_config_port = auth_config_port
         self._credential_resolver = credential_resolver
         self._adapter_registry = adapter_registry or SurfacePlatformAdapterRegistry()
+        self._workspace_people = workspace_people
 
     @property
     def credential_resolver(self) -> "SurfaceCredentialResolver | None":
@@ -138,7 +142,10 @@ class AgentSurfaceService(
         surface_identity_email: str | None = None,
         surface_identity_id: str | None = None,
         ctx: Context | None = None,
+        contacts_chosen: bool | None = None,
     ) -> AgentSurfaceEntity:
+        # ``contacts_chosen``: whether a contact policy was sent (see
+        # ``WorkspacePeople.answer_by_default``).
         # A surface is addressed by its pod-unique name (defaults to the
         # platform); several surfaces of the same platform can coexist under
         # distinct names (e.g. different bots → different agents). Distinct bot
@@ -203,6 +210,10 @@ class AgentSurfaceService(
                     "readable one and retries when it is taken."
                 )
             entity.surface_identity_email = surface_identity_email
+        if self._workspace_people is not None:
+            await self._workspace_people.answer_by_default(
+                entity, chosen=contacts_chosen, config_given=config is not None
+            )
         self._validate_runtime_supported(entity)
         await self.activate_if_tenant_consented(entity)
         await ensure_one_surface_per_agent(
@@ -215,20 +226,25 @@ class AgentSurfaceService(
             telegram_credentials = await self._prepare_telegram_webhook(entity)
         created = await self.surface_repository.create(entity)
         if telegram_credentials is not None:
-            created = await self._register_committed_telegram_webhook(
-                created, credentials=telegram_credentials, drop_pending_updates=True
-            )
+            try:
+                created = await self._register_committed_telegram_webhook(
+                    created, credentials=telegram_credentials, drop_pending_updates=True
+                )
+            except AgentSurfacePlatformError:
+                # A new bot the platform never took is not kept: nothing would
+                # reach it, and its name stays free to try again.
+                await self.surface_repository.delete(created.id)
+                await commit_now(self.surface_repository)
+                await clear_problem(created.id)
+                raise
         await self._notify_receivers_after_commit(created.id)
         return created
 
     async def _notify_receivers_after_commit(self, surface_id: UUID | None) -> None:
-        """Wake the receiver coordinators once the change has actually committed.
+        """Reconcile the native receivers once the change has actually committed.
 
-        Not inline, for the same two reasons the authorization service gives for
-        its snapshot invalidation: publishing inside the transaction holds a
-        pooled connection across a Redis round trip, and it is the wrong order
-        besides -- a coordinator woken before the commit reads the surface
-        configuration this change is about to replace.
+        Not inline: a reconcile that ran before the commit would read the
+        surface configuration this change is about to replace.
 
         Falls back to publishing immediately when there is no unit of work to
         defer to, which is also when there is no pooled connection to keep.
@@ -236,6 +252,12 @@ class AgentSurfaceService(
         uow = active_uow(self.surface_repository)
 
         async def _run() -> None:
+            # Imported here: the receiver work module reaches the runners,
+            # whose imports lead back to this service.
+            from app.modules.agent_surfaces.events.receiver_work import (
+                notify_surface_receiver_config_changed,
+            )
+
             await notify_surface_receiver_config_changed(surface_id)
 
         if uow is None:

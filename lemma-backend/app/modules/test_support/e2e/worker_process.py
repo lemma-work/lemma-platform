@@ -1,4 +1,4 @@
-"""Reusable production streaq-worker subprocess for hermetic E2E journeys."""
+"""Reusable production worker subprocess (``python -m app.worker``) for hermetic E2E journeys."""
 
 from __future__ import annotations
 
@@ -18,9 +18,13 @@ import redis.asyncio as redis
 from app.core.config import settings
 from app.modules.datastore.config import datastore_settings
 from app.modules.agent.tests.e2e.system_lemma_helpers import system_lemma_env_overlay
+from app.modules.test_support.e2e.worker_hold import (
+    register_session_worker,
+    unregister_session_worker,
+)
 
 _DEFAULT_READINESS_MARKERS = (
-    '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+    '"logger": "app.core.infrastructure.work.process"',
     '"event": "service.started"',
 )
 
@@ -54,9 +58,6 @@ async def production_worker_process(
     extra_env: Mapping[str, str] | None = None,
     readiness_markers: Sequence[str] = _DEFAULT_READINESS_MARKERS,
     startup_attempts: int = 600,
-    # Module entrypoint, not the streaq CLI: `streaq run app.events:streaq_worker`
-    # starts a single Worker object, which since lanes exist would consume only
-    # the interactive queue and silently never run document processing.
     worker_entrypoint: str = "app.worker",
 ) -> AsyncIterator[ProductionWorkerProcess]:
     """Start the same worker entrypoint used in production with hermetic I/O.
@@ -95,7 +96,8 @@ async def production_worker_process(
         # SIGKILL cannot be trapped, so coverage's `sigterm = true` handler
         # never flushed and the subprocess's coverage was lost. That is the
         # race that pinned the `agent` shard to one xdist worker.
-        "WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS": "1",
+        "WORK_SHUTDOWN_GRACE_SECONDS": "1",
+        "WORK_SHUTDOWN_GRACE_JSON": '{"interactive": 1}',
         "EMAIL_TRANSPORT": "filesystem",
         # `settings` rather than the `e2e_settings` parameter: the same object,
         # but only this spelling is one `check_settings_attrs.py` can follow to a
@@ -144,9 +146,11 @@ async def production_worker_process(
                 f"Timed out waiting for {log_prefix} worker.\n{_read_log(log_path)}"
             )
 
+        register_session_worker(process.pid, e2e_settings.database_url)
         try:
             yield ProductionWorkerProcess(process=process, log_path=log_path)
         finally:
+            unregister_session_worker(process.pid)
             process.terminate()
             try:
                 # Comfortably longer than the 1s grace period set above. The

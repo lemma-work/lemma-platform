@@ -62,11 +62,20 @@ def test_the_datastore_engine_keeps_no_compiled_statements() -> None:
     assert get_datastore_engine().sync_engine._compiled_cache is None
 
 
+# The two soaks loop a workload until retained memory would show, which is
+# most of a minute between them; the protected lane runs them.
+@pytest.mark.slow
 async def test_bulk_writes_of_varying_size_retain_nothing(
     pod_api: DatastoreApi,
 ) -> None:
     await _soak_table(pod_api)
-    await pod_api.bulk_create("soak", [_row(0)])  # warm every code path once
+    # Warm every code path once. The query path imports sqlglot lazily, and the
+    # first call of each path loads modules; that is ~10 MiB of one-time code
+    # objects that a run with no earlier datastore traffic would count as kept.
+    await pod_api.bulk_create("soak", [_row(0)])
+    warm_id = (await pod_api.query('SELECT id FROM "soak"'))["items"][0]["id"]
+    await pod_api.bulk_update("soak", [{"id": warm_id, "c0": "warm"}])
+    await pod_api.bulk_delete("soak", [warm_id])
 
     tracemalloc.start(1)
     try:
@@ -113,6 +122,7 @@ async def _handshake(app, pod_id: str, token: str, *, leave_after_ready: bool) -
         await communicator.wait(timeout=5)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("outcome", ["no_token", "bad_token", "no_access", "accepted"])
 async def test_changes_socket_handshakes_retain_nothing(
     outcome: str,

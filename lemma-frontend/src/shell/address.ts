@@ -107,9 +107,15 @@ export function readAddress(pathname: string): Address {
         case "tables":
         case "files":
         case "workflows":
-        case "groups":
+        case "channels":
         case "contacts":
             return rest.length > 1 ? here(null) : here("space:" + rest[0]);
+        /* Groups became channels. A link to the old list opens the new one,
+           and so does a link to one group: its id named a source, not a
+           channel, and the list is where every source's channel is. The
+           shell writes the new address back. */
+        case "groups":
+            return rest.length > 1 ? here(null) : here("space:channels");
         /* A part of About is a page under it. One this build does not know —
            a section that moved to Settings, say — still opens About. */
         case "about":
@@ -135,7 +141,9 @@ export function readAddress(pathname: string): Address {
         case "workflow":
             return rest.length === 2 && rest[1] ? here("workflow:" + rest[1]) : here(null);
         case "group":
-            return rest.length === 2 && rest[1] ? here("group:" + rest[1]) : here(null);
+            return rest.length === 2 && rest[1] ? here("space:channels") : here(null);
+        case "channel":
+            return rest.length === 2 && rest[1] ? here("channel:" + rest[1]) : here(null);
         case "app":
             return rest.length === 2 && rest[1] ? here("app:" + rest[1]) : here(null);
         case "record":
@@ -186,7 +194,7 @@ function tailOf(address: Address): string[] {
         case "bot":
         case "run":
         case "workflow":
-        case "group":
+        case "channel":
             return [kind, encodeURIComponent(rest)];
         case "record": {
             /* The row id may itself carry a colon, so the table name is taken
@@ -225,11 +233,11 @@ export function tabFromId(tabId: string): Tab | null {
         const name = tabId.slice("workflow:".length);
         return name ? { id: tabId, kind: "workflow", label: name, name } : null;
     }
-    if (tabId.startsWith("group:")) {
-        const groupId = tabId.slice("group:".length);
-        /* Named "Group" until the page has read the group and says what it
-           is called. */
-        return groupId ? { id: tabId, kind: "group", label: "Group", groupId } : null;
+    if (tabId.startsWith("channel:")) {
+        const channelId = tabId.slice("channel:".length);
+        /* Named "Channel" until the page has read it and says what it is
+           called. */
+        return channelId ? { id: tabId, kind: "channel", label: "Channel", channelId } : null;
     }
     if (tabId.startsWith("run:")) {
         const runId = tabId.slice("run:".length);

@@ -151,6 +151,9 @@ pub(crate) struct Shell {
     pub(crate) confirmations: confirmation::Confirmations,
     pub(crate) recovery_mode: AtomicBool,
     pub(crate) quit_after_stop: AtomicBool,
+    /// Set while "Stop Lemma and quit?" is on screen, so a second ⌘Q or Dock
+    /// → Quit waits on that prompt instead of asking again and being refused.
+    pub(crate) quit_prompt_open: AtomicBool,
     pub(crate) shutdown: shutdown::Shutdown,
     // The tray is built once, so its Agent Host entries are kept here to be
     // rewritten as status arrives.
@@ -226,6 +229,7 @@ impl Shell {
             confirmations: confirmation::Confirmations::default(),
             recovery_mode: AtomicBool::new(false),
             quit_after_stop: AtomicBool::new(false),
+            quit_prompt_open: AtomicBool::new(false),
             shutdown: shutdown::Shutdown::default(),
             tray_agent_host: Mutex::new(None),
             tray_status: Mutex::new(None),

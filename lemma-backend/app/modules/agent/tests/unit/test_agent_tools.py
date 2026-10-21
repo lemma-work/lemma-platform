@@ -1799,7 +1799,9 @@ def test_runner_uses_final_answer_tool_for_structured_output_agents():
         type=ConversationType.TASK,
     )
 
-    assert runner._resolve_output_type(agent, conversation).__name__ == "final_answer"
+    assert runner._resolve_output_type(agent, conversation).output.__name__ == (
+        "final_answer"
+    )
 
 
 def test_final_answer_tool_output_becomes_normal_assistant_message():
@@ -2510,11 +2512,11 @@ async def test_ask_user_option_icons_ride_along_without_touching_the_pause():
 
 
 @pytest.mark.asyncio
-async def test_an_agent_host_run_is_served_the_notification_tools():
+async def test_an_agent_host_run_is_served_the_question_tool():
     """An Agent Host run reaches its tools only through this list, so the
-    tools that answer a notification or a workflow form have to be in it; the
-    in-process harness gets them from its capability and must not see them
-    twice."""
+    tool that answers a question waiting on the person -- a member's message,
+    a workflow's form -- has to be in it; the in-process harness gets it from
+    its capability and must not see it twice."""
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -2538,14 +2540,14 @@ async def test_an_agent_host_run_is_served_the_notification_tools():
             names.update(tools or {})
         return names
 
-    remote = await tool_names(include_notification_tools=True)
-    assert {"respond_to_notification", "submit_workflow_form"} <= remote
+    remote = await tool_names(include_question_tools=True)
+    assert "answer_question" in remote
     in_process = await tool_names()
-    assert "respond_to_notification" not in in_process
+    assert "answer_question" not in in_process
 
 
 @pytest.mark.asyncio
-async def test_the_runner_decides_by_harness_which_runs_get_the_notification_tools():
+async def test_the_runner_decides_by_harness_which_runs_get_the_question_tool():
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -2557,16 +2559,16 @@ async def test_the_runner_decides_by_harness_which_runs_get_the_notification_too
         pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id
     )
 
-    async def has_respond(harness_kind: HarnessKind) -> bool:
+    async def has_answer(harness_kind: HarnessKind) -> bool:
         toolsets = await RunToolAssembler(object()).assemble(
             agent=agent, conversation=conversation, harness_kind=harness_kind
         )
         return any(
-            "respond_to_notification"
+            "answer_question"
             in (getattr(getattr(t, "wrapped", t), "tools", None) or {})
             for t in toolsets
         )
 
-    assert await has_respond(HarnessKind.LEMMA) is False
+    assert await has_answer(HarnessKind.LEMMA) is False
     remote = [kind for kind in HarnessKind if kind != HarnessKind.LEMMA]
-    assert remote and all([await has_respond(kind) for kind in remote])
+    assert remote and all([await has_answer(kind) for kind in remote])

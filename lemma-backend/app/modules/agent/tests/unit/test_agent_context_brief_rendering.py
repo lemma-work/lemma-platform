@@ -123,6 +123,19 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         assert "daily-invoices" in framed
         assert "Assume nobody is watching" in framed
 
+    def test_the_run_says_where_it_was_asked_from_its_own_platform(self):
+        """The conversation was last heard on WhatsApp; this run was asked in
+        Lemma, and its framing must not say it arrived from WhatsApp."""
+        heard = SimpleNamespace(metadata={"surface_platform": "WHATSAPP"})
+
+        in_lemma = brief_lines.run_framing(heard, run_source="user_message")
+        on_whatsapp = brief_lines.run_framing(
+            heard, run_source="user_message", platform="WHATSAPP"
+        )
+
+        assert "whatsapp" not in in_lemma.lower()
+        assert "This arrived from whatsapp" in on_whatsapp
+
     def test_a_person_typing_into_a_scheduled_conversation_is_not_ignored(self):
         """``started_by`` stays on the conversation; a person may return to it."""
         framed = brief_lines.run_framing(
@@ -184,7 +197,7 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
 
     def test_a_surface_run_is_told_where_the_person_is(self):
         conversation = SimpleNamespace(metadata={"surface_platform": "SLACK"})
-        framed = brief_lines.run_framing(conversation)
+        framed = brief_lines.run_framing(conversation, platform="SLACK")
         assert "arrived from slack" in framed
 
     def test_an_unmarked_run_is_told_its_budget_and_nothing_guessed_at(self):

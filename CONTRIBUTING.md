@@ -169,8 +169,9 @@ that enforces it, and whether it is a hard failure or a ratchet — is in
 - Cross-module collaboration belongs in an explicit `contracts` package or a
   versioned domain event. Do not import another module's API, service,
   infrastructure, or persistence model from new code.
-- Persist state and its domain event in one database transaction through the
-  unit of work. Consumers must be inbox-backed and idempotent.
+- Write the work a change causes in the change's own transaction: a work item
+  (`WorkWriter`) or a fact other modules subscribe to. Handlers must be
+  idempotent, because a job whose lease expires runs again.
 - Never hold a DB session across external I/O or a streaming body.
 - Classify errors at process boundaries. Preserve cancellation, redact secrets,
   and never return or log raw provider exceptions.

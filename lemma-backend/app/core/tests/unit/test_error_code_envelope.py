@@ -98,3 +98,45 @@ def test_headers_on_an_http_exception_reach_the_caller() -> None:
 
     assert response.status_code == 416
     assert response.headers["content-range"] == "bytes */1234"
+
+
+def _observed_app() -> FastAPI:
+    from app.middleware import RequestObserverMiddleware
+
+    app = FastAPI()
+    register_exception_handlers(app)
+    app.add_middleware(RequestObserverMiddleware)
+
+    @app.get("/boom")
+    async def _boom() -> None:
+        raise RuntimeError("kaboom")
+
+    @app.get("/gone")
+    async def _gone() -> None:
+        raise HTTPException(status_code=404, detail="gone")
+
+    return app
+
+
+def test_an_unhandled_500_carries_the_request_id_the_server_chose() -> None:
+    """The client sent no id, so the observer made one up -- and the 500 is
+    built outside the observer, from a scope that never saw it."""
+    client = TestClient(_observed_app(), raise_server_exceptions=False)
+
+    response = client.get("/boom")
+
+    assert response.status_code == 500
+    request_id = response.json()["request_id"]
+    assert request_id, "a 500 is the response a support request quotes"
+    assert response.headers["x-request-id"] == request_id
+
+
+def test_a_handled_error_and_a_500_report_the_id_the_same_way() -> None:
+    client = TestClient(_observed_app(), raise_server_exceptions=False)
+
+    handled = client.get("/gone")
+    sent = client.get("/boom", headers={"x-request-id": "client-chosen-id"})
+
+    assert handled.json()["request_id"] == handled.headers["x-request-id"]
+    assert sent.json()["request_id"] == "client-chosen-id"
+    assert sent.headers["x-request-id"] == "client-chosen-id"

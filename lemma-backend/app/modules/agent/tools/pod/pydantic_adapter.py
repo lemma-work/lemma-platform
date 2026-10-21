@@ -168,8 +168,17 @@ async def pod_write_record(
 
         table_ctx = await _table_context(services, request.table_name)
         if request.action == "create":
+            # Keyed on the call: a resumed turn re-running this create under
+            # its recorded id gets the row back, not a second one (KEYED).
             record = await services.record.create_record(
-                table_ctx, dict(request.data or {}), services.ctx.user_id
+                table_ctx,
+                dict(request.data or {}),
+                services.ctx.user_id,
+                idempotency_key=(
+                    f"run:{ctx.deps.agent_run_id}:{ctx.tool_call_id}"
+                    if ctx.deps.agent_run_id and ctx.tool_call_id
+                    else None
+                ),
             )
             return {"success": True, "record": to_json_value(record.data)}
         if request.action == "update":

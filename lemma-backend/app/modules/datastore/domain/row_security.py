@@ -90,6 +90,18 @@ class RowPrincipal:
         )
 
     @classmethod
+    def every_row(cls) -> "RowPrincipal":
+        """A platform reader that applies row visibility itself.
+
+        A pod admin among members passes both policies -- per-user isolation
+        by the admin setting, the contact policy by the member audience -- so
+        every row comes back whether or not the database role bypasses row
+        security. Only for a caller that then decides, per row, who may see
+        it: the change feed, by each change's ``owner_user_id``.
+        """
+        return cls(audience=RowAudience.MEMBER, is_pod_admin=True)
+
+    @classmethod
     def contact(cls, contact_id: UUID) -> "RowPrincipal":
         return cls(audience=RowAudience.CONTACT, contact_id=contact_id)
 

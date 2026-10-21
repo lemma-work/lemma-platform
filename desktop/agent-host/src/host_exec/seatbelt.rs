@@ -145,6 +145,11 @@ impl Confinement {
 /// denied however a root is named.
 pub const CLI_ROOT_EXCEPTION: &str = "Library/Application Support/Lemma/runtime";
 
+/// Where the Agent Host keeps the CLIs it downloads for hosted runs, in its
+/// default data directory (`lemma_cli::download`). Code and nothing secret,
+/// like the host packs; the host's pairing secrets beside it stay denied.
+pub const DOWNLOADED_CLI_EXCEPTION: &str = "Library/Application Support/Lemma/agent-host/cli";
+
 /// The `lemma` CLI root Lemma named for a workspace, if it is one commands
 /// may be given.
 ///
@@ -160,13 +165,15 @@ pub fn lemma_cli_root(raw: &str, home: &Path) -> Option<PathBuf> {
     if !root.join("bin/lemma").is_file() || home.starts_with(&root) {
         return None;
     }
-    let exception = home.join(CLI_ROOT_EXCEPTION);
     let denied = CREDENTIAL_PATHS.iter().any(|relative| {
         let path = home.join(relative);
         let real = std::fs::canonicalize(&path).unwrap_or(path);
         root.starts_with(&real)
     });
-    (!denied || root.starts_with(&exception)).then_some(root)
+    let excepted = [CLI_ROOT_EXCEPTION, DOWNLOADED_CLI_EXCEPTION]
+        .iter()
+        .any(|exception| root.starts_with(home.join(exception)));
+    (!denied || excepted).then_some(root)
 }
 
 /// The `.git` of the root and of each grant, where one exists now.

@@ -42,8 +42,13 @@ async def admit_fire(
     source_event_id: str,
     user_id: UUID,
     metadata: Mapping[str, object] | None,
+    claimed: bool = False,
 ) -> bool:
     """Whether this fire may claim a run. When it may not, it is recorded.
+
+    ``claimed``: the fire's row already exists (a filter verdict promoting its
+    own FILTERING row), so it is counted rather than waved through, and a
+    refusal is left for the caller to settle on that row.
 
     Call before claiming, in the transaction that claims: the lock taken here
     is held until that claim commits, which is what makes the count honest.
@@ -66,7 +71,7 @@ async def admit_fire(
         return True
     runs = ScheduleRunRepository(uow)
     await runs.lock_admission(schedule.id)
-    if await runs.has_run_for_event(
+    if not claimed and await runs.has_run_for_event(
         schedule_id=schedule.id, source_event_id=source_event_id
     ):
         return True
@@ -75,6 +80,8 @@ async def admit_fire(
     )
     if in_flight < cap:
         return True
+    if claimed:
+        return False
     await ScheduleRunOutcomeService(uow).record_filtered(
         schedule,
         source_event_id=source_event_id,
