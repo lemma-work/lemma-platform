@@ -744,7 +744,9 @@ organization's contacts cap is reached, or a member answers the contact by hand
 stepped in by writing there -- the assignee of its current case -- and has
 written within the channel's hand-back window; past it, the member is let go
 and told). If so the message is kept
--- in the conversation and on the channel's timeline -- and no run starts. At
+-- in the conversation and on the channel's timeline -- and no run starts;
+marked held, it and whatever the person was told instead reach the run that
+answers them once the hold ends (`agent`'s `domain/held_turns`). At
 the cap the member is told, pushed -- or, when the member who looks after them
 cannot open a contact's channel, told how to get access while the pod's
 administrators are told it is theirs -- and the person hears once a day that a

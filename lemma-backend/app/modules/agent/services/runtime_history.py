@@ -173,9 +173,11 @@ def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
     )
 
 
-#: How many run-less notifications ride along with the history. They are short
-#: and rarely stack up, so this is a backstop rather than a budget.
-MAX_UNATTACHED_NOTIFICATIONS = 20
+#: How many run-less messages ride along with the history, the newest kept. A
+#: backstop rather than a budget: notifications rarely stack up, and where
+#: lines do -- a stretch a member answered by hand, where both sides are
+#: run-less -- the agent taking the conversation back picks up from the newest.
+MAX_UNATTACHED_MESSAGES = 20
 
 
 def oldest_carried_sequence(runs: list[AgentRun]) -> int | None:
@@ -192,20 +194,21 @@ def first_sequence_of_run(runs: list[AgentRun], run_id: UUID) -> int | None:
     return None
 
 
-def unattached_notification_window(
+def unattached_message_window(
     runs: list[AgentRun],
     run_id: UUID,
     *,
     dropped_runs: int,
 ) -> tuple[int | None, int | None]:
-    """``(after, before)`` sequences bounding the run-less notifications to carry.
+    """``(after, before)`` sequences bounding the run-less messages to carry.
 
-    The lower bound exists to keep a notification that is older than the
-    history out of it, so it applies only when history *was* cut. Applied
+    The lower bound exists to keep a message that is older than the history
+    out of it, so it applies only when history *was* cut. Applied
     unconditionally it is the oldest message the prompt carries, and for a
     conversation a notification opened that is the first run's own first
     message -- the notification precedes it, so the person's first reply to a
-    report or a reminder was read against nothing.
+    report or a reminder was read against nothing. A contact whose first words
+    were held for a person is the same.
 
     The upper bound is the turn being answered, whether or not anything was cut.
     """
@@ -230,7 +233,7 @@ class RuntimeHistorySource(Protocol):
         self, runs: list[AgentRun], *, full_run_ids: set[UUID]
     ) -> list[AgentRun]: ...
 
-    async def load_unattached_notifications(
+    async def load_unattached_messages(
         self,
         conversation_id: UUID,
         *,
@@ -251,9 +254,11 @@ async def assemble_runtime_history(
     """Every message the model is shown for ``run_id``, in the order it reads them.
 
     One place for the whole recipe so the runner and anything that wants to know
-    what a turn will see cannot drift apart on it -- the notification bounds in
-    particular are a decision about *this* history, and were made inline where
-    nothing could exercise them without a database.
+    what a turn will see cannot drift apart on it -- the bounds on run-less
+    messages in particular are a decision about *this* history, and were made
+    inline where nothing could exercise them without a database. Those ride
+    along with the runs: notifications, and what somebody outside the pod said
+    while a person had them (``held_turns``).
     """
     # The trim decides which runs need every message, and it can keep an
     # old-but-active run while dropping newer ones -- so it runs before the
@@ -268,15 +273,15 @@ async def assemble_runtime_history(
     messages = select_runtime_history(bounded, already_dropped=dropped_runs)
     # Belong to no run, so the run-keyed reads above never see them; sequences
     # are conversation-wide, so the harness places them.
-    after_sequence, before_sequence = unattached_notification_window(
+    after_sequence, before_sequence = unattached_message_window(
         bounded, run_id, dropped_runs=dropped_runs
     )
     messages.extend(
-        await source.load_unattached_notifications(
+        await source.load_unattached_messages(
             conversation_id,
             after_sequence=after_sequence,
             before_sequence=before_sequence,
-            limit=MAX_UNATTACHED_NOTIFICATIONS,
+            limit=MAX_UNATTACHED_MESSAGES,
         )
     )
     if read_channel is None:
@@ -299,7 +304,8 @@ def without_private_runs(
 
     Whole runs go, so a tool call never loses its return. A note queued into
     another run's history is dropped on its own. The current run is never
-    dropped: a private run reads its own note.
+    dropped: a private run reads its own note. What the stranger said while a
+    person had them stays: it is in no run, and never a note (``held_turns``).
     """
     private = {
         run.id

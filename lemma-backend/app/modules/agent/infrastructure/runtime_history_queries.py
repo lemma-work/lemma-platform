@@ -2,14 +2,14 @@
 
 What a prompt is built from: the newest runs of a conversation with their sizes,
 the messages attached to whichever of them survive the cap, and the run-less
-notifications that ride along. Delegated to by ``ConversationRepository``.
+messages that ride along. Delegated to by ``ConversationRepository``.
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.domain.entities import (
@@ -19,6 +19,7 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
+from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
 from app.modules.agent.infrastructure.runtime_history_window import (
     newest_runs,
@@ -208,7 +209,7 @@ class RuntimeHistoryQueries:
             ]
         return runs
 
-    async def load_unattached_notifications(
+    async def load_unattached_messages(
         self,
         conversation_id: UUID,
         *,
@@ -216,24 +217,31 @@ class RuntimeHistoryQueries:
         before_sequence: int | None,
         limit: int,
     ) -> list[MessageEntity]:
-        """Notifications written into the conversation outside any run.
+        """What was written into the conversation outside any run, and is carried.
 
-        A proactive message -- a reminder, a notification delivered to the
-        person's chat -- belongs to no run, so reading messages by run id never
-        finds it. The person's "yes" to it then arrives at an agent that cannot
-        see what was asked. Only notifications: other run-less messages are
-        queued turns, which the steering path already owns.
+        Reading messages by run id never finds these, and two kinds are owed to
+        the model. A notification -- a reminder, a report delivered to the
+        person's chat -- without which the person's "yes" to it reached an agent
+        that could not see what was asked. And what somebody outside the pod
+        said while a person had them (``held_turns``), without which the agent
+        answering them next read their newest message as if there were no
+        earlier thread. A queued turn is not run-less: it joins the run it
+        waits on. A copy a contact merge folded in (``folded_history``) keeps
+        the kind and marks of what it copies, so only copies of these two are
+        carried.
 
-        ``after_sequence`` is the oldest message the prompt carries; a
-        notification older than that is older than the history and stays out.
-        ``before_sequence`` is the turn being answered: one written after it
-        arrived mid-run and must not end up after the user turn the model is
-        replying to.
+        ``after_sequence`` is the oldest message the prompt carries; one older
+        than that is older than the history and stays out. ``before_sequence``
+        is the turn being answered: one written after it arrived mid-run and
+        must not end up after the user turn the model is replying to.
         """
         query = select(MessageModel).where(
             MessageModel.conversation_id == conversation_id,
             MessageModel.agent_run_id.is_(None),
-            MessageModel.kind == MessageKind.NOTIFICATION.value,
+            or_(
+                MessageModel.kind == MessageKind.NOTIFICATION.value,
+                MessageModel.message_metadata[HELD_FOR_A_PERSON].astext == "true",
+            ),
         )
         if after_sequence is not None:
             query = query.where(MessageModel.sequence > after_sequence)

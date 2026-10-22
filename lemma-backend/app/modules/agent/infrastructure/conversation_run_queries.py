@@ -215,7 +215,7 @@ class ConversationRunQueriesMixin:
             self.session
         ).attach_runtime_history_messages(runs, full_run_ids=full_run_ids)
 
-    async def load_unattached_notifications(
+    async def load_unattached_messages(
         self,
         conversation_id: UUID,
         *,
@@ -223,7 +223,7 @@ class ConversationRunQueriesMixin:
         before_sequence: int | None,
         limit: int,
     ) -> list[MessageEntity]:
-        return await RuntimeHistoryQueries(self.session).load_unattached_notifications(
+        return await RuntimeHistoryQueries(self.session).load_unattached_messages(
             conversation_id,
             after_sequence=after_sequence,
             before_sequence=before_sequence,

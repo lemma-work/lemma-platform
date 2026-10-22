@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.contracts.contact_conversations import hold_outside_turn
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     ConversationModel,
@@ -277,7 +278,7 @@ async def test_a_notification_that_belongs_to_no_run_is_still_loaded(
         )
     await db_session.flush()
 
-    loaded = await _repo(db_session).load_unattached_notifications(
+    loaded = await _repo(db_session).load_unattached_messages(
         conversation_id, after_sequence=None, before_sequence=None, limit=20
     )
 
@@ -286,17 +287,71 @@ async def test_a_notification_that_belongs_to_no_run_is_still_loaded(
     # Bounded on both sides: older than the history, or arriving after the turn
     # being answered, it stays out.
     assert (
-        await _repo(db_session).load_unattached_notifications(
+        await _repo(db_session).load_unattached_messages(
             conversation_id, after_sequence=500, before_sequence=None, limit=20
         )
         == []
     )
     assert (
-        await _repo(db_session).load_unattached_notifications(
+        await _repo(db_session).load_unattached_messages(
             conversation_id, after_sequence=None, before_sequence=500, limit=20
         )
         == []
     )
+
+
+async def test_what_a_contact_said_while_held_for_a_person_is_loaded_with_its_bounds(
+    db_session, scenario
+):
+    """A contact's turn held for a member, or past the contacts cap, starts no
+    run, so reading by run never finds it: the agent answering them next read
+    their newest message as if there were no earlier thread. Their message and
+    what they were told are carried; a run-less line nothing marked is not."""
+    await scenario.create_org_with_pod(name_prefix="HistoryHeld")
+    run_ids = await _seed(db_session, scenario, runs=2, messages_per_run=3)
+    conversation_id = (await db_session.get(AgentRunModel, run_ids[0])).conversation_id
+    uow = SqlAlchemyUnitOfWork(db_session)
+    await hold_outside_turn(
+        uow,
+        conversation_id=conversation_id,
+        text="Is anybody there?",
+        metadata={"sender_display_name": "Dana"},
+        reply="A person from the shop will reply here.",
+    )
+    db_session.add(
+        MessageModel(
+            id=uuid4(),
+            conversation_id=conversation_id,
+            agent_run_id=None,
+            sequence=1005,
+            role="user",
+            kind="TEXT",
+            text="a copy a contact merge folded in",
+            message_metadata={"folded_from": str(uuid4())},
+            created_at=_BASE + timedelta(minutes=30),
+        )
+    )
+    await db_session.flush()
+    await hold_outside_turn(
+        uow, conversation_id=conversation_id, text="Hello?", metadata={}, reply=None
+    )
+
+    loaded = await _repo(db_session).load_unattached_messages(
+        conversation_id, after_sequence=None, before_sequence=None, limit=20
+    )
+
+    assert [(message.role.value, message.text) for message in loaded] == [
+        ("user", "Is anybody there?"),
+        ("assistant", "A person from the shop will reply here."),
+        ("user", "Hello?"),
+    ]
+    # The bounds a notification has: older than the history, or after the turn
+    # being answered, stays out.
+    first, told, last = (message.sequence for message in loaded)
+    within = await _repo(db_session).load_unattached_messages(
+        conversation_id, after_sequence=first, before_sequence=last, limit=20
+    )
+    assert [message.sequence for message in within] == [told]
 
 
 async def test_the_first_reply_to_a_notification_is_read_against_it(
