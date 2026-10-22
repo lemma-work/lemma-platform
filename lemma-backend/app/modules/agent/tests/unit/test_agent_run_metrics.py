@@ -287,6 +287,11 @@ class _RecordingFinalizer:
         self.finished.append(kwargs)
 
 
+async def _said_nothing(agent_run_id: UUID) -> None:
+    """No words on the record: what a completed run with no output finds."""
+    del agent_run_id
+
+
 @pytest.mark.parametrize(
     ("event_type", "expected"),
     [
@@ -318,9 +323,9 @@ async def test_a_terminal_event_is_counted_as_the_outcome_it_finalized(
         started_at=None,
     )
 
-    terminal = await RunEventPump(SimpleNamespace(), finalizer).handle(
-        event=AgentEvent(type=event_type, data={}), run=run, outcome=outcome
-    )
+    terminal = await RunEventPump(
+        SimpleNamespace(last_words=_said_nothing), finalizer
+    ).handle(event=AgentEvent(type=event_type, data={}), run=run, outcome=outcome)
 
     assert terminal and len(finalizer.finished) == 1
     assert ended_as(outcome.final_status) == expected

@@ -14,4 +14,5 @@ mod session;
 mod setup_deadline_tests;
 mod start_gate_tests;
 mod steering_tests;
+mod supervision_tests;
 mod tolerance_tests;

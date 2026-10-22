@@ -91,6 +91,7 @@ impl SupervisedAgent {
             .ok()
             .and_then(Result::ok)
             .unwrap_or_default();
+        let tail = without_lemmas_own_warnings(&tail);
         if tail.trim().is_empty() {
             anyhow::anyhow!("Process exited with {status}")
         } else {
@@ -170,6 +171,34 @@ pub(crate) fn kill_agent_tree(pid: u32) {
             .stderr(std::process::Stdio::null())
             .spawn();
     }
+}
+
+/// The code of the warning the Claude Agent SDK prints, once a session, when
+/// `allowedTools` names a tool outright beside a `canUseTool` callback. Lemma
+/// does that on purpose for its own tools (`session_options::lemma_tool_rules`),
+/// so the warning is on the stderr of every Claude Code run that has them,
+/// naming each one, and says nothing about why that run failed.
+const SDK_ALLOWED_TOOLS_WARNING: &str = "[CLAUDE_SDK_CAN_USE_TOOL_SHADOWED]";
+
+/// `tail` without the warning above, and without the line Node prints after
+/// a process's first warning (``(Use `node --trace-warnings ...` ...)``, named
+/// for however the process was started), when it follows that one.
+///
+/// Quoted as a crashed agent's own error, the warning came first, a line
+/// listing every Lemma tool the run had, and read as the cause.
+pub(crate) fn without_lemmas_own_warnings(tail: &str) -> String {
+    let mut kept = Vec::new();
+    let mut after_warning = false;
+    for line in tail.lines() {
+        let warning = line.contains(SDK_ALLOWED_TOOLS_WARNING);
+        let hint =
+            after_warning && line.starts_with("(Use `") && line.contains(" --trace-warnings ");
+        after_warning = warning;
+        if !warning && !hint {
+            kept.push(line);
+        }
+    }
+    kept.join("\n")
 }
 
 /// Read an agent's stderr into a bounded tail, for its failure message.

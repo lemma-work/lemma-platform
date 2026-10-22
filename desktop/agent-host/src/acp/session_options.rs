@@ -21,7 +21,9 @@
 //! offers the same thing and its prompt tells the agent to use Lemma's: the
 //! agent's own browser control (the person watches Lemma's browser, not one on
 //! their Mac), its own web search and fetch when the run has Lemma's, and
-//! Claude Code's own subagents when the run has Lemma's.
+//! Claude Code's own subagents when the run has Lemma's. Others are allowed
+//! either way: Claude Code may call Lemma's own tools, and run the run's own
+//! `lemma`, without asking anyone (`claude_code`).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -29,7 +31,8 @@ use std::path::Path;
 use agent_client_protocol::schema::v1::McpServer;
 use serde_json::{Map, Value, json};
 
-use super::{claude_config_dir, claude_permission_rules, claude_sign_in};
+use super::{claude_config_dir, claude_permission_rules, claude_sign_in, published_mcp_tool_names};
+use crate::adapters::version_is_at_least;
 use crate::protocol::RunSpec;
 
 /// The Lemma tool that stands in for an agent's own web search.
@@ -38,6 +41,9 @@ const LEMMA_WEB_SEARCH: &str = "lemma_web_search";
 const LEMMA_WEB_FETCH: &str = "lemma_web_fetch";
 /// The Lemma tool that stands in for an agent's own subagents.
 const LEMMA_SPAWN_SUBAGENT: &str = "lemma_spawn_subagent";
+/// The first Claude Code that reads `alwaysLoad` on an MCP server's config.
+/// The pinned adapter accepts older ones (`minimum_upstream_version`).
+const CLAUDE_CODE_ALWAYS_LOAD: &str = "2.1.121";
 
 /// How one run's session is opened, beyond what ACP itself says.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -49,9 +55,11 @@ pub(crate) struct SessionOptions {
     pub(crate) environment: BTreeMap<String, String>,
     /// The instructions travel in `meta`, so the prompt must not repeat them.
     pub(crate) system_prompt_in_meta: bool,
-    /// Lemma's MCP server travels in `environment` (`CODEX_CONFIG`), so the
-    /// session must not name it again in its `mcpServers`.
-    pub(crate) mcp_server_in_environment: bool,
+    /// Lemma's MCP server travels in the agent's own configuration --
+    /// `CODEX_CONFIG` in `environment`, Claude Code's options in `meta` --
+    /// where it carries what ACP cannot, so the session must not name it
+    /// again in its `mcpServers`.
+    pub(crate) mcp_server_in_agent_config: bool,
 }
 
 /// What this run's agent is started with.
@@ -61,7 +69,8 @@ pub(crate) struct SessionOptions {
 /// the person's choice for this agent, and only Claude Code reads it. `lemma_cli` is the `bin/` of Lemma's own
 /// CLI, when this Mac has one for the run, which goes first on the agent's
 /// `PATH` so the `lemma` it runs is the release its server is. `mcp_server`
-/// is Lemma's own server for the run, when it has one.
+/// is Lemma's own server for the run, when it has one. `upstream_version` is
+/// what the agent itself answered to `--version`, when it did.
 pub(crate) fn session_options(
     adapter_key: &str,
     adapter_environment: &BTreeMap<String, String>,
@@ -69,6 +78,7 @@ pub(crate) fn session_options(
     own_settings: bool,
     lemma_cli: Option<&Path>,
     mcp_server: Option<&McpServer>,
+    upstream_version: Option<&str>,
 ) -> SessionOptions {
     let lemma_tools = LemmaTools::of(spec);
     let mut options = match adapter_key {
@@ -78,6 +88,8 @@ pub(crate) fn session_options(
             &lemma_tools,
             claude_config_dir().as_deref(),
             lemma_cli,
+            mcp_server,
+            upstream_version,
         ),
         "codex" => codex(adapter_environment, &lemma_tools, mcp_server),
         "opencode" => opencode(&lemma_tools),
@@ -145,21 +157,33 @@ impl LemmaTools {
 ///   tool is `Agent` in current Claude Code, which still reads `Task` as its
 ///   earlier name; the pinned adapter accepts a Claude Code back to 2.1.0, so
 ///   both are named.
-/// - `env` turns Claude Code's tool search off (`ENABLE_TOOL_SEARCH=false`),
-///   whichever way the switch is set. With it on, every MCP tool is held back
-///   until the model looks it up by name, so Lemma's tools -- the run's whole
-///   reason for being in Lemma -- were in no prompt the model saw, and it
-///   reached for the built-in ones it could. Claude Code's own MCP call limit
+/// - `mcpServers` holds Lemma's own server, marked `alwaysLoad`, whichever way
+///   the switch is set. Claude Code otherwise holds every MCP tool back behind
+///   its tool search until the model looks it up by name, so Lemma's tools --
+///   the run's whole reason for being in Lemma -- were in no prompt the model
+///   saw: it reached for the built-in ones it could, or spent a whole request
+///   on `ToolSearch` before its first real call. `alwaysLoad` lists Lemma's
+///   tools and nothing else; Claude Code's own rarely used tools, and with the
+///   person's own setup their MCP servers, stay behind the search as they
+///   would outside Lemma, rather than adding their definitions to every
+///   request. The session's `mcpServers` must then leave the server out: the
+///   adapter lets an entry there replace this one, without the flag. A
+///   Claude Code older than `alwaysLoad`, or a server that is not the stdio
+///   bridge, has its tool search turned off instead (`ENABLE_TOOL_SEARCH=false`
+///   in `env`), which lists every tool. Claude Code's own MCP call limit
 ///   needs nothing: it is longer than the bridge's (`CALL_TIMEOUT`) unless the
 ///   person set `MCP_TOOL_TIMEOUT`.
-/// - `allowedTools` lets the run's own `lemma` CLI run without a permission
-///   request (`lemma_cli_rules`), whichever way the switch is set.
+/// - `allowedTools` lets the tools Lemma serves the run (`lemma_tool_rules`)
+///   and the run's own `lemma` CLI (`lemma_cli_rules`) run without a
+///   permission request, whichever way the switch is set.
 fn claude_code(
     spec: &RunSpec,
     own_settings: bool,
     lemma_tools: &LemmaTools,
     claude_config: Option<&Path>,
     lemma_cli: Option<&Path>,
+    mcp_server: Option<&McpServer>,
+    upstream_version: Option<&str>,
 ) -> SessionOptions {
     let mut disallowed = vec![json!("mcp__claude-in-chrome")];
     if lemma_tools.web_search {
@@ -171,12 +195,29 @@ fn claude_code(
     if lemma_tools.spawn_subagent {
         disallowed.extend([json!("Agent"), json!("Task")]);
     }
+    let reads_always_load = upstream_version
+        .is_some_and(|version| version_is_at_least(version, CLAUDE_CODE_ALWAYS_LOAD));
+    let always_loaded = mcp_server
+        .filter(|_| reads_always_load)
+        .and_then(claude_mcp_server);
     let mut env = Map::new();
-    env.insert("ENABLE_TOOL_SEARCH".to_owned(), json!("false"));
     let mut claude_options = Map::new();
+    if let Some((name, entry)) = &always_loaded {
+        let mut servers = Map::new();
+        servers.insert(name.clone(), entry.clone());
+        claude_options.insert("mcpServers".to_owned(), Value::Object(servers));
+    } else if mcp_server.is_some() {
+        env.insert("ENABLE_TOOL_SEARCH".to_owned(), json!("false"));
+    }
     claude_options.insert("disallowedTools".to_owned(), Value::Array(disallowed));
+    let mut allowed = mcp_server
+        .map(|server| lemma_tool_rules(spec, server))
+        .unwrap_or_default();
     if let Some(bin) = lemma_cli {
-        claude_options.insert("allowedTools".to_owned(), json!(lemma_cli_rules(bin)));
+        allowed.extend(lemma_cli_rules(bin));
+    }
+    if !allowed.is_empty() {
+        claude_options.insert("allowedTools".to_owned(), json!(allowed));
     }
     // Claude Code's own switch for its browser integration, which also reads
     // a preference `settingSources` does not govern.
@@ -204,8 +245,31 @@ fn claude_code(
         meta: Some(meta),
         environment: BTreeMap::new(),
         system_prompt_in_meta: !instructions.is_empty(),
-        mcp_server_in_environment: false,
+        mcp_server_in_agent_config: always_loaded.is_some(),
     }
+}
+
+/// Lemma's stdio bridge as a Claude Code `mcpServers` entry whose tools are
+/// always in the prompt.
+fn claude_mcp_server(server: &McpServer) -> Option<(String, Value)> {
+    let McpServer::Stdio(stdio) = server else {
+        return None;
+    };
+    let env: Map<String, Value> = stdio
+        .env
+        .iter()
+        .map(|variable| (variable.name.clone(), json!(variable.value)))
+        .collect();
+    Some((
+        stdio.name.clone(),
+        json!({
+            "type": "stdio",
+            "command": stdio.command.to_string_lossy(),
+            "args": stdio.args,
+            "env": env,
+            "alwaysLoad": true,
+        }),
+    ))
 }
 
 /// What of the person's own Claude Code settings in `config` goes back in as
@@ -216,6 +280,60 @@ fn persons_flag_settings(config: &Path) -> Option<Map<String, Value>> {
         settings.insert("permissions".to_owned(), Value::Object(rules));
     }
     (!settings.is_empty()).then_some(settings)
+}
+
+/// The permission rules that let the tools Lemma serves this run, through
+/// `server`, be called without a permission request: `mcp__<server>__<tool>`,
+/// the name Claude Code gives each, for every tool the run published.
+///
+/// Where Claude Code would ask about one of these, the host says yes itself
+/// (`PermissionHandler::triage` in `driver`): they are scoped to the run and
+/// authorised by the workspace already. So in a mode that asks, the rules
+/// only spare a round trip. "Don't Ask" is the mode they are for: it never
+/// asks, and denies whatever no rule allows, so a run in it could call none
+/// of Lemma's tools and did nothing. "Auto" mode's classifier, which judges
+/// only what Claude Code would otherwise ask about, no longer sees these
+/// calls either. Claude Code's own tools get no rule here: they ask, or are
+/// denied, as the mode says.
+///
+/// One rule per published name, the same set triage trusts, rather than
+/// `mcp__<server>`, which Claude Code also takes, for every tool of that
+/// server: a tool Lemma did not publish is not one the host vouches for.
+///
+/// A name with anything but letters, digits, `_` and `-` gets no rule.
+/// Claude Code would rename that tool, so the rule could not match it; and
+/// the rules reach Claude Code as one argument it splits on commas and spaces,
+/// so a name like `lemma_x,Bash` would add a rule of its own, for every
+/// command.
+fn lemma_tool_rules(spec: &RunSpec, server: &McpServer) -> Vec<String> {
+    let Some(server) = registered_name(server).filter(|name| is_plain_name(name)) else {
+        return Vec::new();
+    };
+    published_mcp_tool_names(&spec.mcp)
+        .filter(|tool| is_plain_name(tool))
+        .map(|tool| format!("mcp__{server}__{tool}"))
+        .collect()
+}
+
+/// The name `server` is registered under in the session, which an agent puts
+/// in front of each of its tools' names.
+fn registered_name(server: &McpServer) -> Option<&str> {
+    match server {
+        McpServer::Stdio(stdio) => Some(&stdio.name),
+        McpServer::Http(http) => Some(&http.name),
+        McpServer::Sse(sse) => Some(&sse.name),
+        _ => None,
+    }
+}
+
+/// Letters, digits, `_` and `-`, and at least one: a name Codex takes as a
+/// config key as it is, and one Claude Code leaves as it is in an MCP tool's
+/// name.
+fn is_plain_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 /// The permission rules that let the run's own `lemma` CLI, in `bin`, run
@@ -277,7 +395,7 @@ fn codex(
         overrides.insert("web_search".to_owned(), json!("disabled"));
     }
     let server = mcp_server.and_then(codex_mcp_server);
-    let mcp_server_in_environment = server.is_some();
+    let mcp_server_in_agent_config = server.is_some();
     let mut environment = BTreeMap::new();
     if !overrides.is_empty() || server.is_some() {
         let mut config = adapter_environment
@@ -307,7 +425,7 @@ fn codex(
         meta: None,
         environment,
         system_prompt_in_meta: false,
-        mcp_server_in_environment,
+        mcp_server_in_agent_config,
     }
 }
 
@@ -319,12 +437,7 @@ fn codex_mcp_server(server: &McpServer) -> Option<(String, Value)> {
     let McpServer::Stdio(stdio) = server else {
         return None;
     };
-    let name_is_a_key = !stdio.name.is_empty()
-        && stdio
-            .name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-    if !name_is_a_key {
+    if !is_plain_name(&stdio.name) {
         return None;
     }
     let env: Map<String, Value> = stdio
@@ -366,7 +479,7 @@ fn opencode(lemma_tools: &LemmaTools) -> SessionOptions {
         meta: None,
         environment,
         system_prompt_in_meta: false,
-        mcp_server_in_environment: false,
+        mcp_server_in_agent_config: false,
     }
 }
 
@@ -418,7 +531,7 @@ mod tests {
         for own in [false, true] {
             for key in ["codex", "opencode"] {
                 assert_eq!(
-                    session_options(key, &BTreeMap::new(), &spec, own, None, None),
+                    session_options(key, &BTreeMap::new(), &spec, own, None, None, None),
                     SessionOptions::default(),
                     "{key} own_settings={own}"
                 );
@@ -478,12 +591,12 @@ mod tests {
         .unwrap();
         let tools = LemmaTools::default();
 
-        let isolated = claude_code(&spec, false, &tools, Some(&config), None);
+        let isolated = claude_code(&spec, false, &tools, Some(&config), None, None, None);
         let options = &isolated.meta.unwrap()["claudeCode"]["options"];
         assert_eq!(options["settings"], json!({ "apiKeyHelper": "key-helper" }));
         assert_eq!(options["plugins"], json!([]));
 
-        let own = claude_code(&spec, true, &tools, Some(&config), None);
+        let own = claude_code(&spec, true, &tools, Some(&config), None, None, None);
         let options = &own.meta.unwrap()["claudeCode"]["options"];
         assert!(options.get("settings").is_none(), "{options}");
         assert!(options.get("plugins").is_none(), "{options}");
@@ -508,7 +621,15 @@ mod tests {
     fn claude_code_may_run_the_runs_own_lemma_cli_without_asking() {
         let bin = Path::new("/Lemma/runtime/releases/7/backend/bin");
         for own in [false, true] {
-            let options = claude_code(&empty_spec(), own, &no_web_tools(), None, Some(bin));
+            let options = claude_code(
+                &empty_spec(),
+                own,
+                &no_web_tools(),
+                None,
+                Some(bin),
+                None,
+                None,
+            );
             let options = &options.meta.unwrap()["claudeCode"]["options"];
             // Joined the way the host joins it: Windows separates with `\`.
             let exact = format!("Bash({}:*)", bin.join("lemma").display());
@@ -519,7 +640,15 @@ mod tests {
             );
         }
         // No CLI this Mac took for the run: nothing is allowed by name.
-        let options = claude_code(&empty_spec(), false, &no_web_tools(), None, None);
+        let options = claude_code(
+            &empty_spec(),
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            None,
+            None,
+        );
         let options = &options.meta.unwrap()["claudeCode"]["options"];
         assert!(options.get("allowedTools").is_none(), "{options}");
     }
@@ -554,6 +683,8 @@ mod tests {
             &no_web_tools(),
             Some(&config),
             Some(Path::new("/pack/bin")),
+            None,
+            None,
         );
         let options = &options.meta.unwrap()["claudeCode"]["options"];
 
@@ -574,21 +705,150 @@ mod tests {
         assert_eq!(options["allowedTools"], json!([exact, "Bash(lemma:*)"]));
     }
 
+    fn publishing(names: &[&str]) -> RunSpec {
+        let mut spec = empty_spec();
+        spec.mcp = json!({ "server_name": "lemma_tools", "tool_names": names });
+        spec
+    }
+
+    /// "Don't Ask" never sends a permission request, so the host never got to
+    /// say yes to a Lemma tool, and every one of them was denied.
+    #[test]
+    fn claude_code_may_call_the_tools_lemma_published_without_asking() {
+        let spec = publishing(&["lemma_pod_read_file", "lemma_exec_command"]);
+        let server = bridge("lemma_tools");
+        let bin = Path::new("/pack/bin");
+        let cli = format!("Bash({}:*)", bin.join("lemma").display());
+        for own in [false, true] {
+            let options = claude_options(claude_code(
+                &spec,
+                own,
+                &no_web_tools(),
+                None,
+                Some(bin),
+                Some(&server),
+                CURRENT_CLAUDE_CODE,
+            ));
+            assert_eq!(
+                options["allowedTools"],
+                json!([
+                    "mcp__lemma_tools__lemma_pod_read_file",
+                    "mcp__lemma_tools__lemma_exec_command",
+                    cli,
+                    "Bash(lemma:*)",
+                ]),
+                "own_settings={own}"
+            );
+        }
+
+        // No server for the run, or nothing published on it: no tool is
+        // allowed by name, as triage would trust none.
+        let unserved = claude_options(claude_code(
+            &spec,
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            None,
+            CURRENT_CLAUDE_CODE,
+        ));
+        assert!(unserved.get("allowedTools").is_none(), "{unserved}");
+        let unpublished = claude_options(claude_code(
+            &empty_spec(),
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            Some(&server),
+            CURRENT_CLAUDE_CODE,
+        ));
+        assert!(unpublished.get("allowedTools").is_none(), "{unpublished}");
+    }
+
+    /// The rules reach Claude Code as one argument it splits on commas and
+    /// spaces, so a name that is not one plain word would write rules of its
+    /// own.
+    #[test]
+    fn a_published_name_that_is_not_one_plain_word_gets_no_rule() {
+        let spec = publishing(&[
+            "lemma_x,Bash",
+            "lemma_y Write",
+            "Edit(/**)",
+            "lemma.read",
+            " lemma_echo ",
+            "lemma_Read_Table",
+        ]);
+        let options = claude_options(claude_code(
+            &spec,
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            Some(&bridge("lemma_tools")),
+            CURRENT_CLAUDE_CODE,
+        ));
+        // Trimmed as triage trims it, and otherwise spelled as published:
+        // Claude Code matches the name exactly.
+        assert_eq!(
+            options["allowedTools"],
+            json!([
+                "mcp__lemma_tools__lemma_echo",
+                "mcp__lemma_tools__lemma_Read_Table",
+            ])
+        );
+
+        // A server name that is not one word gives none of its tools a rule.
+        let options = claude_options(claude_code(
+            &spec,
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            Some(&bridge("lemma tools")),
+            CURRENT_CLAUDE_CODE,
+        ));
+        assert!(options.get("allowedTools").is_none(), "{options}");
+    }
+
     fn claude_options(options: SessionOptions) -> Value {
         options.meta.unwrap()["claudeCode"]["options"].clone()
     }
 
-    /// With tool search on, Lemma's MCP tools were in no prompt the model
-    /// saw until it searched for them by name.
+    const CURRENT_CLAUDE_CODE: Option<&str> = Some("2.1.303 (Claude Code)");
+
+    /// Behind Claude Code's tool search, Lemma's MCP tools were in no prompt
+    /// the model saw until it searched for them by name.
     #[test]
-    fn claude_code_has_its_tool_search_off_either_way() {
+    fn claude_code_is_shown_lemmas_tools_either_way() {
+        let server = bridge("lemma_tools");
         for own in [false, true] {
-            let options =
-                claude_options(claude_code(&empty_spec(), own, &no_web_tools(), None, None));
+            let options = claude_code(
+                &empty_spec(),
+                own,
+                &no_web_tools(),
+                None,
+                None,
+                Some(&server),
+                CURRENT_CLAUDE_CODE,
+            );
+            // Given in Claude Code's own options, so not in the session too.
+            assert!(options.mcp_server_in_agent_config, "own_settings={own}");
+            let options = claude_options(options);
             assert_eq!(
-                options["env"]["ENABLE_TOOL_SEARCH"],
-                json!("false"),
+                options["mcpServers"],
+                json!({ "lemma_tools": {
+                    "type": "stdio",
+                    "command": "/Lemma/lemma-agent-host",
+                    "args": ["mcp-bridge"],
+                    "env": { "LEMMA_AGENT_HOST_BRIDGE": "1" },
+                    "alwaysLoad": true,
+                } }),
                 "own_settings={own}"
+            );
+            // Its search stays on for every other tool.
+            assert!(
+                options["env"].get("ENABLE_TOOL_SEARCH").is_none(),
+                "own_settings={own}: {options}"
             );
             // Auto-memory stays the person's when they keep their own setup.
             assert_eq!(
@@ -599,6 +859,54 @@ mod tests {
                 "own_settings={own}: {options}"
             );
         }
+    }
+
+    /// A Claude Code that predates `alwaysLoad`, or whose version is unknown,
+    /// would read the server's entry without it and search for Lemma's tools
+    /// again, so its tool search is turned off and the session names the
+    /// server as before.
+    #[test]
+    fn an_older_claude_code_has_its_tool_search_turned_off_instead() {
+        let server = bridge("lemma_tools");
+        for version in [Some("2.1.120 (Claude Code)"), None] {
+            for own in [false, true] {
+                let options = claude_code(
+                    &empty_spec(),
+                    own,
+                    &no_web_tools(),
+                    None,
+                    None,
+                    Some(&server),
+                    version,
+                );
+                assert!(!options.mcp_server_in_agent_config, "{version:?}");
+                let options = claude_options(options);
+                assert!(
+                    options.get("mcpServers").is_none(),
+                    "{version:?}: {options}"
+                );
+                assert_eq!(
+                    options["env"]["ENABLE_TOOL_SEARCH"],
+                    json!("false"),
+                    "{version:?} own_settings={own}"
+                );
+            }
+        }
+        // With no Lemma server there is nothing of Lemma's to show.
+        let options = claude_options(claude_code(
+            &empty_spec(),
+            false,
+            &no_web_tools(),
+            None,
+            None,
+            None,
+            CURRENT_CLAUDE_CODE,
+        ));
+        assert!(options.get("mcpServers").is_none(), "{options}");
+        assert!(
+            options["env"].get("ENABLE_TOOL_SEARCH").is_none(),
+            "{options}"
+        );
     }
 
     #[test]
@@ -616,6 +924,8 @@ mod tests {
                 &LemmaTools::of(&served),
                 None,
                 None,
+                None,
+                None,
             ));
             let disallowed = options["disallowedTools"].as_array().unwrap();
             assert!(disallowed.contains(&json!("Agent")), "{options}");
@@ -626,6 +936,8 @@ mod tests {
                 &unserved,
                 own,
                 &LemmaTools::of(&unserved),
+                None,
+                None,
                 None,
                 None,
             ));
@@ -655,7 +967,7 @@ mod tests {
             json!({ "plugins": { "browser@openai-bundled": { "enabled": false } } }).to_string(),
         )]);
         let options = codex(&pinned, &no_web_tools(), Some(&bridge("lemma_tools")));
-        assert!(options.mcp_server_in_environment);
+        assert!(options.mcp_server_in_agent_config);
         let config: Value = serde_json::from_str(&options.environment["CODEX_CONFIG"]).unwrap();
         assert_eq!(
             config["mcp_servers"],
@@ -727,7 +1039,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            session_options("cursor", &BTreeMap::new(), &spec, false, None, None),
+            session_options("cursor", &BTreeMap::new(), &spec, false, None, None, None),
             SessionOptions::default()
         );
     }

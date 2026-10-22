@@ -5,32 +5,46 @@ use super::*;
 use crate::host_loopback::{
     bind_relay_socket, requested_host_port, serve_relay, serve_relay_client, HOST_LOOPBACK_SOCKET,
 };
+use crate::sandbox_tunnel::wait_readable;
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A read that never ends fails the test instead of hanging it. Generous on
-/// purpose: it guards against a hang, not a slow machine, and a shared CI
-/// runner once took longer than five seconds to move 256 KiB through the relay.
-fn bounded(stream: &UnixStream) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .unwrap();
+/// A test end's reads: each waits in `poll` first, as the relay's do, because
+/// on macOS a blocking read can sleep through its peer's half-close (see
+/// `copy_until_eof`). A read that never ends fails the test instead of hanging
+/// it. Generous on purpose: it guards against a hang, not a slow machine, and
+/// a shared CI runner once took longer than five seconds to move 256 KiB
+/// through the relay.
+struct Patient(UnixStream);
+
+impl Read for Patient {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if !wait_readable(self.0.as_raw_fd(), Some(Duration::from_secs(30)))? {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "nothing to read for 30 seconds",
+            ));
+        }
+        self.0.read(buffer)
+    }
+}
+
+fn patient(stream: &UnixStream) -> Patient {
+    Patient(stream.try_clone().unwrap())
 }
 
 /// A sandbox connection (the test's end) and the end guestd is handed.
 fn sandbox_link() -> (UnixStream, UnixStream) {
-    let (sandbox, guest) = UnixStream::pair().unwrap();
-    bounded(&sandbox);
-    (sandbox, guest)
+    UnixStream::pair().unwrap()
 }
 
 /// A stand-in host: reads the request line, answers it, then echoes until the
 /// guest half-closes, and closes after answering.
 fn echoing_host(answer: &'static str) -> (UnixStream, thread::JoinHandle<String>) {
     let (guest_end, mut host) = UnixStream::pair().unwrap();
-    bounded(&host);
     let served = thread::spawn(move || {
-        let mut reader = BufReader::new(host.try_clone().unwrap());
+        let mut reader = BufReader::new(patient(&host));
         let mut request = String::new();
         reader.read_line(&mut request).unwrap();
         host.write_all(answer.as_bytes()).unwrap();
@@ -96,7 +110,7 @@ fn a_refused_request_never_reaches_the_host() {
         })
         .unwrap();
         let mut answer = String::new();
-        sandbox.read_to_string(&mut answer).unwrap();
+        patient(&sandbox).read_to_string(&mut answer).unwrap();
         assert!(answer.starts_with("error "), "{request:?}: {answer:?}");
         assert!(
             !dialled.load(Ordering::SeqCst),
@@ -115,7 +129,7 @@ fn the_host_is_asked_for_the_port_and_its_answer_passes_through() {
     sandbox.write_all(b"3000\nGET / HTTP/1.1\r\n\r\n").unwrap();
     sandbox.shutdown(std::net::Shutdown::Write).unwrap();
     let mut answer = String::new();
-    sandbox.read_to_string(&mut answer).unwrap();
+    patient(&sandbox).read_to_string(&mut answer).unwrap();
 
     assert_eq!(served.join().unwrap(), "3000\n");
     assert_eq!(answer, "ok\nGET / HTTP/1.1\r\n\r\n");
@@ -132,7 +146,7 @@ fn a_host_refusal_reaches_the_sandbox_verbatim() {
 
     sandbox.write_all(b"49153\n").unwrap();
     let mut answer = String::new();
-    sandbox.read_to_string(&mut answer).unwrap();
+    patient(&sandbox).read_to_string(&mut answer).unwrap();
 
     assert_eq!(served.join().unwrap(), "49153\n");
     assert_eq!(answer, "error that port is one of Lemma's own\n");
@@ -149,7 +163,7 @@ fn an_unreachable_host_is_an_error_line_not_a_hang() {
     })
     .unwrap();
     let mut answer = String::new();
-    sandbox.read_to_string(&mut answer).unwrap();
+    patient(&sandbox).read_to_string(&mut answer).unwrap();
     assert_eq!(answer, "error the host is not reachable\n");
 }
 
@@ -159,9 +173,8 @@ fn an_unreachable_host_is_an_error_line_not_a_hang() {
 fn a_half_close_from_the_sandbox_still_gets_the_whole_response() {
     let (mut sandbox, guest) = sandbox_link();
     let (guest_end, mut host) = UnixStream::pair().unwrap();
-    bounded(&host);
     let served = thread::spawn(move || {
-        let mut reader = BufReader::new(host.try_clone().unwrap());
+        let mut reader = BufReader::new(patient(&host));
         let mut request = String::new();
         reader.read_line(&mut request).unwrap();
         host.write_all(b"ok\n").unwrap();
@@ -178,7 +191,7 @@ fn a_half_close_from_the_sandbox_still_gets_the_whole_response() {
     sandbox.write_all(b"3000\nupload").unwrap();
     sandbox.shutdown(std::net::Shutdown::Write).unwrap();
     let mut answer = Vec::new();
-    sandbox.read_to_end(&mut answer).unwrap();
+    patient(&sandbox).read_to_end(&mut answer).unwrap();
 
     assert_eq!(served.join().unwrap(), b"upload");
     assert_eq!(&answer[..3], b"ok\n");
@@ -218,10 +231,9 @@ fn a_restarted_guest_rebinds_the_socket_in_place() {
         })
     });
     let mut sandbox = UnixStream::connect(&path).unwrap();
-    bounded(&sandbox);
     sandbox.write_all(b"3000\n").unwrap();
     let mut answer = String::new();
-    sandbox.read_to_string(&mut answer).unwrap();
+    patient(&sandbox).read_to_string(&mut answer).unwrap();
     assert_eq!(answer, "error the host is not reachable\n");
 }
 

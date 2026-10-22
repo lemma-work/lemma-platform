@@ -26,6 +26,7 @@ from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
+    AgentEventType,
     ConversationStatus,
     JsonObject,
     JsonValue,
@@ -34,6 +35,10 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.repositories.run_last_words import (
+    last_text,
+    tool_result_after,
+)
 
 logger = get_logger(__name__)
 
@@ -241,6 +246,45 @@ class RunMessageWriter:
         return await repository.get_tool_return(
             conversation_id=conversation_id,
             tool_call_id=draft.tool_call_id,
+        )
+
+    async def last_words(self, agent_run_id: UUID) -> Message | None:
+        """The answer this run left on the record without naming it, if any.
+
+        Its last assistant text, unless a tool result follows it. A result
+        means the agent went on working once it had spoken, so the text was
+        leading up to that work and the run ended with no answer. Nothing else
+        after it is work: a call announced after the agent's closing words --
+        an Agent Host releases one its adapter opened and never settled only
+        once the turn is over -- never ran, and the return made up for it as
+        the run ended says exactly that; a thought is not speech, and a
+        person's message is not the agent's doing.
+
+        Read from the record rather than the events this process saw, so a run
+        resumed on another worker after its closing words still finds them.
+        """
+        async with self.uow_factory() as uow:
+            words = await last_text(uow.session, agent_run_id=agent_run_id)
+            if words is None or not (words.text or "").strip():
+                return None
+            if await tool_result_after(
+                uow.session, agent_run_id=agent_run_id, sequence=words.sequence
+            ):
+                return None
+        return words
+
+    def answer_output(self, answer: Message) -> JsonValue | None:
+        """What a run answered by ``answer`` hands back, by the rule for any answer."""
+        draft = MessageDraft.of_text(
+            answer.text or "",
+            metadata={**(answer.metadata or {}), "is_final_answer": True},
+        )
+        return self.output_data_from_event(
+            AgentEvent(
+                type=AgentEventType.MESSAGE,
+                data=draft,
+                agent_run_id=answer.agent_run_id,
+            )
         )
 
     def output_data_from_event(self, event: AgentEvent) -> JsonValue | None:

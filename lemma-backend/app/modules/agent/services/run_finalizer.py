@@ -20,6 +20,7 @@ from uuid import UUID
 
 
 from app.core.authorization.delegation import is_pod_default_agent
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
@@ -27,6 +28,7 @@ from app.modules.agent.infrastructure.harnesses.run_failure_classification impor
     is_usage_limit_error as is_usage_limit_error,
     run_failure_reason as run_failure_reason,
 )
+from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
     AgentRunUsage,
@@ -41,13 +43,18 @@ from app.modules.agent.infrastructure.wait_repository import (
 from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
+from app.modules.agent.infrastructure.repositories.run_last_words import (
+    mark_final_answer,
+)
 from app.modules.agent.services.realtime import (
     completed_payload,
     error_payload,
+    message_payload,
     publish_conversation_event,
 )
 from app.modules.agent.services.run_followups import stage_run_followups
 from app.modules.agent.services.run_identity import RunIdentity
+from app.modules.agent.services.serialization import message_to_payload
 from app.modules.usage.contracts.execution import usage_context_from_agent_context
 from app.modules.agent.tools.context import ConversationContext
 
@@ -109,6 +116,22 @@ async def waiting_on_work(uow: Any, conversation_id: UUID) -> bool:
     return await AgentConversationWaitRepository(uow).has_active(conversation_id)
 
 
+async def _marked_as_the_answer(
+    uow: SqlAlchemyUnitOfWork, answer: Message | None
+) -> Message | None:
+    if answer is None:
+        return None
+    return await mark_final_answer(uow.session, message_id=answer.id)
+
+
+async def _redraw(run: RunIdentity, message: Message | None) -> None:
+    if message is not None:
+        await publish_conversation_event(
+            run.conversation_id,
+            message_payload(run.agent_run_id, message_to_payload(message)),
+        )
+
+
 class RunFinalizer:
     """Terminal writes for one runner's runs."""
 
@@ -141,10 +164,20 @@ class RunFinalizer:
         error_reason: str | None = None,
         output_data: JsonValue | None = None,
         usage_data: AgentRunUsage | None = None,
+        answer: Message | None = None,
     ) -> None:
+        """Record the run's end, once.
+
+        ``answer`` is a message already on the record that ``output_data`` was
+        read from but that was not written as the answer -- a run's last words
+        (``RunEventPump._answer_from_last_words``). It is marked as the answer
+        in this transaction, so no reader sees the run's status, its output
+        and its transcript disagree.
+        """
         try:
             event: AgentRunCompletedEvent | None = None
             event_data: JsonObject = {}
+            answered: Message | None = None
             async with self.terminal_units() as uow:
                 finish_result = await ConversationRepository(uow).finish_agent_run(
                     agent_run_id=run.agent_run_id,
@@ -156,6 +189,7 @@ class RunFinalizer:
                     output_data=output_data,
                 )
                 if finish_result is not None and finish_result.updated:
+                    answered = await _marked_as_the_answer(uow, answer)
                     status = finish_result.status
                     conversation_status = finish_result.conversation_status
                     if status == AgentRunStatus.STOPPED:
@@ -205,6 +239,9 @@ class RunFinalizer:
                 await self.usage_recorder.release(run.usage_reservation)
                 return
             assert event is not None
+            # Before ``completed``: a client that drew the words as a step
+            # redraws them as the answer before it hears the run is over.
+            await _redraw(run, answered)
             if status == AgentRunStatus.FAILED:
                 await publish_conversation_event(
                     run.conversation_id,

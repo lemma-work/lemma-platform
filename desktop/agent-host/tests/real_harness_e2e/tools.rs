@@ -136,6 +136,67 @@ async fn real_agents_discover_and_call_a_lemma_mcp_tool() {
     }
 }
 
+#[tokio::test]
+#[ignore = "requires an authenticated Claude Code and spends real provider quota"]
+async fn claude_code_calls_lemmas_tool_without_searching_for_it_first() {
+    // Claude Code holds an MCP server's tools back behind its own tool search
+    // unless told otherwise. A model that has to look Lemma's tool up spends a
+    // whole request on `ToolSearch` before its first real call, on every run.
+    // A tool the model was never shown can only be called after that search,
+    // so a call with no search before it is a tool that was in the prompt.
+    if !configured_agents()
+        .iter()
+        .any(|agent| agent == "claude-code")
+    {
+        eprintln!("claude-code is not among the selected live agents");
+        return;
+    }
+    let endpoint = support::LemmaMcpEndpoint::new();
+    let (_directory, control) = paired_real_run(
+        "claude-code",
+        concat!(
+            "Call the Lemma MCP tool named lemma_echo with the argument ",
+            "text set to exactly LEMMA_REAL_MCP_OK. Do not use any other ",
+            "tool and do not write files. Reply with exactly the text the ",
+            "tool returned."
+        ),
+        endpoint.run_configuration(),
+        Some(&endpoint),
+        support::PermissionAnswer::AllowOnce,
+        Duration::from_secs(300),
+    )
+    .await;
+
+    let calls: Vec<String> = control
+        .events()
+        .iter()
+        .filter(|event| event.event_type == EventType::ToolCall)
+        .map(|event| {
+            event.payload["tool"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert!(
+        !calls.iter().any(|name| name == "tool_search"),
+        "Claude Code searched for Lemma's tools instead of being shown them; calls={calls:?}"
+    );
+    assert!(
+        endpoint
+            .requests()
+            .iter()
+            .any(|record| record.method == "tools/call" && record.params["name"] == "lemma_echo"),
+        "Claude Code never called lemma_echo; calls={calls:?}"
+    );
+    assert!(
+        control.assistant_text().contains("LEMMA_REAL_MCP_OK"),
+        "Claude Code did not report the tool's result: {:?}",
+        control.assistant_text()
+    );
+    println!("claude-code: LEMMA_TOOLS_LISTED_UP_FRONT_OK calls={calls:?}");
+}
+
 /// A per-run file outside every adapter's sandbox, plus the shell command that
 /// writes it.
 ///

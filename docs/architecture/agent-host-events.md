@@ -103,6 +103,16 @@ host means it can use adapter-specific knowledge. OpenCode, for example, reports
 the tool's name only in its *first* title and replaces it with a description
 afterwards.
 
+A call released because the turn ended arrives after the agent's closing words.
+Claude Code produces them during any long tool call: its SDK reports progress
+under ids of its own, `<call id>-heartbeat-<n>`, which the adapter forwards as
+updates to calls the host has never seen, with no input, so they never settle.
+The backend seals words that come before a call as narration, so such a turn
+reaches `terminal` with nothing marked as its answer. A run that completes
+without an answer therefore takes its last words as the answer unless a tool
+result came after them, and marks them so in the transaction that records the
+run's end (`RunEventPump._answer_from_last_words`).
+
 ```json
 {
   "tool": {

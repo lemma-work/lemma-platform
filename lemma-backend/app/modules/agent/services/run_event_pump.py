@@ -20,6 +20,7 @@ from typing import Any, AsyncIterator
 
 from app.core.log.log import get_logger
 from app.core.text.thinking_tags import ThinkingStreamSplitter
+from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -237,23 +238,57 @@ class RunEventPump:
             return True
 
         if event.type in {AgentEventType.COMPLETED, AgentEventType.STOPPED}:
-            await self.finalizer.finish(
-                status=(
-                    AgentRunStatus.STOPPED
-                    if event.type == AgentEventType.STOPPED
-                    else AgentRunStatus.FAILED
-                    if outcome.final_status == ConversationStatus.FAILED
-                    else AgentRunStatus.COMPLETED
-                ),
-                conversation_status=outcome.final_status,
-                error=outcome.final_error,
-                output_data=outcome.output_data,
-                usage_data=outcome.usage_data,
-                run=run,
+            await self._finish_ended(
+                stopped=event.type == AgentEventType.STOPPED, run=run, outcome=outcome
             )
             return True
 
         return False
+
+    async def _finish_ended(
+        self, *, stopped: bool, run: RunIdentity, outcome: RunOutcome
+    ) -> None:
+        """A run its harness says is over: stopped, or done talking."""
+        # Before the finish is built: looking the answer up fills the output.
+        answer = None if stopped else await self._answer_from_last_words(run, outcome)
+        await self.finalizer.finish(
+            status=(
+                AgentRunStatus.STOPPED
+                if stopped
+                else AgentRunStatus.FAILED
+                if outcome.final_status == ConversationStatus.FAILED
+                else AgentRunStatus.COMPLETED
+            ),
+            conversation_status=outcome.final_status,
+            error=outcome.final_error,
+            output_data=outcome.output_data,
+            usage_data=outcome.usage_data,
+            run=run,
+            answer=answer,
+        )
+
+    async def _answer_from_last_words(
+        self, run: RunIdentity, outcome: RunOutcome
+    ) -> Message | None:
+        """The answer of a run that says it is done but named none.
+
+        Whatever callers read as the run's result -- a workflow step, a
+        channel's reply, a parent agent -- is the output finished with the
+        status, so a run whose answer went on the record as narration would
+        complete with nothing to hand back. Its last words become the answer
+        (``RunMessageWriter.last_words``), and the finalizer marks them so in
+        the transaction that ends the run. A run that did name an answer, or
+        ended with a status of its own, has said how it ended.
+        """
+        if outcome.output_data is not None or outcome.final_status not in (
+            None,
+            ConversationStatus.COMPLETED,
+        ):
+            return None
+        answer = await self.message_writer.last_words(run.agent_run_id)
+        if answer is not None:
+            outcome.output_data = self.message_writer.answer_output(answer)
+        return answer
 
     async def drive(
         self,

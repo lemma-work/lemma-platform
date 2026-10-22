@@ -14,6 +14,7 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
+use std::os::fd::{AsRawFd, RawFd};
 use std::thread;
 use std::time::Duration;
 
@@ -82,7 +83,7 @@ where
 /// Shared with the loopback relay (`host_loopback`), where the client is a
 /// sandbox and the upstream is the host; the shape of the exchange is the same.
 pub(crate) fn splice<S, U>(
-    mut from_client: BufReader<S>,
+    from_client: BufReader<S>,
     mut to_client: S,
     upstream: U,
 ) -> io::Result<()>
@@ -95,16 +96,73 @@ where
     let outbound = thread::Builder::new()
         .name("guestd-splice-out".into())
         .spawn(move || {
-            let _ = io::copy(&mut from_client, &mut to_upstream);
+            if to_upstream.write_all(from_client.buffer()).is_ok() {
+                let _ = copy_until_eof(&mut from_client.into_inner(), &mut to_upstream);
+            }
             let _ = to_upstream.shutdown_write();
         })?;
-    let _ = io::copy(&mut from_upstream, &mut to_client);
+    let _ = copy_until_eof(&mut from_upstream, &mut to_client);
     // The client's reader must see the upstream close, or a response that ends
     // by closing the connection hangs until the client gives up.
     let _ = to_client.shutdown_write();
     let _ = from_upstream.shutdown_both();
     let _ = outbound.join();
     Ok(())
+}
+
+/// `io::copy`, except that every read first waits in `poll(2)`.
+///
+/// On macOS a thread that goes to sleep in a blocking `recv` on a Unix socket
+/// at the moment its peer calls `shutdown(SHUT_WR)` can sleep through it: the
+/// socket is marked at EOF -- the next `recv` returns 0 at once -- but the
+/// sleeper is never woken, and a second `shutdown` does not wake it either.
+/// Roughly one race in ten thousand loses it. `poll` is woken every time, and
+/// a read after it cannot block. Linux, where guestd runs, has no such race;
+/// the tests run on macOS, and the relay should not hang wherever it runs.
+pub(crate) fn copy_until_eof<R, W>(from: &mut R, to: &mut W) -> io::Result<u64>
+where
+    R: Read + AsRawFd,
+    W: Write,
+{
+    let mut buffer = [0_u8; 8 * 1024];
+    let mut copied = 0;
+    loop {
+        wait_readable(from.as_raw_fd(), None)?;
+        let read = match from.read(&mut buffer) {
+            Ok(0) => return Ok(copied),
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        to.write_all(&buffer[..read])?;
+        copied += read as u64;
+    }
+}
+
+/// Wait until `descriptor` has bytes, EOF or an error to read; `false` if
+/// `timeout` passed first. `None` waits for as long as it takes.
+pub(crate) fn wait_readable(descriptor: RawFd, timeout: Option<Duration>) -> io::Result<bool> {
+    let milliseconds = timeout.map_or(-1, |timeout| {
+        libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX)
+    });
+    let mut interest = libc::pollfd {
+        fd: descriptor,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        // SAFETY: one `pollfd` that outlives the call; poll keeps no pointer.
+        match unsafe { libc::poll(&mut interest, 1, milliseconds) } {
+            0 => return Ok(false),
+            ready if ready > 0 => return Ok(true),
+            _ => {
+                let error = io::Error::last_os_error();
+                if error.kind() != io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+        }
+    }
 }
 
 /// Connect to `port` on this guest's own address, where the engine publishes.
@@ -119,8 +177,9 @@ pub(crate) fn connect_published(host: &str, port: u16) -> io::Result<TcpStream> 
 /// A stream that can be split into a reader and a writer, and half-closed.
 ///
 /// `TcpStream`, `UnixStream` and the vsock connection's `File` all can, but
-/// through different methods; this names what `splice` needs.
-pub(crate) trait TryCloneStream: Sized {
+/// through different methods; this names what `splice` needs. Each is also a
+/// descriptor, so `splice` can wait on it before reading.
+pub(crate) trait TryCloneStream: Sized + AsRawFd {
     fn try_clone_stream(&self) -> io::Result<Self>;
     /// Send EOF without closing the read side, which a duplicate may hold.
     fn shutdown_write(&self) -> io::Result<()>;
@@ -165,7 +224,6 @@ impl TryCloneStream for std::fs::File {
 }
 
 fn shutdown_descriptor(file: &std::fs::File, how: libc::c_int) -> io::Result<()> {
-    use std::os::fd::AsRawFd;
     // SAFETY: a valid descriptor this `File` owns; shutdown takes no memory.
     if unsafe { libc::shutdown(file.as_raw_fd(), how) } == 0 {
         Ok(())
