@@ -60,6 +60,41 @@ async def _drain_agent_host_links(_context: object) -> AsyncIterator[None]:
     await link_registry.drain()
 
 
+@asynccontextmanager
+async def _warm_turn_imports(_context: object) -> AsyncIterator[None]:
+    """Import what a turn reaches for before this worker claims one.
+
+    The tokenizer starts building alongside (``warmed_for_turns`` says why it
+    is not awaited). Left to the first turn, both ran on the event loop, and
+    every turn beside it on the worker waited too. Skipped where nobody gains:
+    in local mode, which the API skips for the same reason (the person waiting
+    through the boot is usually the one about to send that turn), and in a
+    worker that runs no turns, which has no use for the model clients.
+    """
+    from app.core.config import settings
+
+    if settings.is_local_mode() or not _dispatches_turns():
+        yield
+        return
+    from app.warm_imports import warmed_for_turns
+
+    async with warmed_for_turns():
+        yield
+
+
+def _dispatches_turns() -> bool:
+    """Whether this process claims either turn kind, given ``WORK_CLASSES``."""
+    from app.core.infrastructure.work import registry
+    from app.core.infrastructure.work.config import enabled_classes
+    from app.modules.agent.events.work_kinds import AGENT_TURN_KINDS
+
+    dispatched = set(enabled_classes())
+    return any(
+        (spec := registry.find(kind)) is not None and spec.cls in dispatched
+        for kind in AGENT_TURN_KINDS
+    )
+
+
 def _routers():
     from app.modules.agent.api.controllers.agent_controller import router as agent
     from app.modules.agent.api.controllers.agent_host_controller import (
@@ -198,5 +233,5 @@ module = LemmaModule(
     api_lifespans=(_report_system_model_pricing, _drain_agent_host_links),
     # The worker is where agent runs actually dispatch, so a deployment
     # whose models cannot back its spend limit has to hear it there too.
-    worker_lifespans=(_report_system_model_pricing,),
+    worker_lifespans=(_report_system_model_pricing, _warm_turn_imports),
 )
