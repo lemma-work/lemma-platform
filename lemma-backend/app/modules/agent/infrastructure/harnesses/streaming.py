@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import re
+import time
+from collections.abc import Callable
 
 DEFAULT_TOKEN_CHUNK_WORDS = 6
 DEFAULT_TOKEN_CHUNK_CHARS = 240
+#: How long after one chunk a `CharStreamBuffer` holds new text for more to
+#: join it. Each chunk is a realtime publish, so this also caps the publishes of
+#: a stream too slow to fill the size bound in that time: one per interval.
+DEFAULT_TOKEN_FLUSH_SECONDS = 0.05
 
 
 class TextStreamBuffer:
@@ -83,11 +89,35 @@ def _word_count(text: str) -> int:
 
 
 class CharStreamBuffer:
-    """Accumulate deltas and emit roughly fixed-size string chunks."""
+    """Accumulate deltas and release them in chunks a reader can watch arrive.
 
-    def __init__(self, *, max_chars: int = 50) -> None:
+    A chunk goes out when ``max_chars`` have gathered, or when a delta lands
+    ``max_wait`` seconds or more after the last chunk went out. The size alone
+    was not enough: at tens of tokens a second, fifty characters take a quarter
+    of a second to arrive, so a reply appeared in visible jumps and a short one
+    appeared whole when its part ended. The wait bounds how far shown text lags
+    the model; the size still batches a stream fast enough to outrun it.
+
+    The wait is checked as each delta arrives, not on a timer, so this needs no
+    task beside the stream. The cost is that text held when the model pauses
+    waits for its next delta or the end of the part -- at most what arrived
+    within one ``max_wait`` of the last chunk.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_chars: int = 50,
+        max_wait: float = DEFAULT_TOKEN_FLUSH_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self.max_chars = max(1, max_chars)
+        self.max_wait = max_wait
+        self._clock = clock
         self._buffer = ""
+        # Nothing sent yet counts as long enough ago, so a stream's first text
+        # goes straight out: it is the text a reader has waited longest for.
+        self._last_emit: float | None = None
 
     def append(self, text: str, *, force: bool = False) -> list[str]:
         if text:
@@ -95,9 +125,17 @@ class CharStreamBuffer:
         return self.drain(force=force)
 
     def drain(self, *, force: bool = False) -> list[str]:
+        now = self._clock()
         chunks: list[str] = []
-        while self._buffer and (force or len(self._buffer) >= self.max_chars):
-            split_index = len(self._buffer) if force else self.max_chars
-            chunks.append(self._buffer[:split_index])
-            self._buffer = self._buffer[split_index:]
+        while not force and len(self._buffer) >= self.max_chars:
+            chunks.append(self._buffer[: self.max_chars])
+            self._buffer = self._buffer[self.max_chars :]
+        if self._buffer and (force or self._waited_since_last_emit(now)):
+            chunks.append(self._buffer)
+            self._buffer = ""
+        if chunks:
+            self._last_emit = now
         return chunks
+
+    def _waited_since_last_emit(self, now: float) -> bool:
+        return self._last_emit is None or now - self._last_emit >= self.max_wait
