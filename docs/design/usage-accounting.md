@@ -8,10 +8,56 @@ once, including child runs. Parent totals are never added to child totals.
 ## Check, dispatch, record
 
 Run start and every LLM provider attempt check current organization and user budgets
-before dispatch. Request checks refresh shared totals from the ledger and current policy, so ongoing runs
-observe usage from other workers and newly configured limits. A reached limit
-stops the next request. There are no budget allocations, reservations, prompt
-estimates, local grants or checkpoint batches.
+before dispatch. Each request resolves the current limits, so an ongoing run
+observes newly configured ones at its next request, and reads each limited
+window's shared counter, so it observes usage from other workers. A reached
+limit stops the next request. There are no budget allocations, reservations,
+prompt estimates, local grants or checkpoint batches.
+
+A run is checked twice before its first request: when the message that starts
+it is appended, and when a worker starts it. Both ask
+`UsageService.spent_windows` which of the windows its requests will be admitted
+under (`budget_windows`) has spent its limit, read from the same counters. The
+message check names the limit it hit; the run-start check commits what a
+recount learned even when it refuses, and the message check's recount commits
+with the message, so a refused message keeps none.
+
+A run for a contact or a group's outsider is asked one more thing first, by
+the surface that would start it: whether the organization's contacts cap is
+reached (`contacts_cap_reached`). Past it the surface starts no run and hands
+the person to a member. The surface reads the `contacts_month` counter the
+run's requests are admitted on, in a unit of work of its own that commits at
+once. A turn holds its conversation's lock while its message check reads the
+same counter, so a surface that recounted it inside the turn's own transaction
+would hold the counter while waiting for that lock.
+
+A window's counter is its running total. Settlement adds a receipt's cost to
+it in the transaction that prices the ledger row, and admission compares it
+with the limit without a lock or a ledger sum, so the cost of a request does
+not grow with the ledger or queue a member's concurrent runs. The counter is
+recounted from the ledger instead of trusted when it is new; when the rows it
+counts change -- it keeps a digest, its basis, of the window's organization and
+source exclusions, and a window asking with another one recounts it -- or its
+limit changes; when a ledger row was inserted through the ORM by anything but
+settlement, which marks every counter that row falls into under the counter's
+recount lock; and when it has not been recounted for
+`USAGE_COUNTER_REFRESH_SECONDS`, which bounds how long a ledger edit nothing
+announced (raw SQL) can go uncounted. Settlement charges every window a request
+fell in that has a counter, limited or not, so a counter whose limit is lifted
+keeps counting and is exact when the same limit is restored. A recount applies the
+difference between the ledger sum and the counter as read in one snapshot, so
+a receipt settled while the sum ran keeps its charge, and recounts exclude one
+another with a transaction-scoped advisory lock rather than blocking
+settlement. Settlement never recounts: a counter recounted under other rules
+while its request was out is left for the next admission.
+
+The limits API (`get_usage_limits`) still sums the ledger, for every window: it
+reports spend in windows that have no limit, and those keep no counter. What it
+shows is the ledger's figure; what admits work is the counter's, and the two
+differ only for as long as a recount is due. The contacts-cap API
+(`GET`/`PUT /usage/organizations/{id}/contacts-cap`) sums the month's outside
+spend the same way, for the same reason: it reports it whether or not a cap
+applies.
 
 Before provider I/O, admission commits a request journal entry marked `PENDING`.
 Afterward, settlement records the actual reported tokens and their per-request
@@ -34,9 +80,12 @@ input-token estimate. No database transaction stays open across provider I/O.
 Counter updates, receipt settlement and outbox events commit together.
 
 Spend is attributed to the request's original start window. The post-response
-limit check uses the current time and policy, including window rollover. Warning
-thresholds use the current limit and `USAGE_LIMIT_WARN_FRACTION`; changing a limit
-resets its warning latch.
+limit check uses the current time, including window rollover, and the limits
+the request was admitted under: settlement does not ask the limit provider a
+second time. A limit changed while a request was out applies at the next
+admission, which resolves limits afresh before any further dispatch. Warning
+thresholds use the admitted limit and `USAGE_LIMIT_WARN_FRACTION`; changing a
+limit resets its warning latch.
 
 ## Pricing and supported requests
 
@@ -107,8 +156,15 @@ The compatibility `cost_usd` field is not the authority for new receipts.
 The usage migration follows the app/function history migrations. It adds exact
 costs, pricing provenance and a partial unique request-id index for idempotent
 settlement. It does not create allocation tables. Historical usage remains
-available with legacy provenance. Checks refresh totals from history so policy
-changes and compatibility writers cannot leave stale cached allowance. The request-id index is built concurrently so the migration does not
+available with legacy provenance. Counters carry the basis they were counted
+under, so policy changes and writers that mark the counters a row falls into
+cannot leave a stale total trusted: a counter whose basis no longer matches, or
+that such a writer marked, is recounted from history before its next use. Only
+an ORM unit-of-work insert marks them; a writer that bypasses that (raw SQL, an
+ORM-enabled or bulk insert) is counted at the next refresh, within
+`USAGE_COUNTER_REFRESH_SECONDS`. Counters from before the basis
+existed have none, and are recounted the first time a request uses them. The
+request-id index is built concurrently so the migration does not
 require a blocking index build on existing usage rows.
 
 Drain old workers before migration and deployment: aggregate run settlement

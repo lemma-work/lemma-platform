@@ -1,4 +1,8 @@
-"""The contacts cap: the default until an owner chooses, and their choice after."""
+"""The contacts cap: the default until an owner chooses, and their choice after.
+
+Whether a cap is reached is decided on the ``contacts_month`` window's running
+total, as a run's requests are (``usage/tests/e2e/test_contacts_cap_check_e2e.py``).
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,6 @@ import pytest
 from app.modules.usage.config import UsageSettings
 from app.modules.usage.domain.contacts_cap import (
     StoredContactsCap,
-    cap_reached,
     effective_contacts_cap,
 )
 
@@ -32,21 +35,20 @@ def test_an_owner_who_removed_the_cap_chose_no_limit_and_keeps_it():
 
     assert cap.limit_usd is None
     assert cap.is_default is False
-    assert not cap_reached(cap, consumed_usd=Decimal(10_000))
 
 
 def test_an_owners_own_cap_replaces_the_default():
     cap = effective_contacts_cap(StoredContactsCap(Decimal(5)), default_usd=50)
 
     assert cap.limit_usd == Decimal(5)
-    assert cap_reached(cap, consumed_usd=Decimal(5))
-    assert not cap_reached(cap, consumed_usd=Decimal("4.99"))
+    assert cap.is_default is False
 
 
-def test_a_cap_of_zero_answers_nobody():
+def test_a_cap_of_zero_is_a_limit_of_nothing_not_no_limit():
     cap = effective_contacts_cap(StoredContactsCap(Decimal(0)), default_usd=50)
 
-    assert cap_reached(cap, consumed_usd=Decimal(0))
+    assert cap.limit_usd == Decimal(0)
+    assert cap.is_default is False
 
 
 def test_an_owner_who_set_only_a_spend_still_gets_the_default_count():

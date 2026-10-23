@@ -367,15 +367,9 @@ async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
 class _ExhaustedUsage:
     """An account with no headroom left on any window."""
 
-    async def get_usage_limits(self, *, organization_id, user_id):
-        del organization_id, user_id
-        exhausted = {"allowed": False}
-        return {
-            "allowed": False,
-            "org_monthly": exhausted,
-            "user_weekly": exhausted,
-            "user_monthly": exhausted,
-        }
+    async def spent_windows(self, *, organization_id, user_id, outside_audience):
+        del organization_id, user_id, outside_audience
+        return ("org_month", "user_week", "user_month")
 
 
 async def test_resuming_a_pause_is_held_to_the_usage_limit(scenario) -> None:

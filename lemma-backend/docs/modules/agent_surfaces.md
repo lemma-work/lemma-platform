@@ -739,7 +739,9 @@ unsubscribe every email carries still works for whoever it reached. What it says
 model -- a refusal, a parked-mail note, "a person will reply" -- is windowed in
 Redis by `services/contact_windows.py`, failing closed. Before a run for
 somebody outside the pod starts, `services/outside_cap.py` asks whether the
-organization's contacts cap is reached, or a member answers the contact by hand
+organization's contacts cap is reached -- first, in a unit of work of its own
+(`organization_capped`), from the running total the run's requests would be
+admitted on -- or a member answers the contact by hand
 (`services/contact_hold.py`: the channel's agent is switched off, or a member
 stepped in by writing there -- the assignee of its current case -- and has
 written within the channel's hand-back window; past it, the member is let go

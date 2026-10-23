@@ -85,6 +85,24 @@ fn adapter(key: &str, log: &Path, environment: BTreeMap<String, String>) -> Reso
     }
 }
 
+/// What a current Claude Code answers to `--version`.
+const CLAUDE_CODE: &str = "2.1.303 (Claude Code)";
+
+/// The fake agent, standing in for a Claude Code that answered `version`.
+fn claude_code(log: &Path, version: &str) -> ResolvedAdapter {
+    let mut adapter = adapter("claude-code", log, BTreeMap::new());
+    adapter.upstream_version = Some(version.into());
+    adapter
+}
+
+/// Lemma's tools as the host serves them: its own binary, as a stdio bridge.
+fn lemma_bridge() -> McpServer {
+    McpServer::Stdio(
+        McpServerStdio::new("lemma_tools", PathBuf::from("/Lemma/lemma-agent-host"))
+            .args(vec!["mcp-bridge".to_owned()]),
+    )
+}
+
 fn request(
     adapter: ResolvedAdapter,
     cwd: PathBuf,
@@ -218,12 +236,13 @@ async fn claude_code_gets_lemmas_instructions_and_settings_in_the_sessions_meta(
 async fn claude_code_with_its_own_settings_keeps_them() {
     let directory = TempDir::new().unwrap();
     let log = directory.path().join("claude.jsonl");
-    let run = request(
-        adapter("claude-code", &log, BTreeMap::new()),
+    let mut run = request(
+        claude_code(&log, CLAUDE_CODE),
         directory.path().join("cwd"),
         true,
         Value::Null,
     );
+    run.mcp_server = Some(lemma_bridge());
     AcpDriver::default()
         .run(run, Arc::new(Quiet))
         .await
@@ -233,14 +252,98 @@ async fn claude_code_with_its_own_settings_keeps_them() {
     let options = &sessions(&traffic)[0]["params"]["_meta"]["claudeCode"]["options"];
     assert!(options.get("settingSources").is_none(), "{options}");
     assert!(options.get("strictMcpConfig").is_none(), "{options}");
-    // Lemma's tools are in the prompt either way, not behind a search.
-    assert_eq!(options["env"]["ENABLE_TOOL_SEARCH"], json!("false"));
+    // Lemma's tools are in the prompt either way, not behind a search, and
+    // the person's own servers stay behind it as they would outside Lemma.
+    assert_eq!(
+        options["mcpServers"]["lemma_tools"]["alwaysLoad"],
+        json!(true)
+    );
+    assert!(
+        options["env"].get("ENABLE_TOOL_SEARCH").is_none(),
+        "{options}"
+    );
     // Lemma's browser is the one the person watches, whatever the setting.
     assert!(
         options["disallowedTools"]
             .as_array()
             .unwrap()
             .contains(&json!("mcp__claude-in-chrome"))
+    );
+}
+
+/// Claude Code's tool search held Lemma's tools back until the model looked
+/// them up by name, a whole request before its first real call. The server
+/// is given in Claude Code's own options, marked to always load, on a new
+/// session and a resumed one alike -- and only there: the adapter lets a
+/// session entry of the same name replace it, without the mark.
+#[tokio::test]
+async fn claude_code_is_shown_lemmas_tools_on_a_new_and_a_resumed_session() {
+    let directory = TempDir::new().unwrap();
+    let log = directory.path().join("claude.jsonl");
+    let mut first = request(
+        claude_code(&log, CLAUDE_CODE),
+        directory.path().join("cwd"),
+        false,
+        Value::Null,
+    );
+    first.mcp_server = Some(lemma_bridge());
+    AcpDriver::default()
+        .run(first.clone(), Arc::new(Quiet))
+        .await
+        .unwrap();
+    let mut resumed = first;
+    resumed.run_spec.resume_session_id = Some("fake-session".into());
+    AcpDriver::default()
+        .run(resumed, Arc::new(Quiet))
+        .await
+        .unwrap();
+
+    let traffic = read_traffic(&log);
+    let opened = sessions(&traffic);
+    assert_eq!(opened.len(), 2);
+    for session in opened {
+        let options = &session["params"]["_meta"]["claudeCode"]["options"];
+        let server = &options["mcpServers"]["lemma_tools"];
+        assert_eq!(server["alwaysLoad"], json!(true), "{session}");
+        assert_eq!(server["command"], json!("/Lemma/lemma-agent-host"));
+        assert_eq!(server["args"], json!(["mcp-bridge"]));
+        assert_eq!(session["params"]["mcpServers"], json!([]), "{session}");
+        // Its search stays on for every tool that is not Lemma's.
+        assert!(
+            options["env"].get("ENABLE_TOOL_SEARCH").is_none(),
+            "{session}"
+        );
+    }
+}
+
+/// A Claude Code older than `alwaysLoad` would take the server's entry
+/// without it, so the session names the server as before and the agent's
+/// tool search is turned off instead.
+#[tokio::test]
+async fn an_older_claude_code_has_its_tool_search_turned_off_instead() {
+    let directory = TempDir::new().unwrap();
+    let log = directory.path().join("claude.jsonl");
+    let mut run = request(
+        claude_code(&log, "2.1.120 (Claude Code)"),
+        directory.path().join("cwd"),
+        false,
+        Value::Null,
+    );
+    run.mcp_server = Some(lemma_bridge());
+    AcpDriver::default()
+        .run(run, Arc::new(Quiet))
+        .await
+        .unwrap();
+
+    let traffic = read_traffic(&log);
+    let session = sessions(&traffic)[0];
+    let options = &session["params"]["_meta"]["claudeCode"]["options"];
+    assert!(options.get("mcpServers").is_none(), "{options}");
+    assert_eq!(options["env"]["ENABLE_TOOL_SEARCH"], json!("false"));
+    let servers = session["params"]["mcpServers"].as_array().unwrap();
+    assert!(
+        servers.iter().any(|server| server["name"] == "lemma_tools"),
+        "{session}"
     );
 }
 
@@ -253,7 +356,7 @@ async fn claude_code_may_call_the_runs_lemma_tools_without_asking() {
     for own in [false, true] {
         let log = directory.path().join(format!("claude-tools-{own}.jsonl"));
         let mut first = request(
-            adapter("claude-code", &log, BTreeMap::new()),
+            claude_code(&log, CLAUDE_CODE),
             directory.path().join(format!("cwd-tools-{own}")),
             own,
             json!({
@@ -614,8 +717,13 @@ async fn each_agent_keeps_lemmas_server_sign_in_and_instructions() {
 
     for agent in ["codex", "claude-code", "opencode"] {
         let log = directory.path().join(format!("{agent}.jsonl"));
+        let resolved = if agent == "claude-code" {
+            claude_code(&log, CLAUDE_CODE)
+        } else {
+            adapter(agent, &log, BTreeMap::new())
+        };
         let mut run = request(
-            adapter(agent, &log, BTreeMap::new()),
+            resolved,
             directory.path().join(format!("cwd-{agent}")),
             false,
             Value::Null,
@@ -654,6 +762,14 @@ async fn each_agent_keeps_lemmas_server_sign_in_and_instructions() {
                 config["mcp_servers"]["lemma"]["command"],
                 json!("lemma-agent-host")
             );
+            assert!(servers.is_empty(), "{session}");
+        } else if agent == "claude-code" {
+            // Claude Code is given it in its own options, where it can be
+            // marked to always load, and only there.
+            let server =
+                &session["params"]["_meta"]["claudeCode"]["options"]["mcpServers"]["lemma"];
+            assert_eq!(server["command"], json!("lemma-agent-host"), "{session}");
+            assert_eq!(server["alwaysLoad"], json!(true), "{session}");
             assert!(servers.is_empty(), "{session}");
         } else {
             assert!(

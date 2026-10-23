@@ -254,17 +254,18 @@ def compaction_generation_settings(merged: GenerationSettings) -> GenerationSett
     )
 
 
-def title_model_settings(
+def unreasoned_model_settings(
     resolved: ResolvedAgentRuntime, *, ask_no_reasoning: bool = True
 ) -> JsonObject:
-    """Request parameters for a conversation title: no reasoning at all.
+    """Request parameters for a small helper call: no reasoning at all.
 
-    A title is a few words, and a reasoning model left at its default spends
-    almost all of its output on thinking before writing them. ``none`` is
-    asked of every model, declared reasoning or not -- an undeclared reasoning
-    model is exactly the one that would otherwise think at length. A model
-    that rejects the field is asked again without it
-    (``ask_no_reasoning=False``); see the title generator.
+    A conversation title is a few words, and a memory pass mostly decides
+    there is nothing to keep; a reasoning model left at its default spends
+    almost all of its output on thinking before either. ``none`` is asked of
+    every model, declared reasoning or not -- an undeclared reasoning model is
+    exactly the one that would otherwise think at length. A model that rejects
+    the field is asked again without it (``ask_no_reasoning=False``); see the
+    title generator and the memory pass.
     """
     capabilities = list(resolved.capabilities)
     if ask_no_reasoning:
@@ -338,7 +339,7 @@ __all__ = [
     "record_generation_settings",
     "run_generation_settings",
     "split_stored_settings",
-    "title_model_settings",
+    "unreasoned_model_settings",
     "validated_stored_settings",
     "wire_settings",
 ]

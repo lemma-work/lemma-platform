@@ -13,6 +13,8 @@ and the "the next message picks it up" comments used to cover.
   conversation was owed while it could not take them.
 * ``agent.replies_arrived`` -- written by ``channel_question_work`` once the last
   question of a batch a conversation asked closes: its next turn.
+* ``agent.memory`` -- the memory pass of a completed run a person waited on,
+  registered from ``memory_pass_work`` with the rest.
 
 Each locks only the conversation it starts a turn in, in its own transaction,
 so a child's finalize and its parent's never wait on each other. Each is safe to
@@ -49,6 +51,7 @@ from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.core.log.log import get_logger
+from app.modules.agent.events.memory_pass_work import register_memory_pass_work
 from app.modules.agent.events.turn_payloads import ConversationWork, RepliesArrived
 from app.modules.agent.events.work_kinds import (
     AGENT_FOLLOWUP,
@@ -219,6 +222,8 @@ def register_run_followup_work(registry: WorkRegistry) -> None:
         payload=RepliesArrived,
         retry=FOLLOWUP_RETRY,
     )(deliver_replies)
+    # Staged by the same finalize, so registered wherever these are.
+    register_memory_pass_work(registry)
 
 
 register_run_followup_work(default_registry)

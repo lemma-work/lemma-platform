@@ -13,9 +13,9 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.usage.domain.contacts_cap import may_answer_another_contact
 from app.modules.usage.services.contacts_cap import (
     applicable_contacts_cap,
-    contacts_cap_status,
     this_month,
 )
+from app.modules.usage.services.usage_admission import contacts_cap_spent
 
 __all__ = [
     "contacts_cap_reached",
@@ -28,8 +28,15 @@ __all__ = [
 async def contacts_cap_reached(
     uow: SqlAlchemyUnitOfWork, *, organization_id: UUID
 ) -> bool:
-    """Whether this month's spend answering outsiders has reached the cap."""
-    return (await contacts_cap_status(uow, organization_id)).reached
+    """Whether this month's spend answering outsiders has reached the cap.
+
+    Read from the running total the run's own requests are admitted on, never
+    summed from the ledger (``usage_admission.contacts_cap_spent``). Ask it in
+    a unit of work of its own, committed before the turn's: a recount it makes
+    holds the total's row until ``uow`` ends, and a turn takes its
+    conversation's lock first and that row after it.
+    """
+    return await contacts_cap_spent(uow, organization_id=organization_id)
 
 
 async def counts_contacts(uow: SqlAlchemyUnitOfWork, *, organization_id: UUID) -> bool:

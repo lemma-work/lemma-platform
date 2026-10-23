@@ -125,14 +125,7 @@ def _authorize(
 
 def _usage_service(*, allowed: bool) -> SimpleNamespace:
     return SimpleNamespace(
-        get_usage_limits=AsyncMock(
-            return_value={
-                "allowed": allowed,
-                "org_monthly": {"allowed": allowed},
-                "user_weekly": {"allowed": True},
-                "user_monthly": {"allowed": True},
-            }
-        )
+        spent_windows=AsyncMock(return_value=() if allowed else ("org_month",))
     )
 
 
@@ -253,9 +246,10 @@ async def test_retry_failed_run_asks_usage_about_the_runtime_it_will_run_on(
     )
 
     assert service.usage_service is not None
-    service.usage_service.get_usage_limits.assert_awaited_once_with(
+    service.usage_service.spent_windows.assert_awaited_once_with(
         organization_id=conversation.organization_id,
         user_id=user_id,
+        outside_audience=False,
     )
     repository.create_agent_run.assert_awaited_once()
     assert (

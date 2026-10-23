@@ -54,6 +54,9 @@ AGENT_PAUSE_QUESTIONS: Final = "agent.pause_questions"
 AGENT_PAUSE_EXPIRED: Final = "agent.pause_expired"
 #: A question one conversation put to a member closed: is its batch settled?
 AGENT_ASKED_QUESTION_CLOSED: Final = "agent.asked_question_closed"
+#: After a run a person was waiting on: keeps what was worth remembering from
+#: it, which the run itself was told not to stop and save.
+AGENT_MEMORY: Final = "agent.memory"
 
 
 def turn_key(run_id: UUID) -> str:
@@ -130,6 +133,16 @@ def asked_question_closed_key(message_id: UUID) -> str:
     return f"asked-question-closed:{message_id}"
 
 
+def memory_pass_key(run_id: UUID) -> str:
+    return f"memory-pass:{run_id}"
+
+
+def memory_pod_key(pod_id: UUID) -> str:
+    """One memory pass at a time per pod: two would rewrite the shared index
+    each from what it read before the other wrote."""
+    return f"memory:{pod_id}"
+
+
 __all__ = [
     "AGENT_APPROVAL_EXECUTE",
     "AGENT_ASKED_QUESTION_CLOSED",
@@ -139,6 +152,7 @@ __all__ = [
     "AGENT_PAUSE_EXPIRED",
     "AGENT_PAUSE_QUESTIONS",
     "AGENT_FOLLOWUP",
+    "AGENT_MEMORY",
     "AGENT_REPLIES_ARRIVED",
     "AGENT_SUBAGENT_RESULT",
     "AGENT_TITLE",
@@ -157,6 +171,8 @@ __all__ = [
     "child_wait_key",
     "conversation_key",
     "followup_key",
+    "memory_pass_key",
+    "memory_pod_key",
     "pause_expired_key",
     "pause_questions_key",
     "pod_ask_key",

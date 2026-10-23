@@ -1,6 +1,8 @@
 """Exact monetary values and immutable provider request receipts."""
 
-from datetime import datetime
+import hashlib
+import json
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_CEILING
 from uuid import UUID
 
@@ -62,6 +64,11 @@ class TokenCounts(BaseModel):
     request_count: int = Field(default=0, ge=0)
 
 
+#: Bumped when what a window sums changes in code -- which rows count, or how a
+#: row's cost is read -- so every counter is recounted under the new rule.
+_LEDGER_BASIS_VERSION = "1"
+
+
 class BudgetWindow(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -76,6 +83,34 @@ class BudgetWindow(BaseModel):
     source_types: tuple[str, ...] = ()
     #: Leaves out usage recorded under these sources.
     excluded_source_types: tuple[str, ...] = ()
+
+    @property
+    def basis(self) -> str:
+        """Which ledger rows this window counts, as a digest.
+
+        A counter's running total is only good for the rows it was counted
+        over. The same counter row -- one organization, member, kind and start
+        -- can be asked to count different rows when policy moves: a member
+        joins a team, and the team's organization leaves their personal
+        allowance, or a source is carved out. The counter keeps the digest it
+        was last counted under, and a window that asks with another one has it
+        recounted from the ledger first. The limit is not part of it: what was
+        spent does not depend on what may be.
+        """
+        described = [
+            _LEDGER_BASIS_VERSION,
+            self.kind,
+            self.start.astimezone(timezone.utc).isoformat(),
+            self.end.astimezone(timezone.utc).isoformat(),
+            str(self.organization_id),
+            str(self.user_id),
+            sorted(self.source_types),
+            sorted(self.excluded_source_types),
+            sorted(
+                str(organization) for organization in self.excluded_organization_ids
+            ),
+        ]
+        return hashlib.sha256(json.dumps(described).encode()).hexdigest()
 
 
 class RequestReceipt(BaseModel):

@@ -71,6 +71,11 @@ class AgentContext(BaseModel):
     # `memory_is_active`, which the run-context builder resolves once here so
     # the capability assembler and the brief builder cannot disagree about it.
     memory_enabled: bool = False
+    # Whether this run is told to write memory only when asked, its memory
+    # being kept by a pass after it ends (`memory_kept_after_turn`). Resolved
+    # with `memory_enabled`; the prompt reads it, and the run's terminal write
+    # queues the pass from the same value, so the two cannot disagree.
+    memory_after_turn: bool = False
     # This agent's grant summary, loaded once for the run. Toolset selection
     # derives POD and CONNECTORS from it, and the tool assembler reuses it
     # rather than reading the same rows a second time. Typed loosely here to
