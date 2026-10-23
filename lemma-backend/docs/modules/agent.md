@@ -109,12 +109,20 @@ requests and answer -- so the read is bounded and moves in elision's blocks.
 A run answering a line in Lemma answers the lines whose words it read
 (`services/channel_answers`, recorded in `channel_line_answers`).
 
-Two kinds of message belong to no run and still reach the model, placed by
-sequence among the runs around them: notifications, and what somebody outside
+Three kinds of message belong to no run and still reach the model, placed by
+sequence among the runs around them: notifications; what somebody outside
 the pod said while a person had them, with whatever they were told instead
-(`domain/held_turns`). Neither is carried from after the turn being answered,
-nor, once older runs are cut from the history, from before what remains of it
-(`runtime_history.unattached_message_window`).
+(`domain/held_turns`); and what a contact merge copied in from the person's
+conversation that lost its seat (`contracts/folded_history`). None is carried
+from after the turn being answered, nor, once older runs are cut from the
+history, from before what remains of it
+(`runtime_history.unattached_message_window`). The copies sit where the merge
+put them, after what the kept conversation held then, so each stretch of them
+is opened and closed by a notice saying it is another chat's, and a copied
+message is read with no sending time, since its own is the merge's. They have
+their own bound, the newest `MAX_FOLDED_MESSAGES`, apart from the newest
+`MAX_UNATTACHED_MESSAGES` of the other two, and the opening notice says when
+it left some out (`domain/folded_turns`).
 
 Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through
