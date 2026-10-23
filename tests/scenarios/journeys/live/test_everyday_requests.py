@@ -29,6 +29,7 @@ from harness.environment import MODEL_IS_REAL
 from harness.credentials import needs
 from harness.run import a_name_for
 from harness.steps.datastore import column
+from harness.waiting import UNTIL_BACKGROUND_WORK_LANDS, eventually
 
 pytestmark = [
     journey("Agents and conversations"),
@@ -326,6 +327,68 @@ async def test_something_is_remembered(desk):
                 found = True
                 break
     assert found, f"{marker} is in no memory file"
+
+
+#: Where the pod's assistant keeps memory: the two indexes, and its two folders.
+_MEMORY_FOLDERS = (
+    "/me",
+    "/me/agents/pod-default",
+    "/memory",
+    "/memory/agents/pod-default",
+)
+
+
+def _names_memory(tool_args: object) -> bool:
+    text = json.dumps(tool_args or {})
+    return "/memory" in text or "/me/agents" in text or "AGENTS.md" in text
+
+
+async def _memory_text(person, pod) -> str:
+    """Every memory file the pod's assistant could have written, run together."""
+    texts = []
+    for folder in _MEMORY_FOLDERS:
+        for path in await person.paths_in(pod, directory=folder):
+            if path.endswith(".md"):
+                texts.append(
+                    (await person.downloads(path, in_pod=pod)).decode("utf-8", "replace")
+                )
+    return "\n".join(texts)
+
+
+@scenario("Something mentioned in passing is answered first, and remembered after")
+@proves("PS-AGENT-016")
+@covers(
+    "agent.conversation.create",
+    "agent.conversation.message.append",
+    "agent.conversation.get",
+)
+async def test_something_mentioned_in_passing_is_remembered_after_the_answer(desk):
+    """Saving it first cost the person extra model calls before their answer,
+    for a fact they had only mentioned."""
+    person, pod, _ = desk
+
+    transcript = await _asks(
+        person,
+        pod,
+        "I run a 12-person design studio. Give me a short checklist (max 6 "
+        "items) for onboarding a new client project.",
+        budget=QUICK,
+    )
+
+    before_the_answer = [
+        message.get("tool_args")
+        for message in json.loads(transcript)
+        if message.get("kind") == "TOOL_CALL" and _names_memory(message.get("tool_args"))
+    ]
+    assert not before_the_answer, (
+        f"memory was touched before the answer: {before_the_answer}"
+    )
+    await eventually(
+        lambda: _memory_text(person, pod),
+        lambda text: "design studio" in text.lower(),
+        describe="the design studio to be remembered after the answer",
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
+    )
 
 
 async def _the_widget(person, pod, transcript: str) -> str:

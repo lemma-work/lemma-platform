@@ -38,4 +38,12 @@ class RepliesArrived(BaseModel):
     batch_id: str | None = None
 
 
-__all__ = ["AgentTurnWork", "ConversationWork", "RepliesArrived"]
+class MemoryPassWork(BaseModel):
+    """A finished run whose memory is kept after it, and who it worked for."""
+
+    conversation_id: UUID
+    run_id: UUID
+    user_id: UUID
+
+
+__all__ = ["AgentTurnWork", "ConversationWork", "MemoryPassWork", "RepliesArrived"]

@@ -20,8 +20,13 @@ from app.core.infrastructure.db.transient_errors import raise_if_database_unavai
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.agent_memory_paths import memory_is_active
+from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.agent_memory_paths import (
+    memory_is_active,
+    memory_kept_after_turn,
+)
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
+from app.modules.agent.domain.run_origin import run_origin
 from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
@@ -109,6 +114,19 @@ async def build_run_context(
     run_toolsets, _ = resolve_toolset_names(agent, conversation, grants=grant_summary)
     audience = Audience.of(conversation)
     for_outsider = audience.answers_outsiders
+    memory_enabled = memory_is_active(run_toolsets)
+    memory_after_turn = agent_settings.agent_memory_after_turn and (
+        memory_kept_after_turn(
+            memory_enabled=memory_enabled,
+            in_process=resolved_runtime.harness_kind == HarnessKind.LEMMA,
+            answers_outsiders=for_outsider,
+            origin=run_origin(
+                metadata=conversation.metadata,
+                parent_id=conversation.parent_id,
+                conversation_id=conversation.id,
+            ).origin,
+        )
+    )
     ctx = ConversationContext(
         user_id=user_id,
         org_id=conversation.organization_id,
@@ -136,7 +154,8 @@ async def build_run_context(
         # mid tool-call and use the WAITING output contract instead.
         supports_pause_signal=(resolved_runtime.harness_kind == HarnessKind.LEMMA),
         is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
-        memory_enabled=memory_is_active(run_toolsets),
+        memory_enabled=memory_enabled,
+        memory_after_turn=memory_after_turn,
         run_toolsets=run_toolsets,
         workspace_readable=AgentToolset.WORKSPACE_CLI in run_toolsets,
         grant_summary=grant_summary,

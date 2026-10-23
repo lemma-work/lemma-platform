@@ -29,6 +29,7 @@ from app.modules.usage.domain.query_types import (
     UsageLimitScope,
 )
 from app.modules.usage.infrastructure.repositories import UsageRepository
+from app.modules.usage.services import usage_admission
 from app.modules.usage.services.pricing import UsagePricing
 from app.modules.usage.services.usage_reporting import UsageReporting
 from app.modules.usage.services.usage_metrics import record_usage_metrics
@@ -333,6 +334,18 @@ class UsageService(UsagePricing, UsageReporting):
                 reason="configuration",
             )
 
+    async def spent_windows(
+        self, *, organization_id: UUID | None, user_id: UUID, outside_audience: bool
+    ) -> tuple[str, ...]:
+        """``usage_admission.spent_windows``, under this service's limit port."""
+        return await usage_admission.spent_windows(
+            self.usage_repository.uow,
+            self.usage_limit_port,
+            organization_id=organization_id,
+            user_id=user_id,
+            outside_audience=outside_audience,
+        )
+
     async def get_usage_limits(
         self,
         *,
@@ -341,6 +354,8 @@ class UsageService(UsagePricing, UsageReporting):
         now: datetime | None = None,
         _limit_values: UsageLimitValues | None = None,
     ) -> UsageLimits:
+        """Each window's spend summed from the ledger, for the limits pages: they
+        report windows with no limit, which keep no running total to read."""
         now = now or datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         week_start = (now - timedelta(days=now.weekday())).replace(

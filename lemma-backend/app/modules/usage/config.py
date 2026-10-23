@@ -38,6 +38,17 @@ class UsageSettings(BaseSettings):
         le=1,
         description="Confirmed fraction of a limit that emits its once-per-window warning",
     )
+    usage_counter_refresh_seconds: int = Field(
+        default=600,
+        ge=1,
+        description=(
+            "Longest a limit window's running total is trusted before it is "
+            "recounted from the ledger. Every writer the code knows about keeps "
+            "the total exact or marks it for recounting, and a lifted limit's "
+            "counter keeps counting, so this bounds only what nothing "
+            "announced: a ledger row written or edited in raw SQL."
+        ),
+    )
 
     # Deployment-wide system-spend limits. None means unlimited.
     usage_org_monthly_limit_usd: float | None = Field(

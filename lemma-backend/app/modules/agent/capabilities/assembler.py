@@ -310,7 +310,9 @@ async def _build_lemma_harness_tooling(
     # contract; append it here from the flag the run-context builder resolved.
     # Stable per run, so it rides in the cached prefix with the fragments above.
     if getattr(ctx, "memory_enabled", False):
-        capabilities.append(MemoryCapability())
+        capabilities.append(
+            MemoryCapability(after_turn=getattr(ctx, "memory_after_turn", False))
+        )
 
     # When the run talks over a third-party surface, append standing
     # per-platform guidance (delivery/forms/formatting/channel-context). The

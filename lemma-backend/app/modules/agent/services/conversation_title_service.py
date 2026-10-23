@@ -46,7 +46,7 @@ from app.modules.agent.services.realtime import (
     publish_conversation_event,
     title_updated_payload,
 )
-from app.modules.agent.services.generation_settings import title_model_settings
+from app.modules.agent.services.generation_settings import unreasoned_model_settings
 from app.modules.agent.services.runtime_model_factory import (
     provider_model_settings,
     require_pydantic_ai_model_from_runtime_profile,
@@ -232,8 +232,8 @@ class ConversationTitleGenerator:
         prompt = _build_user_prompt(user_text, reply_text)
         limits = usage_limits_for(model, _TITLE_USAGE_LIMITS)
         # No reasoning for a few words, asked of every model.
-        asked = title_model_settings(resolved)
-        plain = title_model_settings(resolved, ask_no_reasoning=False)
+        asked = unreasoned_model_settings(resolved)
+        plain = unreasoned_model_settings(resolved, ask_no_reasoning=False)
         async with metering_execution(usage_context):
             try:
                 result = await agent.run(

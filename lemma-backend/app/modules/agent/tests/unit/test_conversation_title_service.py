@@ -584,7 +584,7 @@ async def test_generator_sanitizes_what_the_model_returned() -> None:
 @pytest.mark.asyncio
 async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
     """A reasoning model must not spend the token budget on a chain-of-thought
-    trace for a 3-6 word title (see `title_model_settings`)."""
+    trace for a 3-6 word title (see `unreasoned_model_settings`)."""
     generator, capture = _generator()
 
     await _ask(generator, user_text="Plan a trip to Japan")

@@ -70,6 +70,7 @@ from app.modules.agent_surfaces.services.outside_cap import (
     first_word_today,
     hand_to_a_person,
     held_for_a_person,
+    organization_capped,
 )
 from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.services.attachment_ingest_memo import (
@@ -372,9 +373,13 @@ class SurfaceTurnStarter:
         """
         if not context.audience.answers_outsiders or context.pod_id is None:
             return False
+        capped = await organization_capped(self.uow_factory, pod_id=context.pod_id)
         async with self.uow_factory() as uow:
             return await held_for_a_person(
-                uow, pod_id=context.pod_id, conversation_id=context.conversation_id
+                uow,
+                pod_id=context.pod_id,
+                conversation_id=context.conversation_id,
+                capped=capped,
             )
 
     async def _hand_to_a_person(
