@@ -13,11 +13,13 @@ relies on: Claude Code with `--setting-sources project,local --strict-mcp-config
 (the flags `settingSources` and `strictMcpConfig` become) reads none of
 `~/.claude/CLAUDE.md`, skills, agents, commands, output styles or the
 person's MCP servers, still reads the project's `CLAUDE.md`, and still signs
-in through an `apiKeyHelper` given as flag settings. And that in Claude Code's
+in through an `apiKeyHelper` given as flag settings. That in Claude Code's
 "Don't Ask" permission mode, which never asks, a tool of Lemma's server named
 in `--allowedTools` as `mcp__<server>__<tool>` -- the rule `allowedTools`
 becomes for every tool a run publishes -- runs, while one named in no rule is
-denied.
+denied. And that with its tool search on, Claude Code puts the tools of a
+server marked `alwaysLoad`, as Lemma's is, in its first request, while it
+holds another server's back for the model to search for.
 
 Run it after bumping a pinned adapter or when an agent's upstream CLI moves:
 
@@ -175,6 +177,19 @@ for line in sys.stdin:
 """
 
 
+def lemma_server(root: Path, calls: Path, **extra: object) -> dict[str, object]:
+    """`LEMMA_SERVER_SCRIPT`, written under `root`, as an `--mcp-config` entry
+    that appends each call to `calls`."""
+    script = root / "lemma_tools.py"
+    write(script, LEMMA_SERVER_SCRIPT)
+    return {
+        "type": "stdio",
+        "command": sys.executable,
+        "args": [str(script), str(calls)],
+        **extra,
+    }
+
+
 class AsksForLemmasTool(http.server.BaseHTTPRequestHandler):
     """A stand-in model that calls `LEMMA_TOOL_RULE` once, then stops."""
 
@@ -249,14 +264,8 @@ def dont_ask_ran_lemmas_tool(root: Path, claude: str, rules: list[str]) -> bool 
     write(home / ".claude.json", json.dumps({"hasCompletedOnboarding": True}))
     calls = root / "calls.jsonl"
     calls.unlink(missing_ok=True)
-    write(root / "lemma_tools.py", LEMMA_SERVER_SCRIPT)
-    servers = {
-        LEMMA_SERVER: {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": [str(root / "lemma_tools.py"), str(calls)],
-        }
-    }
+    # Marked as Lemma marks it, so the tool is offered rather than searched for.
+    servers = {LEMMA_SERVER: lemma_server(root, calls, alwaysLoad=True)}
     AsksForLemmasTool.requests = 0
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), AsksForLemmasTool)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -265,8 +274,6 @@ def dont_ask_ran_lemmas_tool(root: Path, claude: str, rules: list[str]) -> bool 
         HOME=str(home),
         ANTHROPIC_BASE_URL=f"http://127.0.0.1:{server.server_address[1]}",
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
-        # As Lemma starts it, so the tool is offered rather than searched for.
-        ENABLE_TOOL_SEARCH="false",
     )
     environment.pop("ANTHROPIC_API_KEY", None)
     environment.pop("CLAUDE_CONFIG_DIR", None)
@@ -321,10 +328,82 @@ def check_claude_dont_ask(root: Path) -> list[str]:
     return failures
 
 
+#: A server of the person's own beside Lemma's, which nothing marks.
+THEIR_SERVER = "theirs"
+
+
+def check_claude_always_load(root: Path) -> list[str]:
+    claude = shutil.which("claude")
+    if claude is None:
+        print("- claude alwaysLoad: not installed, skipped")
+        return []
+    home = root / "home"
+    write(home / ".claude.json", json.dumps({"hasCompletedOnboarding": True}))
+    calls = root / "calls.jsonl"
+    servers = {
+        LEMMA_SERVER: lemma_server(root, calls, alwaysLoad=True),
+        THEIR_SERVER: lemma_server(root, calls),
+    }
+    Capture.seen = []
+    model = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Capture)
+    threading.Thread(target=model.serve_forever, daemon=True).start()
+    environment = dict(
+        os.environ,
+        HOME=str(home),
+        ANTHROPIC_BASE_URL=f"http://127.0.0.1:{model.server_address[1]}",
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
+        # On, as it is against Anthropic's own API. Behind a base URL it does
+        # not know, which this stand-in's is, Claude Code may leave it off.
+        ENABLE_TOOL_SEARCH="true",
+    )
+    environment.pop("ANTHROPIC_API_KEY", None)
+    environment.pop("CLAUDE_CONFIG_DIR", None)
+    try:
+        subprocess.run(
+            [
+                claude,
+                "-p",
+                "hi",
+                "--strict-mcp-config",
+                "--mcp-config",
+                json.dumps({"mcpServers": servers}),
+                "--settings",
+                json.dumps({"apiKeyHelper": "echo sk-ant-local-check"}),
+            ],
+            cwd=root,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=180,
+        )
+    finally:
+        model.shutdown()
+
+    failures = []
+    if not Capture.seen:
+        failures.append("claude alwaysLoad: sent nothing to the stand-in model server")
+    else:
+        first = json.loads(Capture.seen[0]["body"])
+        offered = {tool.get("name") for tool in first.get("tools", [])}
+        if "ToolSearch" not in offered or f"mcp__{THEIR_SERVER}__{LEMMA_TOOL}" in offered:
+            # Without this the next check would hold whatever Claude Code did.
+            failures.append("claude alwaysLoad: tool search was off, so nothing was held back")
+        elif LEMMA_TOOL_RULE not in offered:
+            failures.append(
+                f"claude alwaysLoad: {LEMMA_TOOL_RULE} was held back behind tool search"
+            )
+    print(f"- claude alwaysLoad: {'ok' if not failures else 'FAILED'}")
+    return failures
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        failures = check_claude(root) + check_claude_dont_ask(root / "dont-ask")
+        failures = (
+            check_claude(root)
+            + check_claude_dont_ask(root / "dont-ask")
+            + check_claude_always_load(root / "always-load")
+        )
     if failures:
         print("\n".join(failures))
         return 1

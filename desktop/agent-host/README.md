@@ -458,7 +458,8 @@ Codex, Claude Code, and OpenCode installations, then pairs a complete
 It checks that assistant text arrives before completion, the final answer is
 complete, and the event sequence has one terminal event with no gaps or duplicates.
 Follow-up tests exercise session continuity, missing sessions, cancellation,
-native-tool approval and denial, and Lemma MCP tools. Use a disposable Agent Host
+native-tool approval and denial, and Lemma MCP tools, which Claude Code must
+call without first searching for them. Use a disposable Agent Host
 data directory containing copies of the verified adapters:
 
 ```bash
