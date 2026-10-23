@@ -65,10 +65,13 @@ test.afterEach(() => {
     for (const window of windows.splice(0)) window.close();
 });
 
-function load({ body = "", script = "", routes = {}, hook = false }: {
+function load({ body = "", script = "", routes = {}, motion = false, hook = false }: {
     body?: string;
     script?: string;
     routes?: Record<string, Route>;
+    /** A visitor who has not asked for reduced motion: a reply is typed out over
+     *  animation frames, which wait until the test runs them with `frames()`. */
+    motion?: boolean;
     hook?: boolean;
 }) {
     const dom = new JSDOM(
@@ -77,8 +80,19 @@ function load({ body = "", script = "", routes = {}, hook = false }: {
     );
     const window = dom.window as DOMWindow & Record<string, unknown>;
     windows.push(window);
-    // Reduced motion: a reply is drawn as it arrives, with no frames to wait on.
-    window.matchMedia = (() => ({ matches: true })) as unknown as typeof window.matchMedia;
+    // Reduced motion unless the test asks for motion: a reply is drawn as it
+    // arrives, with no frames to wait on.
+    window.matchMedia = (() => ({ matches: !motion })) as unknown as typeof window.matchMedia;
+    // jsdom has no animation frames, so the ones the page asks for queue here.
+    const waiting: FrameRequestCallback[] = [];
+    if (motion) window.requestAnimationFrame = (callback) => waiting.push(callback);
+    /** Run the frames the page asked for, and the ones those ask for, until it asks for none. */
+    const frames = () => {
+        for (let ran = 0; waiting.length > 0; ran += 1) {
+            assert.ok(ran < 1000, "the page never stopped asking for frames");
+            waiting.shift()!(window.performance.now());
+        }
+    };
     window.ReadableStream = ReadableStream;
     window.TextDecoder = TextDecoder;
     const calls: Call[] = [];
@@ -102,7 +116,7 @@ function load({ body = "", script = "", routes = {}, hook = false }: {
         assert.ok(host?.shadowRoot, "the widget drew nothing");
         return host.shadowRoot;
     };
-    return { window, calls, shadow, hook: () => window.__LEMMA_WIDGET_TEST__ as Hook };
+    return { window, calls, shadow, frames, hook: () => window.__LEMMA_WIDGET_TEST__ as Hook };
 }
 
 /** Open the chat bubble, as a visitor clicking it. */
@@ -217,6 +231,36 @@ test("a reply is painted piece by piece, built as markdown once, and only then r
     assert.equal(root.querySelector(".lw-raw"), null);
     assert.equal(root.querySelector(".lw-assistant strong")?.textContent, "Two");
     assert.equal(root.querySelector(".lw-sr")?.textContent, "Two pieces");
+    feed!.close();
+});
+
+test("a reply typed out frame by frame drops no letter where one piece ends and the next begins", async () => {
+    let feed: ReadableStreamDefaultController<Uint8Array> | null = null;
+    let streams = 0;
+    const page = load({
+        motion: true,
+        routes: {
+            "GET /stream": () => (streams++ === 0 ? new Response(null, { status: 204 }) : new Response(new ReadableStream<Uint8Array>({
+                start(controller) { feed = controller; },
+            }))),
+        },
+    });
+    const send = (frame: unknown) => feed?.enqueue(new TextEncoder().encode(JSON.stringify(frame) + "\n"));
+    await openChat(page);
+    await say(page, "hello");
+    send({ type: "open" });
+    // Three letters, and at least two are typed a frame: the piece's last
+    // frame has one letter left to type.
+    send({ type: "delta", text: "abc" });
+    await settle();
+    const raw = page.shadow().querySelector(".lw-raw");
+    assert.ok(raw, "the reply is drawn while it is written");
+    assert.equal(raw.textContent, "", "nothing is typed until a frame runs");
+    page.frames();
+    send({ type: "delta", text: "def" });
+    await settle();
+    page.frames();
+    assert.equal(raw.textContent, "abcdef");
     feed!.close();
 });
 

@@ -602,7 +602,9 @@
     this.frame = window.requestAnimationFrame(function () {
       self.frame = null;
       var left = self.target.length - self.shown;
-      if (left > 0) self.shown += Math.max(2, Math.ceil(left / 10));
+      // Never past the end: what arrives next is painted from where this
+      // frame stopped, so a step past the end would skip its first character.
+      if (left > 0) self.shown += Math.min(left, Math.max(2, Math.ceil(left / 10)));
       self.paint();
       if (self.shown < self.target.length) self.tick();
     });
