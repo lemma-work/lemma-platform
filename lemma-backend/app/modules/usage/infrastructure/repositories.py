@@ -28,8 +28,10 @@ from app.modules.usage.domain.query_types import (
     UsageStatsBucket,
     UsageReportFilters,
 )
+from app.modules.usage.infrastructure import spend_counters
 from app.modules.usage.infrastructure.cost_expressions import recorded_cost
 from app.modules.usage.infrastructure.models import (
+    COUNTER_LOCK_ORDER,
     UsageLimitCounter,
 )
 from app.modules.usage.infrastructure.models import (
@@ -412,11 +414,11 @@ class UsageRepository(UsageRepositoryPort):
 
         ordered = sorted(
             scopes,
-            key=lambda item: (
+            key=lambda item: spend_counters.counter_lock_order(
                 item.window_kind,
-                str(item.organization_id or ""),
-                str(item.user_id or ""),
-                item.window_start.isoformat(),
+                item.window_start,
+                item.organization_id,
+                item.user_id,
             ),
         )
         counters: list[UsageLimitCounter] = []
@@ -462,9 +464,10 @@ class UsageRepository(UsageRepositoryPort):
             ).one()
             # Synchronize pre-migration/history spend without ever lowering the
             # transactionally maintained counter.
-            counter.used_usd = max(
-                money(counter.used_usd or 0), money(scope.initial_used_usd)
-            )
+            synced = max(money(counter.used_usd or 0), money(scope.initial_used_usd))
+            if synced != counter.used_usd:
+                counter.used_usd = synced
+                counter.basis = None  # Not a running total: recount before use.
             counters.append(counter)
 
         if any(
@@ -490,7 +493,8 @@ class UsageRepository(UsageRepositoryPort):
         if not counter_ids:
             return
         stmt = select(UsageLimitCounter).where(UsageLimitCounter.id.in_(counter_ids))
-        result = await self.session.execute(stmt.with_for_update())
+        stmt = stmt.order_by(*COUNTER_LOCK_ORDER).with_for_update()
+        result = await self.session.execute(stmt)
         for counter in result.scalars().all():
             counter.reserved_usd = max(
                 Decimal(0),
@@ -510,7 +514,7 @@ class UsageRepository(UsageRepositoryPort):
         result = await self.session.execute(
             select(UsageLimitCounter)
             .where(UsageLimitCounter.id.in_(counter_ids))
-            .order_by(UsageLimitCounter.id)
+            .order_by(*COUNTER_LOCK_ORDER)
             .with_for_update()
         )
         for counter in result.scalars().all():
@@ -518,6 +522,7 @@ class UsageRepository(UsageRepositoryPort):
                 Decimal(0), money(counter.reserved_usd or 0) - money(reserved_usd)
             )
             counter.used_usd = money(counter.used_usd or 0) + money(actual_usd)
+            counter.basis = None  # Not a running total: recount before use.
         await self.session.flush()
 
     async def get_usage_stats(

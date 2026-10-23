@@ -45,6 +45,11 @@ class PostgresRequestAccountingGateway:
             settings,
         )
         self._reported_unpriceable = False
+        #: The limits each request in flight was admitted under, by request.
+        #: Its receipt is charged to the windows those limits gave it -- the
+        #: windows it was dispatched in -- without asking the limit provider a
+        #: second time.
+        self._admitted_under: dict[UUID, UsageLimitValues] = {}
 
     async def _limits(self, uow: SqlAlchemyUnitOfWork) -> UsageLimitValues:
         provider = build_usage_limit_port(uow)
@@ -178,7 +183,8 @@ class PostgresRequestAccountingGateway:
         is not binding and nothing else would say so.
         """
         async with self.factory() as uow:
-            windows = self._windows(await self._limits(uow), now)
+            limits = await self._limits(uow)
+            windows = self._windows(limits, now)
             limited = bool(windows)
             # Two unrelated reasons, and only one of them is this deployment's
             # to have an opinion about. An unenforceable rate card is a fact
@@ -198,9 +204,15 @@ class PostgresRequestAccountingGateway:
                         "This request needs supported usage reporting and a known price to run with monetary limits",
                         reason="configuration",
                     )
-            await request_accounting.begin(
-                uow.session, request_id, self.identity, self.pricing, windows, now
+            if await request_accounting.limit_reached(uow.session, windows):
+                # Keep what recounting a window learned; refusing it again
+                # should not cost another sum over the ledger.
+                await uow.commit()
+                raise UsageLimitExceededError("Current usage allowance is exhausted")
+            await request_accounting.journal(
+                uow.session, request_id, self.identity, self.pricing, now
             )
+            self._admitted_under[request_id] = limits
             return limited
 
     async def record(
@@ -208,18 +220,24 @@ class PostgresRequestAccountingGateway:
     ) -> bool:
         now = now or datetime.now(timezone.utc)
         async with self.factory() as uow:
-            limits = await self._limits(uow)
+            # Kept until settlement commits, so a retry charges the same windows.
+            limits = self._admitted_under.get(receipt.request_id)
+            if limits is None:
+                limits = await self._limits(uow)
             events: list[DomainEvent] = []
             exhausted = await request_accounting.record(
                 uow.session,
                 receipt,
                 self.identity,
-                self._windows(limits, receipt.occurred_at),
+                # Every window it fell in, limited or not: a lifted limit's
+                # counter keeps counting, so restoring it finds it exact.
+                budget_windows(self.identity, limits, receipt.occurred_at),
                 self._windows(limits, now),
                 events,
                 Decimal(str(self.settings.usage_limit_warn_fraction)),
             )
             uow.collect_events(events)
+        self._admitted_under.pop(receipt.request_id, None)
         for event in events:
             if isinstance(event, ModelUsageEvent):
                 record_usage_metrics(

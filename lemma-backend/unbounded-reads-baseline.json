@@ -53,6 +53,7 @@
     "app/modules/schedule/repositories/schedule_repository.py::ScheduleRepository.list::unbounded-read": 1,
     "app/modules/schedule/repositories/schedule_repository.py::ScheduleRepository.list_all_by_pod::unbounded-read": 1,
     "app/modules/schedule/repositories/schedule_repository.py::ScheduleRepository.lock_breaker_candidates::unbounded-read": 1,
+    "app/modules/usage/infrastructure/models.py::_uncount_windows_of::unbounded-read": 1,
     "app/modules/workspace/infrastructure/sandbox_repository.py::SandboxRepository.list_for_owner::unbounded-read": 1
   }
 }
