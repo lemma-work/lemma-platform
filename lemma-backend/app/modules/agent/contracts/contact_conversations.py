@@ -27,6 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import aliased
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY
 from app.modules.agent.domain.held_turns import held_messages
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.value_objects import MessageDraft, MessageKind
@@ -39,10 +40,6 @@ from app.modules.channels.contracts.backgrounds import current_words
 
 #: Where a member's follow-up names the line it marks.
 FOLLOW_UP_LINE_KEY = "line_id"
-
-#: A message copied from a conversation that lost its seat when its contact
-#: was merged into another: the conversation it came from.
-FOLDED_FROM_KEY = "folded_from"
 
 #: The message kinds a person outside the pod may have been shown. Thinking and
 #: tool traffic are the pod's working.

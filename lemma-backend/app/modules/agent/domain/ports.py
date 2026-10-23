@@ -306,6 +306,7 @@ class ConversationRepository(Protocol):
         after_sequence: int | None,
         before_sequence: int | None,
         limit: int,
+        folded_limit: int,
     ) -> list[Message]: ...
 
     async def append_message(

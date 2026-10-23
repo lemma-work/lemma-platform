@@ -13,7 +13,6 @@ import itertools
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from app.modules.agent.contracts.contact_conversations import FOLDED_FROM_KEY
 from app.modules.agent.domain.entities import (
     AgentRun,
     Message,
@@ -21,6 +20,7 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
+from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY, folded_from
 from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON, held_messages
 from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, MessageDraft
@@ -117,20 +117,28 @@ class StoredConversation:
         after_sequence: int | None,
         before_sequence: int | None,
         limit: int,
+        folded_limit: int,
     ) -> list[Message]:
         """The contract of the query, not a second opinion on it."""
-        matching = [
+        within = [
             message
             for message in self.messages
             if message.agent_run_id is None
-            and (
-                message.kind is MessageKind.NOTIFICATION
-                or (message.metadata or {}).get(HELD_FOR_A_PERSON) is True
-            )
             and (after_sequence is None or message.sequence > after_sequence)
             and (before_sequence is None or message.sequence < before_sequence)
         ]
-        return matching[-limit:]
+        copies = [m for m in within if folded_from(m.metadata) is not None]
+        others = [
+            m
+            for m in within
+            if folded_from(m.metadata) is None
+            and (
+                m.kind is MessageKind.NOTIFICATION
+                or (m.metadata or {}).get(HELD_FOR_A_PERSON) is True
+            )
+        ]
+        carried = {m.id for m in others[-limit:] + copies[-folded_limit:]}
+        return [message for message in within if message.id in carried]
 
     async def history_for(self, run: AgentRun) -> list[Message]:
         """What the model reads for ``run``, oldest first, as the runner loads

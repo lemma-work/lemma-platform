@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from app.modules.agent.domain.folded_turns import folded_from
 from app.modules.agent.domain.private_notes import defuse_lemma_labels, lemma_label
 from app.modules.agent.domain.surface_prompts import attachment_listing_block
 from app.modules.agent.domain.value_objects import (
@@ -49,13 +50,17 @@ def timed_user_prompt_text(msg: object, *, with_roster: bool = True) -> str:
 
 def _sent_at_note(msg: object) -> str | None:
     """Only on a person's message: a notice Lemma made up has no sending time,
-    and one stamped when it was built would change on every run."""
+    and one stamped when it was built would change on every run. Nor on what
+    a contact merge copied in: the copy was written when the merge ran, which
+    is not when they sent it (``folded_turns``)."""
     if getattr(msg, "role", None) is not MessageRole.USER:
         return None
     if getattr(msg, "kind", None) is not MessageKind.TEXT:
         return None
     metadata = getattr(msg, "metadata", None)
-    if isinstance(metadata, dict) and metadata.get("synthetic"):
+    if isinstance(metadata, dict) and (
+        metadata.get("synthetic") or folded_from(metadata) is not None
+    ):
         return None
     sent = getattr(msg, "created_at", None)
     if not isinstance(sent, datetime):
