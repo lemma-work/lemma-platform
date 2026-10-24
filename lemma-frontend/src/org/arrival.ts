@@ -98,7 +98,7 @@ export function freshTeamNameFor(email: string | null | undefined, taken: readon
  *  displayed and shortened exactly like one the platform made. */
 export function personalNameFor(name: string | null | undefined): string {
     /* The first name, and only a real one. The local part of an address is
-       not a name — this screen offered somebody "deepakjha0196+99's Personal",
+       not a name — this screen offered somebody "ada+99's Personal",
        which is a mailbox with a possessive stuck on it. Where there is no name
        to use, the workspace is called Personal and the sentence about it goes
        away rather than being filled in with the nearest string to hand. */

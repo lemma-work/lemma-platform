@@ -53,7 +53,7 @@ test("a personal workspace takes the person's first name, or no name at all", ()
     assert.equal(personalNameFor("Alice Chen"), "Alice's Personal");
     assert.equal(personalNameFor("Alice"), "Alice's Personal");
     // The local part of an address is a mailbox, not a name: this screen
-    // offered somebody "deepakjha0196+99's Personal".
+    // offered somebody "ada+99's Personal".
     assert.equal(personalNameFor(""), "Personal");
     assert.equal(personalNameFor(null), "Personal");
 });

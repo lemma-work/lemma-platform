@@ -350,7 +350,7 @@ export function MakeOne({
                 <p className="arrival__note">
                     <LockIcon size={14} />
                     {/* The name only when there is a real one to say. It was
-                        announcing "deepakjha0196+99's Personal" to somebody
+                        announcing "ada+99's Personal" to somebody
                         who had not been asked for a name and would not have
                         chosen that one. */}
                     <span>
