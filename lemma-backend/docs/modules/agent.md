@@ -109,6 +109,13 @@ requests and answer -- so the read is bounded and moves in elision's blocks.
 A run answering a line in Lemma answers the lines whose words it read
 (`services/channel_answers`, recorded in `channel_line_answers`).
 
+Two kinds of message belong to no run and still reach the model, placed by
+sequence among the runs around them: notifications, and what somebody outside
+the pod said while a person had them, with whatever they were told instead
+(`domain/held_turns`). Neither is carried from after the turn being answered,
+nor, once older runs are cut from the history, from before what remains of it
+(`runtime_history.unattached_message_window`).
+
 Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through
 table inspection rather than repeated in every prompt. Omission counts mark

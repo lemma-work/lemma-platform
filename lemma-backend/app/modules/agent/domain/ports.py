@@ -299,7 +299,7 @@ class ConversationRepository(Protocol):
         full_run_ids: set[UUID],
     ) -> list[AgentRun]: ...
 
-    async def load_unattached_notifications(
+    async def load_unattached_messages(
         self,
         conversation_id: UUID,
         *,

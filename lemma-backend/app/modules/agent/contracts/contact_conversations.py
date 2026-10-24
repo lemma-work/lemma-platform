@@ -27,12 +27,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import aliased
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.held_turns import held_messages
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
-from app.modules.agent.domain.value_objects import (
-    MessageDraft,
-    MessageKind,
-    MessageRole,
-)
+from app.modules.agent.domain.value_objects import MessageDraft, MessageKind
 from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
     ConversationModel,
@@ -505,23 +502,17 @@ async def hold_outside_turn(
     Their message goes into the conversation as any message would, so the
     member answering it reads what was asked. ``reply``, when given, is what
     they were told instead of an answer, written as the bot's so the thread
-    shows it.
+    shows it. Both are marked held (``held_turns``): in no run, the mark is
+    what carries them to the agent once it answers them again.
     """
     from app.modules.agent.infrastructure.repositories.conversation_repository import (
         ConversationRepository,
     )
 
     conversations = ConversationRepository(uow)
-    await conversations.append_message(
-        conversation_id=conversation_id,
-        agent_run_id=None,
-        draft=MessageDraft.of_text(text, role=MessageRole.USER, metadata=metadata),
-    )
-    if reply:
+    for draft in held_messages(text, metadata, reply=reply):
         await conversations.append_message(
-            conversation_id=conversation_id,
-            agent_run_id=None,
-            draft=MessageDraft.of_text(reply, metadata={"handed_off": True}),
+            conversation_id=conversation_id, agent_run_id=None, draft=draft
         )
     await uow.session.flush()
 

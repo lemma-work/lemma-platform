@@ -40,6 +40,7 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
+from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
@@ -213,7 +214,7 @@ class AgentSide:
             ]
         return runs
 
-    async def load_unattached_notifications(
+    async def load_unattached_messages(
         self, conversation_id, *, after_sequence, before_sequence, limit
     ):
         """The contract of the query, not a second opinion on it."""
@@ -221,7 +222,10 @@ class AgentSide:
             message
             for message in self.messages[conversation_id]
             if message.agent_run_id is None
-            and message.kind is MessageKind.NOTIFICATION
+            and (
+                message.kind is MessageKind.NOTIFICATION
+                or (message.metadata or {}).get(HELD_FOR_A_PERSON) is True
+            )
             and (after_sequence is None or message.sequence > after_sequence)
             and (before_sequence is None or message.sequence < before_sequence)
         ]
