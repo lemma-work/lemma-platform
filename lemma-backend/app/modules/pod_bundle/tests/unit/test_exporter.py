@@ -21,6 +21,7 @@ from lemma_pod_bundle import extract_bundle
 
 import app.modules.pod_bundle.infrastructure.exporter as exporter_mod
 from app.modules.agent.contracts import AgentKind
+from app.modules.pod_bundle.infrastructure.bundle_identity import read_bundle_id
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure.exporter_surfaces import export_surfaces
 
@@ -350,6 +351,45 @@ async def test_export_produces_expected_layout(patched_exporter, tmp_path):
     # Progress advanced to completion.
     assert progress[-1] == (progress[-1][1], progress[-1][1])
     assert progress[-1][1] >= 1
+
+
+async def test_an_export_names_itself_inside_the_archive(patched_exporter, tmp_path):
+    """An import sees only the archive. The export's id inside it is the one
+    thing that says which export an import came from."""
+    bundle_id = uuid4()
+
+    async def on_progress(_done, _total):
+        return None
+
+    _, zip_bytes, _ = await patched_exporter.export(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        include=None,
+        ctx=object(),
+        uow=object(),
+        on_progress=on_progress,
+        bundle_id=bundle_id,
+    )
+    stamped = extract_bundle(zip_bytes, tmp_path / "stamped")
+    assert read_bundle_id(stamped) == bundle_id
+
+    _, unnamed_bytes, _ = await _run_export(patched_exporter)
+    assert read_bundle_id(extract_bundle(unnamed_bytes, tmp_path / "plain")) is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["not-a-uuid", 42, None, {"id": "x"}],
+    ids=["text", "number", "null", "object"],
+)
+def test_a_bundle_id_that_is_not_one_is_no_identity(tmp_path, value):
+    """A bundle is a file anyone can edit; what it claims can never fail an
+    import, only fail to join one."""
+    (tmp_path / "pod.json").write_text(json.dumps({"name": "p", "bundle_id": value}))
+    assert read_bundle_id(tmp_path) is None
+    (tmp_path / "pod.json").write_text("{ not json")
+    assert read_bundle_id(tmp_path) is None
+    assert read_bundle_id(tmp_path / "missing") is None
 
 
 async def test_with_data_writes_data_csv(patched_exporter, tmp_path):

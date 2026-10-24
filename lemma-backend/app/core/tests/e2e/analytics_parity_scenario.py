@@ -126,7 +126,7 @@ def scenario_events(rows: ScenarioRows) -> list[DomainEvent]:
             actor_id=None,
             file_id=fixed("file"),
             path="/docs/report.pdf",
-            metadata={"size_bytes": 123_456},
+            size_bytes=123_456,
             **_o("IMPORT"),
         ),
         FunctionCreatedEvent(
@@ -247,8 +247,10 @@ def scenario_events(rows: ScenarioRows) -> list[DomainEvent]:
             resource_count=12,
             **_o("WEB"),
         ),
+        # An import of the export above: the archive carried its id.
         BundleImportCompletedEvent(
-            bundle_id=fixed("import"),
+            import_id=fixed("import"),
+            bundle_id=fixed("export"),
             pod_id=pod,
             user_id=user,
             resource_count=5,

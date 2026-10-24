@@ -47,6 +47,7 @@ from lemma_pod_bundle.normalize import (
 )
 from lemma_pod_bundle.portability import _extract_portable_variables
 
+from app.modules.pod_bundle.infrastructure.bundle_identity import stamp_bundle_id
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
 from app.modules.pod_bundle.infrastructure.exporter_surfaces import (
     export_surfaces,
@@ -170,6 +171,7 @@ class BundleExporter:
         ctx: Context,
         uow: SqlAlchemyUnitOfWork,
         on_progress: ProgressCallback,
+        bundle_id: UUID | None = None,
     ) -> tuple[str, bytes, list[str]]:
         """Assemble the bundle and return ``(bundle_filename, zip_bytes, warnings)``.
 
@@ -183,6 +185,9 @@ class BundleExporter:
         seeded only when it appears in ``data_tables``, and a file is included
         only when it lives under one of ``file_folders``. Naming nothing exports
         the pod's resources alone.
+
+        ``bundle_id`` is written into ``pod.json`` so an import of this archive
+        can say which export it came from (``bundle_identity``).
         """
         selected = _normalize_include(include)
         data_tables_set = _normalize_data_tables(data_tables)
@@ -242,7 +247,10 @@ class BundleExporter:
                 raise BundleInvalidError(f"Pod {pod_id} no longer exists.")
             pod_dict = _pod_response_dict(pod)
             pod_name = str(pod_dict.get("name") or str(pod_id)).strip() or str(pod_id)
-            _write_json(root / "pod.json", _normalize_pod_payload(pod_dict))
+            pod_payload = _normalize_pod_payload(pod_dict)
+            if bundle_id is not None:
+                pod_payload = stamp_bundle_id(pod_payload, bundle_id)
+            _write_json(root / "pod.json", pod_payload)
 
             # Total = the pod.json step + every selected resource type; drives the
             # progress bar deterministically without a pre-count DB round-trip.

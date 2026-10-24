@@ -26,6 +26,8 @@ class PodBundleDomainEvent(DomainEvent):
 
 class BundleExportedEvent(PodBundleDomainEvent):
     event_type: str = "pod_bundle.exported"
+    #: The export's id, which is also written into the archive's ``pod.json``
+    #: (``infrastructure.bundle_identity``) so its imports can name it.
     bundle_id: UUID
     pod_id: UUID
     user_id: UUID | None = None
@@ -34,7 +36,11 @@ class BundleExportedEvent(PodBundleDomainEvent):
 
 class BundleImportCompletedEvent(PodBundleDomainEvent):
     event_type: str = "pod_bundle.import_completed"
-    bundle_id: UUID
+    import_id: UUID | None = None
+    #: The export the imported archive came out of, read from its ``pod.json``:
+    #: the same id ``BundleExportedEvent`` carries. ``None`` for a bundle no
+    #: Lemma export produced -- one built by the CLI, or a repository.
+    bundle_id: UUID | None = None
     pod_id: UUID
     user_id: UUID | None = None
     resource_count: int = 0
