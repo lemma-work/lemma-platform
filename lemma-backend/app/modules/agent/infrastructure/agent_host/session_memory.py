@@ -154,6 +154,7 @@ def _rebound(
     )
     binding_value.update(_host_directory_binding(stored, checkpoint, same_session))
     binding_value.update(_instruction_binding(stored, checkpoint, same_session))
+    binding_value.update(_prompted_binding(stored, checkpoint, same_session))
     return None if stored == binding_value else binding_value
 
 
@@ -192,6 +193,19 @@ def _instruction_binding(
     if isinstance(delivered, str) and delivered:
         result["instructions_digest"] = delivered
     return result
+
+
+def _prompted_binding(
+    stored: JsonObject, checkpoint: AgentHostRunCheckpoint, same_session: bool
+) -> JsonObject:
+    # The newest run whose prompt this session is known to hold, which is not
+    # always the run the binding names: that one may have failed before its
+    # prompt was sent. Gated as the instructions' promotion is, and never
+    # carried into a different session.
+    if checkpoint.state in _STATES_PROVING_THE_PROMPT_LANDED:
+        return {"prompted_run_id": str(checkpoint.run_id)}
+    prompted = stored.get("prompted_run_id") if same_session else None
+    return {"prompted_run_id": prompted} if isinstance(prompted, str) else {}
 
 
 def _binding_is_newer(stored: JsonObject, run_id: UUID, created_at: datetime) -> bool:
@@ -266,13 +280,25 @@ async def instructions_already_delivered(
     return stored.get("instructions_digest") == digest
 
 
-async def resume_session_id(
+@dataclass(frozen=True, slots=True)
+class ResumedSession:
+    """The provider session a turn continues, and how far into it Lemma knows."""
+
+    session_id: str
+    #: The newest run whose prompt the session is known to hold. What it holds
+    #: of the conversation runs to that run's start: anything written in no run
+    #: since, it has never been sent. None when no prompt is known to have
+    #: landed in it, or it was bound before Lemma kept this.
+    last_run_id: UUID | None
+
+
+async def resumed_session(
     uow: SqlAlchemyUnitOfWork,
     *,
     conversation_id: UUID,
     harness_id: UUID,
     capabilities: JsonObject,
-) -> str | None:
+) -> ResumedSession | None:
     """The provider session this conversation should continue in, if any.
 
     Absent on a conversation's first turn, when the conversation last spoke to
@@ -289,4 +315,32 @@ async def resume_session_id(
     if not isinstance(stored, dict) or stored.get("harness_id") != str(harness_id):
         return None
     session_id = stored.get("session_id")
-    return session_id if isinstance(session_id, str) and session_id else None
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    return ResumedSession(
+        session_id=session_id, last_run_id=_uuid(stored.get("prompted_run_id"))
+    )
+
+
+async def resume_session_id(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    harness_id: UUID,
+    capabilities: JsonObject,
+) -> str | None:
+    """Just the id :func:`resumed_session` names."""
+    session = await resumed_session(
+        uow,
+        conversation_id=conversation_id,
+        harness_id=harness_id,
+        capabilities=capabilities,
+    )
+    return session.session_id if session is not None else None
+
+
+def _uuid(value: object) -> UUID | None:
+    try:
+        return UUID(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
