@@ -13,6 +13,11 @@ old state and believe itself current.
 
 Each API process listens once per pod some socket in it watches
 (``PodSignals``); topics' hubs register handlers by kind.
+
+An organization has a channel of its own, ``org:<id>:live``, for what is about
+the organization rather than one pod in it: a pod made or deleted, a member
+added or taken out. The ``org`` topic's hub hears it and decides again which
+pods each of its readers covers.
 """
 
 from __future__ import annotations
@@ -71,14 +76,18 @@ def signal_channel(pod_id: UUID) -> str:
     return f"pod:{pod_id}:live"
 
 
-async def _publish(pod_id: UUID, payloads: list[str]) -> None:
+def org_signal_channel(organization_id: UUID) -> str:
+    return f"org:{organization_id}:live"
+
+
+async def _publish(channel: str, payloads: list[str]) -> None:
     try:
         # The pool, not the process's Pub/Sub listener: workers publish too,
         # and have no listener to lease.
         client = get_redis(url=settings.redis_url)
         for payload in payloads:
             await asyncio.wait_for(
-                client.publish(signal_channel(pod_id), payload),
+                client.publish(channel, payload),
                 timeout=_PUBLISH_TIMEOUT_SECONDS,
             )
     except (RedisError, OSError, TimeoutError) as exc:
@@ -89,9 +98,7 @@ async def _publish(pod_id: UUID, payloads: list[str]) -> None:
         _publish_incident.record_success()
 
 
-def publish_signals(pod_id: UUID, signals: list[Signal]) -> None:
-    """Publish ``signals`` now, in the background. Best effort and bounded: at
-    most ``MAX_PENDING_SIGNALS`` publishes in flight per process."""
+def _publish_on(channel: str, signals: list[Signal]) -> None:
     if not signals:
         return
     if len(_pending) >= MAX_PENDING_SIGNALS:
@@ -99,13 +106,25 @@ def publish_signals(pod_id: UUID, signals: list[Signal]) -> None:
         return
     # Encoded here, off the publish task: a signal is a few ids.
     payloads = [json.dumps(dict(signal)) for signal in signals]
-    task = create_background_task(_publish(pod_id, payloads), name="live-signal")
+    task = create_background_task(_publish(channel, payloads), name="live-signal")
     _pending.add(task)
     task.add_done_callback(_pending.discard)
 
 
+def publish_signals(pod_id: UUID, signals: list[Signal]) -> None:
+    """Publish ``signals`` now, in the background. Best effort and bounded: at
+    most ``MAX_PENDING_SIGNALS`` publishes in flight per process."""
+    _publish_on(signal_channel(pod_id), signals)
+
+
 def publish_signal(pod_id: UUID, signal: Signal) -> None:
     publish_signals(pod_id, [signal])
+
+
+def publish_org_signal(organization_id: UUID, signal: Signal) -> None:
+    """Publish ``signal`` on the organization's channel, as ``publish_signal``
+    does on a pod's."""
+    _publish_on(org_signal_channel(organization_id), [signal])
 
 
 def signal_after_commit(session: AsyncSession, pod_id: UUID, signal: Signal) -> None:
@@ -141,10 +160,14 @@ def _forget(sync: Session) -> None:
 
 
 class PodSignals:
-    """One process's listener on one pod's signals, shared by its hubs."""
+    """One process's listener on one pod's signals, shared by its hubs -- or on
+    an organization's (``name``), for the ``org`` topic's."""
 
-    def __init__(self, pod_id: UUID, channel: RealtimeChannel) -> None:
+    def __init__(
+        self, pod_id: UUID, channel: RealtimeChannel, *, name: str | None = None
+    ) -> None:
         self.pod_id = pod_id
+        self.name = name or signal_channel(pod_id)
         self._channel = channel
         self._handlers: dict[str, list[SignalHandler]] = {}
         self._catch_ups: list[CatchUp] = []
@@ -198,9 +221,7 @@ class PodSignals:
         backoff = 0.25
         while True:
             try:
-                async with self._channel.subscribe(
-                    [signal_channel(self.pod_id)]
-                ) as messages:
+                async with self._channel.subscribe([self.name]) as messages:
                     backoff = 0.25
                     # Anything signalled while we were not listening is read now.
                     self._catch_up()
@@ -214,7 +235,7 @@ class PodSignals:
             except (RedisError, OSError, RuntimeError) as exc:
                 logger.warning(
                     "live.signals_lost.degraded",
-                    pod_id=str(self.pod_id),
+                    channel=self.name,
                     error_type=type(exc).__name__,
                     exc_info=True,
                 )
@@ -223,29 +244,42 @@ class PodSignals:
 
 
 class SignalListeners:
-    """Every pod's listener in this process, made on first use."""
+    """Every pod's (and organization's) listener in this process, made on
+    first use."""
 
     def __init__(self) -> None:
-        self._pods: dict[UUID, PodSignals] = {}
+        self._pods: dict[str, PodSignals] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
 
     async def of(self, pod_id: UUID) -> PodSignals:
+        return await self._of(pod_id, signal_channel(pod_id))
+
+    async def of_org(self, organization_id: UUID) -> PodSignals:
+        return await self._of(organization_id, org_signal_channel(organization_id))
+
+    async def _of(self, owner: UUID, name: str) -> PodSignals:
         loop = asyncio.get_running_loop()
         if self._loop is not loop:
             # A listener's task belongs to the loop that made it; a test that
             # started a fresh loop starts fresh listeners.
             self._pods, self._loop = {}, loop
-        listener = self._pods.get(pod_id)
+        listener = self._pods.get(name)
         if listener is None:
-            listener = PodSignals(pod_id, await get_channel_service())
-            self._pods[pod_id] = listener
+            listener = PodSignals(owner, await get_channel_service(), name=name)
+            self._pods[name] = listener
         return listener
 
     async def release(self, pod_id: UUID) -> None:
         """Stop a pod's listener once no hub needs it."""
-        listener = self._pods.get(pod_id)
+        await self._release(signal_channel(pod_id))
+
+    async def release_org(self, organization_id: UUID) -> None:
+        await self._release(org_signal_channel(organization_id))
+
+    async def _release(self, name: str) -> None:
+        listener = self._pods.get(name)
         if listener is not None and listener.idle:
-            self._pods.pop(pod_id, None)
+            self._pods.pop(name, None)
             await listener.stop()
 
 
@@ -263,6 +297,8 @@ __all__ = [
     "Signal",
     "SignalHandler",
     "SignalListeners",
+    "org_signal_channel",
+    "publish_org_signal",
     "publish_signal",
     "publish_signals",
     "signal_after_commit",

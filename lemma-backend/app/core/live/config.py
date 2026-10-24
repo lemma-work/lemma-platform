@@ -40,6 +40,41 @@ class LiveSettings(BaseSettings):
             "``LIVE_MAX_SOCKETS_PER_USER_PER_POD``."
         ),
     )
+    live_max_sockets_per_user_per_org: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Live sockets one user may hold open on one organization "
+            "(``/organizations/{id}/live``) across every API process. The next "
+            "is closed with 4429. Env: ``LIVE_MAX_SOCKETS_PER_USER_PER_ORG``."
+        ),
+    )
+    live_max_subscriptions_per_org_socket: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Subscriptions one organization socket may hold at once; a client "
+            "needs one. Env: ``LIVE_MAX_SUBSCRIPTIONS_PER_ORG_SOCKET``."
+        ),
+    )
+    live_org_max_pods: int = Field(
+        default=50,
+        ge=1,
+        description=(
+            "Pods one `org` subscription covers, in the organization listing's "
+            "order; the rest are left out and `pods` says so (`more`). It bounds "
+            "what one reader costs the hub. Env: ``LIVE_ORG_MAX_PODS``."
+        ),
+    )
+    live_org_poll_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        description=(
+            "How often the `org` topic reads every state of every covered pod "
+            "whether or not a signal said to, so a lost signal delays a notice "
+            "rather than losing it. Env: ``LIVE_ORG_POLL_SECONDS``."
+        ),
+    )
     live_limit_overrides_json: str = Field(
         default="",
         description=(

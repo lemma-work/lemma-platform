@@ -77,6 +77,26 @@ async def pod_member_user_id(uow, *, pod_id: UUID, pod_member_id: UUID) -> UUID 
     return member.user_id if member is not None else None
 
 
+async def pod_member_user_ids(
+    session, pod_member_ids: Iterable[UUID]
+) -> dict[UUID, UUID]:
+    """The user behind each of these pod memberships, in one read; one no
+    longer standing is left out -- whom the ``org`` topic tells of the
+    workflow forms assigned to a member."""
+    wanted = sorted(set(pod_member_ids))
+    if not wanted:
+        return {}
+    rows = await session.execute(
+        select(PodMember.id, OrganizationMember.user_id)
+        .join(
+            OrganizationMember,
+            PodMember.organization_member_id == OrganizationMember.id,
+        )
+        .where(PodMember.id.in_(wanted))
+    )
+    return dict(rows.tuples().all())
+
+
 async def pod_member_holds(
     uow, pod_id: UUID, user_id: UUID, permission_id: str
 ) -> bool:

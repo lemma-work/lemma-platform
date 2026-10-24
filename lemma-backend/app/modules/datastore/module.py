@@ -222,9 +222,10 @@ def _routers():
 
 def _live():
     from app.core.live.topics import LiveContribution
+    from app.modules.datastore.services.live.org_tables import PodTables
     from app.modules.datastore.services.live.topic import RecordsTopic
 
-    return LiveContribution(topics=(RecordsTopic(),))
+    return LiveContribution(topics=(RecordsTopic(),), org_states=(PodTables(),))
 
 
 def _register_work() -> None:

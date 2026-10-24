@@ -1,4 +1,5 @@
-"""A client of the pod's live socket for e2e tests, over a real websocket.
+"""A client of the live sockets for e2e tests -- the pod's and the
+organization's -- over a real websocket.
 
 The tests run the app under uvicorn (``runtime.backend_server``) and talk to
 it the way a browser does: one TCP websocket per client, frames read in the
@@ -165,4 +166,18 @@ async def live_socket(
         yield LiveClient(ws, ready)
 
 
-__all__ = ["Frame", "LiveClient", "live_socket", "ws_url"]
+@asynccontextmanager
+async def org_socket(
+    server: dict[str, str], organization_id: str, token: str
+) -> AsyncIterator[LiveClient]:
+    """An open live socket on the organization, ``ready`` already read."""
+    async with connect(
+        ws_url(server, f"/organizations/{organization_id}/live"),
+        additional_headers={"Authorization": f"Bearer {token}"},
+    ) as ws:
+        ready = json.loads(await asyncio.wait_for(ws.recv(), 15))
+        assert ready["type"] == "ready", ready
+        yield LiveClient(ws, ready)
+
+
+__all__ = ["Frame", "LiveClient", "live_socket", "org_socket", "ws_url"]

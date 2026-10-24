@@ -156,6 +156,10 @@ class InboxFeed:
                         if after.changed_rev > before.changed_rev
                     },
                 )
+        if self._heads is None:
+            # The last reader went while this read was out: there is nobody
+            # left to keep heads for, and the next to come reads them afresh.
+            return
         # Everyone told: only now do the heads and what each reader saw move.
         self._heads.update(now)
         for channel_id in gone:

@@ -30,6 +30,7 @@ under the epoch that is about to be retired. Redis being unavailable reads as
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from uuid import UUID
 
 from redis.exceptions import RedisError
@@ -92,6 +93,39 @@ async def pod_grants_epoch(pod_id: UUID) -> str | None:
     """The pod's epoch without its files: it moves when who may do what in the
     pod may have, never on a file write. None without Redis."""
     return await _epoch_of([_GLOBAL, _pod_key(pod_id)])
+
+
+async def pod_grants_epochs(pod_ids: Sequence[UUID]) -> dict[UUID, str | None]:
+    """``pod_grants_epoch`` of several pods in one round trip; every pod is
+    ``None`` without Redis."""
+    if not pod_ids:
+        return {}
+    keys = [_GLOBAL, *(_pod_key(pod_id) for pod_id in pod_ids)]
+    redis = get_redis(url=settings.redis_url)
+    try:
+        values = await redis.mget(keys)
+        missing = [key for key, value in zip(keys, values) if value is None]
+        for key in missing:
+            await redis.set(key, _seed(), ex=_EPOCH_TTL_SECONDS, nx=True)
+        if missing:
+            values = await redis.mget(keys)
+    except (RedisError, OSError) as exc:
+        _incident.record_failure(error_type=type(exc).__name__)
+        return dict.fromkeys(pod_ids)
+    _incident.record_success()
+    decoded = [
+        None
+        if value is None
+        else value.decode()
+        if isinstance(value, bytes)
+        else str(value)
+        for value in values
+    ]
+    shared = decoded[0]
+    return {
+        pod_id: None if shared is None or own is None else f"{shared}:{own}"
+        for pod_id, own in zip(pod_ids, decoded[1:])
+    }
 
 
 async def _bump(key: str, pod_id: UUID | None) -> None:

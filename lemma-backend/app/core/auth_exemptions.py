@@ -134,7 +134,8 @@ SIGN_IN_PATHS: dict[str, frozenset[str]] = {
 #: headers on an upgrade). Exempt on the websocket scope only. The pod live
 #: socket, `/pods/{pod_id}/live`, and its predecessor
 #: `/pods/{pod_id}/datastore/changes` are matched by `_is_pod_live_ws_path`
-#: because their prefix is a pod id.
+#: because their prefix is a pod id; the organization's live socket,
+#: `/organizations/{organization_id}/live`, by `_is_org_live_ws_path`.
 SELF_AUTHENTICATED_WEBSOCKETS: tuple[str, ...] = ("/workspace/browser/view",)
 
 #: Old paths of routes that moved under `/public/`, and the day each goes. The
@@ -193,6 +194,19 @@ def _is_pod_live_ws_path(path: str) -> bool:
     return True
 
 
+def _is_org_live_ws_path(path: str) -> bool:
+    """Match ``/organizations/{organization_id}/live``, which authenticates
+    its session itself as the pod's socket does."""
+    parts = path.strip("/").split("/")
+    if len(parts) != 3 or parts[0] != "organizations" or parts[2] != "live":
+        return False
+    try:
+        UUID(parts[1])
+    except ValueError:
+        return False
+    return True
+
+
 def _is_public_desktop_auth_path(path: str, method: str) -> bool:
     return method.upper() == "POST" and path in _DESKTOP_SIGN_IN
 
@@ -220,7 +234,11 @@ def exemption_of(path: str, method: str) -> str | None:
 
 def is_self_authenticated_websocket(path: str) -> bool:
     """Whether a websocket handshake on this path authenticates itself."""
-    return _under_any(path, SELF_AUTHENTICATED_WEBSOCKETS) or _is_pod_live_ws_path(path)
+    return (
+        _under_any(path, SELF_AUTHENTICATED_WEBSOCKETS)
+        or _is_pod_live_ws_path(path)
+        or _is_org_live_ws_path(path)
+    )
 
 
 __all__ = [
