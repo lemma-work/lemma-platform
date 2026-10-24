@@ -329,6 +329,34 @@ export const PUBLIC_TEMPLATES: PublicTemplate[] = [
             },
         ],
     },
+    {
+        slug: "issue-triage",
+        name: "Issue Triage",
+        category: "Engineering",
+        kicker: "Sort new issues fast, with a person in charge",
+        description:
+            "Helps open-source maintainers sort new GitHub issues, spot duplicates, and draft replies that a person approves.",
+        github: "https://github.com/SOURAT/issue-triage",
+        outcomes: [
+            "Label every new issue by type and priority",
+            "Catch duplicates before they pile up",
+            "Ask authors for missing details with a kind, ready-made reply",
+        ],
+        includes: [
+            {
+                label: "Triage agent",
+                detail: "Reads each issue and the earlier ones, then labels it and drafts a reply.",
+            },
+            {
+                label: "Approval step",
+                detail: "A person reviews and edits the reply before anything is final.",
+            },
+            {
+                label: "Issue history",
+                detail: "Keeps every triaged issue, its labels, and the decision in one table.",
+            },
+        ],
+    },
 ];
 
 export function getPublicTemplateBySlug(
