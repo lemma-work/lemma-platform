@@ -1,14 +1,12 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type ConversationRef, type Pod } from "@/data";
 import { ContactsPage } from "@/space/contacts-page";
 import { Library } from "@/library/library";
 import { AppCover } from "@/stage/app-cover";
-import { platformName } from "@/thread/conversation-origin";
 import { readableName } from "@/library/reading";
-import { useWorkflowList } from "@/workflow/use-run";
 import { useMaySeeContacts } from "@/space/contact-queries";
 import { TeammateFace } from "@/space/teammate-face";
 import { allChannels, useChannelList } from "@/channels/queries";
@@ -16,17 +14,19 @@ import { sinceShort } from "@/channels/model";
 import { useMe } from "@/session/use-me";
 import {
     NEW_CHAT, NOTHING_OWNED, OUTCOME_TABS, PLAN_PATH, PLAN_SECTIONS, SECTION_TITLES,
-    ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, sectionRows, standingOf, stampOf, viewOfItem, workRows,
+    ageOf, chatItems, chatView, draftPlan, formatMeasure, inSidebar, outcomeView, sectionRows, standingOf, stampOf, workRows,
     type Go, type OutcomeTab, type Plan, type PlanLine, type PlanSection, type QueueItem,
 } from "./model";
 import { classic, mcpUrl, planRequest, PlanMovedOn, readPlan, savePlan, useMeasure } from "./data";
-import { Avatar, Empty, Icon, to, type IconName } from "./parts";
+import { Avatar, Empty, Icon, to } from "./parts";
 import type { FrameActions } from "./actions";
+import { NeedRow } from "./answer";
 import { AskBox } from "./ask";
+import { AutomationsTab } from "./automations";
 import { WhatItRuns } from "./runs";
 import { kindOf, markOf } from "./sidebar";
 
-const TAB_LABELS: Record<OutcomeTab, string> = { home: "Home", plan: "Plan", apps: "Apps", made: "Files", contacts: "Contacts", xray: "X-ray", settings: "Settings" };
+const TAB_LABELS: Record<OutcomeTab, string> = { home: "Home", plan: "Plan", apps: "Apps", made: "Files", contacts: "Contacts", automations: "Automations", settings: "Settings" };
 
 /** Close the menu a click inside it came from. */
 function closeMenu(event: { currentTarget: Element }) {
@@ -46,9 +46,13 @@ async function copy(text: string): Promise<boolean> {
  *  number, on top. Its home is where you talk to it, what it needs from
  *  you, what it has been doing and what it runs; then the plan, its apps,
  *  what it has made, the people outside who wrote in, and X-ray. */
-export function OutcomePage({ pod, tab, plan, activity, queue, me, go, onAsk, actions }: {
+export function OutcomePage({ pod, pods, tab, section = null, plan, activity, queue, me, go, onAsk, actions }: {
     pod: Pod;
+    /** Every Lemma in the organization, for the queues that read across them. */
+    pods: readonly Pod[];
     tab: OutcomeTab;
+    /** One view of the tab, where the tab has views (Automations). */
+    section?: string | null;
     plan: Plan | null | undefined;
     activity: readonly ConversationRef[];
     queue: readonly QueueItem[];
@@ -126,7 +130,7 @@ export function OutcomePage({ pod, tab, plan, activity, queue, me, go, onAsk, ac
             {tab === "contacts" && (contacts
                 ? <div className="ox-embed"><ContactsPage pod={pod} onConnect={() => actions.connect(pod.id)} /></div>
                 : <Empty title="Contacts are for whoever looks after them."><p>Ask an admin of {pod.name} if you should be one.</p></Empty>)}
-            {tab === "xray" && <XrayTab pod={pod} go={go} actions={actions} />}
+            {tab === "automations" && <AutomationsTab pod={pod} pods={pods} section={section} queue={queue} go={go} actions={actions} />}
 
         </div>
     );
@@ -184,16 +188,7 @@ function HomeTab({ pod, plan, activity, queue, go, onAsk }: {
                 <section aria-label="Needs you">
                     <div className="ox-sec"><h2>Needs you</h2></div>
                     <div className="ox-queue">
-                        {queue.map((item) => (
-                            <a key={item.key} className="ox-item" {...to(viewOfItem(item), go)}>
-                                <span className="ox-item__t">
-                                    <span className="ox-item__w">{item.title}</span>
-                                    {item.detail && <span className="ox-item__o">{item.detail}</span>}
-                                </span>
-                                <span className="ox-item__age">{ageOf(item.sinceMs, now)}</span>
-                                <span className="ox-btn ox-btn--small">{item.kind === "decide" ? "Decide" : item.kind === "answer" ? "Answer" : "Open"}</span>
-                            </a>
-                        ))}
+                        {queue.map((item) => <NeedRow key={item.key} item={item} pods={[pod]} now={now} go={go} showLemma={false} />)}
                     </div>
                 </section>
             )}
@@ -473,100 +468,3 @@ function AppsTab({ pod, go }: { pod: Pod; go: Go }) {
         </div>
     );
 }
-
-/* ── x-ray ────────────────────────────────────────────────────────────── */
-
-function lastRan(at: string): string {
-    const ms = at ? Date.parse(at) : Number.NaN;
-    return Number.isNaN(ms) ? "" : ` · last ran ${ageOf(ms, Date.now())} ago`;
-}
-
-/** One thing a Lemma runs on. Opens in the frame when the frame shows that
- *  kind of thing, in the workspace when it does not. */
-function Piece({ icon, name, line, link, tone }: { icon: IconName; name: string; line?: string; link: { href: string; onClick?: ReturnType<typeof to>["onClick"] }; tone?: "lemma" | "off" }) {
-    return (
-        <a className={"ox-piece" + (tone === "off" ? " ox-piece--off" : "")} {...link}>
-            <span className={"ox-piece__i" + (tone === "lemma" ? " ox-piece__i--lemma" : "")}><Icon name={icon} /></span>
-            <span className="ox-piece__t">{name}</span>
-            {line && <span className="ox-piece__d">{line}</span>}
-        </a>
-    );
-}
-
-function XrayTab({ pod, go, actions }: { pod: Pod; go: Go; actions: FrameActions }) {
-    const agents = useQuery({ queryKey: ["outcome-agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 5 * 60_000 });
-    const schedules = useQuery({ queryKey: ["outcome-schedules", pod.id], queryFn: () => source.listSchedules(pod.id), staleTime: 5 * 60_000 });
-    const tables = useQuery({ queryKey: ["outcome-tables", pod.id], queryFn: () => source.listLibrary(pod.id, "tables", "/"), staleTime: 5 * 60_000 });
-    const tabs = useQuery({ queryKey: ["outcome-apps", pod.id], queryFn: () => source.listTabs(pod.id), staleTime: 5 * 60_000 });
-    const skills = useQuery({ queryKey: ["outcome-skills", pod.id], queryFn: () => source.listLibrary(pod.id, "files", "/skills"), staleTime: 5 * 60_000, retry: false });
-    const surfaces = useQuery({ queryKey: ["outcome-surfaces", pod.id], queryFn: () => source.listSurfaces(pod.id), staleTime: 5 * 60_000, retry: false });
-    const workflows = useWorkflowList(pod.id);
-
-    const apps = (tabs.data ?? []).flatMap((tab) => (tab.kind === "app" ? [tab] : []));
-    const jobs = (schedules.data ?? []).filter((job) => !job.internal);
-    const groups: { title: string; pending: boolean; failed: boolean; empty: string; pieces: ReactNode[] }[] = [
-        {
-            title: "Runs on its own",
-            pending: schedules.isPending,
-            failed: schedules.isError,
-            empty: "Nothing scheduled.",
-            pieces: jobs.map((job) => <Piece key={job.id} icon="clock" name={job.title} line={`${job.trigger}${job.active ? "" : " · paused"}${lastRan(job.lastFiredAt)}`} link={to(outcomeView(pod.id, "settings", "schedules"), go)} tone={job.active ? "lemma" : "off"} />),
-        },
-        {
-            title: "Workflows",
-            pending: workflows.isPending,
-            failed: workflows.isError,
-            empty: "No workflows yet.",
-            pieces: (workflows.data ?? []).map((flow) => <Piece key={flow.id} icon="flow" name={readableName(flow.name)} line={[flow.description, `${flow.steps} ${flow.steps === 1 ? "step" : "steps"}`, flow.active ? "" : "off"].filter(Boolean).join(" · ")} link={to({ name: "workflow", podId: pod.id, workflow: flow.name }, go)} tone={flow.active ? "lemma" : "off"} />),
-        },
-        {
-            title: "Agents",
-            pending: agents.isPending,
-            failed: agents.isError,
-            empty: "Only its own agent.",
-            pieces: (agents.data ?? []).map((agent) => <Piece key={agent.id} icon="agent" name={agent.front ? `${agent.label} (answers here)` : agent.label} line={agent.blurb} link={to({ name: "agent", podId: pod.id, agent: agent.name }, go)} tone="lemma" />),
-        },
-        {
-            title: "Tables",
-            pending: tables.isPending,
-            failed: tables.isError,
-            empty: "No tables yet.",
-            pieces: (tables.data?.items ?? []).map((table) => <Piece key={table.id} icon="table" name={table.name} line={table.detail} link={to({ name: "table", podId: pod.id, table: table.name }, go)} />),
-        },
-        {
-            title: "Apps",
-            pending: tabs.isPending,
-            failed: tabs.isError,
-            empty: "No apps yet.",
-            pieces: apps.map((app) => <Piece key={app.id} icon="app" name={app.label} line={app.visibility ? app.visibility.toLowerCase() : undefined} link={to({ name: "app", podId: pod.id, app: app.id.replace(/^app:/, "") }, go)} />),
-        },
-        {
-            title: "Skills it follows",
-            pending: skills.isPending,
-            failed: skills.isError,
-            empty: "No skills written here yet.",
-            pieces: (skills.data?.items ?? []).map((item) => <Piece key={item.id} icon="skill" name={item.name.replace(/\.md$/i, "")} line={item.description} link={to({ name: "file", podId: pod.id, path: item.kind === "file" ? item.path : item.path.replace(/\/+$/, "") + "/SKILL.md" }, go)} />),
-        },
-        {
-            title: "Where people reach it",
-            pending: surfaces.isPending,
-            failed: surfaces.isError,
-            empty: "Only here.",
-            pieces: (surfaces.data ?? []).map((surface) => <Piece key={surface.id} icon="plug" name={platformName(surface.platform)} line={[surface.handle, surface.active ? "" : "off"].filter(Boolean).join(" · ")} link={{ href: "#", onClick: (event) => { event.preventDefault(); actions.connect(pod.id); } }} tone={surface.active ? undefined : "off"} />),
-        },
-    ];
-    return (
-        <div>
-            <p className="ox-xray__lead">Everything {pod.name} runs on. Each piece opens here.</p>
-            <div className="ox-xray">
-                {groups.map((group) => (
-                    <section key={group.title} className="ox-xray__g">
-                        <h2>{group.title}{!group.pending && !group.failed && group.pieces.length > 0 && <span className="ox-vs"> · {group.pieces.length}</span>}</h2>
-                        {group.pending ? <p className="ox-loading">Loading…</p> : group.failed ? <p className="ox-vs">Couldn’t read this.</p> : group.pieces.length === 0 ? <p className="ox-vs">{group.empty}</p> : <div className="ox-pieces">{group.pieces}</div>}
-                    </section>
-                ))}
-            </div>
-        </div>
-    );
-}
-

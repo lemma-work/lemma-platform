@@ -336,7 +336,7 @@ export function OutcomesShell() {
     } else if (view.name === "outcome" && view.tab === "settings") {
         page = <SettingsView key={pod.id} pod={pod} org={org} section={view.section ?? null} go={go} actions={actions} />;
     } else if (view.name === "outcome") {
-        page = <OutcomePage pod={pod} tab={view.tab} plan={plans.get(pod.id)} activity={activity.get(pod.id) ?? []} queue={queue.filter((item) => item.podId === pod.id)} me={myName} go={go} onAsk={ask} actions={actions} />;
+        page = <OutcomePage pod={pod} pods={list} tab={view.tab} section={view.section ?? null} plan={plans.get(pod.id)} activity={activity.get(pod.id) ?? []} queue={queue.filter((item) => item.podId === pod.id)} me={myName} go={go} onAsk={ask} actions={actions} />;
     } else if (view.name === "run") {
         page = <RunView key={view.runId} pod={pod} runId={view.runId} go={go} back={back} />;
     } else if (view.name === "workflow") {

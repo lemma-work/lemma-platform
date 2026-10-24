@@ -28,23 +28,24 @@ export function WhatItRuns({ pod, go, onNew }: { pod: Pod; go: Go; onNew: (words
     const tables = useQuery({ queryKey: ["outcome-tables", pod.id], queryFn: () => source.listLibrary(pod.id, "tables", "/"), staleTime: 5 * 60_000, retry: false });
     const schedules = useQuery({ queryKey: ["outcome-schedules", pod.id], queryFn: () => source.listSchedules(pod.id), staleTime: 5 * 60_000 });
     const workflows = useWorkflowList(pod.id);
-    const xray = to(outcomeView(pod.id, "xray"), go);
+    const files = to(outcomeView(pod.id, "made"), go);
+    const automations = to(outcomeView(pod.id, "automations"), go);
     const tableChips: Chip[] = (tables.data?.items ?? []).filter((item) => item.kind === "table").map((item) => ({
         key: item.id, icon: "table", label: readableName(item.name), link: to({ name: "table", podId: pod.id, table: item.name }, go),
     }));
     const automationChips: Chip[] = [
         ...(workflows.data ?? []).map((flow): Chip => ({ key: "w:" + flow.id, icon: "flow", label: readableName(flow.name), link: to({ name: "workflow", podId: pod.id, workflow: flow.name }, go) })),
-        ...(schedules.data ?? []).filter((job) => !job.internal).map((job): Chip => ({ key: "s:" + job.id, icon: "clock", label: job.title, link: to(outcomeView(pod.id, "settings", "schedules"), go) })),
+        ...(schedules.data ?? []).filter((job) => !job.internal).map((job): Chip => ({ key: "s:" + job.id, icon: "clock", label: job.title, link: to(outcomeView(pod.id, "automations", "schedules"), go) })),
     ];
     return (
         <>
             <Shelf title="Apps" count={apps.length} all={to(outcomeView(pod.id, "apps"), go)} newLabel="New app" onNew={() => onNew("Build an app for ")}>
                 {apps.length > 0 && <AppTiles apps={apps.slice(0, 5)} go={go} showWhose={false} />}
             </Shelf>
-            <Shelf title="Tables" count={tableChips.length} all={xray} newLabel="New table" onNew={() => onNew("Make a table to track ")}>
+            <Shelf title="Tables" count={tableChips.length} all={files} newLabel="New table" onNew={() => onNew("Make a table to track ")}>
                 <Chips chips={tableChips} />
             </Shelf>
-            <Shelf title="Automations" count={automationChips.length} all={xray} newLabel="New automation" onNew={() => onNew("Set up an automation that ")}>
+            <Shelf title="Automations" count={automationChips.length} all={automations} newLabel="New automation" onNew={() => onNew("Set up an automation that ")}>
                 <Chips chips={automationChips} />
             </Shelf>
         </>

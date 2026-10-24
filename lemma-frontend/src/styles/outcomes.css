@@ -1505,7 +1505,8 @@ a.ox-row:hover .ox-row__t {
     cursor: pointer;
 }
 
-.ox-chip[aria-pressed="true"] {
+.ox-chip[aria-pressed="true"],
+.ox-chip[aria-current="page"] {
     background: var(--accent);
     color: var(--on-accent);
     box-shadow: none;
@@ -1540,6 +1541,16 @@ a.ox-row:hover .ox-row__t {
     font-size: 13px;
 }
 
+/* One thing waiting on you: its title opens where it came from, and its
+   button opens it in place, onto the card or form that answers it. */
+.ox-need {
+    border-bottom: 1px solid var(--line);
+}
+
+.ox-need:last-child {
+    border-bottom: 0;
+}
+
 .ox-item {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 70px auto;
@@ -1547,10 +1558,10 @@ a.ox-row:hover .ox-row__t {
     align-items: center;
     min-height: 54px;
     padding: 6px 16px;
-    border-bottom: 1px solid var(--line);
 }
 
-.ox-item:hover {
+.ox-item:hover,
+.ox-need[data-open] .ox-item {
     background: var(--wash-b);
 }
 
@@ -1558,6 +1569,15 @@ a.ox-row:hover .ox-row__t {
     display: flex;
     flex-direction: column;
     min-width: 0;
+}
+
+.ox-need__panel {
+    padding: 4px 16px 16px;
+    background: var(--wash-b);
+}
+
+.ox-need__panel > .ox-vs {
+    margin: 4px 0 0;
 }
 
 .ox-item__w {
@@ -1587,6 +1607,21 @@ a.ox-row:hover .ox-row__t {
 
 .ox-queue__foot {
     margin: 12px 0 0;
+}
+
+/* ── a Lemma's automations ───────────────────────────────────────────── */
+
+/* One row of views over the workspace's own pages: Workflows, scheduled
+   work and Agents, drawn here without the margins they keep on a page of
+   their own. */
+.ox-autom .ox-chips {
+    margin: 4px 0 18px;
+}
+
+.ox-autom .all {
+    max-width: none;
+    margin: 0;
+    padding: 0;
 }
 
 /* ── outcomes ────────────────────────────────────────────────────────── */

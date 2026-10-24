@@ -15,7 +15,8 @@ import { SpaceEmpty } from "./empty-state";
 import { guideTitle } from "@/tour/guides";
 import { humanizeName } from "@/schedule/schedules";
 
-type View = "workflows" | "waiting" | "running" | "recent";
+export type WorkflowsView = "workflows" | "waiting" | "running" | "recent";
+type View = WorkflowsView;
 
 /** A space's workflows, and everything they have been doing.
  *
@@ -23,9 +24,15 @@ type View = "workflows" | "waiting" | "running" | "recent";
  *  there; what is waiting on me; what is going right now; what happened.
  *  Every run in every view opens its own page — the list is never a dead end
  *  that only leads back to the workflow. */
-export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun, onAsk, onLearn }: {
+export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun, onAsk, onLearn, view: shown, bare = false }: {
     pod: Pod;
     pods: Pod[];
+    /** Which view, when the page around this one chooses it: the `/o`
+     *  frame lists these four views beside schedules and agents, in one row
+     *  of its own. Left out, the page keeps its own tabs. */
+    view?: WorkflowsView;
+    /** Without its heading and tabs, for a page that has its own. */
+    bare?: boolean;
     onOpenWorkflow: (name: string) => void;
     onOpenRun: (runId: string, label: string) => void;
     /** Put words for the teammate in the chat box, to finish or send. */
@@ -33,7 +40,8 @@ export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun, onAsk, onL
     /** Open the guide to workflows. */
     onLearn?: () => void;
 }) {
-    const [view, setView] = useState<View>("workflows");
+    const [own, setView] = useState<View>("workflows");
+    const view = shown ?? own;
     const flows = useWorkflowList(pod.id);
     const runs = useSpaceRuns(pod.id);
     const schedules = useSchedules(pod.id);
@@ -71,19 +79,21 @@ export function WorkflowsPage({ pod, pods, onOpenWorkflow, onOpenRun, onAsk, onL
     ];
 
     return (
-        <div className="all workflows-page">
-            <header className="all__head">
-                <h1>Workflows</h1>
-            </header>
-            <p className="all__scope-note workflows-page__note">Steps that run in order, wait for people where they have to, and pick up again.</p>
-            <div className="all__tabs wfindex__tabs" role="tablist" aria-label="Workflows">
-                {tabs.map((tab) => (
-                    <button key={tab.id} role="tab" aria-selected={view === tab.id} onClick={() => setView(tab.id)}>
-                        {tab.label}
-                        {tab.count !== null && tab.count > 0 && <span className="wfindex__count" data-hot={tab.id === "waiting" || undefined}>{tab.count}</span>}
-                    </button>
-                ))}
-            </div>
+        <div className={"all workflows-page" + (bare ? " workflows-page--bare" : "")}>
+            {!bare && <>
+                <header className="all__head">
+                    <h1>Workflows</h1>
+                </header>
+                <p className="all__scope-note workflows-page__note">Steps that run in order, wait for people where they have to, and pick up again.</p>
+                <div className="all__tabs wfindex__tabs" role="tablist" aria-label="Workflows">
+                    {tabs.map((tab) => (
+                        <button key={tab.id} role="tab" aria-selected={view === tab.id} onClick={() => setView(tab.id)}>
+                            {tab.label}
+                            {tab.count !== null && tab.count > 0 && <span className="wfindex__count" data-hot={tab.id === "waiting" || undefined}>{tab.count}</span>}
+                        </button>
+                    ))}
+                </div>
+            </>}
 
             {view === "workflows" && (
                 <>

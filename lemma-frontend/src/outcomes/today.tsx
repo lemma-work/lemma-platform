@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ConversationRef, Org, Pod } from "@/data";
 import { key } from "@/session/storage";
-import { ageOf, viewOfItem, workSince, type Go, type QueueItem } from "./model";
+import { workSince, type Go, type QueueItem } from "./model";
+import { NeedRow } from "./answer";
 import { AppTiles, AskBox, useApps } from "./ask";
 import { Empty, to } from "./parts";
 
@@ -100,16 +101,7 @@ export function Today({ org, pods, activity, queue, me, go, onAsk }: {
                         {queue.length > ASKS_SHOWN && <a className="ox-link" {...to({ name: "needs" }, go)}>All {queue.length}</a>}
                     </div>
                     <div className="ox-queue">
-                        {queue.slice(0, ASKS_SHOWN).map((item) => (
-                            <a key={item.key} className="ox-item" {...to(viewOfItem(item), go)}>
-                                <span className="ox-item__t">
-                                    <span className="ox-item__w">{item.title}</span>
-                                    <span className="ox-item__o">{item.podName}{item.detail ? ` · ${item.detail}` : ""}</span>
-                                </span>
-                                <span className={"ox-item__age" + (now - item.sinceMs > DAY_MS ? " ox-item__age--old" : "")}>{ageOf(item.sinceMs, now)}</span>
-                                <span className="ox-btn ox-btn--small">{item.kind === "decide" ? "Decide" : item.kind === "answer" ? "Answer" : "Open"}</span>
-                            </a>
-                        ))}
+                        {queue.slice(0, ASKS_SHOWN).map((item) => <NeedRow key={item.key} item={item} pods={pods} now={now} go={go} />)}
                     </div>
                 </section>
             )}

@@ -14,7 +14,13 @@ import type { WaitingRow } from "@/workflow/waiting-inbox";
 
 /* ── address ──────────────────────────────────────────────────────────── */
 
-export type OutcomeTab = "home" | "plan" | "apps" | "made" | "contacts" | "xray" | "settings";
+export type OutcomeTab = "home" | "plan" | "apps" | "made" | "contacts" | "automations" | "settings";
+
+/** What a Lemma runs, in one place: its workflows and their runs, its
+ *  schedules, its agents, and the X-ray of all of it. The workspace keeps
+ *  these on four pages; here they are one tab, a view each. */
+export const AUTOMATION_SECTIONS = ["workflows", "waiting", "running", "history", "schedules", "agents", "xray"] as const;
+export type AutomationSection = (typeof AUTOMATION_SECTIONS)[number];
 
 /** The id a chat not started yet goes by, in the address and in the data
  *  source (`NEW_CONVERSATION`). Repeated rather than imported so this file
@@ -42,7 +48,8 @@ export type View =
     | { name: "needs" }
     | { name: "chats"; open: ChatOpen }
     | { name: "people" }
-    /** `section` is a part of a Lemma's settings (its About), on that tab. */
+    /** `section` is a part of a Lemma's settings (its About), or one view
+     *  of its automations, on that tab. */
     | { name: "outcome"; podId: string; tab: OutcomeTab; section?: string }
     | { name: "run"; podId: string; runId: string }
     | { name: "app"; podId: string; app: string }
@@ -54,11 +61,11 @@ export type View =
     /** Starting a Lemma from scratch, the workspace's own way. */
     | { name: "hire" };
 
-export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "plan", "apps", "made", "contacts", "xray", "settings"];
+export const OUTCOME_TABS: readonly OutcomeTab[] = ["home", "plan", "apps", "made", "contacts", "automations", "settings"];
 
 /** A Lemma's page, on its home unless another tab is named. */
 export function outcomeView(podId: string, tab: OutcomeTab = "home", section: string | null = null): View {
-    return section && tab === "settings" ? { name: "outcome", podId, tab, section } : { name: "outcome", podId, tab };
+    return section && (tab === "settings" || tab === "automations") ? { name: "outcome", podId, tab, section } : { name: "outcome", podId, tab };
 }
 
 /** A chat, open in the main area beside the sidebar that lists it. */
@@ -147,6 +154,9 @@ export function readView(pathname: string): View {
             if (recordId) return { name: "record", podId, table: one, recordId };
         }
         if (tab === "settings") return outcomeView(podId, "settings", one);
+        if (tab === "automations") return outcomeView(podId, "automations", AUTOMATION_SECTIONS.find((each) => each === one) ?? null);
+        /* X-ray was a tab of its own; it is a view of Automations now. */
+        if (tab === "xray") return outcomeView(podId, "automations", "xray");
         if (tab === "file" && rest.length > 0) {
             const parts = rest.map(decoded);
             if (parts.every((part): part is string => part !== null)) return { name: "file", podId, path: "/" + parts.join("/") };
@@ -174,7 +184,7 @@ export function writeView(view: View): string {
         case "outcome": {
             const base = "/o/outcome/" + encodeURIComponent(view.podId);
             if (view.tab === "home") return base;
-            return base + "/" + view.tab + (view.tab === "settings" && view.section ? "/" + encodeURIComponent(view.section) : "");
+            return base + "/" + view.tab + ((view.tab === "settings" || view.tab === "automations") && view.section ? "/" + encodeURIComponent(view.section) : "");
         }
         case "run": return "/o/outcome/" + encodeURIComponent(view.podId) + "/run/" + encodeURIComponent(view.runId);
         case "app": return "/o/outcome/" + encodeURIComponent(view.podId) + "/app/" + encodeURIComponent(view.app);
@@ -212,7 +222,9 @@ export function viewOfAddress(address: { podId: string | null; tabId: string | n
         case "history":
             return outcomeView(podId);
         case "space:about":
-            return outcomeView(podId, "settings", address.section ?? null);
+            /* Schedules are a part of About in the workspace and a view of
+               Automations here. */
+            return address.section === "schedules" ? outcomeView(podId, "automations", "schedules") : outcomeView(podId, "settings", address.section ?? null);
         case "profile":
             return address.agentName ? { name: "agent", podId, agent: address.agentName } : outcomeView(podId, "settings");
         case "conversation":
@@ -228,7 +240,7 @@ export function viewOfAddress(address: { podId: string | null; tabId: string | n
         case "library":
             return outcomeView(podId, "made");
         case "space:workflows":
-            return outcomeView(podId, "xray");
+            return outcomeView(podId, "automations");
     }
     const colon = tabId.indexOf(":");
     const kind = colon < 0 ? tabId : tabId.slice(0, colon);
@@ -685,6 +697,28 @@ export interface QueueItem {
     runId: string | null;
     /** A contact's chat, waiting on a person. */
     contactId: string | null;
+    /** The workflow wait itself, when the row is one: it carries its form. */
+    wait: WaitingRow["wait"] | null;
+}
+
+/** Where a row is answered: in place, from its own card ("ask") or its
+ *  form ("form"), or only where it came from (null). A question or an
+ *  approval is answered with the card the chat would dock, and a form wait
+ *  with the form the run would show. A contact wants a written reply, and
+ *  a workflow decision has no form to submit, so both open where they are. */
+export function answersHere(item: Pick<QueueItem, "contactId" | "wait" | "conversationId" | "runId">): "ask" | "form" | null {
+    if (item.contactId) return null;
+    if (item.wait) return item.wait.type === "HUMAN" ? "form" : null;
+    if (item.runId) return null;
+    return item.conversationId ? "ask" : null;
+}
+
+/** The row's button: what doing it is called. */
+export function verbOf(item: Pick<QueueItem, "kind" | "contactId" | "wait" | "conversationId" | "runId">): string {
+    const here = answersHere(item);
+    if (here === "form") return "Fill in";
+    if (here === "ask") return item.kind === "decide" ? "Decide" : "Answer";
+    return item.contactId ? "Reply" : "Open";
 }
 
 /** Someone outside a Lemma who wrote in and is waiting on a person: its
@@ -715,6 +749,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: row.conversationId,
             runId: null,
             contactId: null,
+            wait: null,
         });
     }
     for (const row of waits) {
@@ -730,6 +765,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: row.wait.externalRef,
             runId: row.run.id,
             contactId: null,
+            wait: row.wait,
         });
     }
     for (const row of contacts) {
@@ -744,6 +780,7 @@ export function queueItems(asked: readonly AskedRow[], waits: readonly WaitingRo
             conversationId: null,
             runId: null,
             contactId: row.channelId,
+            wait: null,
         });
     }
     return items.sort((a, b) => a.sinceMs - b.sinceMs);
@@ -800,11 +837,12 @@ export function isChat(conversation: Pick<ConversationRef, "origin" | "waitingOn
     return CHAT_ORIGINS.has(conversation.origin?.kind ?? "chat");
 }
 
-/** Someone's private line with a Lemma, named for what it is: theirs, on
- *  the platforms it comes through -- or the notices the Lemma sends them.
- *  Called just "Email" beside chats with names, it read as an inbox. */
+/** Someone's own chat with a Lemma, named by where they reach it
+ *  ("WhatsApp"), or "Notices" when it only sends them things. Its glyph
+ *  already says it is theirs, and a person never reads "line" or "channel"
+ *  (`tests/outcomes-copy.test.ts`). */
 export function lineTitle(platforms: string): string {
-    return platforms === "Notices" ? "Notices" : `Your line on ${platforms}`;
+    return platforms;
 }
 
 function timeOf(iso: string | null | undefined): number | null {

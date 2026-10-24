@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
     NO_CHAT,
     ageOf,
+    answersHere,
     chatItems,
     chatView,
     dailyActivity,
@@ -25,6 +26,7 @@ import {
     serializePlan,
     standingOf,
     viewOfAddress,
+    verbOf,
     viewOfItem,
     workSince,
     writeView,
@@ -61,7 +63,8 @@ test("every view writes an address that reads back as itself", () => {
         { name: "chats", open: { kind: "contact", podId: "abc", id: "contact 7" } },
         outcomeView("abc", "contacts"),
         outcomeView("pod one/2"),
-        outcomeView("abc", "xray"),
+        outcomeView("abc", "automations"),
+        outcomeView("abc", "automations", "schedules"),
         outcomeView("abc", "apps"),
         outcomeView("abc", "plan"),
         outcomeView("abc", "settings"),
@@ -83,6 +86,8 @@ test("an address the frame cannot read lands somewhere, not nowhere", () => {
     assert.deepEqual(readView("/o/outcome/abc/whatever"), outcomeView("abc"));
     assert.deepEqual(readView("/o/outcome/%E0%A4%A"), { name: "today" });
     assert.deepEqual(readView("/o/outcome/abc/run"), outcomeView("abc"), "a run with no id is the outcome");
+    assert.deepEqual(readView("/o/outcome/abc/xray"), outcomeView("abc", "automations", "xray"), "X-ray was a tab; it is a view of Automations now");
+    assert.deepEqual(readView("/o/outcome/abc/automations/nonsense"), outcomeView("abc", "automations"), "a view it does not have is its first");
     assert.deepEqual(readView("/o/chats/p1/c/%E0%A4%A"), { name: "chats", open: NO_CHAT });
     assert.deepEqual(readView("/o/chats/p1/x/y"), { name: "chats", open: NO_CHAT }, "an unknown kind of chat opens none");
 });
@@ -112,10 +117,11 @@ test("a workspace link followed inside the frame stays in the frame where it can
     assert.deepEqual(viewOfAddress(address("space:contacts")), outcomeView("p1", "contacts"));
     assert.deepEqual(viewOfAddress(address("space:chats")), outcomeView("p1"), "an outcome's chats are under its name in the sidebar");
     assert.deepEqual(viewOfAddress(address(null)), outcomeView("p1"));
-    assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null, section: "schedules" }), outcomeView("p1", "settings", "schedules"));
+    assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null, section: "schedules" }), outcomeView("p1", "automations", "schedules"), "schedules are a view of Automations here");
+    assert.deepEqual(viewOfAddress({ podId: "p1", tabId: "space:about", conversationId: null, section: "people" }), outcomeView("p1", "settings", "people"));
     assert.deepEqual(viewOfAddress(address("bot:researcher")), { name: "agent", podId: "p1", agent: "researcher" });
     assert.deepEqual(viewOfAddress(address("record:leads:42")), { name: "record", podId: "p1", table: "leads", recordId: "42" });
-    assert.deepEqual(viewOfAddress(address("space:workflows")), outcomeView("p1", "xray"));
+    assert.deepEqual(viewOfAddress(address("space:workflows")), outcomeView("p1", "automations"));
     assert.equal(viewOfAddress(address("computer")), null, "what the frame does not show goes to the workspace");
     assert.equal(viewOfAddress({ podId: null, tabId: null, conversationId: null }), null);
 });
@@ -366,6 +372,30 @@ test("a contact waiting on a person is something to answer, opened in their chat
     assert.deepEqual(viewOfItem(items[1]), chatView({ kind: "contact", podId: "p1", id: "ch1" }));
 });
 
+test("a question, an approval or a form is answered in place; a reply or a decision opens where it is", () => {
+    const asked: AskedRow[] = [
+        { podId: "p1", podName: "Support", conversationId: "c1", title: "Refund for Mara", kind: "approval", summary: "Approve a $240 refund", sinceMs: 1_000 },
+        { podId: "p1", podName: "Support", conversationId: "c2", title: "Holiday hours", kind: "question", summary: null, sinceMs: 2_000 },
+    ];
+    const wait = (id: string, type: string) => ({
+        podId: "p2",
+        podName: "Books",
+        workflowName: "late-fees",
+        wait: { id, runId: "r-" + id, workflowId: null, podId: "p2", nodeId: "n", type, schema: null, uiSchema: null, createdAt: new Date(3_000).toISOString(), externalRef: null, agentName: null, question: null },
+        run: { id: "r-" + id, workflowId: null, podId: "p2", status: "WAITING", failedNodeId: null, currentNodeId: null, error: null, startedAt: null, completedAt: null, createdAt: null },
+    });
+    const waits = [wait("w1", "HUMAN"), wait("w2", "DECISION")] as unknown as WaitingRow[];
+    const contacts = [{ podId: "p1", podName: "Support", channelId: "ch1", name: "Dana Ruiz", reason: null, sinceMs: 5_000 }];
+    const said = queueItems(asked, waits, contacts).map((item) => [item.title, answersHere(item), verbOf(item)]);
+    assert.deepEqual(said, [
+        ["Approve a $240 refund", "ask", "Decide"],
+        ["Holiday hours", "ask", "Answer"],
+        ["Fill in the late-fees form", "form", "Fill in"],
+        ["Fill in the late-fees form", null, "Open"],
+        ["Reply to Dana Ruiz", null, "Reply"],
+    ]);
+});
+
 test("how long something has waited reads the way a person says it", () => {
     const now = 100 * 86_400_000;
     assert.equal(ageOf(now - 20_000, now), "1 min");
@@ -435,7 +465,7 @@ test("chats from every outcome make one list: waiting on you first, then the res
         me: "u1",
     });
     assert.deepEqual(needs.map((item) => item.title), ["Approve a refund", "Escalations"]);
-    assert.deepEqual(rest.map((item) => item.title), ["Renewal list", "Ops", "Refund question", "Your line on WhatsApp"]);
+    assert.deepEqual(rest.map((item) => item.title), ["Renewal list", "Ops", "Refund question", "WhatsApp"]);
     const ops = rest[1];
     assert.equal(ops.kind, "shared");
     assert.equal(ops.unread, 3);
@@ -558,9 +588,9 @@ test("the sidebar puts the busiest outcome first and folds the ones gone quiet",
     assert.ok(QUIET_AFTER_MS > 0);
 });
 
-test("a private line is named for what it is, and repeated names get told apart", () => {
-    assert.equal(lineTitle("Email"), "Your line on Email");
-    assert.equal(lineTitle("WhatsApp and Email"), "Your line on WhatsApp and Email");
+test("a person's own chat is named by where they reach it, and repeated names get told apart", () => {
+    assert.equal(lineTitle("Email"), "Email");
+    assert.equal(lineTitle("WhatsApp and Email"), "WhatsApp and Email");
     assert.equal(lineTitle("Notices"), "Notices");
     const repeated = repeatedTitles([
         { key: "a", title: "LLM Lab tutor" },
