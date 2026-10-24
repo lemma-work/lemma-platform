@@ -10,9 +10,13 @@ and as the text of a single content block.
 
 import json
 import sys
+import time
 
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
+
+#: The longest `sleep N` a call is held for, so a typo cannot hang a recording.
+MAX_SLEEP_SECONDS = 120
 
 TOOLS = [
     {
@@ -51,6 +55,12 @@ def answer(request_id, value):
 def tool_result(name, arguments):
     if name == "lemma_exec_command":
         command = str(arguments.get("cmd", ""))
+        # `sleep N` takes as long as it says, as the real tool would: a call
+        # held open is what makes an agent report progress on one.
+        seconds = command.removeprefix("sleep ").strip()
+        if command.startswith("sleep ") and seconds.isdigit():
+            time.sleep(min(int(seconds), MAX_SLEEP_SECONDS))
+            return {"exit_code": 0, "stdout": "", "stderr": ""}
         output = command.removeprefix("echo ").strip() + "\n"
         return {"exit_code": 0, "stdout": output, "stderr": ""}
     if name == "lemma_display_resource":

@@ -9,6 +9,9 @@
 //! model has finished writing it. That last refinement is the signal the input
 //! is final. See `toolCallNotification` and `streamedInputRefinement` in the
 //! adapter's `acp-agent.js`.
+//!
+//! Not every `tool_call_update` is about a call the adapter opened: some are
+//! progress beats, which never become calls (see [`is_beat`]).
 
 use serde_json::{Map, Value};
 
@@ -55,6 +58,41 @@ pub(super) fn settled(call: &Call, report: &Report<'_>) -> bool {
             running || consolidated || bare
         }
     }
+}
+
+/// Whether a report for an id the run has not seen is a progress beat.
+///
+/// The adapter forwards each of the SDK's `tool_progress` messages as a
+/// `tool_call_update` carrying nothing but `status: in_progress`, the tool's
+/// name and `_meta.claudeCode.toolResponse.elapsedTimeSeconds` (`case
+/// "tool_progress"` in `acp-agent.js`), under the message's own id -- which is
+/// often not a call's. Claude Code beats for a tool while it runs under
+/// `<call id>-heartbeat-<n>`, and for a sub-agent waiting out an API retry
+/// under an id of its own. Opened as a call, a beat would have no input, so it
+/// would never settle and would be released when the turn ends: an empty card
+/// after the agent's closing words, which the backend closes as failed.
+///
+/// A report that carries input is a call, whatever its id.
+pub(super) fn is_beat(update: &Map<String, Value>, id: &str) -> bool {
+    let input = update
+        .get("rawInput")
+        .is_some_and(|input| !super::is_empty(input));
+    !input && (heartbeat_of(id).is_some() || reports_running_time(update))
+}
+
+/// The call a heartbeat beats for: `toolu_1-heartbeat-0` is `toolu_1`'s.
+pub(super) fn heartbeat_of(id: &str) -> Option<&str> {
+    let (call, beat) = id.rsplit_once("-heartbeat-")?;
+    let numbered = !beat.is_empty() && beat.bytes().all(|byte| byte.is_ascii_digit());
+    (numbered && !call.is_empty()).then_some(call)
+}
+
+fn reports_running_time(update: &Map<String, Value>) -> bool {
+    update.get("status").and_then(Value::as_str) == Some("in_progress")
+        && update
+            .get("_meta")
+            .and_then(|meta| meta.pointer("/claudeCode/toolResponse/elapsedTimeSeconds"))
+            .is_some_and(Value::is_number)
 }
 
 /// A closing status, sharpened by the reason Claude Code gives for a tool
