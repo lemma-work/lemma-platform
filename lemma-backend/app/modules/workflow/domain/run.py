@@ -94,6 +94,10 @@ class StepRecord(BaseModel):
     # and that row stops being the *active* wait the moment the step resumes:
     # a finished agent step otherwise has no way back to its own transcript.
     external_ref: str | None = None
+    # Whether this step stopped for a person's form. Its status says so only
+    # until the form is answered and the step completes, and whether a run
+    # needed a person is still worth knowing once it has finished.
+    waited_on_form: bool = False
 
 
 class WorkflowRunEntity(AggregateRoot):
@@ -195,6 +199,7 @@ class WorkflowRunEntity(AggregateRoot):
         step.external_ref = external_ref
         if human_wait:
             step.status = StepStatus.WAITING
+            step.waited_on_form = True
             self.status = WorkflowRunStatus.WAITING
 
     def record_node_output(self, node_id: str, output: Any) -> dict[str, Any]:
