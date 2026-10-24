@@ -67,7 +67,6 @@ async def on_pod_bundle_event(
                 # never the import's own job id.
                 "bundle_id": imported.bundle_id,
                 "resource_count_bucket": bucket(imported.resource_count, COUNT_EDGES),
-                "is_remix": imported.is_remix,
             },
         )
 

@@ -254,7 +254,6 @@ def scenario_events(rows: ScenarioRows) -> list[DomainEvent]:
             pod_id=pod,
             user_id=user,
             resource_count=5,
-            is_remix=True,
             **_o("IMPORT"),
         ),
         PodDeletedEvent(

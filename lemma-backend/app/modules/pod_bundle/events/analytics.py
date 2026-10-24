@@ -44,7 +44,6 @@ async def record_import_completed(
     pod_id: UUID,
     user_id: UUID,
     resource_count: int,
-    is_remix: bool,
 ) -> None:
     async with uow_scope(worker_ctx.uow_factory) as uow:
         uow.collect_events(
@@ -55,7 +54,6 @@ async def record_import_completed(
                     pod_id=pod_id,
                     user_id=user_id,
                     resource_count=resource_count,
-                    is_remix=is_remix,
                 )
             ]
         )

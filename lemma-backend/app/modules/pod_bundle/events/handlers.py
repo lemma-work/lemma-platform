@@ -49,6 +49,10 @@ from app.modules.pod_bundle.infrastructure.archive_offload import (
     extract_bundle_offloaded,
 )
 from app.modules.pod_bundle.infrastructure import github_fetcher
+from app.modules.pod_bundle.infrastructure.bundle_contents import (
+    archived_resource_count,
+    resource_count,
+)
 from app.modules.pod_bundle.infrastructure.bundle_identity import read_bundle_id
 from app.modules.pod_bundle.infrastructure import publish_manifest
 from app.modules.pod_bundle.infrastructure.realtime import (
@@ -260,7 +264,9 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
             export_id=export_id,
             pod_id=pod_id,
             user_id=user_id,
-            resource_count=len(getattr(state, "manifest", None) or ()),
+            resource_count=await run_blocking(
+                archived_resource_count, zip_bytes, limiter="cpu_bound"
+            ),
         )
         state.completed_at = _now()
         # Retain the READY export state (and thus its archive) for the URL's TTL,
@@ -616,6 +622,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         function_runner = None
 
         source_bundle_id: UUID | None = None
+        bundle_resources = 0
         with tempfile.TemporaryDirectory(prefix="lemma-pod-apply-") as tmp:
             try:
                 bundle_root = await extract_bundle_offloaded(archive, tmp)
@@ -624,6 +631,9 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             publish_manifest.prepare_published_bundle(bundle_root)
             source_bundle_id = await run_blocking(
                 read_bundle_id, bundle_root, limiter="cpu_bound"
+            )
+            bundle_resources = await run_blocking(
+                resource_count, bundle_root, limiter="cpu_bound"
             )
 
             while (step := state.plan.next_pending_step()) is not None:
@@ -737,8 +747,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             bundle_id=source_bundle_id,
             pod_id=pod_id,
             user_id=user_id,
-            resource_count=len(getattr(state.plan, "steps", None) or ()),
-            is_remix=bool(getattr(state, "is_remix", False)),
+            resource_count=bundle_resources,
         )
         await publish_bundle_event(
             import_id, completed_payload(state.status.value, state.seq)

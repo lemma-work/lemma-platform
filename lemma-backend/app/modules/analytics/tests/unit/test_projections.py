@@ -541,3 +541,6 @@ async def test_an_export_and_an_import_of_it_name_the_same_bundle(
     assert imported.properties["bundle_id"] == str(bundle_id)
     # A bundle no export produced has no bundle identity -- not the import's.
     assert "bundle_id" not in unknown.properties
+    # Nor a remix flag: a remix opens a conversation and never an import, so
+    # the server has nothing to say there.
+    assert "is_remix" not in imported.properties

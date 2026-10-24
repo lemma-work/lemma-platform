@@ -212,17 +212,17 @@ ANALYTICS_CATALOG: Final[dict[str, AnalyticEvent]] = {
         groups=frozenset(),
         person_profile=PersonProfile.ANONYMOUS,
     ),
-    # ``is_remix`` belongs at *start*, not only on completion: the abandonment
-    # between the two is the interesting number, and it is only countable if
-    # both ends carry the same dimension.
     "import.started": AnalyticEvent(
         properties=frozenset({"bundle_id", "is_remix"}),
         groups=_ORG_ONLY,
     ),
+    # No ``is_remix``: a remix does not go through an import. It opens a
+    # conversation asking the pod's agent to rebuild the app, so an import the
+    # server completes is never one, and a flag that is always false is not a
+    # dimension. ``resource_count_bucket`` counts the way ``bundle.exported``
+    # does (``pod_bundle.infrastructure.bundle_contents``), so the two compare.
     "import.completed": AnalyticEvent(
-        properties=frozenset(
-            {"pod_id", "bundle_id", "resource_count_bucket", "is_remix"}
-        ),
+        properties=frozenset({"pod_id", "bundle_id", "resource_count_bucket"}),
     ),
 }
 

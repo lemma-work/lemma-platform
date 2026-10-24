@@ -21,6 +21,10 @@ from lemma_pod_bundle import extract_bundle
 
 import app.modules.pod_bundle.infrastructure.exporter as exporter_mod
 from app.modules.agent.contracts import AgentKind
+from app.modules.pod_bundle.infrastructure.bundle_contents import (
+    archived_resource_count,
+    resource_count,
+)
 from app.modules.pod_bundle.infrastructure.bundle_identity import read_bundle_id
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure.exporter_surfaces import export_surfaces
@@ -412,6 +416,17 @@ async def test_an_export_names_itself_inside_the_archive(patched_exporter, tmp_p
 
     _, unnamed_bytes, _ = await _run_export(patched_exporter)
     assert read_bundle_id(extract_bundle(unnamed_bytes, tmp_path / "plain")) is None
+
+
+async def test_an_exported_archive_counts_as_its_import_will_count_it(
+    patched_exporter, tmp_path
+):
+    """The export reports the archive it packed, the import the tree it
+    extracts. Over a real export the two agree, and neither is zero."""
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
+    exported = archived_resource_count(zip_bytes)
+    assert exported > 0
+    assert exported == resource_count(extract_bundle(zip_bytes, tmp_path / "out"))
 
 
 @pytest.mark.parametrize(

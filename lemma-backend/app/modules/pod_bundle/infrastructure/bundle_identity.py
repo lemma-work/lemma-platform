@@ -24,9 +24,15 @@ BUNDLE_ID_KEY = "bundle_id"
 
 
 def stamp_bundle_id(
-    pod_payload: Mapping[str, object], bundle_id: UUID
+    pod_payload: Mapping[str, object], bundle_id: UUID | None
 ) -> dict[str, object]:
-    """``pod.json``'s payload, naming the export that is writing it."""
+    """``pod.json``'s payload, naming the export that is writing it.
+
+    Unchanged for ``None``: an archive nobody exported (a GitHub publish packs
+    its own) names no export rather than a made-up one.
+    """
+    if bundle_id is None:
+        return dict(pod_payload)
     return {**pod_payload, BUNDLE_ID_KEY: str(bundle_id)}
 
 

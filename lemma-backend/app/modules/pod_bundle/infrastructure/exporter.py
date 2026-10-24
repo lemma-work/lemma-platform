@@ -189,9 +189,6 @@ class BundleExporter:
         seeded only when it appears in ``data_tables``, and a file is included
         only when it lives under one of ``file_folders``. Naming nothing exports
         the pod's resources alone.
-
-        ``bundle_id`` is written into ``pod.json`` so an import of this archive
-        can say which export it came from (``bundle_identity``).
         """
         selected = _normalize_include(include)
         data_tables_set = _normalize_data_tables(data_tables)
@@ -268,9 +265,7 @@ class BundleExporter:
             pod_payload = _normalize_pod_payload(
                 pod_dict, format_version=bundle_format_version(root)
             )
-            if bundle_id is not None:
-                pod_payload = stamp_bundle_id(pod_payload, bundle_id)
-            _write_json(root / "pod.json", pod_payload)
+            _write_json(root / "pod.json", stamp_bundle_id(pod_payload, bundle_id))
 
             # --- tables (+ optional data) -------------------------------------
             if "tables" in selected:

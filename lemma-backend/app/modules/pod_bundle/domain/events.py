@@ -31,6 +31,8 @@ class BundleExportedEvent(PodBundleDomainEvent):
     bundle_id: UUID
     pod_id: UUID
     user_id: UUID | None = None
+    #: Resources the archive holds, counted as ``infrastructure.bundle_contents``
+    #: counts them -- the same rule the import's count uses.
     resource_count: int = 0
 
 
@@ -43,5 +45,6 @@ class BundleImportCompletedEvent(PodBundleDomainEvent):
     bundle_id: UUID | None = None
     pod_id: UUID
     user_id: UUID | None = None
+    #: Resources the imported bundle held, by the export's rule. Not the plan's
+    #: step count, which counts a table's rows and an agent's grants as steps.
     resource_count: int = 0
-    is_remix: bool = False
