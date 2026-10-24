@@ -23,6 +23,10 @@ from app.modules.agent.domain.entities import (
 from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY, folded_from
 from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON, held_messages
 from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.domain.queued_messages import (
+    DURING_ACTIVE_RUN,
+    STEERED_INTO_RUN,
+)
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, MessageDraft
 from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
@@ -73,10 +77,47 @@ class StoredConversation:
             self._write(MessageDraft.of_text(answered), run_id=run.id)
         return run
 
+    def answer(self, run: AgentRun, text: str) -> None:
+        """The agent's reply in ``run``, after whatever came meanwhile."""
+        self._write(MessageDraft.of_text(text), run_id=run.id)
+
+    def followup(self) -> AgentRun:
+        """A run started to answer what was said while the last one worked
+        (``start_queued_followup``): nothing in it is its own yet."""
+        run = AgentRun(
+            conversation_id=self.id,
+            agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
+            started_at=datetime.now(timezone.utc),
+        )
+        self.runs.append(run)
+        return run
+
+    def said_meanwhile(self, run: AgentRun, text: str, *, into: AgentRun) -> None:
+        """A message typed while ``run`` worked: it joins ``run``, and the
+        follow-up ``into`` claims it."""
+        self._write(
+            MessageDraft.of_text(
+                text,
+                role=MessageRole.USER,
+                metadata={DURING_ACTIVE_RUN: True, STEERED_INTO_RUN: str(into.id)},
+            ),
+            run_id=run.id,
+        )
+
     def held(self, text: str, *, reply: str | None = None, **metadata: object) -> None:
         """What ``hold_outside_turn`` writes."""
         for draft in held_messages(text, metadata, reply=reply):
             self._write(draft, run_id=None)
+
+    def notified(self, text: str) -> None:
+        """What ``append_notification_message`` writes: a reminder or a report
+        delivered to the chat, in no run."""
+        self._write(
+            MessageDraft.of_notification(
+                text, metadata={"notification_id": str(uuid4())}
+            ),
+            run_id=None,
+        )
 
     def follow_up(self, text: str) -> None:
         """A member's line to the contact, in no run."""

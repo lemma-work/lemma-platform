@@ -29,7 +29,6 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.services.runtime_model_factory import provider_model_settings
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.domain.queued_messages import STEERED_INTO_RUN
 from app.modules.agent.domain.run_context_prompt import run_context_for
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
@@ -38,6 +37,9 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
     to_json_value,
+)
+from app.modules.agent.infrastructure.harnesses.turn_messages import (
+    turn_messages,
 )
 from app.modules.agent.infrastructure.mcp import (
     LEMMA_MCP_SERVER_NAME,
@@ -106,6 +108,7 @@ def run_start_payload(
     runtime_instructions: str,
     carries_history: bool,
     resumed_tool_call_id: str | None = None,
+    session_last_run_id: UUID | None = None,
 ) -> JsonObject:
     """Everything one dispatched run needs, and nothing it does not.
 
@@ -116,9 +119,10 @@ def run_start_payload(
     changes.
 
     ``carries_history`` is set when the run is not even going to try to resume a
-    provider session, so the prompt has to bring the conversation with it, and
-    ``resumed_tool_call_id`` names the pausing call this run exists to answer.
-    See :func:`_turn_messages`.
+    provider session, so the prompt has to bring the conversation with it,
+    ``resumed_tool_call_id`` names the pausing call this run exists to answer,
+    and ``session_last_run_id`` is the newest run whose prompt the session
+    being resumed holds. See :func:`turn_messages`.
 
     Its destination is somebody's laptop, where the host keeps it in its own
     journal, so it carries the prompt and nothing else. It used to carry the
@@ -132,11 +136,12 @@ def run_start_payload(
         "prompt": _prompt_payload(
             agent=agent,
             conversation=conversation,
-            messages=_turn_messages(
+            messages=turn_messages(
                 messages,
                 carries_history=carries_history,
                 resumed_tool_call_id=resumed_tool_call_id,
                 agent_run_id=agent_run_id,
+                session_last_run_id=session_last_run_id,
             ),
             ctx=ctx,
             runtime_instructions=runtime_instructions,
@@ -327,77 +332,6 @@ def _prompt_payload(
         "user_prompt": run_context + ("\n\n" + history if history else ""),
         "system_prompt": "\n\n".join(section for section in sections if section),
     }
-
-
-def _turn_messages(
-    messages: Sequence[Message],
-    *,
-    carries_history: bool,
-    resumed_tool_call_id: str | None = None,
-    agent_run_id: UUID | None = None,
-) -> list[Message]:
-    """The messages this prompt has to carry.
-
-    Normally just the latest user message. A Lemma conversation maps to one
-    provider session, kept in one working directory, and the agent loads it back
-    on every turn — so the rest is already on the other side and resending it
-    would only duplicate the conversation in its context.
-
-    A run that resumes a pause is the same rule with a different answer. Waking
-    from a ``wait_for`` adds no user message, so "the latest user message" is the
-    request that started the task — and re-sending that to an agent whose
-    session already contains it does not read as "carry on", it reads as the
-    person asking again, so the agent does the work twice. What the session has
-    genuinely not seen is the return Lemma synthesized for the call it paused
-    on, which is exactly what resuming has to deliver.
-
-    The other exception is a run that is not going to try: a harness that never
-    advertised ``loadSession`` has no session to resume, ever. Sending one lone
-    message there leaves the agent answering a follow-up it has never seen the
-    start of. This costs nothing in the usual case, because a resumable harness
-    only lacks a stored session on a conversation's first turn, where there is
-    no history to send.
-
-    And a turn answers every message that is its own, not only the newest: the
-    one that started it, any that arrived before it was dispatched, and -- for
-    a follow-up turn -- everything the person said while the previous turn was
-    working, which the follow-up claims (``steered_into_run``). "The latest
-    user message" alone answered the last of three and dropped the other two on
-    a session that had never seen them.
-    """
-    ordered = sorted(messages, key=lambda item: item.sequence)
-    if carries_history:
-        return ordered
-    resumed = (
-        [
-            message
-            for message in ordered
-            if message.kind == MessageKind.TOOL_RETURN
-            and message.tool_call_id == resumed_tool_call_id
-        ]
-        if resumed_tool_call_id is not None
-        else []
-    )
-    if agent_run_id is not None:
-        answering = [
-            message
-            for message in ordered
-            if message.role == MessageRole.USER
-            and (
-                message.agent_run_id == agent_run_id
-                or (message.metadata or {}).get(STEERED_INTO_RUN) == str(agent_run_id)
-            )
-        ]
-        if answering:
-            # A resume also carries what was said while the pause was being
-            # answered: the return the session is waiting on, and the messages.
-            return [*resumed, *answering]
-    if resumed:
-        return resumed
-    for message in reversed(ordered):
-        if message.role == MessageRole.USER:
-            return [message]
-    return ordered[-1:]
 
 
 def _workspace_cwd(ctx: AgentContext) -> str:

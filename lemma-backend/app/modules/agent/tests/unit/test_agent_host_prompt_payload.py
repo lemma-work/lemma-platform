@@ -76,11 +76,18 @@ def _conversation() -> Conversation:
     )
 
 
+#: The run the messages below were said in. A message in no run is something
+#: else -- a reminder, another chat folded in -- which a resumed session is
+#: sent too (``test_agent_host_between_turns``).
+EARLIER_RUN = uuid7()
+
+
 def _message(sequence: int, role: str, text: str) -> Message:
     return Message(
         id=uuid7(),
         conversation_id=CONVERSATION_ID,
         sequence=sequence,
+        agent_run_id=EARLIER_RUN,
         role=role,
         kind=MessageKind.TEXT,
         text=text,
@@ -112,11 +119,13 @@ def _ctx() -> BaseAgentContext:
 
 
 def _woke_up(sequence: int, tool_call_id: str) -> Message:
-    """The return the wake synthesizes for the wait it resolved."""
+    """The return the wake synthesizes for the wait it resolved, appended to
+    the run that paused."""
     return Message(
         id=uuid7(),
         conversation_id=CONVERSATION_ID,
         sequence=sequence,
+        agent_run_id=EARLIER_RUN,
         role=MessageRole.TOOL,
         kind=MessageKind.TOOL_RETURN,
         tool_name="wait_for",

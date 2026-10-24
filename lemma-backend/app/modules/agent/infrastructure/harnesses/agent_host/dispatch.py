@@ -224,7 +224,7 @@ async def enqueue_run[DepsT: AgentContext](
         )
         if harness is None:
             raise RuntimeError("Agent Host harness is unavailable")
-        resume_session_id = await session_memory.resume_session_id(
+        session = await session_memory.resumed_session(
             uow,
             conversation_id=conversation.id,
             harness_id=run_config.harness_id,
@@ -270,7 +270,8 @@ async def enqueue_run[DepsT: AgentContext](
         )
     resumed_tool_call_id = _resumed_tool_call_id(run)
     admission = _Admission(
-        resume_session_id=resume_session_id,
+        resume_session_id=session.session_id if session is not None else None,
+        session_last_run_id=session.last_run_id if session is not None else None,
         harness_id=harness_id,
         host_id=host_id,
         steerable=steerable,
@@ -388,6 +389,7 @@ class _Admission:
     """What the first read settled, which the rest of dispatch has to honour."""
 
     resume_session_id: str | None
+    session_last_run_id: UUID | None
     harness_id: UUID
     host_id: UUID
     steerable: bool
@@ -509,6 +511,7 @@ async def _admit[DepsT: AgentContext](
         ),
         carries_history=resume_session_id is None,
         resumed_tool_call_id=admission.resumed_tool_call_id,
+        session_last_run_id=admission.session_last_run_id,
     )
     prompt = json_object(payload.get("prompt"))
     mcp = await mcp_payload(
