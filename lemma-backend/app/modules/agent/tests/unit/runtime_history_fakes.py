@@ -78,6 +78,16 @@ class StoredConversation:
         for draft in held_messages(text, metadata, reply=reply):
             self._write(draft, run_id=None)
 
+    def notified(self, text: str) -> None:
+        """What ``append_notification_message`` writes: a reminder or a report
+        delivered to the chat, in no run."""
+        self._write(
+            MessageDraft.of_notification(
+                text, metadata={"notification_id": str(uuid4())}
+            ),
+            run_id=None,
+        )
+
     def follow_up(self, text: str) -> None:
         """A member's line to the contact, in no run."""
         self._write(
