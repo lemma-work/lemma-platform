@@ -448,3 +448,20 @@ describe("resolveSafeRedirectUri", () => {
     ).toBe("http://127.0.0.1:49152/callback");
   });
 });
+
+describe("AuthManager token source", () => {
+  it("asks the token source for the current and a renewed token in token mode", async () => {
+    const source = { current: vi.fn(async () => "now"), renew: vi.fn(async () => "renewed") };
+    const auth = new AuthManager("https://api.lemma.work", "https://lemma.work/auth", "built-with", source);
+    expect(await auth.getAccessToken()).toBe("now");
+    expect(await auth.refreshAccessToken()).toBe("renewed");
+    expect(auth.getBearerToken()).toBe("built-with");
+  });
+
+  it("ignores a token source without a token, where the cookie session decides", async () => {
+    const source = { current: vi.fn(async () => "now"), renew: vi.fn(async () => "renewed") };
+    const auth = new AuthManager("https://api.lemma.work", "https://lemma.work/auth", null, source);
+    expect(auth.isTokenMode).toBe(false);
+    expect(source.current).not.toHaveBeenCalled();
+  });
+});

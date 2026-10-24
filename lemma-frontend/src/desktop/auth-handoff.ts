@@ -37,6 +37,7 @@ import { desktopInfo } from "./bridge";
 
 const REQUEST_KEY = "lemma.desktop-auth.request-id";
 const PENDING_KEY = "lemma.desktop-auth.pending";
+const APP_KEY = "lemma.desktop-auth.app";
 const REQUEST_ID = /^[A-Za-z0-9_-]{20,128}$/;
 
 /** Only when the shell says it is a hosted workspace. A local one signs in
@@ -61,8 +62,22 @@ function session(): Storage | null {
     }
 }
 
-export function holdRequestId(requestId: string | null): void {
-    if (requestId) session()?.setItem(REQUEST_KEY, requestId);
+/** Which Lemma app asked. The phone app (`lemma-mobile/`) signs in through
+ *  this same handoff, because Google refuses its WebViews, and adds
+ *  `client=mobile` to the link. Every link without it is the desktop app's.
+ *  Only the words on the page differ: the code, the click and the way back
+ *  (`lemma://`, which both apps answer) are the same. */
+export type HandoffApp = "desktop" | "mobile";
+
+export function handoffAppFromSearch(search: string): HandoffApp {
+    return new URLSearchParams(search).get("client") === "mobile" ? "mobile" : "desktop";
+}
+
+export function holdRequestId(requestId: string | null, app: HandoffApp = "desktop"): void {
+    if (!requestId) return;
+    session()?.setItem(REQUEST_KEY, requestId);
+    if (app === "mobile") session()?.setItem(APP_KEY, app);
+    else session()?.removeItem(APP_KEY);
 }
 
 /** The request this browser tab is signing in for, if any. */
@@ -71,8 +86,20 @@ export function heldRequestId(): string | null {
     return value && REQUEST_ID.test(value) ? value : null;
 }
 
+export function heldHandoffApp(): HandoffApp {
+    return session()?.getItem(APP_KEY) === "mobile" ? "mobile" : "desktop";
+}
+
+/** How the page names the app it is signing in. */
+export function handoffWords(app: HandoffApp): { name: string; Name: string; where: string; back: string } {
+    return app === "mobile"
+        ? { name: "the Lemma app", Name: "The Lemma app", where: "on this phone", back: "The Lemma app comes back to the front." }
+        : { name: "Lemma Desktop", Name: "Lemma Desktop", where: "on this computer", back: "Lemma Desktop comes to the front and opens your workspace. You can close this tab." };
+}
+
 export function dropRequestId(): void {
     session()?.removeItem(REQUEST_KEY);
+    session()?.removeItem(APP_KEY);
 }
 
 /** Letters and digits nobody misreads for one another: no 0/O, 1/I/L, 5/S, 8/B. */

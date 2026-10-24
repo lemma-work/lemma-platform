@@ -37,7 +37,7 @@ export function serverSteps(apiUrl: string | null, siteOrigin: string): string[]
     ];
 }
 
-export function setupCommands(pod: Pod, tool: Tool, servers: string[]): string[] {
+export function setupCommands(pod: Pick<Pod, "id">, tool: Tool, servers: string[]): string[] {
     return [
         "uv tool install lemma-terminal",
         ...servers,
@@ -48,7 +48,7 @@ export function setupCommands(pod: Pod, tool: Tool, servers: string[]): string[]
     ];
 }
 
-export function setupPrompt(pod: Pod, tool: Tool, servers: string[]): string {
+export function setupPrompt(pod: Pick<Pod, "id" | "name">, tool: Tool, servers: string[]): string {
     const steps = setupCommands(pod, tool, servers);
     return "Set me up to use my Lemma space “" + pod.name + "” from here. "
         + "Skip the first step if the lemma command already exists. Run these in order, and when "
@@ -59,7 +59,7 @@ export function setupPrompt(pod: Pod, tool: Tool, servers: string[]): string {
 
 /** Things worth asking once it is set up, each naming the space so the
  *  prompt still works in a folder bound to a different one. */
-export function starterPrompts(pod: Pod): { title: string; prompt: string }[] {
+export function starterPrompts(pod: Pick<Pod, "id" | "name">): { title: string; prompt: string }[] {
     const space = "the Lemma space “" + pod.name + "” (pod " + pod.id + ")";
     return [
         {

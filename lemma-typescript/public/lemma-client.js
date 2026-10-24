@@ -9188,6 +9188,7 @@ var LemmaClient = (() => {
       authUrl: authUrl.replace(/\/$/, ""),
       podId,
       token,
+      tokenSource: overrides.tokenSource,
       app: (_i = overrides.app) != null ? _i : win.app,
       timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
       maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries,
@@ -9723,11 +9724,15 @@ var LemmaClient = (() => {
      *   is no session cookie and no `localStorage`. It wins over a token set
      *   through `setTestingToken`, because it was passed for this client rather
      *   than left lying in shared state.
+     * @param tokenSource The current token and a renewed one, for a caller that
+     *   refreshes its own session (`LemmaConfig.tokenSource`). Only with `token`.
      */
-    constructor(apiUrl, authUrl, token) {
+    constructor(apiUrl, authUrl, token, tokenSource) {
       __publicField(this, "apiUrl");
       __publicField(this, "authUrl");
       __publicField(this, "injectedToken");
+      /** Where a token-mode caller's current token comes from, when it changes. */
+      __publicField(this, "tokenSource");
       /** An app framed inside an AI tool, whose token comes from the Lemma view around it. */
       __publicField(this, "embedded");
       __publicField(this, "state", { status: "loading", user: null });
@@ -9738,6 +9743,7 @@ var LemmaClient = (() => {
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
       this.injectedToken = (token == null ? void 0 : token.trim()) || detectInjectedToken();
+      this.tokenSource = this.injectedToken ? tokenSource != null ? tokenSource : null : null;
       this.embedded = !this.injectedToken && isEmbeddedInHost() ? new EmbeddedCredentials() : null;
       if (!this.injectedToken && !this.embedded) {
         ensureCookieSessionSupport(this.apiUrl, this.onUnauthorised);
@@ -9904,6 +9910,9 @@ var LemmaClient = (() => {
      * Throws if no token is available.
      */
     async getAccessToken() {
+      if (this.tokenSource) {
+        return this.tokenSource.current();
+      }
       if (this.injectedToken) {
         return this.injectedToken;
       }
@@ -9922,6 +9931,9 @@ var LemmaClient = (() => {
      * Force a refresh-token flow and return the new access token.
      */
     async refreshAccessToken() {
+      if (this.tokenSource) {
+        return this.tokenSource.renew();
+      }
       if (this.injectedToken) {
         return this.injectedToken;
       }
@@ -21918,7 +21930,7 @@ var LemmaClient = (() => {
       this._config = resolveConfig(overrides);
       this._currentPodId = this._config.podId;
       this._podId = this._config.podId;
-      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token);
+      this.auth = (_a = internalOptions.authManager) != null ? _a : new AuthManager(this._config.apiUrl, this._config.authUrl, this._config.token, this._config.tokenSource);
       this._http = new HttpClient(this._config.apiUrl, this.auth, {
         timeoutMs: this._config.timeoutMs,
         maxRetries: this._config.maxRetries,
