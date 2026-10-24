@@ -1,0 +1,232 @@
+<!doctype html>
+<!--
+  The stream bench's probe page: what the sandbox browser shows while the
+  bench measures the live view. Served by `stream-probe-server.py` beside it.
+
+  Everything the viewer measures is read off the picture, so the page paints
+  its own clock into the pixels. Two strips sit at the top-left corner and
+  stay there while the text under them scrolls:
+
+    main strip  sandbox time (ms, mod 2^32), a frame counter and the mode,
+                repainted every animation frame (twice a second when idle)
+    key strip   how many keys this page has received, the last one, and the
+                sandbox time it arrived
+
+  A strip is 29 blocks of 16 CSS px: 4 sync blocks, 20 data blocks of 3 bits
+  each (MSB first), 1 parity block (XOR of the data blocks), 4 sync blocks.
+  A block's colour is its 3-bit value as RGB (4 = red, 2 = green, 1 = blue,
+  each channel full or off), which survives JPEG at any quality noVNC asks
+  for. The viewer probe (`lemma-frontend/src/computer/stream-probe.ts`)
+  decodes the same layout; change one and you change both.
+
+  Modes are set by the runner through the server (`POST /mode?m=...`) and
+  polled here, so switching never sends a key through the stream it measures.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Stream probe</title>
+<style>
+  html, body { margin: 0; background: #fff; color: #111; font: 15px/1.5 Georgia, serif; }
+  #strips { position: fixed; top: 0; left: 0; z-index: 10; image-rendering: pixelated; }
+  #hud {
+    position: fixed; top: 0; left: 480px; right: 0; height: 32px; z-index: 10;
+    display: flex; gap: 24px; align-items: center; padding: 0 12px;
+    background: #222; color: #eee; font: 600 14px/1 ui-monospace, Menlo, monospace;
+  }
+  #frame { font-size: 22px; min-width: 7ch; }
+  #stage { position: fixed; top: 48px; left: 16px; z-index: 5; display: none; }
+  #anim { display: block; border: 1px solid #999; }
+  #typing { position: fixed; top: 48px; left: 16px; width: 640px; z-index: 5; display: none; background: #fff; }
+  #typing textarea { width: 100%; height: 72px; font: 18px/1.4 ui-monospace, Menlo, monospace; }
+  #echo { height: 220px; overflow: hidden; margin: 6px 0 0; font: 13px/1.35 ui-monospace, Menlo, monospace; background: #f4f4f4; }
+  #text { padding: 48px 16px 16px 16px; max-width: 760px; }
+  #text h2 { font-size: 18px; margin: 1.4em 0 0.4em; }
+  body.covered #text { visibility: hidden; }
+</style>
+</head>
+<body>
+<canvas id="strips"></canvas>
+<div id="hud"><span id="frame">0</span><span id="mode">idle</span><span id="fps">– fps</span><span id="keys">0 keys</span></div>
+<div id="stage"><canvas id="anim" width="800" height="450"></canvas></div>
+<div id="typing"><textarea id="box" spellcheck="false" autocomplete="off" placeholder="Typing test"></textarea><pre id="echo"></pre></div>
+<main id="text"></main>
+<script>
+"use strict";
+
+const BLOCK = 16;
+const DATA_BLOCKS = 20;
+const SYNC = { main: [[5, 2, 5, 2], [2, 5, 2, 5]], key: [[3, 4, 3, 4], [4, 3, 4, 3]] };
+const STRIP_BLOCKS = 4 + DATA_BLOCKS + 1 + 4;
+const MODES = ["idle", "scroll", "animation", "typing"];
+const TWO32 = 4294967296;
+
+const strips = document.getElementById("strips");
+const dpr = window.devicePixelRatio || 1;
+strips.width = STRIP_BLOCKS * BLOCK * dpr;
+strips.height = 2 * BLOCK * dpr;
+strips.style.width = STRIP_BLOCKS * BLOCK + "px";
+strips.style.height = 2 * BLOCK + "px";
+const sctx = strips.getContext("2d");
+sctx.scale(dpr, dpr);
+
+function nowMs() { return performance.timeOrigin + performance.now(); }
+
+/** Fields as [value, bits] pairs, packed MSB first into 3-bit blocks. */
+function blocksOf(fields) {
+  const bits = [];
+  for (const [value, width] of fields) {
+    for (let i = width - 1; i >= 0; i--) bits.push(Math.floor(value / 2 ** i) % 2);
+  }
+  while (bits.length < DATA_BLOCKS * 3) bits.push(0);
+  const blocks = [];
+  for (let i = 0; i < DATA_BLOCKS; i++) blocks.push(bits[3 * i] * 4 + bits[3 * i + 1] * 2 + bits[3 * i + 2]);
+  return blocks;
+}
+
+function paintStrip(row, sync, data) {
+  const parity = data.reduce((a, b) => a ^ b, 0);
+  const all = [...sync[0], ...data, parity, ...sync[1]];
+  for (let i = 0; i < all.length; i++) {
+    const v = all[i];
+    sctx.fillStyle = `rgb(${v & 4 ? 255 : 0},${v & 2 ? 255 : 0},${v & 1 ? 255 : 0})`;
+    sctx.fillRect(i * BLOCK, row * BLOCK, BLOCK, BLOCK);
+  }
+}
+
+let mode = "idle";
+let frame = 0;
+let keyCount = 0;
+let lastKey = 0;
+let lastKeyAt = 0;
+
+function paintKeyStrip() {
+  paintStrip(1, SYNC.key, blocksOf([[keyCount % 65536, 16], [lastKey % 256, 8], [Math.floor(lastKeyAt) % TWO32, 32]]));
+}
+
+/* The sandbox's own paint rate, reported to the server so a slow stream can be
+   told apart from a sandbox that never drew the frames in the first place. */
+let paints = 0;
+let paintWindowStart = performance.now();
+let lastIdlePaint = 0;
+
+function tick() {
+  requestAnimationFrame(tick);
+  const at = performance.now();
+  if (mode === "idle" && at - lastIdlePaint < 500) return;
+  lastIdlePaint = at;
+  frame = (frame + 1) % 65536;
+  paints++;
+  paintStrip(0, SYNC.main, blocksOf([[Math.floor(nowMs()) % TWO32, 32], [frame, 16], [MODES.indexOf(mode), 4]]));
+  document.getElementById("frame").textContent = String(frame);
+  if (mode === "animation") drawAnimation(at);
+  if (at - paintWindowStart >= 1000) {
+    const fps = paints * 1000 / (at - paintWindowStart);
+    document.getElementById("fps").textContent = fps.toFixed(1) + " fps";
+    void fetch("/report", { method: "POST", body: JSON.stringify({ mode, fps, frame, keys: keyCount }) }).catch(() => {});
+    paints = 0;
+    paintWindowStart = at;
+  }
+}
+
+/* A busy, full-colour canvas: moving gradients, rotating bars and text, so the
+   encoder sees changing photographic and sharp-edged content at once. */
+const anim = document.getElementById("anim").getContext("2d");
+function drawAnimation(at) {
+  const w = 800, h = 450, t = at / 1000;
+  const g = anim.createLinearGradient(0, 0, w, h);
+  g.addColorStop(0, `hsl(${(t * 40) % 360},70%,55%)`);
+  g.addColorStop(1, `hsl(${(t * 40 + 180) % 360},70%,45%)`);
+  anim.fillStyle = g;
+  anim.fillRect(0, 0, w, h);
+  for (let i = 0; i < 24; i++) {
+    const a = t * (0.6 + i * 0.07) + i;
+    const x = w / 2 + Math.cos(a) * (60 + i * 7);
+    const y = h / 2 + Math.sin(a * 1.3) * (40 + i * 6);
+    anim.fillStyle = `hsla(${(i * 15 + t * 90) % 360},80%,60%,0.85)`;
+    anim.beginPath();
+    anim.arc(x, y, 10 + (i % 5) * 4, 0, Math.PI * 2);
+    anim.fill();
+  }
+  anim.save();
+  anim.translate(w / 2, h / 2);
+  anim.rotate(t);
+  anim.fillStyle = "#fff";
+  anim.fillRect(-180, -6, 360, 12);
+  anim.restore();
+  anim.fillStyle = "#000";
+  anim.font = "bold 28px Georgia, serif";
+  anim.fillText("frame " + frame + " · " + (t % 100).toFixed(2) + " s", 24, h - 24);
+}
+
+function setMode(next) {
+  if (!MODES.includes(next) || next === mode) return;
+  mode = next;
+  document.getElementById("mode").textContent = mode;
+  document.getElementById("stage").style.display = mode === "animation" ? "block" : "none";
+  document.getElementById("typing").style.display = mode === "typing" ? "block" : "none";
+  document.body.classList.toggle("covered", mode === "animation" || mode === "typing");
+  if (mode === "typing") {
+    keyCount = 0;
+    lastKey = 0;
+    lastKeyAt = 0;
+    document.getElementById("echo").textContent = "";
+    document.getElementById("box").value = "";
+    paintKeyStrip();
+    document.getElementById("box").focus();
+  }
+  if (mode !== "scroll") window.scrollTo(0, 0);
+}
+
+/* Any click in typing mode lands in the box, so the runner can focus it by
+   clicking anywhere on the picture. */
+document.addEventListener("mousedown", () => {
+  if (mode === "typing") setTimeout(() => document.getElementById("box").focus(), 0);
+});
+
+document.getElementById("box").addEventListener("keydown", (event) => {
+  if (event.key.length !== 1) return;
+  lastKeyAt = nowMs();
+  keyCount++;
+  lastKey = event.key.charCodeAt(0);
+  paintKeyStrip();
+  document.getElementById("keys").textContent = keyCount + " keys";
+  const echo = document.getElementById("echo");
+  echo.textContent = `${String(keyCount).padStart(3)}  ${JSON.stringify(event.key)}  ${lastKeyAt.toFixed(1)}\n` + echo.textContent.slice(0, 4000);
+});
+
+async function pollMode() {
+  try {
+    const answer = await fetch("/mode", { cache: "no-store" });
+    if (answer.ok) setMode((await answer.json()).mode);
+  } catch { /* opened without the server: stays on whatever the hash says */ }
+  setTimeout(pollMode, 200);
+}
+
+/* The long page: enough distinct paragraphs that every scroll position looks
+   different, which is what makes scrolling expensive to stream. */
+const words = ("stream bench probe latency frame socket viewer sandbox display pixel encoder "
+  + "network browser chrome keyboard canvas scroll measure delivered dropped glass "
+  + "quality compression rectangle update damage region tight zlib jpeg cursor").split(" ");
+let seed = 7;
+function rand() { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }
+const text = document.getElementById("text");
+const parts = [];
+for (let s = 1; s <= 120; s++) {
+  parts.push(`<h2>Section ${s}</h2>`);
+  for (let p = 0; p < 3; p++) {
+    const n = 40 + Math.floor(rand() * 50);
+    const sentence = Array.from({ length: n }, () => words[Math.floor(rand() * words.length)]).join(" ");
+    parts.push(`<p>${s}.${p + 1} ${sentence[0].toUpperCase()}${sentence.slice(1)}.</p>`);
+  }
+}
+text.innerHTML = parts.join("");
+
+setMode((location.hash || "#idle").slice(1));
+if (mode === "idle") document.getElementById("mode").textContent = "idle";
+paintKeyStrip();
+requestAnimationFrame(tick);
+void pollMode();
+</script>
+</body>
+</html>

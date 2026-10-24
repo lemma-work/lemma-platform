@@ -150,6 +150,15 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
 
             const rfb = new RFB(surface, socket);
             client.current = rfb;
+            /* The stream bench's probe (`stream-probe.ts`): dev builds only,
+               behind `?streamProbe=1`, and it only watches. The condition is
+               what keeps the module out of a production bundle. */
+            if (process.env.NODE_ENV !== "production") {
+                const socketAt = performance.timeOrigin + performance.now();
+                void import("./stream-probe").then((probe) => {
+                    if (probe.streamProbeAsked()) probe.attachStreamProbe({ socket, surface, socketAt });
+                });
+            }
             rfb.viewOnly = mode === "view";
             rfb.scaleViewport = true;
             rfb.background = "transparent";
