@@ -53,9 +53,9 @@ export function AutomationsTab({ pod, pods, section, queue, go, actions }: {
     const openRun = (runId: string) => go({ name: "run", podId: pod.id, runId });
     return (
         <div className="ox-autom">
-            <nav className="ox-chips" aria-label={`What ${pod.name} runs`}>
+            <nav className="ox-subtabs" aria-label={`What ${pod.name} runs`}>
                 {AUTOMATION_SECTIONS.map((one) => (
-                    <a key={one} className="ox-chip" aria-current={one === shown ? "page" : undefined} {...to(outcomeView(pod.id, "automations", one === "workflows" ? null : one), go, { replace: true })}>
+                    <a key={one} className="ox-subtab" aria-current={one === shown ? "page" : undefined} {...to(outcomeView(pod.id, "automations", one === "workflows" ? null : one), go, { replace: true })}>
                         {LABELS[one]}
                         {one === "waiting" && waiting > 0 && <span>{waiting}</span>}
                     </a>

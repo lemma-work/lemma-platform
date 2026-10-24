@@ -22,20 +22,20 @@ export function ContactBots({ pod, onConnect }: { pod: Pod; onConnect?: () => vo
     return (
         <section className="ccard ccard--wide" aria-labelledby="contacts-bots">
             <div className="ccard__head">
-                <h2 id="contacts-bots">Channels</h2>
+                <h2 id="contacts-bots">Where people reach it</h2>
                 {onConnect && <button type="button" className="ghost-pill" onClick={onConnect}>Connect</button>}
             </div>
-            <p className="ccard__sub">Whom each number, bot and address answers.</p>
+            <p className="ccard__sub">Who each number and address answers.</p>
             {surfaces.isPending ? (
                 <p className="all__empty" role="status">Loading…</p>
             ) : bots.length === 0 ? (
-                <p className="ccard__sub">No WhatsApp number, Telegram bot or email address yet.</p>
+                <p className="ccard__sub">No WhatsApp number, Telegram or email address yet.</p>
             ) : (
                 <>
                     <ul className="crows cbots">
                         {bots.map((surface) => <BotRow key={surface.id} pod={pod} surface={surface} />)}
                     </ul>
-                    <p className="ccard__note">Lemma’s shared WhatsApp number and Telegram bot answer members only.</p>
+                    <p className="ccard__note">Lemma’s shared WhatsApp number and Telegram answer members only.</p>
                 </>
             )}
         </section>

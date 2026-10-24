@@ -864,119 +864,10 @@
     color: var(--ink);
 }
 
-.ox-ohead {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 24px;
-    flex-wrap: wrap;
-    margin-top: 14px;
-}
-
-.ox-ohead__l {
-    min-width: 0;
-}
-
-.ox-ohead__who {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.ox-ohead__name {
-    margin: 0;
-    font-size: 30px;
-    letter-spacing: -0.02em;
-}
-
-.ox-ohead__owns {
-    margin: 6px 0 0;
-    max-width: 70ch;
-    font-size: 16px;
-}
-
-/* No bar or finish line yet: the description, if any, then the nudge. */
-.ox-ohead__nudge {
-    margin: 6px 0 0;
-    color: var(--ink-2);
-    font-size: 14px;
-}
-
-.ox-ohead__nudge a {
-    text-decoration: underline;
-    text-decoration-color: var(--line-2);
-    text-underline-offset: 3px;
-}
-
-.ox-ohead__nudge a:hover {
-    color: var(--ink);
-}
-
-.ox-ohead__people {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 10px 0 0;
-    color: var(--ink-2);
-    font-size: 13px;
-}
-
-.ox-faces {
-    display: inline-flex;
-}
-
-.ox-faces span + span {
-    margin-left: -5px;
-}
-
-.ox-faces .ox-avatar {
-    box-shadow: 0 0 0 2px var(--paper);
-}
-
-.ox-ohead__r {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 12px;
-}
-
 .ox-stand {
     display: flex;
     align-items: center;
     gap: 10px;
-}
-
-.ox-ohead__acts {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-}
-
-.ox-otabs {
-    display: flex;
-    gap: 2px;
-    margin: 20px 0 18px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--line-2);
-}
-
-.ox-otab {
-    height: 32px;
-    padding: 0 12px;
-    display: inline-flex;
-    align-items: center;
-    border-radius: 8px;
-    color: var(--ink-2);
-}
-
-.ox-otab:hover {
-    background: var(--wash-b);
-    color: var(--ink);
-}
-
-.ox-otab[aria-current="page"] {
-    background: var(--wash-a);
-    color: var(--ink);
 }
 
 .ox-split {
@@ -1505,8 +1396,7 @@ a.ox-row:hover .ox-row__t {
     cursor: pointer;
 }
 
-.ox-chip[aria-pressed="true"],
-.ox-chip[aria-current="page"] {
+.ox-chip[aria-pressed="true"] {
     background: var(--accent);
     color: var(--on-accent);
     box-shadow: none;
@@ -1607,21 +1497,6 @@ a.ox-row:hover .ox-row__t {
 
 .ox-queue__foot {
     margin: 12px 0 0;
-}
-
-/* ── a Lemma's automations ───────────────────────────────────────────── */
-
-/* One row of views over the workspace's own pages: Workflows, scheduled
-   work and Agents, drawn here without the margins they keep on a page of
-   their own. */
-.ox-autom .ox-chips {
-    margin: 4px 0 18px;
-}
-
-.ox-autom .all {
-    max-width: none;
-    margin: 0;
-    padding: 0;
 }
 
 /* ── outcomes ────────────────────────────────────────────────────────── */
@@ -2196,29 +2071,296 @@ a.ox-row:hover .ox-row__t {
     margin-top: 0;
 }
 
-/* A Lemma's home: one column -- what it owns if nothing yet, the box to
-   talk to it, what it needs from you, what it has been doing, what it runs. */
-/* A Lemma's page is one column, its header and tabs included, so what is
-   at the header's end lines up with the edge of what is under it. */
+/* A Lemma: its summary at its own address, and each section a page of its
+   own under the bar every page of a Lemma shares. Both are one 1040px
+   column, so a section's edge is the summary's edge. */
 .ox-page--lemma {
-    max-width: 1000px;
+    max-width: 1040px;
 }
 
-.ox-lhome {
+/* The summary: who it is and what it owns across the top, then two
+   columns -- talking to it and what it has done on the left, its sections,
+   people and places on the right. */
+.ox-lsum__head {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.ox-lsum__id {
+    min-width: 0;
+}
+
+.ox-lsum__id h1 {
+    margin: 0;
+    font-size: 28px;
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+}
+
+.ox-lsum__id p {
+    margin: 4px 0 0;
+    color: var(--ink-2);
+    font-size: 15px;
+}
+
+.ox-owns {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 24px;
+    margin-bottom: 20px;
+    padding: 14px 18px;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+}
+
+.ox-owns__t {
+    display: flex;
+    gap: 10px;
+    min-width: 0;
+    margin: 0;
+    font-size: 16px;
+}
+
+.ox-owns__t > span {
+    flex: none;
+    color: var(--ink-2);
+}
+
+.ox-lsum__cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 36px;
+    align-items: start;
+}
+
+.ox-lsum__main {
     display: flex;
     flex-direction: column;
+    gap: 28px;
+    min-width: 0;
 }
 
-.ox-lhome > .ox-askbox {
-    margin-top: 4px;
+/* The column's gap spaces its parts; a heading's own margin would double it. */
+.ox-lsum__main .ox-sec {
+    margin-top: 0;
 }
 
-.ox-lhome .ox-askbox textarea {
+.ox-lsum__side {
+    position: sticky;
+    top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+}
+
+/* Its sections, a row each, saying what is in it. */
+.ox-secrows {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+}
+
+.ox-secrow {
+    display: grid;
+    grid-template-columns: 16px auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
     min-height: 44px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--line);
 }
 
-.ox-lhome > .ox-shelf {
-    margin-top: 28px;
+.ox-secrow:last-child {
+    border-bottom: 0;
+}
+
+.ox-secrow:hover {
+    background: var(--wash-b);
+}
+
+.ox-secrow > .ox-icon {
+    color: var(--ink-2);
+}
+
+.ox-secrow__t {
+    font-size: 14px;
+}
+
+.ox-secrow__d {
+    overflow: hidden;
+    color: var(--ink-2);
+    font-size: 12.5px;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-secrow__d--you {
+    color: var(--lemma-ink);
+}
+
+.ox-sideb {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.ox-sideb__h {
+    margin: 0;
+    color: var(--ink-2);
+    font-size: 13px;
+    font-weight: 400;
+}
+
+.ox-sideb__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.ox-sideb__list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-size: 13.5px;
+}
+
+.ox-sideb__list li > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ox-sideb .ox-vs {
+    margin: 0;
+    font-size: 13px;
+}
+
+/* A section's page: its name once, then what is in it. */
+.ox-section__t {
+    margin: 0 0 18px;
+    font-size: 24px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+}
+
+/* The workspace's own pages, set into a section: the section names itself,
+   so their titles go, and their width and padding are the section's. */
+.ox-section .library-view,
+.ox-section .all {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+}
+
+.ox-section .library-heading > div:first-child,
+.ox-section .contacts__head {
+    display: none;
+}
+
+/* A Lemma's settings are the workspace's About page, in the section's flow
+   rather than over it, without its own column, and with its parts' titles a
+   step under the section's. */
+.ox-section .aboutpage {
+    position: static;
+    overflow: visible;
+}
+
+.ox-section .aboutpage__column {
+    width: auto;
+    margin: 0;
+    padding: 0 0 48px;
+}
+
+.ox-section .aboutpage__hero {
+    gap: 16px;
+    margin-bottom: 20px;
+}
+
+.ox-section .aboutpage__who h1,
+.ox-section .aboutpart__head h1 {
+    font-size: 20px;
+}
+
+/* The Library's own buttons (Upload, New folder) sit on the section's title
+   line, where a page's actions are, rather than on a line of their own. */
+.ox-section {
+    position: relative;
+}
+
+.ox-section .library-heading {
+    position: absolute;
+    top: 22px;
+    right: 28px;
+    margin: 0;
+}
+
+/* One kind of tab under a section's title, whoever drew it: a word, and a
+   rule under the one you are on. Contacts' own tabs already look like this;
+   the Library's and Automations' take the same shape. */
+.ox-subtabs,
+.ox-section .library-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 22px;
+    border-bottom: 1px solid var(--line-2);
+}
+
+.ox-subtabs {
+    margin: 0 0 18px;
+}
+
+.ox-subtab,
+.ox-section .library-filters button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 38px;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.ox-subtab:hover,
+.ox-subtab[aria-current="page"],
+.ox-section .library-filters button:hover,
+.ox-section .library-filters button[aria-pressed="true"] {
+    background: none;
+    color: var(--ink);
+}
+
+.ox-subtab[aria-current="page"]::after,
+.ox-section .library-filters button[aria-pressed="true"]::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--ink);
+}
+
+.ox-subtab span {
+    color: var(--lemma-ink);
+    font-family: var(--ui);
+    font-size: 12px;
 }
 
 .ox-ownit {
@@ -2359,12 +2501,6 @@ a.ox-row:hover .ox-row__t {
     background: var(--wash-b);
 }
 
-/* The workspace's own pages, set into a Lemma's tab: their outer padding
-   and width are the tab's, not theirs. */
-.ox-embed .library-view {
-    max-width: none;
-    padding: 0;
-}
 
 /* Starting a Lemma from scratch, the workspace's way, in the main area. */
 .ox-hire {
@@ -2613,6 +2749,38 @@ a.ox-row:hover .ox-row__t {
     background: var(--paper);
 }
 
+.ox-stagebar__l {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* The section a page is, as the crumb's last step, opening onto the others. */
+.ox-switch > summary {
+    display: inline-flex;
+    gap: 4px;
+    width: auto;
+    height: 30px;
+    padding: 0 8px;
+    color: var(--ink);
+    font-size: 13.5px;
+}
+
+.ox-switch .ox-more__menu {
+    right: auto;
+    left: 0;
+    min-width: 200px;
+}
+
+.ox-switch .ox-more__menu > a {
+    gap: 10px;
+}
+
+.ox-switch .ox-more__menu > a[aria-current="page"] {
+    background: var(--wash-a);
+}
+
 .ox-stagebar .ox-crumb {
     min-width: 0;
     overflow: hidden;
@@ -2682,6 +2850,17 @@ a.ox-row:hover .ox-row__t {
 
     .ox-apps--home {
         grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 900px) {
+    /* The summary's side column goes under what it sits beside. */
+    .ox-lsum__cols {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ox-lsum__side {
+        position: static;
     }
 }
 
@@ -2755,6 +2934,11 @@ a.ox-row:hover .ox-row__t {
         padding: 18px 16px 0;
     }
 
+    .ox-section .library-heading {
+        top: 12px;
+        right: 16px;
+    }
+
     .ox-home {
         padding-top: 24px;
     }
@@ -2781,10 +2965,6 @@ a.ox-row:hover .ox-row__t {
     .ox-row--person {
         grid-template-columns: minmax(0, 1fr);
         gap: 4px;
-    }
-
-    .ox-ohead__r {
-        align-items: flex-start;
     }
 
     .ox-thread__head {

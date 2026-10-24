@@ -77,8 +77,7 @@ export function nameOf(me: Me | undefined): string {
  *  anything inside a Lemma that the workspace draws as its own pane. */
 function fills(view: View): boolean {
     return view.name === "chats" || view.name === "run" || view.name === "workflow" || view.name === "app" || view.name === "file"
-        || view.name === "table" || view.name === "record" || view.name === "agent" || view.name === "hire"
-        || (view.name === "outcome" && view.tab === "settings");
+        || view.name === "table" || view.name === "record" || view.name === "agent" || view.name === "hire";
 }
 
 /** The outcome-first frame: a sidebar of places and of every outcome with

@@ -22,6 +22,7 @@ import { useResourceConversation } from "@/thread/use-resource-conversation";
 import { NEW_CHAT, chatView, outcomeView, type Go, type View } from "./model";
 import { classic } from "./data";
 import type { FrameActions } from "./actions";
+import { LemmaActions, SectionSwitch } from "./lemma-bar";
 import { Empty, Icon, to } from "./parts";
 
 const NO_FRAME_REF = () => undefined;
@@ -34,17 +35,32 @@ export type Back = (fallback: View) => void;
  *  an app, a file or page, a table and its rows, an agent. The bar says
  *  which Lemma it is in and is the way back; the workspace's own view of it
  *  fills the rest. */
-function Stage({ pod, title, go, fill, actions, children }: { pod: Pod; title: string; go: Go; fill?: boolean; actions?: ReactNode; children: ReactNode }) {
+export function Stage({ pod, title, here, go, fill, actions, children }: {
+    pod: Pod;
+    /** Where in the Lemma this is. Left out, the Lemma itself is: its
+     *  summary, where the crumb ends at its name. */
+    title?: string;
+    /** In place of `title`, a step that does more than name the place: a
+     *  section's page names itself with a menu of the other sections. */
+    here?: ReactNode;
+    go: Go;
+    fill?: boolean;
+    actions?: ReactNode;
+    children: ReactNode;
+}) {
+    const last = here ?? (title ? <span className="ox-crumb__here">{title}</span> : null);
     return (
         <div className={"ox-stagepage" + (fill ? " ox-stagepage--fill" : "")}>
             <div className="ox-stagebar">
-                <p className="ox-crumb">
-                    <a {...to({ name: "outcomes" }, go)}>Lemmas</a>
-                    <span aria-hidden="true">/</span>
-                    <a {...to(outcomeView(pod.id), go)}>{pod.name}</a>
-                    <span aria-hidden="true">/</span>
-                    <span className="ox-crumb__here">{title}</span>
-                </p>
+                <div className="ox-stagebar__l">
+                    <p className="ox-crumb">
+                        <a {...to({ name: "outcomes" }, go)}>Lemmas</a>
+                        <span aria-hidden="true">/</span>
+                        {last ? <a {...to(outcomeView(pod.id), go)}>{pod.name}</a> : <span className="ox-crumb__here">{pod.name}</span>}
+                        {last && <span aria-hidden="true">/</span>}
+                    </p>
+                    {last}
+                </div>
                 {actions && <div className="ox-stagebar__acts">{actions}</div>}
             </div>
             <div className="ox-stage">{children}</div>
@@ -218,23 +234,27 @@ export function AgentView({ pod, agent, go, actions, back }: { pod: Pod; agent: 
 export function SettingsView({ pod, org, section, go, actions }: { pod: Pod; org: Org; section: string | null; go: Go; actions: FrameActions }) {
     const cache = useQueryClient();
     return (
-        <Stage pod={pod} title="Settings" go={go} fill actions={<Workspace href={classic.pod(pod.id)} />}>
-            <AboutPage
-                pod={pod}
-                orgId={org.id}
-                orgName={org.name}
-                section={isAboutSection(section) ? section : null}
-                onSection={(next) => go(outcomeView(pod.id, "settings", next))}
-                onOpenSettings={(next) => actions.openSettings(next)}
-                onAsk={() => go(chatView({ kind: "chat", podId: pod.id, id: NEW_CHAT }))}
-                onOpenAgent={(name) => go({ name: "agent", podId: pod.id, agent: name })}
-                onOpenTeammate={(id) => go(outcomeView(id))}
-                onAskFor={(text) => actions.prompt(pod.id, text)}
-                onOpenRun={(runId) => go({ name: "run", podId: pod.id, runId })}
-                onOpenConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
-                onFile={(path) => go({ name: "file", podId: pod.id, path })}
-                onDeleted={() => { void cache.invalidateQueries({ queryKey: ["pods"] }); go({ name: "outcomes" }); }}
-            />
+        <Stage pod={pod} here={<SectionSwitch pod={pod} here="settings" go={go} />} go={go} actions={<LemmaActions pod={pod} go={go} actions={actions} />}>
+            <div className="ox-page ox-page--lemma ox-section" data-section="settings">
+                <h1 className="ox-section__t">Settings</h1>
+                <AboutPage
+                    framed
+                    pod={pod}
+                    orgId={org.id}
+                    orgName={org.name}
+                    section={isAboutSection(section) ? section : null}
+                    onSection={(next) => go(outcomeView(pod.id, "settings", next))}
+                    onOpenSettings={(next) => actions.openSettings(next)}
+                    onAsk={() => go(chatView({ kind: "chat", podId: pod.id, id: NEW_CHAT }))}
+                    onOpenAgent={(name) => go({ name: "agent", podId: pod.id, agent: name })}
+                    onOpenTeammate={(id) => go(outcomeView(id))}
+                    onAskFor={(text) => actions.prompt(pod.id, text)}
+                    onOpenRun={(runId) => go({ name: "run", podId: pod.id, runId })}
+                    onOpenConversation={(id) => go(chatView({ kind: "chat", podId: pod.id, id }))}
+                    onFile={(path) => go({ name: "file", podId: pod.id, path })}
+                    onDeleted={() => { void cache.invalidateQueries({ queryKey: ["pods"] }); go({ name: "outcomes" }); }}
+                />
+            </div>
         </Stage>
     );
 }
