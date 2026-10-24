@@ -230,6 +230,30 @@ Existing apps shall remain reachable in their own tabs.
 
 **Contracts:** `org.navigation`, `org.home`, `pod.list`
 
+### PS-POD-032 — A person sees what waits on them, and what moved, across every pod at once
+**Status:** planned
+
+- When a person asks what is waiting on them in an organization, the system
+  shall answer for every pod they may open in one list, oldest first: what their
+  conversations asked them, the workflow steps assigned to them, and the
+  contacts waiting on a person where they look after contacts.
+- When a person asks what moved lately, the system shall answer for every pod
+  they may open, including the quiet ones: their latest chats, the automations
+  that ran, and how much work was done each day, counted in their own time
+  zone.
+- When a person asks for the organization's apps, the system shall list every
+  app they may open, from every pod.
+- The system shall remember when a person last looked at their organization's
+  Home, for them alone and on every device, and shall never move that moment
+  back.
+- If a person is not a member of the organization, then the system shall
+  refuse.
+- The system shall not show a person, in any of these, a conversation that is
+  someone else's, an app they could not open, or a contact in a pod where they
+  may not see contacts.
+
+**Contracts:** `org.needs_you.list`, `org.recents.get`, `org.apps.list`, `org.home.seen.get`, `org.home.seen.set`
+
 ---
 
 ## Capability: Change and remove membership

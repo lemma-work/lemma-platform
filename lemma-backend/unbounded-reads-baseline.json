@@ -41,7 +41,7 @@
     "app/modules/function/infrastructure/revision_repository.py::FunctionRevisionRepositoryMixin.list_unpurged_revisions::unbounded-read": 1,
     "app/modules/identity/infrastructure/organization_repositories.py::OrganizationRepository.count_members_with_role_for_update::unbounded-read": 1,
     "app/modules/identity/infrastructure/organization_repositories.py::OrganizationRepository.list_auto_join_organizations_by_email_domain::unbounded-read": 1,
-    "app/modules/identity/services/organization_navigation.py::_memberships::unbounded-read": 1,
+    "app/modules/identity/services/organization_scope.py::memberships_of::unbounded-read": 1,
     "app/modules/pod/infrastructure/pod_administration_queries.py::count_members_who_can::unbounded-read": 1,
     "app/modules/pod/infrastructure/pod_role_repository.py::PodRoleQueryRepository.get_member_role_names::unbounded-read": 1,
     "app/modules/pod_bundle/infrastructure/state_store.py::PodBundleStateStore._sync_steps::unbounded-read": 1,

@@ -17,7 +17,7 @@ browser's session (``open_anonymous_contact``), until they prove a handle
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -54,6 +54,7 @@ __all__ = [
     "answered_contacts_in_organization",
     "contact_by_id",
     "contact_names",
+    "contact_names_across",
     "contact_handles",
     "find_contact",
     "find_contact_by_user",
@@ -241,6 +242,15 @@ async def contact_names(
     """What to call each of this pod's contacts named, in one read."""
     return await ContactRepository(uow.session).names(
         pod_id=pod_id, contact_ids=contact_ids
+    )
+
+
+async def contact_names_across(
+    uow: SqlAlchemyUnitOfWork, *, contact_ids_by_pod: Mapping[UUID, Sequence[UUID]]
+) -> dict[UUID, str | None]:
+    """What to call contacts in several pods, each asked for under its pod."""
+    return await ContactRepository(uow.session).names_across(
+        contact_ids_by_pod=contact_ids_by_pod
     )
 
 

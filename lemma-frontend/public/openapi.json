@@ -3245,6 +3245,94 @@
         "title": "AuthScheme",
         "type": "string"
       },
+      "AutomationKind": {
+        "enum": [
+          "WORKFLOW",
+          "SCHEDULE"
+        ],
+        "title": "AutomationKind",
+        "type": "string"
+      },
+      "AutomationResponse": {
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The conversation a schedule's agent ran in, for the newest fire.",
+            "title": "Conversation Id"
+          },
+          "id": {
+            "description": "The workflow's or the schedule's id.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AutomationKind"
+          },
+          "latest_at": {
+            "format": "date-time",
+            "title": "Latest At",
+            "type": "string"
+          },
+          "latest_run_id": {
+            "description": "The newest workflow run, or the newest schedule fire.",
+            "format": "uuid",
+            "title": "Latest Run Id",
+            "type": "string"
+          },
+          "latest_status": {
+            "title": "Latest Status",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "run_count": {
+            "description": "Runs of the workflow, or fires of the schedule, in the window.",
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "workflow_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The workflow run to open for the newest: the workflow's own, or the one a schedule started.",
+            "title": "Workflow Run Id"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "run_count",
+          "latest_run_id",
+          "latest_status",
+          "latest_at"
+        ],
+        "title": "AutomationResponse",
+        "type": "object"
+      },
       "AvailableSurface": {
         "description": "One connectable surface platform. ``supported_credential_modes`` is the\nsingle source of truth for how it can be set up: ``[CUSTOM]`` means an account\nmust be connected; ``[CUSTOM, SYSTEM]`` means a Lemma-managed bot can also run\nwith no account. The frontend derives ``account_needed = SYSTEM not in modes``\nand ``system_bot_available = SYSTEM in modes``.",
         "properties": {
@@ -6317,6 +6405,20 @@
         "title": "ConversationListResponse",
         "type": "object"
       },
+      "ConversationOrigin": {
+        "enum": [
+          "chat",
+          "channel",
+          "notification",
+          "schedule",
+          "workflow",
+          "resource",
+          "task",
+          "ask"
+        ],
+        "title": "ConversationOrigin",
+        "type": "string"
+      },
       "ConversationResponse": {
         "properties": {
           "agent_id": {
@@ -7776,6 +7878,33 @@
           "total"
         ],
         "title": "DatastoreQueryResponse",
+        "type": "object"
+      },
+      "DayCountResponse": {
+        "properties": {
+          "by_agent": {
+            "description": "Conversations last active that day that nobody typed the first message of: a schedule, a workflow, a notification, a task, or another pod's ask.",
+            "title": "By Agent",
+            "type": "integer"
+          },
+          "by_people": {
+            "description": "Conversations a person started.",
+            "title": "By People",
+            "type": "integer"
+          },
+          "day": {
+            "description": "A calendar day in the requested time zone.",
+            "format": "date",
+            "title": "Day",
+            "type": "string"
+          }
+        },
+        "required": [
+          "day",
+          "by_agent",
+          "by_people"
+        ],
+        "title": "DayCountResponse",
         "type": "object"
       },
       "DecisionAnswerResponse": {
@@ -12039,6 +12168,57 @@
         "title": "HomePodResponse",
         "type": "object"
       },
+      "HomeSeenRequest": {
+        "properties": {
+          "seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The moment to mark, with its offset -- typically when the page loaded, so what arrived while it was open still counts as new. Omitted, now. A moment in the future is read as now, and the mark never moves back.",
+            "title": "Seen At"
+          }
+        },
+        "title": "HomeSeenRequest",
+        "type": "object"
+      },
+      "HomeSeenResponse": {
+        "properties": {
+          "previous_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it was before this write. On a read, the same as `seen_at`.",
+            "title": "Previous Seen At"
+          },
+          "seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the member last looked at Home; null until first marked.",
+            "title": "Seen At"
+          }
+        },
+        "title": "HomeSeenResponse",
+        "type": "object"
+      },
       "IconUploadRequest": {
         "properties": {
           "file": {
@@ -13955,6 +14135,156 @@
         "title": "NavigationResponse",
         "type": "object"
       },
+      "NeedsYouItemResponse": {
+        "description": "One thing waiting on the member, and where to answer it.\n\nExactly one of ``conversation_id``, ``workflow_run_id`` and ``channel_id``\nis set, by kind: a conversation for QUESTION, APPROVAL and PERMISSION; a\nworkflow run for FORM and DECISION; a contact's channel for CONTACT.",
+        "properties": {
+          "channel_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Id"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where it is. The conversation's title when `title` is the question; the workflow's name; or why the contact asked for a person.",
+            "title": "Detail"
+          },
+          "key": {
+            "description": "Stable across reads: `conversation:<id>`, `wait:<id>` or `contact:<channel id>`.",
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NeedsYouKind"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "pod_name": {
+            "title": "Pod Name",
+            "type": "string"
+          },
+          "since": {
+            "description": "When it started waiting.",
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What is asked. QUESTION/APPROVAL/PERMISSION: the question or what the agent wants to do, else the conversation's title. FORM/DECISION: the decision's question or the form's title, else the workflow's name. CONTACT: the contact's name.",
+            "title": "Title"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A conversation's pause, as the approval id its decision endpoint takes.",
+            "title": "Tool Call Id"
+          },
+          "workflow_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workflow Run Id"
+          }
+        },
+        "required": [
+          "key",
+          "kind",
+          "pod_id",
+          "pod_name",
+          "since"
+        ],
+        "title": "NeedsYouItemResponse",
+        "type": "object"
+      },
+      "NeedsYouKind": {
+        "description": "What the member is asked for, and so where it is answered.",
+        "enum": [
+          "QUESTION",
+          "APPROVAL",
+          "PERMISSION",
+          "FORM",
+          "DECISION",
+          "CONTACT"
+        ],
+        "title": "NeedsYouKind",
+        "type": "string"
+      },
+      "NeedsYouResponse": {
+        "properties": {
+          "items": {
+            "description": "Oldest first: what has waited longest is listed first.",
+            "items": {
+              "$ref": "#/components/schemas/NeedsYouItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "truncated": {
+            "description": "More was waiting than `limit`; the oldest are listed.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "truncated"
+        ],
+        "title": "NeedsYouResponse",
+        "type": "object"
+      },
       "NoticeRequest": {
         "properties": {
           "text": {
@@ -14409,6 +14739,91 @@
           "name"
         ],
         "title": "OperationSummary",
+        "type": "object"
+      },
+      "OrganizationAppListResponse": {
+        "properties": {
+          "items": {
+            "description": "Every app the member may open, most recently updated first.",
+            "items": {
+              "$ref": "#/components/schemas/OrganizationAppResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "OrganizationAppListResponse",
+        "type": "object"
+      },
+      "OrganizationAppResponse": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "pod_name": {
+            "title": "Pod Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "visibility": {
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "pod_id",
+          "pod_name",
+          "name",
+          "status",
+          "visibility",
+          "updated_at"
+        ],
+        "title": "OrganizationAppResponse",
         "type": "object"
       },
       "OrganizationCreateRequest": {
@@ -14946,6 +15361,45 @@
           "message"
         ],
         "title": "OrganizationMessageResponse",
+        "type": "object"
+      },
+      "OrganizationRecentsResponse": {
+        "properties": {
+          "days": {
+            "title": "Days",
+            "type": "integer"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "pods": {
+            "items": {
+              "$ref": "#/components/schemas/PodRecentsResponse"
+            },
+            "title": "Pods",
+            "type": "array"
+          },
+          "since": {
+            "description": "When the window's first day began.",
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          },
+          "timezone": {
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "timezone",
+          "days",
+          "since",
+          "pods"
+        ],
+        "title": "OrganizationRecentsResponse",
         "type": "object"
       },
       "OrganizationResponse": {
@@ -16911,6 +17365,52 @@
         "title": "PodPermissionResponse",
         "type": "object"
       },
+      "PodRecentsResponse": {
+        "properties": {
+          "activity": {
+            "description": "One entry per day of the window, oldest first, zeros included.",
+            "items": {
+              "$ref": "#/components/schemas/DayCountResponse"
+            },
+            "title": "Activity",
+            "type": "array"
+          },
+          "automations": {
+            "description": "Workflows and schedules that ran in the window, one each, the most recent first.",
+            "items": {
+              "$ref": "#/components/schemas/AutomationResponse"
+            },
+            "title": "Automations",
+            "type": "array"
+          },
+          "chats": {
+            "description": "The member's latest chats, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/RecentChatResponse"
+            },
+            "title": "Chats",
+            "type": "array"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "pod_name": {
+            "title": "Pod Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pod_id",
+          "pod_name",
+          "chats",
+          "automations",
+          "activity"
+        ],
+        "title": "PodRecentsResponse",
+        "type": "object"
+      },
       "PodRecipe": {
         "description": "A record of a bundle installed into this pod (the durable trace of an\nimport; the ephemeral import job state is not kept). ``kind`` distinguishes an\nuploaded bundle from a GitHub-sourced one; ``repo_url`` is set for GitHub.",
         "properties": {
@@ -17818,6 +18318,94 @@
         ],
         "title": "ReasoningEffort",
         "type": "string"
+      },
+      "RecentChatResponse": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "channel_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Name"
+          },
+          "conversation_id": {
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "last_activity_at": {
+            "format": "date-time",
+            "title": "Last Activity At",
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/ConversationOrigin",
+            "description": "`chat` or `channel` -- or, for a conversation waiting on its owner, whatever started it."
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The platform a channel's conversation came in on.",
+            "title": "Platform"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "RUNNING while an agent works in it.",
+            "title": "Status"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "waiting_on_you": {
+            "title": "Waiting On You",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "origin",
+          "last_activity_at",
+          "waiting_on_you"
+        ],
+        "title": "RecentChatResponse",
+        "type": "object"
       },
       "RecordAccessMode": {
         "description": "Row-visibility mode for record reads/writes on RLS-enabled tables.\n\n``USER`` (the default when the ``mode`` param is omitted) scopes rows to the\ncaller's own ``user_id`` so app apps keep their per-user semantics — pod\nadmins included. ``ADMIN`` returns and operates on every member's rows and\nrequires the caller to administer the table (otherwise the request is\nrejected). The mode is a no-op for non-RLS tables, whose rows are shared by\nevery member regardless.\n\nEndpoints expose this as an *optional* query param (default ``None`` ==\n``USER``) rather than one defaulting to ``RecordAccessMode.USER``: a named\nenum query param carrying a literal default makes the TypeScript generator\nemit ``mode: RecordAccessMode = 'USER'``, which fails strict typecheck (a raw\nstring is not assignable to the enum). An optional param generates the valid\n``mode?: RecordAccessMode`` while keeping one shared, CAPS-valued enum type.",
@@ -28537,6 +29125,57 @@
         }
       }
     },
+    "/organizations/{organization_id}/apps": {
+      "get": {
+        "description": "Every app the current user may open in every pod they may open in the organization, most recently updated first. Each app is filtered by its own visibility against the user's permissions in its pod.",
+        "operationId": "org.apps.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationAppListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Apps Across The Organization",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "org.apps",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/organizations/{organization_id}/connector-operations": {
       "get": {
         "description": "Search operations across every connector installed in the org. Each hit carries the `auth_config` to execute it against, so a caller that knows what it wants to do — but not which connector provides it — needs one request instead of one per install.",
@@ -30201,6 +30840,126 @@
         }
       }
     },
+    "/organizations/{organization_id}/home/seen": {
+      "get": {
+        "description": "When the current user last marked the organization's Home seen, so it can say what moved since. Per user and per organization.",
+        "operationId": "org.home.seen.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeSeenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get When You Last Looked At Home",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "org.home.seen",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "put": {
+        "description": "Mark the organization's Home seen by the current user, as of `seen_at` (now when omitted; a future moment is read as now). The mark only moves forward, so an older tab cannot undo a newer one. Returns the mark and what it was before.",
+        "operationId": "org.home.seen.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/HomeSeenRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeSeenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Home Seen",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "org.home.seen"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "org.home.seen",
+          "result": "entity",
+          "verb": "set"
+        }
+      }
+    },
     "/organizations/{organization_id}/installations/{auth_config_id}/impact": {
       "get": {
         "description": "Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP event subscriptions that run through them: organization-wide counts, and per pod for the pods the caller can open. If the second half cannot be read just now the first is still returned, with `complete: false`.",
@@ -30672,6 +31431,69 @@
         }
       }
     },
+    "/organizations/{organization_id}/needs-you": {
+      "get": {
+        "description": "Everything waiting on the current user in every pod they may open in the organization, as one list, oldest first: questions, approvals and Agent Host permission requests in their own conversations (one item per conversation); workflow forms and decisions assigned to them; and contacts waiting on a person, in pods where they hold `channel.read` and `contact.read`. Each item names its pod and what to open: a conversation, a workflow run or a channel.",
+        "operationId": "org.needs_you.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NeedsYouResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List What Waits On You Across The Organization",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "org.needs_you",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/organizations/{organization_id}/permissions/me": {
       "get": {
         "description": "The organization-level permission ids the caller holds here, such as `org.installation.manage`. Pod permissions are `/pods/{pod_id}/permissions/me`.",
@@ -30797,6 +31619,95 @@
           "resource": "pod",
           "result": "collection",
           "verb": "list"
+        }
+      }
+    },
+    "/organizations/{organization_id}/recents": {
+      "get": {
+        "description": "For every pod the current user may open in the organization, quiet ones included: their latest chats (conversations of no channel that they talk in, or that wait on them), the workflows and schedules that ran in the window -- one each, with the newest run and a count -- and a count per day of their conversations by the day each was last active, split into started by an agent (a schedule, a workflow, a notification, a task or another pod's ask) and by a person. Days are calendar days in `timezone`, the window ending today.",
+        "operationId": "org.recents.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 14,
+              "maximum": 31,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Chats listed per pod.",
+            "in": "query",
+            "name": "chats",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "description": "Chats listed per pod.",
+              "maximum": 25,
+              "minimum": 1,
+              "title": "Chats",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "IANA time zone the days are counted in, e.g. Europe/Berlin.",
+            "in": "query",
+            "name": "timezone",
+            "required": false,
+            "schema": {
+              "default": "UTC",
+              "description": "IANA time zone the days are counted in, e.g. Europe/Berlin.",
+              "title": "Timezone",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationRecentsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get What Moved Lately In Each Pod",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "org.recents",
+          "result": "entity",
+          "verb": "get"
         }
       }
     },

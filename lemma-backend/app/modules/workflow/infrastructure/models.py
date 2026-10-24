@@ -123,6 +123,10 @@ class WorkflowRunModel(UUIDAuditBase):
             "schedule_event_id",
             name="uq_workflow_run_flow_user_schedule_event",
         ),
+        # A pod's runs inside a window, for how much each workflow ran lately
+        # (``contracts.run_activity``). Without it the read walks every run the
+        # pod ever had through ``pod_id`` alone, and nothing prunes old runs.
+        Index("ix_workflow_flow_runs_pod_created", "pod_id", "created_at"),
     )
 
     # Base provides id, created_at, updated_at

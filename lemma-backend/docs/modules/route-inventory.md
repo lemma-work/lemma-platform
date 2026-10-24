@@ -307,10 +307,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/slug-availability` | `org.slug_availability` | Check Organization Slug Availability |
 | GET | `/organizations/suggested` | `org.suggested` | Get Suggested Organizations |
 | GET | `/organizations/{organization_id}` | `org.get` | Get Organization |
+| GET | `/organizations/{organization_id}/apps` | `org.apps.list` | List Apps Across The Organization |
 | GET | `/organizations/{organization_id}/home` | `org.home` | Get Organization Home |
+| GET | `/organizations/{organization_id}/home/seen` | `org.home.seen.get` | Get When You Last Looked At Home |
 | GET | `/organizations/{organization_id}/invitations` | `org.invitation.list` | List Organization Invitations |
 | GET | `/organizations/{organization_id}/members` | `org.member.list` | List Organization Members |
+| GET | `/organizations/{organization_id}/needs-you` | `org.needs_you.list` | List What Waits On You Across The Organization |
 | GET | `/organizations/{organization_id}/permissions/me` | `org.permissions.me` | My Permissions In An Organization |
+| GET | `/organizations/{organization_id}/recents` | `org.recents.get` | Get What Moved Lately In Each Pod |
 | GET | `/users/me` | `user.current.get` | Get Current User |
 | GET | `/users/me/email-delivery` | `user.email_delivery.get` | Get Email Delivery Status |
 | GET | `/users/me/profile` | `user.profile.get` | Get User Profile |
@@ -323,6 +327,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/users/me/email-delivery/test` | `user.email_delivery.test` | Send A Test Email |
 | POST | `/users/me/first-workspace` | `users.ensure_first_workspace` | Ensure The Current User Has A Workspace |
 | POST | `/users/me/profile` | `user.profile.upsert` | Create or Update Profile |
+| PUT | `/organizations/{organization_id}/home/seen` | `org.home.seen.set` | Mark Home Seen |
 
 ## mcp_access
 

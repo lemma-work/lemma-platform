@@ -17,6 +17,7 @@ post's to write, so a new case is named on it through ``set_on_head``.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import datetime
 from uuid import UUID, uuid7
 
@@ -456,7 +457,7 @@ def narrowed_by_case(
     contact = channel.kind == ChannelKind.CONTACT.value
     if needs_person:
         statement = statement.where(
-            contact, channel.id.in_(_waiting_on_a_person(pod_id))
+            contact, channel.id.in_(waiting_on_a_person([pod_id]))
         )
     if assignee_user_id is None and not unassigned and status is None:
         return statement
@@ -472,14 +473,16 @@ def narrowed_by_case(
     return statement
 
 
-def _waiting_on_a_person(pod_id: UUID) -> CompoundSelect:
-    """The pod's contacts' channels waiting on a person, from two small
+def waiting_on_a_person(pod_ids: Collection[UUID]) -> CompoundSelect:
+    """These pods' contacts' channels waiting on a person, from two small
     indexes: open cases that asked for one (``ix_channel_cases_needs_person``),
     and channels whose agents are off (``ix_channels_agents_off``) with an
-    open case nobody holds."""
+    open case nobody holds. One pod for a pod's list, several for a list
+    across an organization -- the same rule either way."""
     channel, case = ChannelModel, ChannelCaseModel
+    pods = list(pod_ids)
     asked = select(case.channel_id).where(
-        case.pod_id == pod_id,
+        case.pod_id.in_(pods),
         case.status == _OPEN,
         case.assignee_user_id.is_(None),
         case.attention_at.is_not(None),
@@ -488,7 +491,7 @@ def _waiting_on_a_person(pod_id: UUID) -> CompoundSelect:
         select(channel.id)
         .join(case, case.id == channel.current_case_id)
         .where(
-            channel.pod_id == pod_id,
+            channel.pod_id.in_(pods),
             channel.kind == ChannelKind.CONTACT.value,
             ~channel.agents_answer,
             case.status == _OPEN,

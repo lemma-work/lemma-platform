@@ -69,6 +69,15 @@ class PendingInteraction:
 
 
 @dataclass(frozen=True, slots=True)
+class PodPendingInteraction:
+    """A pause, and the pod its conversation is in: a list across pods needs
+    to say which one to open it in."""
+
+    pod_id: UUID
+    pending: PendingInteraction
+
+
+@dataclass(frozen=True, slots=True)
 class PendingInteractionCursor:
     """Where the next page starts: after this pause, oldest first."""
 
@@ -93,6 +102,7 @@ __all__ = [
     "PendingInteraction",
     "PendingInteractionCursor",
     "PendingInteractionKind",
+    "PodPendingInteraction",
     "SUMMARY_CHARACTERS",
     "WAITING_ON_A_PERSON_TOOLS",
     "clipped_summary",
