@@ -435,6 +435,7 @@ class PlanBuilder:
         return ImportPlan(
             format_version=format_version,
             bundle_name=bundle_name,
+            description=pod_manifest.get("description"),
             steps=steps,
             variables=variables,
             warnings=warnings,

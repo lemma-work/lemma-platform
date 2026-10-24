@@ -1,0 +1,10 @@
+{
+  "name": "draft_next",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 8 * * 2,4",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Draft the next post from the ideas the team has shared, add it to the posts table as a draft, and ask its author to approve it. Publish nothing yourself."
+}

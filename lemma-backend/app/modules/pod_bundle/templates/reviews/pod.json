@@ -1,0 +1,32 @@
+{
+  "format_version": 3,
+  "name": "Reviews",
+  "description": "Gets every pull request a review on the day it is opened.",
+  "lemma": {
+    "position": 3,
+    "face": "cube",
+    "place": "GitHub",
+    "brings": [
+      "A table of open pull requests and their reviewers",
+      "A nudge for anything open four hours",
+      "The week's number in Pages, every Friday"
+    ],
+    "plan": {
+      "how": [
+        "Every pull request is a row in pull_requests, with when it was opened",
+        "Anything open four hours without a review gets a nudge to a reviewer"
+      ],
+      "never": [
+        "Approve or merge a pull request"
+      ]
+    }
+  },
+  "outcome": {
+    "sentence": "Every pull request is reviewed the same day.",
+    "kind": "week",
+    "target": 90,
+    "unit": "%",
+    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE reviewed_same_day) / nullif(count(*), 0), 1) FROM pull_requests WHERE opened_at >= date_trunc('week', now())"
+  },
+  "variables": {}
+}

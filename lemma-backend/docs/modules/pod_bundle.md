@@ -12,7 +12,7 @@ with the CLI through the top-level `lemma-pod-bundle` package.
 | Contribution | Behavior |
 | --- | --- |
 | API routers | Import/upload/plan/apply/replan/cancel/events, export/status/download, publish/status/events |
-| Work items | `pod_bundle.{export,plan,import_github,import_url,apply,publish}`: admin class, pod namespace, one per pod at a time, written with the job's state row in the request's transaction |
+| Work items | `pod_bundle.{export,plan,import_github,import_url,apply,publish}`: admin class, pod namespace, one per pod at a time, written with the job's state row in the request's transaction; `pod_bundle.set_up_lemma` plans and applies a template for a Lemma just started, then starts its setup chat (see [Starting a Lemma](#starting-a-lemma)) |
 | Periodic work | `pod_bundle.staging_sweep` (30 min): sweep expired staging objects, end jobs nothing will run again, delete job rows past retention |
 | Realtime | Redis pub/sub SSE plus polling snapshots |
 | SQL tables | `pod_bundle_jobs`, `pod_bundle_job_steps` |
@@ -49,6 +49,8 @@ CANCELLED if it was cancelling, in the dead transaction.
 | `/.../bundle/imports` | Start URL/GitHub planning, poll, replan, approve apply, cancel, or stream SSE. An import is its starter's: anyone else gets 404 (`POD_BUNDLE_IMPORT_NOT_FOUND`), since its plan was computed with the starter's authority and lists their own accounts |
 | `/.../bundle/exports` | Start/poll an export; authenticated signed-token download is `/pods/bundle/download` |
 | `/.../bundle/publishes` | Start/poll/stream GitHub publication |
+| `/pods/bundle/templates` | The templates that ship with the server, as cards: what a Lemma made from one owns, how it is counted, and the first lines of its plan |
+| `/pods/start` | Start a Lemma: a pod that owns something, from a template or the caller's own words |
 
 ## Import flow
 
@@ -122,6 +124,27 @@ over what the same-named workload already holds, as the apply's
 (`detail.refused`) and in the plan's warnings. Applying such a plan is refused
 `403 CONFERRAL_EXCEEDS_HOLDER` with the pod untouched; the step itself asks
 again of everything when it writes.
+
+## Starting a Lemma
+
+A template is a bundle under `templates/<name>/` whose `pod.json` also says
+what a Lemma made from it owns (`outcome`, with a measure over the tables it
+brings) and how to show it (`lemma`: face, place, what it brings, the first
+lines of its plan). An import with `kind=TEMPLATE` packs and stages it like an
+upload; `GET /pods/bundle/templates` lists the cards.
+
+`POST /pods/start` (`application/start_use_cases.py`) writes a Lemma in one
+transaction: the pod (under a free name), what it owns, a first `/plan.md`, and
+a conversation with the pod's agent opened with the caller's first message.
+From the caller's own words the agent's turn is staged with it. From a template
+the archive is staged before anything is written, the conversation is opened
+held -- its run written without its turn -- and `pod_bundle.set_up_lemma` is
+queued: it plans the import, applies it without the confirmation an uploaded
+bundle waits for (a shipped template, into a pod with nothing to overwrite),
+and starts the turn in its completion transaction. A plan that would need the
+person after all is left awaiting them, and the turn starts beside it. If the
+item dies, its `on_dead` hook ends the import and starts the turn in the same
+commit, so no setup chat waits on a job that will not run again.
 
 ## Security and limits
 

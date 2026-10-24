@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Literal, Mapping, Optional
 from uuid import UUID
@@ -6,14 +6,18 @@ from pydantic import (
     BaseModel,
     Field,
     ValidationError,
+    ValidatorFunctionWrapHandler,
     field_validator,
     model_serializer,
     model_validator,
 )
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.runtime import AgentRuntimeConfig
+from app.core.log.log import get_logger
 from app.modules.identity.contracts import OrganizationRole, UserEntity
 from app.modules.pod.domain.roles import PodRole
+
+logger = get_logger(__name__)
 
 
 class PodJoinPolicy(str, Enum):
@@ -69,6 +73,132 @@ class PodContactSettings(BaseModel):
     )
 
 
+class OutcomeKind(str, Enum):
+    """The two shapes of what a pod owns.
+
+    ``week`` is a bar held every week, which never finishes ("Every customer
+    hears back within a day"). ``date`` is a finish line, reached once by its
+    ``due`` date ("The launch ships by the date it is due"). The values are the plan
+    file's own (``kind: week`` in ``/plan.md``), so a plan a person or the
+    pod's agent wrote reads straight across.
+    """
+
+    WEEK = "week"
+    DATE = "date"
+
+
+#: Where the plan for what a pod owns is kept: the prose people and the pod's
+#: agent both edit -- what must be true, how the work is done, who holds what,
+#: what never happens -- beside the structured part on the pod's config.
+PLAN_PATH = "/plan.md"
+
+#: A measure is one query; anything near this long is several pasted together.
+MEASURE_MAX_CHARS = 4000
+
+#: The unit that makes a measure a share: it answers 0 to 100, as its target is
+#: written ("90" with "%" is "90%"), never a 0-1 fraction.
+SHARE_UNIT = "%"
+
+
+class OutcomeInput(BaseModel):
+    """What the pod owns, as a person or its agent sets it.
+
+    The fields are the front matter of the plan file the workspace keeps at
+    ``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,
+    ``unit``, ``due`` and ``measure`` -- held here so there is one copy of
+    them. The plan's prose (what must be true, how the work is done, who holds
+    what, what never happens) stays in the file.
+    """
+
+    sentence: str = Field(
+        min_length=3,
+        max_length=200,
+        description="What it owns, as one sentence a person can check.",
+    )
+    kind: OutcomeKind = Field(
+        description="week: a bar held every week. date: a finish line by `due`."
+    )
+    target: float | None = Field(
+        default=None,
+        allow_inf_nan=False,
+        description=(
+            "The number the measure is held to: 90 with unit '%' for a share, "
+            "22 for a finish line of 22 steps. Unset while it is still being "
+            "worked out."
+        ),
+    )
+    unit: str | None = Field(
+        default=None,
+        max_length=24,
+        description=(
+            "'%' when the measure answers a share from 0 to 100; otherwise what "
+            "it counts, such as 'steps' or 'posts'."
+        ),
+    )
+    due: date | None = Field(
+        default=None,
+        description="The finish line's date. Required for kind=date, refused for week.",
+    )
+    measure: str | None = Field(
+        default=None,
+        max_length=MEASURE_MAX_CHARS,
+        description=(
+            "One read-only SQL query over the pod's tables that answers a "
+            "single number: one row, one column. Counted for every member alike, "
+            "so only someone who can read every row it touches may set it."
+        ),
+    )
+
+    @field_validator("sentence")
+    @classmethod
+    def _one_line(cls, value: str) -> str:
+        said = " ".join(value.split())
+        if len(said) < 3:
+            raise ValueError("say what it owns in a sentence")
+        return said
+
+    @field_validator("unit", "measure")
+    @classmethod
+    def _blank_is_unset(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator("unit")
+    @classmethod
+    def _unit_is_a_word(cls, value: str | None) -> str | None:
+        if value is not None and any(char in value for char in "\r\n"):
+            raise ValueError("a unit is one short word, such as '%' or 'steps'")
+        return value
+
+    @model_validator(mode="after")
+    def _shape_fits_kind(self) -> "OutcomeInput":
+        if self.kind is OutcomeKind.DATE and self.due is None:
+            raise ValueError("a finish line needs its due date")
+        if self.kind is OutcomeKind.WEEK and self.due is not None:
+            raise ValueError("a bar held every week has no due date")
+        if (
+            self.unit == SHARE_UNIT
+            and self.target is not None
+            and not 0 <= self.target <= 100
+        ):
+            raise ValueError("a share's target is from 0 to 100, as in 90 for 90%")
+        return self
+
+
+class PodOutcome(OutcomeInput):
+    """What the pod owns, as stored on its config."""
+
+    since: date | None = Field(
+        default=None,
+        description=(
+            "When the pod took this on: set by the server when it is first "
+            "set, and kept while only its wording, target or measure change."
+        ),
+    )
+
+
 class PodConfig(BaseModel):
     """Typed pod-level configuration."""
 
@@ -84,6 +214,27 @@ class PodConfig(BaseModel):
     recipes: list[PodRecipe] = Field(default_factory=list)
     triggers: PodTriggerSettings | None = None
     contacts: PodContactSettings | None = None
+    #: What the pod owns. Omitted until somebody sets one, and set only through
+    #: ``PodService.set_outcome``, which checks a measure before keeping it: a
+    #: config written any other way keeps the outcome it had.
+    outcome: PodOutcome | None = None
+
+    @field_validator("outcome", mode="wrap")
+    @classmethod
+    def _unreadable_outcome_is_none(
+        cls, value: object, handler: ValidatorFunctionWrapHandler
+    ) -> "PodOutcome | None":
+        """A stored outcome that no longer reads as one is no outcome.
+
+        Without this, ``from_raw`` would answer a default config for the whole
+        pod -- join policy, runtime and recipes with it -- because one field
+        written under an older shape stopped validating.
+        """
+        try:
+            return handler(value)
+        except ValidationError:
+            logger.warning("pod.config.outcome_unreadable.degraded", exc_info=True)
+            return None
 
     @field_validator("default_profile_id")
     @classmethod
@@ -131,6 +282,8 @@ class PodConfig(BaseModel):
             data.pop("triggers", None)
         if data.get("contacts") is None:
             data.pop("contacts", None)
+        if data.get("outcome") is None:
+            data.pop("outcome", None)
         return data
 
 

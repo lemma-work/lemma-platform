@@ -328,6 +328,11 @@ class AgentContextBriefBuilder:
             # named the pod and never said what it was for, so an agent had the
             # id of a thing it could not describe.
             lines.append(f"- What this pod is for: {pod.description.strip()}")
+        if pod.owns:
+            # What the pod owns and how it is counted. The plan for getting there
+            # is a file the line points at, read when the work needs it rather
+            # than carried in every prompt.
+            lines.append(f"- What this pod owns: {pod.owns}")
         lines.extend(user_lines(profile, user_id))
 
         lines.extend(

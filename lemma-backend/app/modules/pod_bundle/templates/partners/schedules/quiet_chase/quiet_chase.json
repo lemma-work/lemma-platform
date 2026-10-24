@@ -1,0 +1,10 @@
+{
+  "name": "quiet_chase",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 9 * * 1-5",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Read the partners table. For every company not signed whose next_step_due has passed, or that has had no update for five days, ask its owner what happened."
+}

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic_ai.tools import RunContext
+from pydantic_ai.tools import RunContext, Tool
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.authorization.permissions import Permissions
@@ -29,6 +29,7 @@ from app.modules.agent.tools.pod.pod_data_access import (
     empty_data_error,
 )
 from app.modules.agent.tools.pod.pod_common import has_meaningful_data, run_pod_tool
+from app.modules.agent.tools.pod.pod_outcome_tool import set_what_you_own
 from app.modules.agent.tools.pod.pod_file_tools import (
     pod_edit_file,
     pod_get_file_url,
@@ -299,5 +300,10 @@ pod_toolset = FunctionToolset[BaseAgentContext](
         pod_view_document_pages,
         pod_get_file_url,
         pod_search_files,
+        # Behind ToolSearch on its own: setting what the pod owns happens in the
+        # setup chat and seldom after, so it carries no schema on every turn.
+        # In this toolset rather than one of its own so it reaches the pod MCP
+        # surface and every agent with POD, like the rest.
+        Tool(set_what_you_own, defer_loading=True),
     ]
 )

@@ -1,0 +1,32 @@
+{
+  "format_version": 3,
+  "name": "Audit",
+  "description": "Gets every control ready with its evidence before the audit date.",
+  "lemma": {
+    "position": 7,
+    "face": "ring",
+    "place": "Notion",
+    "brings": [
+      "A table of every control and its evidence",
+      "A check that evidence is still fresh, every Monday",
+      "A chase for controls with no owner"
+    ],
+    "plan": {
+      "how": [
+        "Every control is a row in controls, with an owner and its evidence",
+        "Evidence older than 90 days is stale, and is checked every Monday"
+      ],
+      "never": [
+        "Mark a control ready without evidence from the last 90 days"
+      ]
+    }
+  },
+  "outcome": {
+    "sentence": "The SOC 2 audit passes by {due}.",
+    "kind": "date",
+    "target": 100,
+    "unit": "%",
+    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE ready) / nullif(count(*), 0), 1) FROM controls"
+  },
+  "variables": {}
+}

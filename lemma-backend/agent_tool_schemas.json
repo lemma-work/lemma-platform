@@ -4035,6 +4035,98 @@
     }
   },
   {
+    "tool_name": "set_what_you_own",
+    "toolset": "POD",
+    "description": "Set what this pod owns, and the measure that counts it.\n\nOne sentence a person can check, as a bar held every week (kind=week) or\na finish line by a date (kind=date, with due). The measure is one\nread-only SQL query over this pod's tables that answers one number -- one\nrow, one column; with unit \"%\" it answers 0 to 100, as the target is\nwritten. It is read for everyone in the pod alike, so it may only count\nrows you can read in full, and it is read once now: the answer comes back\nas ``value``. Build the tables it counts first. Replaces what the pod\nowned; the plan for getting there stays in /plan.md.",
+    "input_schema": {
+      "$defs": {
+        "OutcomeKind": {
+          "description": "The two shapes of what a pod owns.\n\n``week`` is a bar held every week, which never finishes (\"Every customer\nhears back within a day\"). ``date`` is a finish line, reached once by its\n``due`` date (\"The launch ships by the date it is due\"). The values are the plan\nfile's own (``kind: week`` in ``/plan.md``), so a plan a person or the\npod's agent wrote reads straight across.",
+          "enum": [
+            "week",
+            "date"
+          ],
+          "title": "OutcomeKind",
+          "type": "string"
+        }
+      },
+      "description": "What the pod owns, as a person or its agent sets it.\n\nThe fields are the front matter of the plan file the workspace keeps at\n``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,\n``unit``, ``due`` and ``measure`` -- held here so there is one copy of\nthem. The plan's prose (what must be true, how the work is done, who holds\nwhat, what never happens) stays in the file.",
+      "properties": {
+        "sentence": {
+          "description": "What it owns, as one sentence a person can check.",
+          "maxLength": 200,
+          "minLength": 3,
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/OutcomeKind",
+          "description": "week: a bar held every week. date: a finish line by `due`."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The number the measure is held to: 90 with unit '%' for a share, 22 for a finish line of 22 steps. Unset while it is still being worked out."
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "maxLength": 24,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "'%' when the measure answers a share from 0 to 100; otherwise what it counts, such as 'steps' or 'posts'."
+        },
+        "due": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The finish line's date. Required for kind=date, refused for week."
+        },
+        "measure": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One read-only SQL query over the pod's tables that answers a single number: one row, one column. Counted for every member alike, so only someone who can read every row it touches may set it."
+        }
+      },
+      "required": [
+        "sentence",
+        "kind"
+      ],
+      "title": "OutcomeInput",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "spawn_subagent",
     "toolset": "SUBAGENTS",
     "description": "Start a pod agent as a linked child conversation; returns a handle.\n\nOmit agent_name to spawn another instance of yourself for a targeted subtask.\nNon-blocking: returns {conversation_id, run_id, status}. To collect the\nresult, call `wait_for` with `subagent_run_id` and end your turn; you wake\nwith it. If you end your turn without waiting, it arrives later as a new\nmessage.",

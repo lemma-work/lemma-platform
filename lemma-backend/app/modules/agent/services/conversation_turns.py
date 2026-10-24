@@ -150,6 +150,8 @@ class TurnCoordinator:
         typed_in_lemma: bool = False,
         client_message_id: str | None = None,
         supersede_pauses: bool = True,
+        stage_turn: bool = True,
+        commit: bool = True,
     ) -> AgentRunStartResult:
         """Append the message and return the run that will answer it.
 
@@ -162,6 +164,12 @@ class TurnCoordinator:
         with the same id is the first one retried, and gets the first one's run
         back rather than a second message. ``supersede_pauses`` is False for a
         sender who is not the person a pause asked (``turn_admission``).
+
+        ``commit=False`` leaves the transaction to a caller writing more beside
+        it -- a Lemma being started writes its pod in the same one -- and
+        ``stage_turn=False`` writes the run without the work that executes it,
+        for a caller that stages it later with ``stage_agent_turn`` (the
+        template a Lemma is started from has to be applied first).
         """
         message_metadata = stamped(
             message_metadata, conversation, typed_in_lemma=typed_in_lemma
@@ -183,7 +191,8 @@ class TurnCoordinator:
                 )
             )
             if original is not None and original.agent_run_id is not None:
-                await self.uow.commit()
+                if commit:
+                    await self.uow.commit()
                 return AgentRunStartResult(
                     conversation_id=conversation.id,
                     agent_run_id=original.agent_run_id,
@@ -241,7 +250,7 @@ class TurnCoordinator:
             ),
         )
 
-        if started_new_run:
+        if started_new_run and stage_turn:
             # The turn commits with the run and its message, or not at all.
             await stage_agent_turn(
                 self.uow,
@@ -256,7 +265,8 @@ class TurnCoordinator:
         # Streaming endpoints need the message/run and its outbox event committed
         # atomically before the worker can safely load them; normal CRUD methods
         # still rely on the request UoW.
-        await self.uow.commit()
+        if commit:
+            await self.uow.commit()
         # After the commit, not inside it: this claimed to run "now that they're
         # durably committed", but the commit is the caller's, so it held a
         # connection across a Redis round trip with the row locked. Not the

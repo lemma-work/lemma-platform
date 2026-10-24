@@ -99,7 +99,23 @@ def test_pod_toolset_exposes_exactly_these_tools():
         "pod_view_document_pages",
         "pod_get_file_url",
         "pod_search_files",
+        # The one that costs no prefix budget: deferred, because what the pod
+        # owns is set in its setup chat and seldom after, which is no reason to
+        # carry a schema on every turn. Here rather than in a toolset of its
+        # own so it reaches the pod MCP surface with the rest.
+        # `test_only_setting_what_the_pod_owns_is_deferred` holds the deferral.
+        "set_what_you_own",
     }
+
+
+def test_only_setting_what_the_pod_owns_is_deferred():
+    """Everything else in the pod toolset is in view; this must not be."""
+    deferred = {
+        name
+        for name, tool in pod_adapter.pod_toolset.tools.items()
+        if tool.defer_loading
+    }
+    assert deferred == {"set_what_you_own"}
 
 
 @pytest.mark.asyncio

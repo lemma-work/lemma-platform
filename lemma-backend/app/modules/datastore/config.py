@@ -113,6 +113,17 @@ class DatastoreSettings(DocumentWorkSettings):
         default=5_000_000,
         description="Reject ad-hoc datastore SQL queries whose EXPLAIN estimated row count exceeds this ceiling.",
     )
+    # What a pod owns: its measure is read on this interval into the week's row
+    # of `pod_outcome_weeks`, and a week keeps its last reading.
+    datastore_outcome_read_interval_minutes: int = Field(
+        default=60,
+        ge=5,
+        description=(
+            "How often every pod's measure of what it owns is read into that "
+            "week's row. A week keeps its last reading, so this is also how long "
+            "before the week ends its closing number may have been read."
+        ),
+    )
     datastore_search_readable_id_pushdown_limit: int = Field(
         default=5_000,
         description="How many file ids a search may send to the pod database to narrow its chunk query: the readable searchable files or the hidden ones, whichever is shorter. When both are longer the search runs unnarrowed and authorizes the rows it gets back -- bounded by the candidate pool, at the cost of recall for a caller who may read very little of a very large pod.",

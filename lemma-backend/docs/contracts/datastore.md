@@ -29,6 +29,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `file.update` | PATCH | `/pods/{pod_id}/datastore/files/by-path` | Update File |
 | `file.upload` | POST | `/pods/{pod_id}/datastore/files` | Upload File |
 | `file.url` | GET | `/pods/{pod_id}/datastore/files/url` | Get a short-lived URL for a file |
+| `outcome.history` | GET | `/pods/{pod_id}/outcome/history` | Where the pod has stood, week by week |
+| `outcome.standing` | GET | `/pods/{pod_id}/outcome/standing` | Where the pod stands |
 | `query.execute` | POST | `/pods/{pod_id}/datastore/query` | Execute Query |
 | `record.bulk_create` | POST | `/pods/{pod_id}/datastore/tables/{table_name}/records/bulk/create` | Bulk Create |
 | `record.bulk_delete` | POST | `/pods/{pod_id}/datastore/tables/{table_name}/records/bulk/delete` | Bulk Delete |

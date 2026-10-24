@@ -78,6 +78,10 @@ POD_TOOL_POLICIES: dict[str, ToolPolicy] = {
     "pod_edit_file": ToolPolicy(
         "Edit a file", Scope.WRITE, destructive=True, idempotent=False
     ),
+    # Writes the pod's config, so `pod:write`. Not destructive -- it replaces
+    # only what the pod owned, which the same call can put back -- and
+    # idempotent: the same outcome set twice is the same outcome.
+    "set_what_you_own": ToolPolicy("Set what the pod owns", Scope.WRITE),
 }
 
 _WRITE_UNLESS_KNOWN = ToolPolicy(

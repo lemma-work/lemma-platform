@@ -62,6 +62,7 @@ from app.modules.pod_bundle.infrastructure.rate_limiter import (
     get_bundle_rate_limiter,
 )
 from app.modules.pod_bundle.infrastructure.staging import BundleStagingStorage
+from app.modules.pod_bundle.application.template_imports import stage_template
 from app.core.concurrency.offload import run_blocking
 from app.modules.pod_bundle.infrastructure.state_store import (
     PodBundleStateStore,
@@ -226,6 +227,7 @@ class ImportUseCases:
         owner: str | None = None,
         repo: str | None = None,
         ref: str | None = None,
+        template: str | None = None,
     ) -> ImportState:
         """Single URL-based import entry point.
 
@@ -233,7 +235,9 @@ class ImportUseCases:
         queue ``pod_bundle.import_url`` with the resolved source object — the
         worker reads it straight from object storage (no server-side fetch, no
         SSRF). ``GITHUB``: parse the repo reference and queue
-        ``pod_bundle.import_github``. The request carries no bytes either way.
+        ``pod_bundle.import_github``. ``TEMPLATE``: pack the named template that
+        ships with the backend (404 for an unknown name), stage it, and queue
+        the plan straight away. The request carries no bytes in any case.
         """
         await self._authorize(
             pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
@@ -241,16 +245,32 @@ class ImportUseCases:
 
         # Abuse guard: count this import against the user's daily cap (separate
         # bucket from exports) once POD_UPDATE is authorized. Staging an upload
-        # is not counted — only starting the plan/apply pipeline is.
-        await self._rate_limiter.check_and_increment(
-            user_id=user_id,
-            operation="import",
-            limit=pod_bundle_settings.pod_bundle_daily_import_limit,
-        )
+        # is not counted — only starting the plan/apply pipeline is — and nor
+        # is a template: what it carries ships with this server, so its cost is
+        # small and known, and the allowance is for bundles people author.
+        if kind is not BundleSourceKind.TEMPLATE:
+            await self._rate_limiter.check_and_increment(
+                user_id=user_id,
+                operation="import",
+                limit=pod_bundle_settings.pod_bundle_daily_import_limit,
+            )
 
         import_id = uuid4()
 
-        if kind == BundleSourceKind.URL:
+        if kind == BundleSourceKind.TEMPLATE:
+            if not template:
+                raise BundleInvalidError(
+                    "A template name is required for kind=TEMPLATE."
+                )
+            staged = await stage_template(self._staging, template, import_id)
+            state = staged.import_state(pod_id=pod_id, user_id=user_id)
+            # Already staged, so straight to planning: the same job (and dedup
+            # key) a replan uses, with nothing left to fetch.
+            kind_name: str = PLAN
+            job: ImportJob = ImportJob(
+                import_id=import_id, pod_id=pod_id, user_id=user_id
+            )
+        elif kind == BundleSourceKind.URL:
             if not url:
                 raise BundleInvalidError("A url is required for kind=URL.")
             src_kind, src_id = _resolve_lemma_url(url)
@@ -261,8 +281,8 @@ class ImportUseCases:
                 status=ImportStatus.QUEUED,
                 source=BundleSource(kind=BundleSourceKind.URL, url=url),
             )
-            kind: str = IMPORT_URL
-            job: ImportJob = UrlImportJob(
+            kind_name = IMPORT_URL
+            job = UrlImportJob(
                 import_id=import_id,
                 pod_id=pod_id,
                 user_id=user_id,
@@ -286,7 +306,7 @@ class ImportUseCases:
                     ref=ref,
                 ),
             )
-            kind = IMPORT_GITHUB
+            kind_name = IMPORT_GITHUB
             job = GithubImportJob(
                 import_id=import_id,
                 pod_id=pod_id,
@@ -298,7 +318,7 @@ class ImportUseCases:
         async with self._uow_factory() as uow:
             await self._state_store.stage_import(uow, state)
             if not await self._job_queue.queue_job(
-                uow, kind, job, pod_id=pod_id, dedup_key=plan_key(import_id)
+                uow, kind_name, job, pod_id=pod_id, dedup_key=plan_key(import_id)
             ):
                 raise BundleJobConflictError("This import is already being planned.")
             await uow.commit()

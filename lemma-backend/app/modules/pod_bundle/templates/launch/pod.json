@@ -1,0 +1,32 @@
+{
+  "format_version": 3,
+  "name": "Launch",
+  "description": "Gets the launch out on its date, and chases every step on the way.",
+  "lemma": {
+    "position": 5,
+    "face": "spark",
+    "place": "Linear",
+    "brings": [
+      "A checklist of every step, with owners and dates",
+      "The week's plan, every Monday",
+      "A chase for anything due within three days"
+    ],
+    "plan": {
+      "how": [
+        "Every step to the launch is a row in steps, with an owner and a date",
+        "A step due within three days, or behind, gets a chase to its owner every weekday"
+      ],
+      "never": [
+        "Mark a step done that is not done"
+      ]
+    }
+  },
+  "outcome": {
+    "sentence": "The launch ships on {due}.",
+    "kind": "date",
+    "target": 100,
+    "unit": "%",
+    "measure": "SELECT round(100.0 * count(*) FILTER (WHERE done) / nullif(count(*), 0), 1) FROM steps"
+  },
+  "variables": {}
+}

@@ -161,6 +161,18 @@ class DatastoreInfrastructureError(DatastoreDomainError):
         )
 
 
+class DatastoreMeasureError(DatastoreDomainError):
+    """A measure that runs but does not answer one number.
+
+    422 rather than the 400 a malformed query gets: the query is well formed
+    and the database ran it, and what it answered is not something a pod can
+    hold itself to -- several rows, several columns, or text.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(message, code="DATASTORE_MEASURE_INVALID", status_code=422)
+
+
 class DatastoreQueryUnavailableError(DatastoreDomainError):
     """Direct querying is not available on this deployment.
 

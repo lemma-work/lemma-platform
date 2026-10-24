@@ -86,6 +86,9 @@ REPLAY_CLASS: Mapping[str, ReplayClass] = {
     "pod_write_file": _UNSAFE,
     "pod_write_record": _KEYED,
     "pod_edit_file": _UNSAFE,
+    # Replaces what the pod owns wholesale, so run again it can undo what a
+    # person set since, as a rewritten file can.
+    "set_what_you_own": _UNSAFE,
     # Sub-agents: a spawn is unique on (parent run, call); interacting is
     # refined by action below.
     "spawn_subagent": _KEYED,

@@ -1,0 +1,13 @@
+control,ready
+Access reviews for production,false
+Offboarding checklist,false
+Vendor risk register,false
+Encryption at rest,false
+Backups tested,false
+Incident response plan,false
+Security training for everyone,false
+Change management,false
+Logging and monitoring,false
+Penetration test,false
+Data retention policy,false
+Business continuity plan,false
