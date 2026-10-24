@@ -365,6 +365,41 @@ async def test_nobody_but_the_owner_can_put_an_account_in_front_of_others(
     assert "connector_account.share" in passed_on.json()["message"]
 
 
+async def test_an_account_is_shared_only_with_people_of_its_own_pod(
+    scenario, db_session
+):
+    """A role or member id from somewhere else was stored as a grant that
+    matched nobody and stayed behind. It is refused, and nothing is written."""
+    from app.core.authorization.models import ResourcePermissionGrantModel
+
+    world = await _world(scenario, db_session)
+    await _connect(db_session, world, world.alice, "alice-key")
+    assert (await world.declare("crm", "PER_MEMBER")).status_code == 201
+    assert (await world.run("crm", world.alice)).status_code == 200
+    [personal] = await _pod_accounts(db_session, world.pod_id)
+
+    for grantee_type in ("POD_MEMBER", "ROLE"):
+        refused = await world.call(
+            "PATCH",
+            f"/pods/{world.pod_id}/connector-accounts/{personal.id}",
+            world.alice,
+            json={
+                "visibility": "RESTRICTED",
+                "share_with": [
+                    {"grantee_type": grantee_type, "grantee_id": str(uuid4())}
+                ],
+            },
+        )
+        assert refused.status_code == status.HTTP_404_NOT_FOUND, refused.text
+
+    stored = await db_session.scalars(
+        select(ResourcePermissionGrantModel).where(
+            ResourcePermissionGrantModel.resource_id == personal.id
+        )
+    )
+    assert list(stored) == []
+
+
 async def test_an_agent_runs_only_the_connectors_it_was_granted(scenario, db_session):
     """A grant names one pod connector, not a catalog id that reached every
     installation of it in the org (audit M9); and the agent runs as the person

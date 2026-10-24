@@ -70,3 +70,65 @@ def test_pod_routes_are_open(template: str):
 def test_a_prefix_that_only_looks_like_a_pod_route_is_not():
     assert not workload_may_call("GET", "/pods/{pod_id}x/agents")
     assert not workload_may_call("POST", "/pods/bundle/download")
+
+
+# --- H20: what a pod app's page may call outside its own pod ---
+
+
+def test_every_app_route_exists():
+    from app.core.api.actor_policy import APP_ROUTES
+
+    missing = APP_ROUTES - _app_routes()
+    assert not missing, f"APP_ROUTES names routes that do not exist: {missing}"
+
+
+@pytest.mark.parametrize(
+    ("method", "template"),
+    [
+        ("PATCH", "/organizations/{organization_id}"),
+        (
+            "DELETE",
+            "/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}",
+        ),
+        # Never what already exists for other people (review of #1059): an
+        # installation every member's credentials go through, a role, a seat.
+        (
+            "PATCH",
+            "/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}",
+        ),
+        (
+            "POST",
+            (
+                "/organizations/{organization_id}/connectors/auth-configs"
+                "/{auth_config_name}/operations/refresh"
+            ),
+        ),
+        (
+            "DELETE",
+            "/organizations/{organization_id}/connectors/accounts/{account_id}",
+        ),
+        ("PATCH", "/organizations/{organization_id}/members/{member_id}/role"),
+        ("DELETE", "/organizations/{organization_id}/members/{member_id}"),
+        ("PUT", "/usage/organizations/{organization_id}/contacts-cap"),
+        ("POST", "/users/me/profile"),
+        ("POST", "/pods"),
+        ("POST", "/auth/cli/session-tokens"),
+        ("GET", "/oauth/grants"),
+    ],
+)
+def test_an_app_may_not_call_org_settings_or_credentials(method: str, template: str):
+    from app.core.api.actor_policy import app_may_call
+
+    assert not app_may_call(method, template)
+
+
+def test_an_app_may_call_its_pod_and_connector_setup():
+    from app.core.api.actor_policy import app_may_call
+
+    assert app_may_call("DELETE", "/pods/{pod_id}/datastore/tables/{table_name}")
+    assert app_may_call("GET", "/users/me")
+    assert app_may_call(
+        "POST", "/organizations/{organization_id}/connectors/auth-configs"
+    )
+    assert app_may_call("POST", "/organizations/{organization_id}/invitations")
+    assert not app_may_call("POST", "/pods/bundle/download")

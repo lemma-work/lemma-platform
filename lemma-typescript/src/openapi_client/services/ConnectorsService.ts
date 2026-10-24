@@ -10,6 +10,8 @@ import type { AccountPodUsageResponse } from '../models/AccountPodUsageResponse.
 import type { AccountResponseSchema } from '../models/AccountResponseSchema.js';
 import type { AppTriggerListResponseSchema } from '../models/AppTriggerListResponseSchema.js';
 import type { AppTriggerResponseSchema } from '../models/AppTriggerResponseSchema.js';
+import type { AskMembersRequest } from '../models/AskMembersRequest.js';
+import type { AskMembersResponse } from '../models/AskMembersResponse.js';
 import type { AuthConfigCreateSchema } from '../models/AuthConfigCreateSchema.js';
 import type { AuthConfigListResponseSchema } from '../models/AuthConfigListResponseSchema.js';
 import type { AuthConfigOperationsRefreshResponseSchema } from '../models/AuthConfigOperationsRefreshResponseSchema.js';
@@ -37,7 +39,9 @@ import type { OperationExecutionResponse } from '../models/OperationExecutionRes
 import type { PodAccountCreateRequest } from '../models/PodAccountCreateRequest.js';
 import type { PodAccountListResponse } from '../models/PodAccountListResponse.js';
 import type { PodAccountResponse } from '../models/PodAccountResponse.js';
+import type { PodAccountShareAsRequest } from '../models/PodAccountShareAsRequest.js';
 import type { PodAccountUpdateRequest } from '../models/PodAccountUpdateRequest.js';
+import type { PodConnectorCoverage } from '../models/PodConnectorCoverage.js';
 import type { PodConnectorCreateRequest } from '../models/PodConnectorCreateRequest.js';
 import type { PodConnectorListResponse } from '../models/PodConnectorListResponse.js';
 import type { PodConnectorResponse } from '../models/PodConnectorResponse.js';
@@ -780,6 +784,7 @@ export class ConnectorsService {
     }
     /**
      * What Removing An Installation Would Stop
+     * Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP event subscriptions that run through them: organization-wide counts, and per pod for the pods the caller can open. If the second half cannot be read just now the first is still returned, with `complete: false`.
      * @param organizationId
      * @param authConfigId
      * @returns InstallationImpactResponse Successful Response
@@ -884,6 +889,34 @@ export class ConnectorsService {
         return __request(OpenAPI, {
             method: 'PATCH',
             url: '/pods/{pod_id}/connector-accounts/{pod_account_id}',
+            path: {
+                'pod_id': podId,
+                'pod_account_id': podAccountId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Share Your Account As A Pod Connector
+     * Owner only, and the caller must also manage the pod's connectors: share this pod account with the pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing one, or declaring it. Checked in full before anything changes, and done in one transaction: a refusal leaves the account as it was.
+     * @param podId
+     * @param podAccountId
+     * @param requestBody
+     * @returns PodConnectorResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorAccountShareAs(
+        podId: string,
+        podAccountId: string,
+        requestBody: PodAccountShareAsRequest,
+    ): CancelablePromise<PodConnectorResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/connector-accounts/{pod_account_id}/share-as',
             path: {
                 'pod_id': podId,
                 'pod_account_id': podAccountId,
@@ -1007,6 +1040,58 @@ export class ConnectorsService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Ask Members To Connect
+     * Post one line, "This pod uses <connector> — connect yours: <connect_url>", in the own channel of each member a PER_MEMBER connector is waiting on (as `coverage` counts them). A member is asked about one connector at most once a day; those asked already are returned as `asked_recently`, and those whose line could not be posted, or whose last ask could not be checked, as `not_asked`.
+     * @param podId
+     * @param slug
+     * @param requestBody
+     * @returns AskMembersResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorAskMembers(
+        podId: string,
+        slug: string,
+        requestBody?: (AskMembersRequest | null),
+    ): CancelablePromise<AskMembersResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/connectors/{slug}/ask-members',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Who A Per-Member Connector Is Waiting On
+     * For someone who may manage the pod's connectors: of the members who may use this PER_MEMBER connector, how many have connected a working account, and who has not. Viewers, and anyone a RESTRICTED connector leaves out, are not counted. Asked for one connector at a time, because it weighs each member's own access; listings leave it out.
+     * @param podId
+     * @param slug
+     * @returns PodConnectorCoverage Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorCoverage(
+        podId: string,
+        slug: string,
+    ): CancelablePromise<PodConnectorCoverage> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/connectors/{slug}/coverage',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+            },
             errors: {
                 422: `Validation Error`,
             },

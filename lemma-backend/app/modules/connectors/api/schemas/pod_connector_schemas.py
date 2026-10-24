@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -81,6 +82,42 @@ class SharedAccountSummary(BaseModel):
     email: str | None = None
 
 
+class MemberConnectStanding(StrEnum):
+    #: Has an account on the installation that a call can run as.
+    CONNECTED = "CONNECTED"
+    #: Has none.
+    MISSING = "MISSING"
+    #: Has one, and it needs its owner to sign in again.
+    REAUTH_REQUIRED = "REAUTH_REQUIRED"
+
+
+class MemberAwaited(BaseModel):
+    """A member a required per-member connector is still waiting on.
+
+    Who, and why -- never which account: nobody but its owner is shown that."""
+
+    user_id: UUID
+    pod_member_id: UUID
+    name: str | None = None
+    email: str | None = None
+    standing: MemberConnectStanding
+
+
+class PodConnectorCoverage(BaseModel):
+    """How many of the members who may use a connector can run it as their own."""
+
+    eligible: int = Field(description="Members of the pod who may use this connector.")
+    connected: int = Field(description="Of those, how many have a working account.")
+    waiting_on: list[MemberAwaited] = Field(
+        default_factory=list,
+        description="The rest: missing an account, or theirs needs reconnecting.",
+    )
+    truncated: bool = Field(
+        default=False,
+        description="The pod has more members than were counted.",
+    )
+
+
 class PodConnectorResponse(BaseModel):
     id: UUID
     pod_id: UUID
@@ -100,6 +137,22 @@ class PodConnectorResponse(BaseModel):
     created_by_user_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
+    can_use: bool = Field(
+        default=False,
+        description=(
+            "Whether the caller may run operations through it: what decides if "
+            "connecting their own account would let them use it. False for a "
+            "viewer, and for anyone a RESTRICTED connector leaves out."
+        ),
+    )
+    member_coverage: PodConnectorCoverage | None = Field(
+        default=None,
+        description=(
+            "Not filled in on listings, which stay cheap: read it from "
+            "`GET /pods/{pod_id}/connectors/{slug}/coverage`. Kept so a "
+            "client reading it gets null rather than a missing key."
+        ),
+    )
 
 
 class PodConnectorListResponse(BaseModel):
@@ -140,6 +193,15 @@ class PodAccountUpdateRequest(BaseModel):
         default=None,
         description="Owner only: make this the account your own calls use here.",
     )
+    allow_sandbox_use: bool | None = Field(
+        default=None,
+        description=(
+            "Owner only: allow this account's credential inside sandboxes, so "
+            "a SHARED connector on it (the pod's `github`) can give other "
+            "members' workspaces its raw token for git and gh, which they can "
+            "copy. Off by default; withdrawing the account turns it off."
+        ),
+    )
 
 
 class PodAccountResponse(BaseModel):
@@ -153,6 +215,7 @@ class PodAccountResponse(BaseModel):
     is_member_default: bool
     source: PodAccountSource
     last_used_at: datetime | None = None
+    allow_sandbox_use: bool = False
     display_name: str | None = None
     email: str | None = None
     used_by: list[str] = Field(
@@ -160,6 +223,36 @@ class PodAccountResponse(BaseModel):
         description="Slugs of the SHARED pod connectors that run as this account.",
     )
     created_at: datetime
+    notice: str | None = Field(
+        default=None,
+        description=(
+            "Something the change did not do at once, for the owner to read: "
+            "after turning `allow_sandbox_use` off, that sandboxes already "
+            "given the token keep a copy until it is swept."
+        ),
+    )
+
+
+class PodAccountShareAsRequest(BaseModel):
+    """Share one of your pod accounts with the pod as a SHARED connector."""
+
+    slug: str = Field(
+        description=(
+            "The SHARED connector to run as it: an existing one on the same "
+            "installation is pointed at it, otherwise one is declared."
+        )
+    )
+    purpose: str | None = Field(default=None, max_length=500)
+
+    @field_validator("slug")
+    @classmethod
+    def _slug(cls, value: str) -> str:
+        if not SLUG_PATTERN.match(value):
+            raise ValueError(
+                "slug must be lowercase letters, digits, '-' or '_', starting "
+                "with a letter or digit, at most 63 characters"
+            )
+        return value
 
 
 class PodAccountListResponse(BaseModel):
@@ -187,10 +280,97 @@ class ImpactedPodConnector(BaseModel):
     mode: PodConnectorMode
 
 
+class ImpactedPod(BaseModel):
+    """One pod the caller can open, and what in it stops."""
+
+    pod_id: UUID
+    name: str
+    pod_connectors: list[str] = Field(
+        default_factory=list, description="Slugs of its connectors on it."
+    )
+    surface_count: int = 0
+    schedule_count: int = 0
+    event_subscription_count: int = 0
+
+
 class InstallationImpactResponse(BaseModel):
-    """What deleting or disabling an installation stops, before it is done."""
+    """What deleting or disabling an installation stops, before it is done.
+
+    The counts are the whole organization's; `pods` and `pod_connectors` name
+    only the pods the caller can open, and the rest are counted in
+    `unnamed_pod_count`."""
 
     auth_config_id: UUID
     account_count: int
     pod_account_count: int
-    pod_connectors: list[ImpactedPodConnector]
+    pod_connectors: list[ImpactedPodConnector] = Field(
+        description="Its pod connectors in the pods the caller can open."
+    )
+    unnamed_pod_count: int = Field(
+        default=0,
+        description=(
+            "Pods that lose a connector and are not named here: the caller "
+            "cannot open them, or (with `complete: false`) whether they can "
+            "could not be checked."
+        ),
+    )
+    unnamed_pod_connector_count: int = Field(
+        default=0,
+        description="The pod connectors those unnamed pods lose.",
+    )
+    surface_count: int = Field(
+        default=0,
+        description="Surfaces that answer through one of its pod connectors.",
+    )
+    schedule_count: int = Field(
+        default=0,
+        description="Schedules that listen through one of its pod connectors.",
+    )
+    event_subscription_count: int = Field(
+        default=0,
+        description="MCP event subscriptions held on its accounts.",
+    )
+    pods: list[ImpactedPod] = Field(
+        default_factory=list,
+        description="Per pod the caller can open: what stops there.",
+    )
+    complete: bool = Field(
+        default=True,
+        description=(
+            "False when the surfaces, schedules and subscriptions could not be "
+            "counted just now: the counts above them are zero for that reason, "
+            "not because nothing stops. Removing is not blocked by it."
+        ),
+    )
+
+
+class AskMembersRequest(BaseModel):
+    user_ids: list[UUID] | None = Field(
+        default=None,
+        max_length=500,
+        description=(
+            "Only these members, of those the connector is waiting on. Left out: "
+            "everyone it is waiting on."
+        ),
+    )
+
+
+class AskMembersResponse(BaseModel):
+    """Who was asked to connect, and who was asked too recently to ask again."""
+
+    asked: list[MemberAwaited]
+    asked_recently: list[MemberAwaited] = Field(
+        default_factory=list,
+        description=(
+            "Already asked about this connector in the last day; not asked again."
+        ),
+    )
+    not_asked: list[MemberAwaited] = Field(
+        default_factory=list,
+        description=(
+            "Not asked, because whether they were asked today could not be "
+            "checked, or the line to them could not be posted, just now. Try "
+            "again shortly."
+        ),
+    )
+    connect_url: str

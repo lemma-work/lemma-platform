@@ -41,9 +41,11 @@ from app.core.auth_state_cache import (
     set_account_standing,
 )
 from app.core.analytics.app_session import maybe_record_app_session
+from app.core.app_pin import pin_app_request
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 logger = get_logger(__name__)
 
@@ -445,6 +447,32 @@ async def verify_auth(connection: HTTPConnection):
     # check the session, and must not be turned into the 503 above.
     if getattr(connection.state, "delegation_claims", None) is not None:
         _refuse_workload_off_its_routes(connection)
+    elif _cookie_session(connection):
+        await _pin_app_page(connection)
+
+
+def _cookie_session(connection: HTTPConnection) -> bool:
+    """Whether the session came from the cookie. SuperTokens prefers the
+    ``Authorization`` header when both are sent, so its absence is the test."""
+    header = connection.headers.get("authorization", "")
+    return not header.lower().startswith("bearer ")
+
+
+async def _pin_app_page(connection: HTTPConnection) -> None:
+    """A pod app's page acts as its viewer only in its own pod (``app_pin``).
+
+    The app's lookup reads the database; a failure there is this deployment
+    failing to check, the same 503 as a session that could not be checked.
+    """
+    try:
+        await pin_app_request(connection)
+    except SQLAlchemyError as e:
+        logger.warning(
+            "security.auth_dependency.unexpected_failure.degraded",
+            error_type=type(e).__name__,
+            exc_info=True,
+        )
+        raise auth_unavailable() from e
 
 
 def _refuse_workload_off_its_routes(connection: HTTPConnection) -> None:

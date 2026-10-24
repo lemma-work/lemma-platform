@@ -133,11 +133,14 @@ lemma connectors status       # same facts, your installed apps + your connected
 the exact string to pass to `operations` and `triggers`. If only one auth config
 exists, the CLI auto-discovers it and you can omit the name.
 
-## Set up a connector (CLI — not bundles)
+## Set up a connector (CLI)
 
-Connectors are **org/pod runtime state and do NOT round-trip in bundles**
-(`pod-model.md` → authoring). Set them up by CLI and record the commands in the
-pod README so anyone can reconnect after import.
+A **pod connector** round-trips in a bundle as `connectors/<slug>/<slug>.json` —
+its catalog connector, mode, `required` and `purpose` — and import declares it on
+the importing org's installation (`cli-and-bundles.md` → *Pod connectors in a
+bundle*). The org's **installations and accounts do not**: they belong to the
+org and to each member. Set those up by CLI and record the commands in the pod
+README so anyone can reconnect after import.
 
 ```bash
 # 1. Browse the catalog
@@ -336,6 +339,14 @@ three ways:
   connector operations present as the App where GitHub permits it, so a schedule
   outlives the person who set it up, while pod publish/import and the sandbox's
   `git`/`gh` stay the person so their name is on the commits.
+- **The sandbox's `git`/`gh` get a token only from your own account** — or from a
+  SHARED `github` connector's account whose **owner** ticked "allow use inside
+  sandboxes" (`PATCH /pods/{pod}/connector-accounts/{id}` with
+  `{"allow_sandbox_use": true}`, owner only, on an account already shared with the
+  pod; withdrawing the account turns it off). Otherwise the workspace notice says
+  `SHARED_ACCOUNT_NOT_FOR_SANDBOX`: a token in a sandbox is readable by every later
+  command, so sharing an account for operations does not by itself hand it to a
+  shell. Use the GitHub connector operations instead, or a PER_MEMBER `github`.
 
 The rest is ordinary: `connector:github:use` on the workload, operation ids from
 `operations search`, triggers wired through a `WEBHOOK` schedule.
@@ -581,10 +592,11 @@ A trigger id is **kind-qualified**: `{app}:{kind}:{slug}` (e.g.
 
 ## Limits & gotchas
 
-- **Not in bundles.** Auth configs, accounts, pod connectors and connect state are
-  org/pod runtime state — `pods import` won't recreate them. Script the setup
-  (`auth-configs create`, `pod-add`) in the README, or a connector-using bundle is
-  incomplete.
+- **Pod connectors are in bundles; installations and accounts are not.** `pods
+  import` declares a bundle's `connectors/` on the importer's own installations
+  (`--connector`, `--create-installations`) and shares an account for a SHARED one
+  only when told to (`--share-account`). Each member's own accounts, and connect
+  state, stay out — note in the README who has to connect what.
 - **Several auth configs per connector are allowed**, with exactly one default that
   a bare connector id resolves to. Use `auth-configs update --default` to move it.
   Pods address an installation through a pod connector slug, so code never

@@ -77,6 +77,7 @@ import { History } from "@/thread/history";
 import { AllConversations } from "@/thread/all-conversations";
 import { refreshConversationLists } from "@/thread/conversation-list";
 import { ComputerView } from "@/computer/computer-view";
+import { ConnectBanner } from "@/connect/pod-connect";
 import { FileView } from "@/thread/file-view";
 import { acknowledge, readComposeRequest, registerFrame } from "@/thread/compose-bridge";
 import { identityGenes } from "@/identity/seeded-identity";
@@ -1815,6 +1816,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             {!preview && <WaitingInbox pods={pods.data ?? []} />}
                         </div>
 
+                        {/* Over the pod and every app in it: a connector this pod
+                            asks everyone to connect that I have not. */}
+                        {!preview && !stranger && <ConnectBanner key={pod.id} pod={pod} />}
                         <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "") + (chat.open && chatResource ? " body--chat" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
                             {rightTab && <PaneDivider value={paneWidth} onChange={setPaneWidth} />}
                             {/* Not over a channel: it has a box of its own, and its

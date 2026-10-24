@@ -158,17 +158,18 @@ test("an account made for a surface is shared into the pod, then bound by the co
                 return { body: { id: "pa9", account_id: body?.account_id, auth_config_id: "install-tg", connector_id: "telegram", visibility: "POD", owner_user_id: "u1", pod_id: "p1", is_member_default: false, source: "MANUAL", created_at: "" } };
             }
             if (path.endsWith("/connectors") && method === "GET") return { body: { items: [{ slug: "telegram", mode: "PER_MEMBER", status: "READY" }] } };
-            if (path.endsWith("/connectors")) return { body: { ...body, id: "pc9", pod_id: "p1", status: "READY", required: false, visibility: "POD", created_at: "", updated_at: "" } };
+            if (path.endsWith("/share-as")) {
+                return { body: { ...body, id: "pc9", pod_id: "p1", auth_config_id: "install-tg", mode: "SHARED", shared_pod_account_id: "pa9", status: "READY", required: false, visibility: "POD", created_at: "", updated_at: "" } };
+            }
             return { body: { id: "s9", name: "telegram", platform: "TELEGRAM", config: {} } };
         });
         await liveSource.connectOwnAccount("p1", "TELEGRAM", "acct-new");
         const writes = requests.filter((one) => one.method === "POST").map((one) => [one.path, one.body]);
         assert.deepEqual(writes, [
             ["/pods/p1/connector-accounts", { account_id: "acct-new", visibility: "POD" }],
-            ["/pods/p1/connectors", {
-                auth_config_id: "install-tg", mode: "SHARED", shared_pod_account_id: "pa9",
-                slug: "telegram-2", purpose: "A teammate's own telegram",
-            }],
+            /* One request: the server shares the account and declares the
+               connector, or does neither. */
+            ["/pods/p1/connector-accounts/pa9/share-as", { slug: "telegram-2", purpose: "A teammate's own telegram" }],
             ["/pods/p1/surfaces", { platform: "TELEGRAM", credential_mode: "CUSTOM", pod_connector: "telegram-2" }],
         ]);
     } finally {

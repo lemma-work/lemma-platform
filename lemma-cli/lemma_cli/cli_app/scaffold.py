@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .enums import COLUMN_TYPES, SURFACE_PLATFORMS, TOOLSETS, VISIBILITY_VALUES
-from .pod_bundle import FORMAT_VERSION, loads_jsonc, strip_jsonc
+from .pod_bundle import FORMAT_VERSION_WITHOUT_CONNECTORS, loads_jsonc, strip_jsonc
 
 
 class ScaffoldError(Exception):
@@ -370,7 +370,11 @@ def init_pod(
     files.append(
         _write(
             directory / "pod.json",
-            _render(POD_JSON, NAME=slug, FORMAT_VERSION=str(FORMAT_VERSION)),
+            _render(
+                POD_JSON,
+                NAME=slug,
+                FORMAT_VERSION=str(FORMAT_VERSION_WITHOUT_CONNECTORS),
+            ),
             force=force,
         )
     )
@@ -580,7 +584,11 @@ def resource_example(resource_type: str, name: str = "example") -> str:
     exist' reference printed by `lemma <resource> schema`."""
     rt = resource_type.lower().rstrip("s")
     if rt == "pod":
-        return _render(POD_JSON, NAME=slugify(name), FORMAT_VERSION=str(FORMAT_VERSION))
+        return _render(
+            POD_JSON,
+            NAME=slugify(name),
+            FORMAT_VERSION=str(FORMAT_VERSION_WITHOUT_CONNECTORS),
+        )
     if rt == "table":
         return _render(TABLE_JSON, NAME=snakeify(name), RLS="true")
     if rt == "function":

@@ -190,6 +190,23 @@ def _fake_client(captured: dict):
             captured["add_account"] = (account_id, visibility)
             return {"id": "pa-1"}
 
+        def share_pod_account_as(self, pod_account_id, slug, *, purpose=None):
+            captured["share_as"] = (pod_account_id, slug, purpose)
+            return {"slug": slug}
+
+        def connector_coverage(self, slug):
+            captured["coverage"] = slug
+            return {"eligible": 2, "connected": 1, "waiting_on": [], "truncated": False}
+
+        def ask_members_to_connect(self, slug, *, user_ids=None):
+            captured["ask"] = (slug, user_ids)
+            return {
+                "asked": [],
+                "asked_recently": [],
+                "not_asked": [],
+                "connect_url": "x",
+            }
+
         def execute(self, connector, operation, payload):
             if connector not in _POD_CONNECTORS:
                 raise LemmaNotFoundError(
@@ -611,6 +628,39 @@ def test_pod_share_brings_ones_own_account_into_the_pod_shared(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert captured["add_account"] == ("acct-9", "POD")
+
+
+def test_pod_share_as_shares_and_points_in_one_call(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        ["connectors", "pod-share-as", "pa-1", "support-inbox", "--purpose", "Inbox"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["share_as"] == ("pa-1", "support-inbox", "Inbox")
+
+
+def test_pod_coverage_and_pod_ask_reach_the_selected_pods_connector(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    covered = runner.invoke(app, ["--json", "connectors", "pod-coverage", "gmail"])
+    assert covered.exit_code == 0, covered.output
+    assert json.loads(covered.stdout)["connected"] == 1
+    assert captured["coverage"] == "gmail"
+
+    everyone = runner.invoke(app, ["connectors", "pod-ask", "gmail"])
+    assert everyone.exit_code == 0, everyone.output
+    assert captured["ask"] == ("gmail", None)
+
+    some = runner.invoke(
+        app, ["connectors", "pod-ask", "gmail", "--user", "u1", "--user", "u2"]
+    )
+    assert some.exit_code == 0, some.output
+    assert captured["ask"] == ("gmail", ["u1", "u2"])
 
 
 # --- Deprecated: addressing an installation and an account -----------------

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from lemma_pod_bundle import pack_bundle
+from lemma_pod_bundle import bundle_format_version, pack_bundle
 from lemma_pod_bundle.layout import (
     RESOURCE_DIRS,
     TABLE_DATA_FILE,
@@ -49,6 +49,9 @@ from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.modules.pod_bundle.infrastructure.bundle_identity import stamp_bundle_id
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
+from app.modules.pod_bundle.infrastructure.exporter_connectors import (
+    export_connectors,
+)
 from app.modules.pod_bundle.infrastructure.exporter_surfaces import (
     export_surfaces,
 )
@@ -65,6 +68,7 @@ logger = get_logger(__name__)
 # out of scope for the export slice (the CLI's file/asset export is separate and
 # best-effort); we still create the empty dir for layout parity.
 _EXPORT_RESOURCE_TYPES = (
+    "connectors",
     "tables",
     "functions",
     "agents",
@@ -247,16 +251,26 @@ class BundleExporter:
                 raise BundleInvalidError(f"Pod {pod_id} no longer exists.")
             pod_dict = _pod_response_dict(pod)
             pod_name = str(pod_dict.get("name") or str(pod_id)).strip() or str(pod_id)
-            pod_payload = _normalize_pod_payload(pod_dict)
-            if bundle_id is not None:
-                pod_payload = stamp_bundle_id(pod_payload, bundle_id)
-            _write_json(root / "pod.json", pod_payload)
 
             # Total = the pod.json step + every selected resource type; drives the
             # progress bar deterministically without a pre-count DB round-trip.
             total = 1 + sum(1 for rtype in _EXPORT_RESOURCE_TYPES if rtype in selected)
             done = 1
             await on_progress(done, total)
+
+            # --- connectors (named by slug by everything below) --------------
+            if "connectors" in selected:
+                await export_connectors(root, uow, ctx=ctx, pod_id=pod_id)
+                done += 1
+                await on_progress(done, total)
+            # Written once the connectors are: a bundle with none stays the
+            # format a reader of 3 reads whole.
+            pod_payload = _normalize_pod_payload(
+                pod_dict, format_version=bundle_format_version(root)
+            )
+            if bundle_id is not None:
+                pod_payload = stamp_bundle_id(pod_payload, bundle_id)
+            _write_json(root / "pod.json", pod_payload)
 
             # --- tables (+ optional data) -------------------------------------
             if "tables" in selected:

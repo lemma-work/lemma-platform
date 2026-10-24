@@ -63,6 +63,9 @@ from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.connectors.services.trigger_service import ConnectorTriggerService
 
 if TYPE_CHECKING:
+    from app.modules.connectors.services.pod_connector_coverage import (
+        PodConnectorCoverageService,
+    )
     from app.modules.connectors.api.schemas.connector_operation_schemas import (
         OperationExecutionResponse,
     )
@@ -256,4 +259,41 @@ ConnectorOperationUseCasesDep = Annotated[
 ]
 PodConnectorServiceDep = Annotated[
     PodConnectorService, Depends(get_pod_connector_service)
+]
+
+
+def get_pod_connector_coverage_service(
+    uow: UoWDep,
+) -> "PodConnectorCoverageService":
+    # Imported here: the adapters reach `channels` and `pod` contracts, which
+    # every process importing a connector route would otherwise pay for.
+    from app.modules.connectors.infrastructure.adapters.member_coverage import (
+        RedisAskLedger,
+        connector_title_through_catalog,
+        member_context_through_authorizer,
+        people_through_contracts,
+        tell_through_channels,
+    )
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodConnectorRepository,
+    )
+    from app.modules.connectors.services.pod_connector_coverage import (
+        PodConnectorCoverageService,
+    )
+
+    return PodConnectorCoverageService(
+        uow=uow,
+        pod_connectors=PodConnectorRepository(uow),
+        people=people_through_contracts,
+        member_context=member_context_through_authorizer,
+        ledger=RedisAskLedger(uow.session),
+        tell=tell_through_channels,
+        connector_title=connector_title_through_catalog(
+            uow, _auth_config_repository(uow)
+        ),
+    )
+
+
+PodConnectorCoverageServiceDep = Annotated[
+    "PodConnectorCoverageService", Depends(get_pod_connector_coverage_service)
 ]

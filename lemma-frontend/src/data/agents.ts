@@ -79,6 +79,40 @@ export interface AgentGrant {
     permissions: string[];
 }
 
+/** What an agent holds over a pod connector: running operations through it.
+ *  Granted by the connector's slug, which is what the agent's tool names. */
+export const CONNECTOR_USE = "connector.use";
+
+function isConnectorGrant(grant: AgentGrant): boolean {
+    return grant.resource.toLowerCase() === "connector";
+}
+
+/** The pod connectors an agent may use, by slug. */
+export function connectorGrantSlugs(grants: AgentGrant[]): string[] {
+    return grants.filter(isConnectorGrant).map((grant) => grant.name);
+}
+
+/** The agent's grants with its connector grants replaced by `slugs`: every
+ *  other grant goes back exactly as it was, because the server replaces the
+ *  whole set and a grant left out is a grant taken away. */
+export function withConnectorGrants(grants: AgentGrant[], slugs: string[]): AgentGrant[] {
+    const kept = grants.filter((grant) => !isConnectorGrant(grant));
+    const unique = [...new Set(slugs.map((slug) => slug.trim()).filter(Boolean))];
+    return [...kept, ...unique.map((slug) => ({ resource: "connector", name: slug, permissions: [CONNECTOR_USE] }))];
+}
+
+/** The body of `PUT /pods/{pod}/agents/{name}/permissions`. Resource types
+ *  go as the API spells them, lowercase. */
+export function grantsBody(grants: AgentGrant[]): { grants: { resource_type: string; resource_name: string; permission_ids: string[] }[] } {
+    return {
+        grants: grants.map((grant) => ({
+            resource_type: grant.resource.toLowerCase(),
+            resource_name: grant.name,
+            permission_ids: grant.permissions,
+        })),
+    };
+}
+
 export interface AgentDetail extends AgentRow {
     description: string;
     instruction: string;

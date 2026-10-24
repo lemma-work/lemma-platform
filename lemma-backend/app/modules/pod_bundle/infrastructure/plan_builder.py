@@ -27,7 +27,12 @@ from lemma_pod_bundle import (
 )
 from lemma_pod_bundle.diff import _order_table_dirs_by_dependency
 from lemma_pod_bundle.jsonc import loads_jsonc
-from lemma_pod_bundle.layout import FILES_MANIFEST, POD_MANIFEST_FILE, TABLE_DATA_FILE
+from lemma_pod_bundle.layout import (
+    FILES_MANIFEST,
+    POD_MANIFEST_FILE,
+    TABLE_DATA_FILE,
+    check_format_version,
+)
 from lemma_pod_bundle.limits import (
     MAX_IMPORT_PLAN_STEPS,
     MAX_RECORDS_PER_TABLE,
@@ -41,14 +46,27 @@ from app.modules.pod_bundle.infrastructure.connector_grants import (
     ConnectorDirectory,
     plan_connector_grants,
 )
+from app.modules.pod_bundle.infrastructure.connector_planning import (
+    ConnectorLookup,
+    NoConnectorLookup,
+    plan_connectors,
+)
+from app.modules.pod_bundle.infrastructure import account_checks
 from app.modules.pod_bundle.infrastructure.grants import has_grants
+from app.modules.pod_bundle.infrastructure.plan_variables import (
+    variables_from_manifest,
+)
+from app.modules.pod_bundle.infrastructure.grant_planning import (
+    GrantConferral,
+    NoGrantConferral,
+    plan_grant_conferral,
+)
 from app.modules.pod_bundle.domain.state import (
     ImportPlan,
     PlanStep,
     StepAction,
     StepKind,
     StepStatus,
-    VariableSpec,
 )
 
 logger = get_logger(__name__)
@@ -214,18 +232,33 @@ class PlanBuilder:
     def __init__(
         self,
         existing: ExistingResources,
-        connectors: ConnectorDirectory | None = None,
+        directory: ConnectorDirectory | None = None,
+        *,
+        connectors: ConnectorLookup | None = None,
+        grants: GrantConferral | None = None,
+        accounts: account_checks.AccountUsability | None = None,
     ):
         self._existing = existing
-        self._connectors = connectors
+        #: Whether the importer could use an account a schedule names.
+        self._accounts = accounts or account_checks.AnyAccountUsable()
+        #: Grants on connectors the pod does not declare (``connector_grants``).
+        self._directory = directory
+        #: The bundle's own ``connectors/`` (``connector_planning``).
+        self._connectors = connectors or NoConnectorLookup()
+        self._grants = grants or NoGrantConferral()
 
     async def build_plan(self, *, bundle_root: Path) -> ImportPlan:
         pod_manifest = self._read_pod_manifest(bundle_root)
-        format_version = int(pod_manifest.get("format_version") or 0)
+        try:
+            format_version = check_format_version(pod_manifest)
+        except ValueError as exc:
+            raise BundleInvalidError(str(exc)) from exc
         bundle_name = pod_manifest.get("name")
 
-        steps: list[PlanStep] = []
-        warnings: list[str] = []
+        # --- connectors first: everything else may name one by slug --------
+        connectors, steps, warnings = await plan_connectors(
+            bundle_root, self._connectors
+        )
 
         # --- tables (FK-ordered) + table_data --------------------------------
         table_dirs = _order_table_dirs_by_dependency(
@@ -303,17 +336,17 @@ class PlanBuilder:
         # --- schedules -------------------------------------------------------
         existing_schedules = await self._existing.schedule_names()
         for d in _resource_subdirs(bundle_root, "schedules"):
-            steps.append(
-                self._create_once_step(
-                    StepKind.SCHEDULE,
-                    d.name,
-                    existing_schedules,
-                    reason=(
-                        "a schedule of this name already exists; importing a "
-                        "bundle does not replace it"
-                    ),
-                )
+            step = self._create_once_step(
+                StepKind.SCHEDULE,
+                d.name,
+                existing_schedules,
+                reason=(
+                    "a schedule of this name already exists; importing a "
+                    "bundle does not replace it"
+                ),
             )
+            payload = load_resource_payload(d, d.name, resource_type="schedules")
+            steps.append(account_checks.noting_deprecated_account(step, payload))
 
         # --- surfaces --------------------------------------------------------
         existing_surfaces = await self._existing.surface_names()
@@ -364,9 +397,14 @@ class PlanBuilder:
                     action=StepAction.UPDATE,
                 )
             )
+        warnings += await plan_grant_conferral(bundle_root, steps, self._grants)
 
-        if self._connectors is not None:
-            warnings += await plan_connector_grants(bundle_root, self._connectors)
+        if self._directory is not None:
+            warnings += await plan_connector_grants(
+                bundle_root,
+                self._directory,
+                bundled={plan.slug for plan in connectors},
+            )
 
         # --- table data (after tables exist) ---------------------------------
         for name, _ in data_steps:
@@ -384,7 +422,15 @@ class PlanBuilder:
         for i, step in enumerate(steps):
             step.index = i
 
-        variables = _variables_from_manifest(pod_manifest)
+        variables = variables_from_manifest(pod_manifest)
+        # An account written into the bundle is known now; one given as an
+        # import variable is checked again when the apply is requested.
+        await account_checks.skip_unusable_accounts(
+            steps,
+            warnings,
+            replacements={v.name: v.default for v in variables if v.default},
+            check=self._accounts,
+        )
 
         return ImportPlan(
             format_version=format_version,
@@ -392,6 +438,7 @@ class PlanBuilder:
             steps=steps,
             variables=variables,
             warnings=warnings,
+            connectors=connectors,
         )
 
     def _simple_step(self, kind: StepKind, name: str, existing: set[str]) -> PlanStep:
@@ -545,51 +592,3 @@ class ServiceExistingResources:
                 exc_info=True,
             )
             return set()
-
-
-def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]:
-    """Turn ``pod.json -> variables`` into typed specs.
-
-    A ``pod_member`` variable auto-resolves to the importing user, and a
-    ``free`` variable (e.g. an app slug) is required only when it has no
-    default.
-
-    An ``account`` variable is deprecated: a surface or schedule names the pod
-    connector it runs through by slug, and the importing pod's connector
-    decides the account. A bundle exported before that still imports -- the
-    variable is offered as an optional account id, which the schedule step
-    turns into the pod connector serving it -- so a template nobody
-    re-exported keeps working."""
-    raw = pod_manifest.get("variables")
-    if not isinstance(raw, dict):
-        return []
-    specs: list[VariableSpec] = []
-    for name, meta in raw.items():
-        vtype = str((meta or {}).get("type") or "").lower()
-        if vtype == "account":
-            specs.append(
-                VariableSpec(
-                    name=str(name),
-                    kind="free",
-                    description=(
-                        "Deprecated: one of your connected accounts. Leave it "
-                        "empty and choose the pod connector after import, or "
-                        "give an account id to use the connector serving it."
-                    ),
-                    required=False,
-                    default=None,
-                )
-            )
-            continue
-        kind = "pod_member" if vtype in ("member", "pod_member") else "free"
-        default = (meta or {}).get("default")
-        specs.append(
-            VariableSpec(
-                name=str(name),
-                kind=kind,  # type: ignore[arg-type]
-                description=(meta or {}).get("description"),
-                required=kind == "free" and default is None,
-                default=str(default) if default is not None else None,
-            )
-        )
-    return specs

@@ -1812,6 +1812,75 @@ def share_account_in_pod(
         emit(state, result)
 
 
+@app.command("pod-share-as")
+def share_account_as_pod_connector(
+    ctx: typer.Context,
+    pod_account: str = typer.Argument(..., help="Your pod account's id."),
+    slug: str = typer.Argument(
+        ..., help="The SHARED pod connector to run as it: pointed at it, or declared."
+    ),
+    purpose: str | None = typer.Option(
+        None, "--purpose", help="A new connector's purpose, shown to members."
+    ),
+) -> None:
+    """Share one of your own pod accounts as the SHARED connector SLUG.
+
+    One step on the server: the account is shared with the pod and the
+    connector pointed at it, or neither happens -- a slug that is taken by a
+    per-member connector, or one you may not change, leaves your account as it
+    was.
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: _pod_connectors(client, s).share_pod_account_as(
+            pod_account, slug, purpose=purpose
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("pod-coverage")
+def pod_connector_coverage(
+    ctx: typer.Context,
+    slug: str = typer.Argument(..., help="A required PER_MEMBER pod connector."),
+) -> None:
+    """Who of the members allowed to use SLUG has connected an account, and who
+    it is still waiting on. Needs pod.connector.manage."""
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx, lambda client, s: _pod_connectors(client, s).connector_coverage(slug)
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("pod-ask")
+def ask_members_to_connect(
+    ctx: typer.Context,
+    slug: str = typer.Argument(..., help="A PER_MEMBER pod connector."),
+    user: list[str] = typer.Option(
+        [], "--user", help="Only this member (user id); repeatable."
+    ),
+) -> None:
+    """Ask the members SLUG is waiting on to connect their own account.
+
+    One line each in their own channel with the pod. A member is asked about
+    one connector at most once a day; those asked already come back as
+    asked_recently. Needs pod.connector.manage.
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: _pod_connectors(client, s).ask_members_to_connect(
+            slug, user_ids=list(user) or None
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
 @app.command("pod-operations")
 def search_pod_connector_operations(
     ctx: typer.Context,

@@ -380,23 +380,35 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                 user_id=state.user_id, pod_id=state.pod_id
             )
             async with context_scope(ctx):
+                from app.modules.pod_bundle.infrastructure.account_checks import (
+                    ServiceAccountUsability,
+                )
                 from app.modules.pod_bundle.infrastructure.connector_grants import (
                     ServiceConnectorDirectory,
+                )
+                from app.modules.pod_bundle.infrastructure.connector_planning import (
+                    ServiceConnectorLookup,
+                )
+                from app.modules.pod_bundle.infrastructure.grant_planning import (
+                    ServiceGrantConferral,
                 )
                 from app.modules.pod_bundle.infrastructure.plan_builder import (
                     PlanBuilder,
                     ServiceExistingResources,
                 )
 
-                existing = ServiceExistingResources(
-                    uow=uow, ctx=ctx, pod_id=state.pod_id, user_id=state.user_id
-                )
-                connectors = ServiceConnectorDirectory(
+                scope = {"uow": uow, "ctx": ctx, "pod_id": state.pod_id}
+                existing = ServiceExistingResources(**scope, user_id=state.user_id)
+                directory = ServiceConnectorDirectory(
                     uow=uow, pod_id=state.pod_id, organization_id=ctx.organization_id
                 )
-                plan = await PlanBuilder(existing, connectors).build_plan(
-                    bundle_root=bundle_root
-                )
+                plan = await PlanBuilder(
+                    existing,
+                    directory,
+                    connectors=ServiceConnectorLookup(**scope, user_id=state.user_id),
+                    grants=ServiceGrantConferral(**scope),
+                    accounts=ServiceAccountUsability(**scope),
+                ).build_plan(bundle_root=bundle_root)
 
     await _raise_if_cancelled(store, import_id)
     state.plan = plan
@@ -677,6 +689,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                                     # applier takes is checkpointed with the step
                                     # and read back by the status endpoint.
                                     warnings=state.warnings,
+                                    connector_choices=state.connector_choices,
                                 )
                                 await applier.apply_step(step)
                                 await _raise_if_cancelled(store, import_id)

@@ -41,6 +41,7 @@ from lemma_pod_bundle.layout import (
     normalize_file_folders,
     FILES_MANIFEST,
     FORMAT_VERSION as FORMAT_VERSION,
+    FORMAT_VERSION_WITHOUT_CONNECTORS as FORMAT_VERSION_WITHOUT_CONNECTORS,
     JSON_FILE_REF_KEY as JSON_FILE_REF_KEY,
     POD_MEMBER_TOKEN,
     RESOURCE_DIR_ALIASES as RESOURCE_DIR_ALIASES,
@@ -58,8 +59,10 @@ from lemma_pod_bundle.layout import (
     _record_export_contents,
     _resolve_file_refs as _resolve_file_refs,
     _resource_manifest_path,
+    check_format_version,
     _sanitize_resource_name,
     _write_json,
+    bundle_format_version,
     load_resource_payload,
     normalize_resource_dir_name,
 )
@@ -98,6 +101,7 @@ from lemma_pod_bundle.portability import (
     _tokenize_ref_fields as _tokenize_ref_fields,
 )
 from lemma_pod_bundle.apply_fields import (
+    GRANT_HOLDER_DIRS,
     SCHEDULE_APPLY_FIELDS,
     SURFACE_APPLY_FIELDS,
     is_past_one_time_schedule,
@@ -105,6 +109,12 @@ from lemma_pod_bundle.apply_fields import (
 )
 
 from lemma_sdk import Lemma
+
+from .pod_bundle_connectors import (
+    declare_pod_connectors,
+    export_pod_connectors,
+    plan_pod_connectors,
+)
 from lemma_sdk.errors import LemmaAPIError
 from lemma_sdk.openapi_client.models.add_column_request import AddColumnRequest
 from lemma_sdk.openapi_client.models.agent_permissions_replace_request import (
@@ -974,7 +984,20 @@ def export_pod_bundle(
     bundle_root = output_dir / pod_name
     _ensure_clean_dir(bundle_root, force=force)
     _ensure_resource_dirs(bundle_root)
-    _write_json(bundle_root / "pod.json", _normalize_pod_payload(pod))
+
+    # Connectors first: everything below may name one by slug. Each is the
+    # catalog connector and the mode -- never the installation or the account.
+    connectors: list[dict[str, Any]] = []
+    if should_export("connectors"):
+        connectors = export_pod_connectors(
+            pod_sdk, bundle_root, should_export_name=should_export_name
+        )
+    # Written once the connectors are: a bundle with none stays the format a
+    # reader of 3 reads whole.
+    _write_json(
+        bundle_root / "pod.json",
+        _normalize_pod_payload(pod, format_version=bundle_format_version(bundle_root)),
+    )
 
     tables: list[dict[str, Any]] = []
     if should_export("tables"):
@@ -1191,6 +1214,7 @@ def export_pod_bundle(
         "warnings": data_table_warnings,
         "variables": sorted(variables.keys()),
         "counts": {
+            "connectors": len(connectors),
             "tables": len(tables),
             "functions": len(functions),
             "agents": len(agents),
@@ -1727,8 +1751,8 @@ def _validate_grant_references(
     resource that neither the bundle creates nor the pod already has — so a
     dangling grant never leaves a half-imported pod (grants apply last).
 
-    A ``connector`` grant names a pod connector by slug, so the pod has to
-    declare it before the import (bundles do not declare connectors yet). A
+    A ``connector`` grant names a pod connector by slug: the bundle declares
+    it (``connectors/<slug>/``, applied first) or the pod already does. A
     ``connector_account`` grant is never part of a bundle: a shared account is
     used through a pod connector, and only its owner shares it. A grant still
     holding a ``${var}`` placeholder is left alone — the apply step resolves or
@@ -1787,16 +1811,28 @@ def _validate_grant_references(
         known_slugs = declared_connectors[0]
         return known_slugs is None or slug in known_slugs
 
-    for kind in ("agents", "functions"):
+    bundled_connectors = {d.name for d in _resource_dirs(source_dir, "connectors")}
+
+    for kind in GRANT_HOLDER_DIRS:
         for resource_dir in _resource_dirs(source_dir, kind):
             try:
-                _, permissions = _split_resource_permissions_payload(
-                    load_resource_payload(
-                        resource_dir, resource_dir.name, resource_type=kind
-                    )
+                payload = load_resource_payload(
+                    resource_dir, resource_dir.name, resource_type=kind
                 )
             except Exception:
                 continue  # payload errors are already reported elsewhere
+            try:
+                _, permissions = _split_resource_permissions_payload(payload)
+            except ValueError as exc:
+                # A malformed grant is reported nowhere else, and would fail
+                # the apply.
+                issues.append(
+                    BundleValidationIssue(
+                        path=str(resource_dir / f"{resource_dir.name}.json"),
+                        message=str(exc),
+                    )
+                )
+                continue
             for grant in (permissions or {}).get("grants", []):
                 if not isinstance(grant, dict):
                     continue
@@ -1821,9 +1857,10 @@ def _validate_grant_references(
                         "`connector:<slug>:use` instead."
                     )
                 elif rtype == "connector":
-                    found = pod_connector_declared(rname)
+                    found = rname in bundled_connectors or pod_connector_declared(rname)
                     detail = (
-                        "Declare it in the pod first (`lemma connectors pod-add "
+                        f"Add `connectors/{rname}/{rname}.json` to the bundle, or "
+                        "declare it in the pod first (`lemma connectors pod-add "
                         f"{rname} <installation> --mode PER_MEMBER|SHARED`)."
                     )
                 elif rtype in _LISTERS:
@@ -2363,6 +2400,9 @@ def import_pod_bundle(
     with_files: bool = False,
     variables: dict[str, str] | None = None,
     set_pod_meta: bool = False,
+    connector_installations: dict[str, str] | None = None,
+    share_accounts: dict[str, str] | None = None,
+    create_installations: bool = False,
 ) -> dict[str, Any]:
     if not source_dir.exists():
         raise ValueError(f"Source directory does not exist: {source_dir}")
@@ -2381,9 +2421,17 @@ def import_pod_bundle(
                 with_files=with_files,
                 variables=variables,
                 set_pod_meta=set_pod_meta,
+                connector_installations=connector_installations,
+                share_accounts=share_accounts,
+                create_installations=create_installations,
             )
             result["source_dir"] = str(source_dir)
             return result
+
+    # A newer format than this CLI reads is refused before anything is asked
+    # of the server: reading it as this one would skip what it added.
+    if (source_dir / "pod.json").is_file():
+        check_format_version(_read_json(source_dir / "pod.json"))
 
     # A manifest-aware bundle records whether it carries table rows / file bytes;
     # honor that so re-importing it seeds them without re-passing the flags.
@@ -2397,6 +2445,28 @@ def import_pod_bundle(
         source_dir=source_dir,
         upsert=upsert,
     )
+    # Every bundled connector, and every choice made for one, is checked before
+    # anything is written: a connector that cannot be declared would leave
+    # whatever names its slug bound to nothing.
+    connector_plan: tuple[Any, list[Any], list[str]] | None = None
+    try:
+        connector_plan = plan_pod_connectors(
+            client,
+            pod_id=pod_id,
+            source_dir=source_dir,
+            installations=connector_installations,
+            share_accounts=share_accounts,
+            create_installations=create_installations,
+        )
+    except ValueError as exc:
+        issues.append(
+            BundleValidationIssue(path=str(source_dir / "connectors"), message=str(exc))
+        )
+    else:
+        _, planned_connectors, kept_connectors = connector_plan
+        summary["connectors"] = [
+            f"created:{item.connector.slug}" for item in planned_connectors
+        ] + [f"kept:{slug}" for slug in kept_connectors]
     if dry_run:
         return {
             "ok": len(issues) == 0,
@@ -2432,6 +2502,17 @@ def import_pod_bundle(
             _progress_done("pod", pod_id, "updated metadata")
 
     summary = {key: [] for key in RESOURCE_DIRS}
+
+    assert connector_plan is not None, "a failed connector plan is an issue above"
+    connector_sdk, planned_connectors, kept_connectors = connector_plan
+    summary["connectors"].extend(
+        declare_pod_connectors(
+            connector_sdk,
+            planned_connectors,
+            on_notice=lambda note: console.print(f"[yellow]connector[/yellow] {note}"),
+        )
+    )
+    summary["connectors"].extend(f"kept:{slug}" for slug in kept_connectors)
 
     existing_tables = _build_existing_map(list_items(pod_sdk.tables.list(limit=1000)))
     for resource_dir in _order_table_dirs_by_dependency(
