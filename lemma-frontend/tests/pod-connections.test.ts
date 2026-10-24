@@ -411,7 +411,7 @@ test("turning sandbox use off returns the account as saved, with the server's no
 }));
 
 test("editors declare, change and remove connectors; owners share and withdraw accounts", (context) => withApi(async () => {
-    const requests = await recorded(context, (path, method, body) => method === "DELETE"
+    const requests = await recorded(context, (_path, method, body) => method === "DELETE"
         ? { status: 204, body: null }
         : { body: { ...body, id: "x", pod_id: "p1", slug: "gmail", mode: "PER_MEMBER", status: "READY", required: true, visibility: "POD", created_at: "", updated_at: "",
             account_id: "acc", auth_config_id: "ac", owner_user_id: "me", is_member_default: true, source: "MANUAL" } });
