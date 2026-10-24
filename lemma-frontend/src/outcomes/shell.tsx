@@ -7,6 +7,7 @@ import { source, type Org } from "@/data";
 import { lemma } from "@/session/client";
 import { key } from "@/session/storage";
 import { readAddress } from "@/shell/address";
+import { useAnalyticsIdentity } from "@/site/analytics/identity";
 import { acknowledge, readComposeRequest } from "@/thread/compose-bridge";
 import { gather } from "@/workflow/waiting-inbox";
 import { useConversationAsks } from "@/thread/use-conversation-asks";
@@ -152,6 +153,7 @@ export function OutcomesShell() {
         enabled: source.label !== "sample",
         staleTime: 5 * 60_000,
     });
+    useAnalyticsIdentity(source.label === "sample" ? null : { userId: me.data?.id, organizationId: orgId, podId: podOfView(view) });
 
     const pods = useQuery({
         queryKey: ["pods", orgId],

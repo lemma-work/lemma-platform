@@ -21,6 +21,7 @@ import { Mark } from "@/shell/mark";
 import { personalNameFor } from "@/org/arrival";
 import { forgetInstall, markInstallArrival, rememberInstall } from "./pending-install";
 import type { Pod } from "@/data/types";
+import { captureEvent } from "@/site/analytics/client";
 import type {
     ConnectorPlan,
     ImportStatusResponse,
@@ -304,6 +305,7 @@ function Journey({ repo, owner, title }: Props) {
     }, [finished]);
 
     async function review() {
+        captureEvent("import.started", { is_remix: false });
         setBusy(true);
         clearError();
         try {

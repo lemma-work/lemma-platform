@@ -95,7 +95,7 @@ test("old links reach their resource rather than the default workspace", () => {
 test("analytics never exports private workspace paths or link query payloads", () => {
   assert.equal(
     toRouteTemplate("/t/private-pod/file/private/report.md"),
-    "/t/[[...podId]]",
+    "/t/[pod]/file/[...path]",
   );
   assert.equal(toRouteTemplate("/d/private-share-code"), "/d/[code]");
   /* The notifications page is gone: the inbox is under the channels now. */

@@ -1,6 +1,6 @@
 import { LoadingRows } from "@/ui/loading";
 import { WorkspaceLoading } from "@/shell/workspace-loading";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Invitation, Org } from "@/data";
@@ -11,6 +11,10 @@ import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNam
 import { isLocalDeployment } from "@/site/config";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
 import { ResumeInstall } from "@/site/import/resume-install";
+import { captureEvent } from "@/site/analytics/client";
+
+/** Which way somebody got into an organization, for `onboarding.arrived`. */
+type ArrivalRoute = "invite" | "domain" | "new_org";
 
 /** The first morning.
  *
@@ -50,12 +54,13 @@ export function ArrivalView({
     const [busy, setBusy] = useState<string | null>(null);
     const [problem, setProblem] = useState<string | null>(null);
     const enter = useMutation({
-        mutationFn: async (act: { id: string; run: () => Promise<unknown>; land: string | null }) => {
+        mutationFn: async (act: { id: string; route: ArrivalRoute; run: () => Promise<unknown>; land: string | null }) => {
             setBusy(act.id);
             await act.run();
             return act.land;
         },
-        onSuccess: (land) => {
+        onSuccess: (land, act) => {
+            captureEvent("onboarding.arrived", { route: act.route });
             onEntered(land ?? null);
             return queryClient.invalidateQueries({ queryKey: ["orgs"] });
         },
@@ -64,9 +69,9 @@ export function ArrivalView({
             setProblem(failure instanceof Error ? failure.message : "Couldn’t complete organization setup. Try again.");
         },
     });
-    const go = (id: string, run: () => Promise<unknown>, land?: string | null) => {
+    const go = (id: string, route: ArrivalRoute, run: () => Promise<unknown>, land?: string | null) => {
         setProblem(null);
-        enter.mutate({ id, run, land: land ?? null });
+        enter.mutate({ id, route, run, land: land ?? null });
     };
 
     const waiting = invitations.isPending || suggested.isPending;
@@ -89,6 +94,16 @@ export function ArrivalView({
         () => (suggested.data ?? []).filter((org) => !invites.some((invite) => invite.orgId === org.id)),
         [suggested.data, invites],
     );
+
+    /* What the first screen offered, once its lists are in: somebody who sees
+       an invitation and leaves makes no request, and is the person this screen
+       most needs to keep. */
+    const offered = useRef(false);
+    useEffect(() => {
+        if (offered.current || waiting || unread) return;
+        offered.current = true;
+        captureEvent("onboarding.arrival_viewed", { invited: invites.length > 0, domain_match: matches.length > 0 });
+    }, [waiting, unread, invites.length, matches.length]);
 
     return (
         <div className="arrival-page">
@@ -135,7 +150,7 @@ export function ArrivalView({
                                 key={invite.id}
                                 invite={invite}
                                 busy={busy === invite.id}
-                                onAccept={() => go(invite.id, () => source.acceptInvitation(invite.id), invite.podId)}
+                                onAccept={() => go(invite.id, "invite", () => source.acceptInvitation(invite.id), invite.podId)}
                             />
                         ))}
 
@@ -145,7 +160,7 @@ export function ArrivalView({
                                 org={org}
                                 domain={domainOf(email)}
                                 busy={busy === org.id}
-                                onJoin={() => go(org.id, () => source.joinOrg(org.id))}
+                                onJoin={() => go(org.id, "domain", () => source.joinOrg(org.id))}
                             />
                         ))}
 
@@ -169,7 +184,7 @@ export function ArrivalView({
                                with one person in it. */
                             secondary={invites.length > 0 || matches.length > 0 || unread}
                             busy={busy === "make"}
-                            onMake={(wanted) => go("make", () => source.createOrg(wanted))}
+                            onMake={(wanted) => go("make", "new_org", () => source.createOrg(wanted))}
                         />
 
                         {problem && <p className="arrival__problem">{problem}</p>}

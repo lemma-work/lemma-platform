@@ -13,6 +13,7 @@ import {
 } from "@/site/share/contact-card";
 import { pageMetadata } from "@/site/metadata";
 import { absoluteUrl } from "@/site/seo/site-url";
+import { ContactChannelLink, SaveContactLink, ShareViewed } from "@/site/share/share-analytics";
 type Props = {
   params: Promise<{ kind: string; path: string[] }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -58,21 +59,19 @@ export default async function Page({ params, searchParams }: Props) {
       title={name}
       description={contact?.note || "A shared resource on Lemma."}
     >
+      <ShareViewed kind={p.kind} />
       {contact ? (
         <>
           <p>{contact.org}</p>
           <div className="site-actions">
             {contactChannels(contact).map((c) => (
-              <a className="btn" key={c.key} href={c.href}>
+              <ContactChannelLink key={c.key} channel={c.key} href={c.href}>
                 {c.label}
-              </a>
+              </ContactChannelLink>
             ))}
-            <a
-              className="btn btn--primary"
-              href={contactCardDownloadPath(p.path, search)}
-            >
+            <SaveContactLink href={contactCardDownloadPath(p.path, search)}>
               Save contact
-            </a>
+            </SaveContactLink>
           </div>
           <QRCode
             value={

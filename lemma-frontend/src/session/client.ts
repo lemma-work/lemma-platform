@@ -222,8 +222,12 @@ export function lemma(podId?: string): LemmaClient {
     const url = configured ? apiUrl() : NO_ORIGIN;
     const auth = configured ? authUrl() : NO_ORIGIN + "/auth";
     /* `lemma-desktop` inside the desktop app, hosted workspace or local: the
-       origin exists to tell a person at the app from one in a browser. */
-    base ??= new LemmaClient({ apiUrl: url, authUrl: auth, client: isDesktop() ? "lemma-desktop" : "lemma-app" });
+       origin exists to tell a person at the app from one in a browser. The
+       browser workspace is `lemma-web`. `lemma-app` is a deployed pod app's
+       name for itself (`runtime_config.py`), and the backend counts it as
+       the APP origin, so the workspace using it put every person's actions
+       there and left WEB unreachable. */
+    base ??= new LemmaClient({ apiUrl: url, authUrl: auth, client: isDesktop() ? "lemma-desktop" : "lemma-web" });
     if (!podId) return base;
 
     const existing = scoped.get(podId);

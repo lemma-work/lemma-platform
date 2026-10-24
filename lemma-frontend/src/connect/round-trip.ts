@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { isDesktop } from "@/desktop/bridge";
 import { holdTab, openExternal } from "@/desktop/open-external";
+import { captureEvent } from "@/site/analytics/client";
 
 /** Getting somebody back from a provider's consent page, and hearing how it went.
  *
@@ -181,6 +182,9 @@ export function openAuthorization(url: string, what: string): boolean {
        the person opens by hand, and that is still a round trip. */
     sentAt = Date.now();
     rememberWaiting(sentAt);
+    /* The top of the connect funnel, wherever it was started from: what comes
+       back is the backend's `connector.connected`. */
+    captureEvent("connector.authorization_opened");
     if (isDesktop()) {
         openExternal(url);
         return true;

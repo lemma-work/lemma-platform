@@ -7,6 +7,7 @@ import { hasApiUrl } from "@/session/client";
 import { source as data } from "@/data";
 import { afterNewOrganization, newOrganizationLink } from "@/auth/redirects";
 import type { ActionProps } from "./action-host";
+import { captureEvent } from "@/site/analytics/client";
 export function Actions(props: ActionProps) {
     const session = useSession();
     if (!hasApiUrl() || data.label === "sample")
@@ -72,6 +73,7 @@ function Remix({ source }: ActionProps) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     async function prepare() {
+        captureEvent("import.started", { is_remix: true });
         setBusy(true);
         setError("");
         try {
