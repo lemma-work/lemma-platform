@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         AgentHosts,
         WebLogins,
         Machines,
+        MachineConnections,
         BoundConnectors,
         BoundOrg,
         BoundOrgRuntime,
@@ -138,6 +139,16 @@ class Lemma:
         from .resources import Machines
 
         return Machines(self._transport, pod_id=self.default_pod_id)
+
+    def machine_connections(self) -> "MachineConnections":
+        """Machines you joined with ``lemma machine connect``.
+
+        Per person, like a paired computer: the person who approved a machine
+        owns it.
+        """
+        from .resources import MachineConnections
+
+        return MachineConnections(self._transport)
 
     @cached_property
     def org_runtime(self) -> "BoundOrgRuntime":

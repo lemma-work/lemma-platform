@@ -10,6 +10,11 @@ instead; guestd's end reads the port wanted, answers `ok`, and splices.
 
 Only addresses the guest itself reported are sent this way, so Docker, E2B and
 anything else keep their own routes.
+
+A connected machine's addresses (``<id>.machine.lemma.internal``) are routed
+here too, onto a stream on the machine's link
+(``services/machine_link/network``), so the same transport and socket serve
+every caller that may address one.
 """
 
 from __future__ import annotations
@@ -92,10 +97,23 @@ async def _handshake(read, write, port: int) -> None:
         raise TunnelRefused(f"the Desktop guest could not reach port {port}: {reason}")
 
 
-class _TunnelNetworkBackend(httpcore.AsyncNetworkBackend):
-    """`httpcore`'s network backend, with guest addresses sent through the tunnel."""
+def _machines_enabled() -> bool:
+    return workspace_settings.machine_connections_enabled
 
-    def __init__(self, path: str) -> None:
+
+def _is_machine(host: str | None) -> bool:
+    from app.modules.workspace.services.machine_link.network import (
+        connection_for_host,
+    )
+
+    return connection_for_host(host) is not None
+
+
+class _TunnelNetworkBackend(httpcore.AsyncNetworkBackend):
+    """`httpcore`'s network backend, with guest addresses sent through the
+    tunnel and connected machines' addresses over their links."""
+
+    def __init__(self, path: str | None) -> None:
         self._path = path
         self._network = httpcore.AnyIOBackend()
 
@@ -107,7 +125,13 @@ class _TunnelNetworkBackend(httpcore.AsyncNetworkBackend):
         local_address: str | None = None,
         socket_options=None,
     ) -> httpcore.AsyncNetworkStream:
-        if host not in _guest_hosts:
+        if _is_machine(host):
+            from app.modules.workspace.services.machine_link.network import (
+                connect_machine,
+            )
+
+            return await connect_machine(host, port, timeout)
+        if self._path is None or host not in _guest_hosts:
             return await self._network.connect_tcp(
                 host,
                 port,
@@ -140,7 +164,7 @@ class _TunnelNetworkBackend(httpcore.AsyncNetworkBackend):
 class _TunnelTransport(httpx.AsyncHTTPTransport):
     """`httpx`'s transport over a connection pool that knows the tunnel."""
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str | None) -> None:
         super().__init__()
         self._pool = httpcore.AsyncConnectionPool(
             ssl_context=httpx.create_ssl_context(),
@@ -158,10 +182,12 @@ def sandbox_transport() -> httpx.AsyncBaseTransport | None:
     `httpx.AsyncClient(transport=...)` and gets httpx's own default otherwise.
     """
     path = tunnel_socket()
-    return transport_for(path) if path is not None else None
+    if path is None and not _machines_enabled():
+        return None
+    return transport_for(path)
 
 
-def transport_for(socket_path: str) -> httpx.AsyncBaseTransport:
+def transport_for(socket_path: str | None) -> httpx.AsyncBaseTransport:
     """A transport sending guest addresses through the tunnel at `socket_path`."""
     return _TunnelTransport(socket_path)
 
@@ -177,10 +203,16 @@ async def tunneled_socket(
     """
     parts = urlsplit(url)
     host = parts.hostname
+    port = parts.port or (443 if parts.scheme in ("https", "wss") else 80)
+    if _is_machine(host):
+        from app.modules.workspace.services.machine_link.network import (
+            machine_socket,
+        )
+
+        return await machine_socket(host, port)
     path = socket_path if socket_path is not None else tunnel_socket()
     if path is None or host is None or host not in _guest_hosts:
         return None
-    port = parts.port or (443 if parts.scheme in ("https", "wss") else 80)
     loop = asyncio.get_running_loop()
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.setblocking(False)

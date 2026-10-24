@@ -2799,6 +2799,48 @@
         "title": "ApprovalDecisionResponse",
         "type": "object"
       },
+      "ApprovePairingRequest": {
+        "properties": {
+          "code": {
+            "description": "The code it shows.",
+            "maxLength": 32,
+            "minLength": 6,
+            "title": "Code",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its name in refs; defaults to one made from its own.",
+            "title": "Name"
+          },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Share it into this pod (editors and admins).",
+            "title": "Pod Id"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "ApprovePairingRequest",
+        "type": "object"
+      },
       "AskMembersRequest": {
         "properties": {
           "user_ids": {
@@ -13527,6 +13569,137 @@
         "title": "MachineCapabilitiesModel",
         "type": "object"
       },
+      "MachineConnectionList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MachineConnectionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "MachineConnectionList",
+        "type": "object"
+      },
+      "MachineConnectionResponse": {
+        "properties": {
+          "capabilities": {
+            "additionalProperties": true,
+            "description": "What the machine reported it can do.",
+            "title": "Capabilities",
+            "type": "object"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "display_name": {
+            "description": "What the machine called itself.",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "home": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where Lemma's files live on the machine.",
+            "title": "Home"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "mode": {
+            "description": "`host` (as your OS user) or `image` (Docker).",
+            "title": "Mode",
+            "type": "string"
+          },
+          "name": {
+            "description": "How refs name it: `mine:<name>`.",
+            "title": "Name",
+            "type": "string"
+          },
+          "online": {
+            "description": "Whether its link is up right now.",
+            "title": "Online",
+            "type": "boolean"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pod it is shared into.",
+            "title": "Pod Id"
+          },
+          "runtime_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Version"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "display_name",
+          "mode",
+          "online"
+        ],
+        "title": "MachineConnectionResponse",
+        "type": "object"
+      },
       "MachineFileEntry": {
         "properties": {
           "kind": {
@@ -16328,6 +16501,41 @@
           "created_at"
         ],
         "title": "PendingInteractionResponse",
+        "type": "object"
+      },
+      "PendingPairingResponse": {
+        "properties": {
+          "approved": {
+            "title": "Approved",
+            "type": "boolean"
+          },
+          "display_name": {
+            "description": "What the machine asking calls itself.",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name",
+          "mode",
+          "platform",
+          "expires_at",
+          "approved"
+        ],
+        "title": "PendingPairingResponse",
         "type": "object"
       },
       "PendingSignInResponse": {
@@ -28151,6 +28359,180 @@
           "resource": "icon",
           "result": "entity",
           "verb": "upload"
+        }
+      }
+    },
+    "/machine-connections": {
+      "get": {
+        "operationId": "machine_connections.list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineConnectionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List your connected machines",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine_connections",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/machine-connections/pairings/{code}": {
+      "get": {
+        "operationId": "machine_connections.pairing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingPairingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What a pairing code asks for",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine_connections",
+          "result": "entity",
+          "verb": "pairing"
+        }
+      }
+    },
+    "/machine-connections/{connection_id}": {
+      "delete": {
+        "operationId": "machine_connections.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disconnect a machine",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine_connections"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine_connections",
+          "result": "void",
+          "verb": "delete"
+        }
+      }
+    },
+    "/machine-connections:pair": {
+      "post": {
+        "operationId": "machine_connections.pair",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovePairingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineConnectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve a machine's pairing code",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine_connections"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine_connections",
+          "result": "entity",
+          "verb": "pair"
         }
       }
     },

@@ -397,6 +397,10 @@ def workspace_template():
             "/app/sandbox_runtime/browser_relay",
         )
         .copy(
+            "lemma-backend/sandbox_runtime/machine_link",
+            "/app/sandbox_runtime/machine_link",
+        )
+        .copy(
             "lemma-backend/sandbox_runtime/workspace",
             "/app/sandbox_runtime/workspace",
         )

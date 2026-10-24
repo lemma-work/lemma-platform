@@ -11312,6 +11312,331 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/MachinesService.ts
+  var MachinesService = class {
+    /**
+     * List your connected machines
+     * @returns MachineConnectionList Successful Response
+     * @throws ApiError
+     */
+    static machineConnectionsList() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/machine-connections"
+      });
+    }
+    /**
+     * What a pairing code asks for
+     * @param code
+     * @returns PendingPairingResponse Successful Response
+     * @throws ApiError
+     */
+    static machineConnectionsPairing(code) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/machine-connections/pairings/{code}",
+        path: {
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Disconnect a machine
+     * @param connectionId
+     * @returns void
+     * @throws ApiError
+     */
+    static machineConnectionsDelete(connectionId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/machine-connections/{connection_id}",
+        path: {
+          "connection_id": connectionId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Approve a machine's pairing code
+     * @param requestBody
+     * @returns MachineConnectionResponse Successful Response
+     * @throws ApiError
+     */
+    static machineConnectionsPair(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/machine-connections:pair",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List the machines you can see
+     * @param podId Also list this pod's machines.
+     * @returns MachineListResponse Successful Response
+     * @throws ApiError
+     */
+    static machineList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/machines",
+        query: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get one machine
+     * @param ref Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.
+     * @returns MachineResponse Successful Response
+     * @throws ApiError
+     */
+    static machineGet(ref) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/machines/{ref}",
+        path: {
+          "ref": ref
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Whether a machine is ready, without waking it
+     * @param ref Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.
+     * @returns MachineStartupResponse Successful Response
+     * @throws ApiError
+     */
+    static machineStartup(ref) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/machines/{ref}/startup",
+        path: {
+          "ref": ref
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Stop a machine's compute, keeping its disk
+     * @param ref Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.
+     * @returns MachineResponse Successful Response
+     * @throws ApiError
+     */
+    static machineRelease(ref) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/machines/{ref}:release",
+        path: {
+          "ref": ref
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Clean a machine by scope
+     * @param ref
+     * @param requestBody
+     * @returns ResetResponse Successful Response
+     * @throws ApiError
+     */
+    static machineReset(ref, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/machines/{ref}:reset",
+        path: {
+          "ref": ref
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Stop a machine and start it again
+     * @param ref Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.
+     * @returns MachineResponse Successful Response
+     * @throws ApiError
+     */
+    static machineRestart(ref) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/machines/{ref}:restart",
+        path: {
+          "ref": ref
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Which machines you or a pod may create
+     * @param podId
+     * @returns MachinePolicyResponse Successful Response
+     * @throws ApiError
+     */
+    static machinePolicy(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/machines:policy",
+        query: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create a machine the pod's agents share
+     * @param podId
+     * @param requestBody
+     * @returns MachineResponse Successful Response
+     * @throws ApiError
+     */
+    static machinePodCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/machines",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Delete a pod machine and its disk
+     * @param podId
+     * @param name
+     * @returns void
+     * @throws ApiError
+     */
+    static machinePodDelete(podId, name) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/machines/{name}",
+        path: {
+          "pod_id": podId,
+          "name": name
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Rename, resize or change who sees a pod machine
+     * @param podId
+     * @param name
+     * @param requestBody
+     * @returns MachineResponse Successful Response
+     * @throws ApiError
+     */
+    static machinePodUpdate(podId, name, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/machines/{name}",
+        path: {
+          "pod_id": podId,
+          "name": name
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Who is granted a pod machine
+     * @param podId
+     * @param name
+     * @returns MachineGrantsModel Successful Response
+     * @throws ApiError
+     */
+    static machinePodGrantsGet(podId, name) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/machines/{name}/grants",
+        path: {
+          "pod_id": podId,
+          "name": name
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Replace who is granted a pod machine
+     * @param podId
+     * @param name
+     * @param requestBody
+     * @returns MachineGrantsModel Successful Response
+     * @throws ApiError
+     */
+    static machinePodGrantsSet(podId, name, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/machines/{name}/grants",
+        path: {
+          "pod_id": podId,
+          "name": name
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/machine-connections.ts
+  var MachineConnectionsNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    list() {
+      return this.client.request(() => MachinesService.machineConnectionsList());
+    }
+    /** What the machine showing `code` calls itself, before approving it. */
+    pairing(code) {
+      return this.client.request(() => MachinesService.machineConnectionsPairing(code));
+    }
+    pair(request2) {
+      return this.client.request(() => MachinesService.machineConnectionsPair(request2));
+    }
+    /** Disconnect a machine: its secret stops working and its link closes. */
+    delete(connectionId) {
+      return this.client.request(() => MachinesService.machineConnectionsDelete(connectionId));
+    }
+  };
+
   // src/openapi_client/services/AgentRuntimeService.ts
   var AgentRuntimeService = class {
     /**
@@ -22456,6 +22781,7 @@ var LemmaClient = (() => {
       __publicField(this, "agents");
       __publicField(this, "agentRuntime");
       __publicField(this, "agentHost");
+      __publicField(this, "machineConnections");
       __publicField(this, "conversations");
       __publicField(this, "workflows");
       __publicField(this, "apps");
@@ -22520,6 +22846,7 @@ var LemmaClient = (() => {
       this.agents = new AgentsNamespace(this._generated, podIdFn, () => this.conversations);
       this.agentRuntime = new AgentRuntimeNamespace(this._generated);
       this.agentHost = new AgentHostNamespace(this._generated);
+      this.machineConnections = new MachineConnectionsNamespace(this._generated);
       this.conversations = new ConversationsNamespace(this._http, podIdFn);
       this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);

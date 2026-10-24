@@ -31,7 +31,9 @@ Five tables arrive with it:
 `agents.machine` is the ref an agent's commands run on, unset meaning the
 default machine of whoever the run acts for.
 
-`TABLES` is each table's DDL exactly as the models compile it, pinned to them
+Connected machines add `machine_connection_pairings` in their own section.
+
+`TABLES` and `CONNECTED_MACHINE_TABLES` are each table's DDL exactly as the models compile it, pinned to them
 by ``workspace/tests/unit/test_machine_ddl_matches_models``.
 
 Revision ID: 0064_machines
@@ -72,7 +74,7 @@ AGENT_COLUMN = "machine VARCHAR(200)"
 
 TABLES: dict[str, tuple[str, ...]] = {
     "machine_connections": (
-        "CREATE TABLE machine_connections ( user_id UUID NOT NULL, organization_id UUID, pod_id UUID, name TEXT NOT NULL, display_name TEXT NOT NULL, mode TEXT NOT NULL, secret_hash TEXT NOT NULL, capabilities JSONB DEFAULT '{}'::jsonb NOT NULL, home TEXT NOT NULL, runtime_version TEXT, link_generation BIGINT DEFAULT 0 NOT NULL, last_seen_at TIMESTAMP WITH TIME ZONE, revoked_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT ck_machine_connections_mode CHECK (mode IN ('host', 'image')), CONSTRAINT uq_machine_connections_secret_hash UNIQUE (secret_hash), FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE )",
+        "CREATE TABLE machine_connections ( user_id UUID NOT NULL, organization_id UUID, pod_id UUID, name TEXT NOT NULL, display_name TEXT NOT NULL, mode TEXT NOT NULL, secret_hash TEXT, installation_id TEXT, platform TEXT, capabilities JSONB DEFAULT '{}'::jsonb NOT NULL, home TEXT, runtime_version TEXT, link_generation BIGINT DEFAULT 0 NOT NULL, last_seen_at TIMESTAMP WITH TIME ZONE, revoked_at TIMESTAMP WITH TIME ZONE, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, updated_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT ck_machine_connections_mode CHECK (mode IN ('host', 'image')), CONSTRAINT uq_machine_connections_secret_hash UNIQUE (secret_hash), FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE )",
         "CREATE UNIQUE INDEX uq_machine_connections_live_name ON machine_connections (user_id, name) WHERE revoked_at IS NULL",
     ),
     "machine_previews": (
@@ -119,12 +121,43 @@ def _downgrade_machines() -> None:
         op.execute(f"ALTER TABLE sandboxes DROP COLUMN {column.split()[0]}")
 
 
+# --- connected machines -------------------------------------------------------
+#
+# A person's own laptop or VM, joined with `lemma machine connect`
+# (docs/architecture/connected-machines.md). `machine_connections` above is
+# theirs: `secret_hash` is null between the person's approval and the machine's
+# claim, when the secret is minted, and `home` until the machine first says
+# where it is. `machine_connection_pairings` holds a code a machine asked for
+# until it claims it or it expires: the hash of the code and of the claim key
+# only the machine holds; approving fills `connection_id`.
+
+CONNECTED_MACHINE_TABLES: dict[str, tuple[str, ...]] = {
+    "machine_connection_pairings": (
+        "CREATE TABLE machine_connection_pairings ( code_hash VARCHAR(64) NOT NULL, claim_key_hash VARCHAR(64) NOT NULL, display_name VARCHAR(255) NOT NULL, mode VARCHAR(16) NOT NULL, platform VARCHAR(32) NOT NULL, expires_at TIMESTAMP WITH TIME ZONE NOT NULL, connection_id UUID, id UUID NOT NULL, created_at TIMESTAMP WITH TIME ZONE NOT NULL, PRIMARY KEY (id), CONSTRAINT uq_machine_connection_pairings_code UNIQUE (code_hash), FOREIGN KEY(connection_id) REFERENCES machine_connections (id) ON DELETE CASCADE )",
+        "CREATE INDEX ix_machine_connection_pairings_expires_at ON machine_connection_pairings (expires_at)",
+    ),
+}
+
+
+def _upgrade_connected_machines() -> None:
+    for statements in CONNECTED_MACHINE_TABLES.values():
+        for statement in statements:
+            op.execute(statement)
+
+
+def _downgrade_connected_machines() -> None:
+    for table in reversed(CONNECTED_MACHINE_TABLES):
+        op.execute(f"DROP TABLE {table}")
+
+
 # --- every part ---------------------------------------------------------------
 
 
 def upgrade() -> None:
     _upgrade_machines()
+    _upgrade_connected_machines()
 
 
 def downgrade() -> None:
+    _downgrade_connected_machines()
     _downgrade_machines()

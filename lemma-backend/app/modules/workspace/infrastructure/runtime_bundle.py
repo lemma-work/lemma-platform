@@ -47,6 +47,10 @@ class RuntimeBundle:
     #: stronger, but a log line saying which release a sandbox is running should
     #: not require resolving a hash to read.
     component_version: str = "unknown"
+    #: The image's locked third-party closure as a hashed requirements file,
+    #: which a connected machine in host mode builds its environment from.
+    #: None for a bundle built before it was exported.
+    requirements: str | None = None
 
     @property
     def size_bytes(self) -> int:
@@ -87,6 +91,14 @@ def _required_modules(manifest: dict[str, object]) -> tuple[str, ...]:
     return tuple(modules)
 
 
+def _optional_text(directory: Path, name: object) -> str | None:
+    """A file the manifest may name beside the archive, or None."""
+    if not isinstance(name, str) or not name or "/" in name:
+        return None
+    path = directory / name
+    return path.read_text(encoding="utf-8") if path.is_file() else None
+
+
 def load_bundle(directory: Path) -> RuntimeBundle | None:
     """Read one bundle directory, or None when there is not one there.
 
@@ -115,6 +127,7 @@ def load_bundle(directory: Path) -> RuntimeBundle | None:
             archive_sha256=_required_text(manifest, "archive_sha256"),
             requires=_required_modules(manifest),
             component_version=str(manifest.get("component_version", "unknown")),
+            requirements=_optional_text(directory, manifest.get("requirements")),
         )
     except (OSError, ValueError, TypeError, KeyError) as exc:
         logger.warning(

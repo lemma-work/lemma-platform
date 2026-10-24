@@ -339,6 +339,151 @@ pub struct OpOkBody {
 /// The event batch a host appends, carried as the `events` body as-is.
 pub type EventsBody = EventBatch;
 
+/// The link's `compute` role: a machine joined with `lemma machine connect`.
+///
+/// This host never speaks it -- it is an Agent Host, and every frame it sends
+/// is the default role. The vocabulary is declared here anyway, because this
+/// file and the backend's `agent_host_link_compute.py` are the two copies the
+/// wire contract holds together: a role, a body field or a mux number that one
+/// side changes and the other does not would be found here, not in a machine
+/// whose streams silently stall. The machine's own agent runs the backend's
+/// mux module (`sandbox_runtime/machine_link/mux.py`). See
+/// docs/architecture/connected-machines.md.
+pub mod compute {
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    use crate::protocol::HostHello;
+
+    /// The role a compute link names on its first frame.
+    pub const ROLE: &str = "compute";
+    /// The role a first frame without one is read as. This host's frames.
+    pub const DEFAULT_ROLE: &str = "agent_host";
+    /// The protocol the role arrived in.
+    pub const MIN_PROTOCOL_VERSION: u16 = 4;
+
+    /// `host`: the runtime runs as the person's OS user under `--root`.
+    /// `image`: it runs in the `lemma-workspace` image under Docker.
+    pub const MODES: [&str; 2] = ["host", "image"];
+    /// What a mux `OPEN` may ask a machine for.
+    pub const STREAM_TARGETS: [&str; 2] = ["port", "runtime_bundle"];
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct PairBody {
+        pub role: String,
+        pub pairing_code: String,
+        /// The secret half of the pairing; only the machine that asked for the
+        /// code holds it.
+        pub claim_key: String,
+        pub hello: HostHello,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct PairedBody {
+        pub connection_id: Uuid,
+        pub user_id: Uuid,
+        pub name: String,
+        pub machine_secret: String,
+    }
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct Capabilities {
+        pub processes: bool,
+        pub files: bool,
+        pub python: bool,
+        pub browser: bool,
+        pub docker: bool,
+        pub previews: bool,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct MachineReport {
+        pub mode: String,
+        pub platform: String,
+        pub home: String,
+        #[serde(default)]
+        pub runtime_version: Option<String>,
+        #[serde(default)]
+        pub runtime_ready: bool,
+        pub runtime_port: u16,
+        #[serde(default)]
+        pub relay_port: Option<u16>,
+        #[serde(default)]
+        pub capabilities: Capabilities,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct HelloBody {
+        pub role: String,
+        pub hello: HostHello,
+        pub machine: MachineReport,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct RuntimeGrant {
+        pub token: String,
+        #[serde(default)]
+        pub version: Option<String>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct WelcomeBody {
+        pub connection_id: Uuid,
+        pub user_id: Uuid,
+        pub name: String,
+        pub protocol_version: u16,
+        pub heartbeat_ms: u64,
+        #[serde(default)]
+        pub server_time: Option<Value>,
+        pub runtime: RuntimeGrant,
+    }
+
+    /// The binary frames a compute link's streams travel in: one WebSocket
+    /// binary message each, `type (u8) | stream id (u32 BE) | payload`.
+    pub mod mux {
+        pub const OPEN: u8 = 1;
+        pub const ACCEPT: u8 = 2;
+        pub const DATA: u8 = 3;
+        pub const WINDOW: u8 = 4;
+        pub const FIN: u8 = 5;
+        pub const RESET: u8 = 6;
+        pub const HEADER_BYTES: usize = 5;
+        pub const MAX_DATA_BYTES: usize = 64 * 1024;
+        pub const DEFAULT_WINDOW_BYTES: usize = 256 * 1024;
+        pub const MAX_WINDOW_BYTES: usize = 16 * 1024 * 1024;
+        pub const MAX_STREAMS: usize = 512;
+        pub const MAX_CONTROL_BYTES: usize = 8 * 1024;
+        pub const RESET_CODES: [&str; 7] = [
+            "refused",
+            "cancelled",
+            "flow_control",
+            "protocol",
+            "link_lost",
+            "too_many_streams",
+            "internal",
+        ];
+
+        /// One frame's bytes.
+        pub fn encode(kind: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
+            let mut frame = Vec::with_capacity(HEADER_BYTES + payload.len());
+            frame.push(kind);
+            frame.extend_from_slice(&stream.to_be_bytes());
+            frame.extend_from_slice(payload);
+            frame
+        }
+
+        /// A frame's type, stream and payload, or `None` if it is too short.
+        pub fn decode(frame: &[u8]) -> Option<(u8, u32, &[u8])> {
+            if frame.len() < HEADER_BYTES {
+                return None;
+            }
+            let stream = u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]);
+            Some((frame[0], stream, &frame[HEADER_BYTES..]))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,6 +584,158 @@ mod tests {
             Some(8),
             "a close code was added to the contract and not here"
         );
+    }
+
+    fn field_names(value: &Value) -> Vec<String> {
+        let mut names: Vec<String> = value
+            .as_object()
+            .expect("a serialized body")
+            .keys()
+            .cloned()
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The compute role is not this host's, but its vocabulary is held to the
+    /// same fixture as the backend's copy of it.
+    #[test]
+    fn the_compute_role_matches_the_contract() {
+        let contract = contract();
+        let role = &contract["compute"];
+        assert_eq!(role["role"], compute::ROLE);
+        assert_eq!(role["default_role"], compute::DEFAULT_ROLE);
+        assert_eq!(
+            role["min_protocol_version"].as_u64(),
+            Some(u64::from(compute::MIN_PROTOCOL_VERSION))
+        );
+        assert_eq!(contract["min_protocol_version"].as_u64(), Some(3));
+        assert_eq!(names(&role["modes"]), {
+            let mut modes: Vec<String> = compute::MODES.iter().map(|m| (*m).to_owned()).collect();
+            modes.sort();
+            modes
+        });
+        assert_eq!(names(&role["stream_targets"]), {
+            let mut targets: Vec<String> = compute::STREAM_TARGETS
+                .iter()
+                .map(|t| (*t).to_owned())
+                .collect();
+            targets.sort();
+            targets
+        });
+        let hello = crate::protocol::HostHello::current("i");
+        let report = compute::MachineReport {
+            mode: "host".into(),
+            platform: "linux".into(),
+            home: "/home/me/lemma-machine".into(),
+            runtime_version: None,
+            runtime_ready: false,
+            runtime_port: 8080,
+            relay_port: None,
+            capabilities: compute::Capabilities::default(),
+        };
+        let bodies = [
+            (
+                "pair_fields",
+                serde_json::to_value(compute::PairBody {
+                    role: compute::ROLE.into(),
+                    pairing_code: "ABCD-EFGH".into(),
+                    claim_key: "k".repeat(43),
+                    hello: hello.clone(),
+                })
+                .unwrap(),
+            ),
+            (
+                "paired_fields",
+                serde_json::to_value(compute::PairedBody {
+                    connection_id: Uuid::nil(),
+                    user_id: Uuid::nil(),
+                    name: "laptop".into(),
+                    machine_secret: "s".into(),
+                })
+                .unwrap(),
+            ),
+            (
+                "hello_fields",
+                serde_json::to_value(compute::HelloBody {
+                    role: compute::ROLE.into(),
+                    hello,
+                    machine: report.clone(),
+                })
+                .unwrap(),
+            ),
+            ("machine_fields", serde_json::to_value(&report).unwrap()),
+            (
+                "capabilities",
+                serde_json::to_value(compute::Capabilities::default()).unwrap(),
+            ),
+            (
+                "welcome_fields",
+                serde_json::to_value(compute::WelcomeBody {
+                    connection_id: Uuid::nil(),
+                    user_id: Uuid::nil(),
+                    name: "laptop".into(),
+                    protocol_version: crate::PROTOCOL_VERSION,
+                    heartbeat_ms: 20_000,
+                    server_time: Some(Value::Null),
+                    runtime: compute::RuntimeGrant {
+                        token: "t".into(),
+                        version: None,
+                    },
+                })
+                .unwrap(),
+            ),
+            (
+                "runtime_fields",
+                serde_json::to_value(compute::RuntimeGrant {
+                    token: "t".into(),
+                    version: None,
+                })
+                .unwrap(),
+            ),
+        ];
+        for (key, body) in bodies {
+            assert_eq!(field_names(&body), names(&role[key]), "{key}");
+        }
+    }
+
+    #[test]
+    fn the_mux_frames_and_bounds_match_the_contract() {
+        use compute::mux;
+        let contract = contract();
+        let declared = &contract["compute"]["mux"];
+        let types = &declared["frame_types"];
+        for (name, number) in [
+            ("open", mux::OPEN),
+            ("accept", mux::ACCEPT),
+            ("data", mux::DATA),
+            ("window", mux::WINDOW),
+            ("fin", mux::FIN),
+            ("reset", mux::RESET),
+        ] {
+            assert_eq!(types[name].as_u64(), Some(u64::from(number)), "{name}");
+        }
+        assert_eq!(types.as_object().map(serde_json::Map::len), Some(6));
+        assert_eq!(declared["max_data_bytes"], mux::MAX_DATA_BYTES);
+        assert_eq!(declared["default_window_bytes"], mux::DEFAULT_WINDOW_BYTES);
+        assert_eq!(declared["max_window_bytes"], mux::MAX_WINDOW_BYTES);
+        assert_eq!(declared["max_streams"], mux::MAX_STREAMS);
+        assert_eq!(declared["max_control_bytes"], mux::MAX_CONTROL_BYTES);
+        let mut codes: Vec<String> = mux::RESET_CODES.iter().map(|c| (*c).to_owned()).collect();
+        codes.sort();
+        assert_eq!(codes, names(&declared["reset_codes"]));
+    }
+
+    #[test]
+    fn a_mux_frame_round_trips_its_header() {
+        use compute::mux;
+        let frame = mux::encode(mux::DATA, 0x0102_0304, b"bytes");
+        assert_eq!(&frame[..5], &[3, 1, 2, 3, 4]);
+        assert_eq!(
+            mux::decode(&frame),
+            Some((mux::DATA, 0x0102_0304, &b"bytes"[..]))
+        );
+        assert_eq!(mux::decode(&[1, 2]), None);
     }
 
     #[test]

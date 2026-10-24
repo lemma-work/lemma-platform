@@ -92,6 +92,7 @@ _NAME_TO_MODULE = {
     'ApplyImportRequestConnectors': 'apply_import_request_connectors',
     'ApplyImportRequestVariables': 'apply_import_request_variables',
     'ApprovalDecisionResponse': 'approval_decision_response',
+    'ApprovePairingRequest': 'approve_pairing_request',
     'AskMembersRequest': 'ask_members_request',
     'AskMembersResponse': 'ask_members_response',
     'AskablePodListResponse': 'askable_pod_list_response',
@@ -388,6 +389,9 @@ _NAME_TO_MODULE = {
     'LoopNodeResponse': 'loop_node_response',
     'LoopNodeResponsePositionType0': 'loop_node_response_position_type_0',
     'MachineCapabilitiesModel': 'machine_capabilities_model',
+    'MachineConnectionList': 'machine_connection_list',
+    'MachineConnectionResponse': 'machine_connection_response',
+    'MachineConnectionResponseCapabilities': 'machine_connection_response_capabilities',
     'MachineFileEntry': 'machine_file_entry',
     'MachineFileEntryKind': 'machine_file_entry_kind',
     'MachineFileListResponse': 'machine_file_list_response',
@@ -479,6 +483,7 @@ _NAME_TO_MODULE = {
     'PendingInteractionKind': 'pending_interaction_kind',
     'PendingInteractionListResponse': 'pending_interaction_list_response',
     'PendingInteractionResponse': 'pending_interaction_response',
+    'PendingPairingResponse': 'pending_pairing_response',
     'PendingSignInResponse': 'pending_sign_in_response',
     'PersonRef': 'person_ref',
     'PlanStepResponse': 'plan_step_response',
@@ -890,6 +895,7 @@ if TYPE_CHECKING:
     from .apply_import_request_connectors import ApplyImportRequestConnectors
     from .apply_import_request_variables import ApplyImportRequestVariables
     from .approval_decision_response import ApprovalDecisionResponse
+    from .approve_pairing_request import ApprovePairingRequest
     from .ask_members_request import AskMembersRequest
     from .ask_members_response import AskMembersResponse
     from .askable_pod_list_response import AskablePodListResponse
@@ -1186,6 +1192,9 @@ if TYPE_CHECKING:
     from .loop_node_response import LoopNodeResponse
     from .loop_node_response_position_type_0 import LoopNodeResponsePositionType0
     from .machine_capabilities_model import MachineCapabilitiesModel
+    from .machine_connection_list import MachineConnectionList
+    from .machine_connection_response import MachineConnectionResponse
+    from .machine_connection_response_capabilities import MachineConnectionResponseCapabilities
     from .machine_file_entry import MachineFileEntry
     from .machine_file_entry_kind import MachineFileEntryKind
     from .machine_file_list_response import MachineFileListResponse
@@ -1277,6 +1286,7 @@ if TYPE_CHECKING:
     from .pending_interaction_kind import PendingInteractionKind
     from .pending_interaction_list_response import PendingInteractionListResponse
     from .pending_interaction_response import PendingInteractionResponse
+    from .pending_pairing_response import PendingPairingResponse
     from .pending_sign_in_response import PendingSignInResponse
     from .person_ref import PersonRef
     from .plan_step_response import PlanStepResponse
@@ -1701,6 +1711,7 @@ __all__ = [
     'ApplyImportRequestConnectors',
     'ApplyImportRequestVariables',
     'ApprovalDecisionResponse',
+    'ApprovePairingRequest',
     'AskMembersRequest',
     'AskMembersResponse',
     'AskablePodListResponse',
@@ -1997,6 +2008,9 @@ __all__ = [
     'LoopNodeResponse',
     'LoopNodeResponsePositionType0',
     'MachineCapabilitiesModel',
+    'MachineConnectionList',
+    'MachineConnectionResponse',
+    'MachineConnectionResponseCapabilities',
     'MachineFileEntry',
     'MachineFileEntryKind',
     'MachineFileListResponse',
@@ -2088,6 +2102,7 @@ __all__ = [
     'PendingInteractionKind',
     'PendingInteractionListResponse',
     'PendingInteractionResponse',
+    'PendingPairingResponse',
     'PendingSignInResponse',
     'PersonRef',
     'PlanStepResponse',

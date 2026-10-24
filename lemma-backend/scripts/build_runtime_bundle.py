@@ -87,6 +87,7 @@ RUNTIME_SOURCES = (
     "sandbox_runtime/sandbox_memory.py",
     "sandbox_runtime/tasks.py",
     "sandbox_runtime/browser_relay",
+    "sandbox_runtime/machine_link",
     "sandbox_runtime/workspace",
 )
 
@@ -150,6 +151,7 @@ REQUIRED_IMPORTS = (
     "sandbox_runtime.browser_relay",
     "sandbox_runtime.browser_relay.chrome",
     "sandbox_runtime.host_fallback",
+    "sandbox_runtime.machine_link.agent",
     "sandbox_runtime.paths",
     "sandbox_runtime.workspace.app",
     "sandbox_runtime.workspace.python_worker",
@@ -500,6 +502,45 @@ def _write_archive(root: Path, destination: Path) -> str:
     return hashlib.sha256(destination.read_bytes()).hexdigest()
 
 
+#: The workspace image's locked third-party closure, relative to the backend.
+WORKSPACE_ENVIRONMENT = Path("sandbox-images/templates/workspace-python")
+
+#: The first-party projects the overlay carries itself, left out of the export.
+_FIRST_PARTY_DISTRIBUTIONS = ("lemma-sdk", "lemma-terminal", "lemma-pod-bundle")
+
+
+def _export_requirements(backend_root: Path, destination: Path) -> None:
+    """The image's locked third-party closure, as a hashed requirements file.
+
+    A connected machine in host mode (``lemma machine connect``) has no image:
+    it builds a uv environment from exactly this, then takes the overlay over
+    its link. Exported from the same lockfile the image is built from, so the
+    two closures cannot drift apart. Not part of the payload or its digest: it
+    is what the payload runs on, not the payload.
+    """
+    _run(
+        [
+            "uv",
+            "export",
+            "--frozen",
+            "--no-dev",
+            "--no-emit-project",
+            *[
+                flag
+                for name in _FIRST_PARTY_DISTRIBUTIONS
+                for flag in ("--no-emit-package", name)
+            ],
+            "--no-header",
+            "--format",
+            "requirements-txt",
+            "--project",
+            str(backend_root / WORKSPACE_ENVIRONMENT),
+            "--output-file",
+            str(destination),
+        ]
+    )
+
+
 def _component_version(repo_root: Path) -> str:
     """The version the first-party projects agree on, for a human reading a log.
 
@@ -538,12 +579,15 @@ def build(
         version = f"sha256:{_contents_digest(payload)}"
         archive_path = out_dir / "runtime-bundle.zip"
         archive_sha256 = _write_archive(payload, archive_path)
+        requirements_path = out_dir / "requirements.txt"
+        _export_requirements(backend_root, requirements_path)
         manifest = {
             "version": version,
             "component_version": _component_version(repo_root),
             "archive_sha256": f"sha256:{archive_sha256}",
             "archive": archive_path.name,
             "requires": list(REQUIRED_IMPORTS),
+            "requirements": requirements_path.name,
             "contents": [
                 path.relative_to(payload).as_posix() for path in _payload_files(payload)
             ],

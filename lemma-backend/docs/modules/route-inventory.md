@@ -460,11 +460,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| DELETE | `/machine-connections/{connection_id}` | `machine_connections.delete` | Disconnect a machine |
 | DELETE | `/machine-consents/{app_id}` | `machine.consent.revoke` | Stop an app running code on your machine |
 | DELETE | `/machines/{ref}/files` | `machine.files.delete` | Delete a file or directory on a machine |
 | DELETE | `/machines/{ref}/previews/{preview_id}` | `machine.preview.revoke` | Revoke a preview; its URL stops answering |
 | DELETE | `/machines/{ref}/processes/{process_id}` | `machine.process.kill` | Stop a process |
 | DELETE | `/pods/{pod_id}/machines/{name}` | `machine.pod.delete` | Delete a pod machine and its disk |
+| GET | `/machine-connections` | `machine_connections.list` | List your connected machines |
+| GET | `/machine-connections/pairings/{code}` | `machine_connections.pairing` | What a pairing code asks for |
 | GET | `/machine-consents` | `machine.consent.list` | Apps you let run code on your machine |
 | GET | `/machine-previews/{label}:open` | `machine.preview.open` | Open a private preview as the signed-in person |
 | GET | `/machines` | `machine.list` | List the machines you can see |
@@ -488,6 +491,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/workspace/files:stat` | `workspace.files.stat` | Stat one workspace file |
 | GET | `/workspace/status` | `workspace.status` | Whether your computer is ready |
 | PATCH | `/pods/{pod_id}/machines/{name}` | `machine.pod.update` | Rename, resize or change who sees a pod machine |
+| POST | `/machine-connections:pair` | `machine_connections.pair` | Approve a machine's pairing code |
 | POST | `/machine-consents` | `machine.consent.grant` | Let an app run code on your machine |
 | POST | `/machines/{ref}/browser:access` | `machine.browser.access` | A signed link to a machine's browser |
 | POST | `/machines/{ref}/browser:display` | `machine.browser.display` | Set the size of a machine's browser display |

@@ -184,11 +184,12 @@ class FakeStore:
         self.host_execution = host_execution
         if secret != SECRET or self.revoked:
             return None
-        status = (
-            AgentHostStatus.ONLINE
-            if hello.protocol_version == AGENT_HOST_PROTOCOL_VERSION
-            else AgentHostStatus.UPGRADE_REQUIRED
-        )
+        # The repository's own rule: any protocol the server still speaks.
+        try:
+            hello.negotiate()
+            status = AgentHostStatus.ONLINE
+        except ValueError:
+            status = AgentHostStatus.UPGRADE_REQUIRED
         claimed = 0
         if status is AgentHostStatus.ONLINE:
             self.generation += 1

@@ -394,6 +394,7 @@ COPY --chown=10001:10001 lemma-backend/sandbox_runtime/protocol.py /app/sandbox_
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/sandbox_memory.py /app/sandbox_runtime/sandbox_memory.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/browser_relay /app/sandbox_runtime/browser_relay
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/machine_link /app/sandbox_runtime/machine_link
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_runtime/workspace
 # Declared here rather than at the top of the stage: its value is part of the
 # cache key of every `RUN` after it, and the layers above have no use for it.
