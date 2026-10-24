@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Integer,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -67,6 +68,15 @@ class SandboxModel(UUIDAuditBase):
             "last_used_at",
             "delete_after",
         ),
+        CheckConstraint(
+            "visibility IN ('private', 'pod', 'restricted')",
+            name="ck_sandboxes_visibility",
+        ),
+        CheckConstraint(
+            "billing_scope IN ('user', 'org')",
+            name="ck_sandboxes_billing_scope",
+        ),
+        CheckConstraint("run_slots >= 1", name="ck_sandboxes_run_slots"),
     )
 
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -98,6 +108,32 @@ class SandboxModel(UUIDAuditBase):
     delete_after: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # What a machine is, as its owner chose it. A function sandbox keeps the
+    # defaults and never reads them. `size` is what the row was last built at,
+    # which is how the 2x4 migration finds the machines it has not moved yet.
+    template: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default=text("'workspace'")
+    )
+    size: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'1x2'")
+    )
+    # The fabric it was last provisioned on; NULL until the first provision.
+    fabric: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    capabilities: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    visibility: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'private'")
+    )
+    billing_scope: Mapped[str] = mapped_column(
+        String(8), nullable=False, server_default=text("'user'")
+    )
+    # A connected machine's link; the table that owns it arrives with the link.
+    connection_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    run_slots: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    created_by: Mapped[UUID | None] = mapped_column(nullable=True)
 
     def to_entity(self) -> Sandbox:
         return Sandbox(
@@ -123,6 +159,15 @@ class SandboxModel(UUIDAuditBase):
             ),
             last_used_at=self.last_used_at,
             delete_after=self.delete_after,
+            template=self.template,
+            size=self.size,
+            fabric=self.fabric,
+            machine_capabilities=dict(self.capabilities or {}),
+            visibility=self.visibility,
+            billing_scope=self.billing_scope,
+            connection_id=self.connection_id,
+            run_slots=self.run_slots,
+            created_by=self.created_by,
         )
 
 
@@ -175,3 +220,24 @@ class SandboxInstanceModel(UUIDAuditBase):
             released_at=self.released_at,
             created_at=self.created_at,
         )
+
+
+# Imported here so every place that registers this module's tables by importing
+# `models` -- Alembic's env, the e2e schema builder -- gets the machine tables too.
+from app.modules.workspace.infrastructure.machine_models import (  # noqa: E402
+    AppMachineConsentModel,
+    MachineConnectionModel,
+    MachineLoginBackupModel,
+    MachinePreviewModel,
+    MachineSessionModel,
+)
+
+__all__ = [
+    "AppMachineConsentModel",
+    "MachineConnectionModel",
+    "MachineLoginBackupModel",
+    "MachinePreviewModel",
+    "MachineSessionModel",
+    "SandboxInstanceModel",
+    "SandboxModel",
+]

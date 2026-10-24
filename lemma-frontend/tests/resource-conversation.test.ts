@@ -22,7 +22,7 @@ test("two kinds sharing a name are two different things", () => {
 });
 
 test("a conversation knows which resource it belongs to", () => {
-    const bound = { metadata: { cwd: "/workspace/c/x", [RESOURCE_KEY]: "table:invoices" } };
+    const bound = { metadata: { cwd: "/home/user/lemma/c/x", [RESOURCE_KEY]: "table:invoices" } };
 
     assert.equal(isBoundTo(bound, "table", "invoices"), true);
     assert.equal(isBoundTo(bound, "table", "Invoices"), true);
@@ -33,7 +33,7 @@ test("a conversation knows which resource it belongs to", () => {
 test("a conversation with no binding belongs to nothing", () => {
     // The server puts its own keys in this object, so "has metadata" is not
     // "is bound".
-    assert.equal(isBoundTo({ metadata: { cwd: "/workspace/c/x" } }, "table", "invoices"), false);
+    assert.equal(isBoundTo({ metadata: { cwd: "/home/user/lemma/c/x" } }, "table", "invoices"), false);
     assert.equal(isBoundTo({ metadata: null }, "table", "invoices"), false);
     assert.equal(isBoundTo(null, "table", "invoices"), false);
     assert.equal(isBoundTo({ metadata: { [RESOURCE_KEY]: 42 } } as never, "table", "invoices"), false);

@@ -3,9 +3,9 @@
 Every tool that takes a workspace path documents both forms -- `listen` says it
 accepts "a pod datastore path or a workspace path", `view_image` the same. Only
 the relative form worked. `path.lstrip("/")` turns
-`/workspace/conversations/<id>/probe.wav` into `workspace/conversations/...`,
+`/home/user/lemma/conversations/<id>/probe.wav` into `home/user/lemma/conversations/...`,
 which joined onto a root that already ends in exactly that produced
-`/workspace/conversations/<id>/workspace/conversations/<id>/probe.wav`, and the
+`/home/user/lemma/conversations/<id>/home/user/lemma/conversations/<id>/probe.wav`, and the
 file was reported missing.
 
 It affected every method on the manager, not just the one where it was noticed.

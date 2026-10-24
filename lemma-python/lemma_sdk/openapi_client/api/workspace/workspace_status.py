@@ -5,7 +5,7 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.workspace_status_response import WorkspaceStatusResponse
+from ...models.machine_startup_response import MachineStartupResponse
 from ...types import Response
 
 
@@ -21,9 +21,9 @@ def _get_kwargs() -> dict[str, Any]:
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> WorkspaceStatusResponse | None:
+) -> MachineStartupResponse | None:
     if response.status_code == 200:
-        response_200 = WorkspaceStatusResponse.from_dict(response.json())
+        response_200 = MachineStartupResponse.from_dict(response.json())
 
         return response_200
 
@@ -35,7 +35,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[WorkspaceStatusResponse]:
+) -> Response[MachineStartupResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -47,7 +47,7 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
-) -> Response[WorkspaceStatusResponse]:
+) -> Response[MachineStartupResponse]:
     """Whether your computer is ready
 
     Raises:
@@ -55,7 +55,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[WorkspaceStatusResponse]
+        Response[MachineStartupResponse]
     """
 
     kwargs = _get_kwargs()
@@ -70,7 +70,7 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient | Client,
-) -> WorkspaceStatusResponse | None:
+) -> MachineStartupResponse | None:
     """Whether your computer is ready
 
     Raises:
@@ -78,7 +78,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        WorkspaceStatusResponse
+        MachineStartupResponse
     """
 
     return sync_detailed(
@@ -89,7 +89,7 @@ def sync(
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
-) -> Response[WorkspaceStatusResponse]:
+) -> Response[MachineStartupResponse]:
     """Whether your computer is ready
 
     Raises:
@@ -97,7 +97,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[WorkspaceStatusResponse]
+        Response[MachineStartupResponse]
     """
 
     kwargs = _get_kwargs()
@@ -110,7 +110,7 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient | Client,
-) -> WorkspaceStatusResponse | None:
+) -> MachineStartupResponse | None:
     """Whether your computer is ready
 
     Raises:
@@ -118,7 +118,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        WorkspaceStatusResponse
+        MachineStartupResponse
     """
 
     return (

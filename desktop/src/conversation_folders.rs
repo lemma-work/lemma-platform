@@ -5,7 +5,7 @@
 //! not a directory Lemma invented under `~/lemma`.
 //!
 //! What stops the workspace page simply sending a path is deliberate: Agent
-//! Host accepts a `/workspace/`-relative suffix and nothing else, so that
+//! Host accepts a suffix beneath `/home/user/lemma/` and nothing else, so that
 //! nothing reachable over the network can point an agent at `~/.ssh`. Keeping
 //! that, and still allowing a real folder, means the *shell* has to be the one
 //! that asks. A native folder dialog is a thing only the person in front of the

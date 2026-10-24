@@ -37,7 +37,7 @@ As the person asking (they must be able to change the table):
 
 ```python
 from lemma_sdk import Lemma
-pod = Lemma().pod()  # pod from the workspace config
+pod = Lemma().pod()  # pod from the machine's LEMMA_* environment
 pod.tables.open_public_rows("signups", audience="anyone",
                             columns=["full_name", "email", "company", "seats", "track"])
 pod.tables.public_rows("signups")   # what is open, and what could be

@@ -2,26 +2,27 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { WorkspaceFileEntry } from '../models/WorkspaceFileEntry.js';
-import type { WorkspaceFileListResponse } from '../models/WorkspaceFileListResponse.js';
-import type { WorkspaceStatusResponse } from '../models/WorkspaceStatusResponse.js';
+import type { MachineFileEntry } from '../models/MachineFileEntry.js';
+import type { MachineFileListResponse } from '../models/MachineFileListResponse.js';
+import type { MachineStartupResponse } from '../models/MachineStartupResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class WorkspaceService {
     /**
+     * @deprecated
      * List workspace files
      * @param path
-     * @param wake Start the workspace if it is paused. Off by default.
-     * @param after Continue after this entry's path, from a previous response's `next_after`.
-     * @returns WorkspaceFileListResponse Successful Response
+     * @param wake
+     * @param after
+     * @returns MachineFileListResponse Successful Response
      * @throws ApiError
      */
     public static workspaceFilesList(
         path?: (string | null),
         wake: boolean = false,
         after?: (string | null),
-    ): CancelablePromise<WorkspaceFileListResponse> {
+    ): CancelablePromise<MachineFileListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/workspace/files',
@@ -36,6 +37,7 @@ export class WorkspaceService {
         });
     }
     /**
+     * @deprecated
      * Read workspace file content
      * @param path
      * @param offset
@@ -70,14 +72,15 @@ export class WorkspaceService {
         });
     }
     /**
+     * @deprecated
      * Stat one workspace file
      * @param path
-     * @returns WorkspaceFileEntry Successful Response
+     * @returns MachineFileEntry Successful Response
      * @throws ApiError
      */
     public static workspaceFilesStat(
         path: string,
-    ): CancelablePromise<WorkspaceFileEntry> {
+    ): CancelablePromise<MachineFileEntry> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/workspace/files:stat',
@@ -90,11 +93,12 @@ export class WorkspaceService {
         });
     }
     /**
+     * @deprecated
      * Whether your computer is ready
-     * @returns WorkspaceStatusResponse Successful Response
+     * @returns MachineStartupResponse Successful Response
      * @throws ApiError
      */
-    public static workspaceStatus(): CancelablePromise<WorkspaceStatusResponse> {
+    public static workspaceStatus(): CancelablePromise<MachineStartupResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/workspace/status',

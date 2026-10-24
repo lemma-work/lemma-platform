@@ -491,7 +491,7 @@ class AgentHostRunSpec(BaseModel):
     workspace_cwd: str | None = Field(
         default=None,
         max_length=4096,
-        description="Saved conversation cwd under /workspace; the host maps its suffix under ~/lemma.",
+        description="Saved conversation cwd under /home/user/lemma; the host maps its suffix under ~/lemma.",
     )
     # Declared on both sides of the wire and read by neither; dispatch leaves it
     # empty (`dispatch.run_spec_from`), because the spec rests on the host.

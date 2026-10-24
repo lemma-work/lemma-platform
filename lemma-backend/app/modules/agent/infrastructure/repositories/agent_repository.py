@@ -67,6 +67,7 @@ class AgentRepository:
             input_schema=agent.input_schema,
             output_schema=agent.output_schema,
             agent_metadata=agent.metadata,
+            machine=agent.machine,
         )
         self.session.add(model)
         try:
@@ -208,6 +209,7 @@ class AgentRepository:
         model.input_schema = agent.input_schema
         model.output_schema = agent.output_schema
         model.agent_metadata = agent.metadata
+        model.machine = agent.machine
         await self.session.flush()
         return model.to_entity()
 

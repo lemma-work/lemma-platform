@@ -8,11 +8,17 @@ ambiguity ``WORKSPACE_RECREATED_NOTICE`` exists to prevent elsewhere.
 
 Two rules shape what this does and does not do:
 
-- **Clone only when there is nothing there.** An existing checkout is never
-  fetched, pulled, reset, or cleaned. One sandbox per user means two
-  conversations can share a checkout, and it may hold uncommitted work from
-  either of them; silently moving a working tree under an agent is worse than
-  leaving it a commit behind.
+- **Check out only when there is nothing there.** An existing checkout is
+  never pulled, reset, or cleaned. Conversations can share a checkout, and it
+  may hold uncommitted work from any of them; silently moving a working tree
+  under an agent is worse than leaving it a commit behind.
+- **Fetch once, check out many.** Each repository has one bare mirror on the
+  machine, fetched at the start of every session that wants it, and every
+  checkout is a worktree of it at whatever ref was asked for -- a branch, a
+  tag, a commit, or a pull request (``pull/123/head``, which a mirror fetches
+  with everything else). A second checkout of the same repository costs a
+  worktree, not a clone, which on a shared machine running many reviews is
+  most of the disk and most of the minutes.
 - **Say when it failed.** A clone that fails (repo gone, account without access)
   returns a notice the caller shows the agent once, rather than leaving it to
   infer something from an empty directory.
@@ -38,6 +44,7 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli.github_credential_bridge import (
     ensure_github_credentials,
 )
+from sandbox_runtime.paths import MIRRORS_ROOT, RUNS_ROOT
 
 logger = get_logger(__name__)
 
@@ -53,13 +60,23 @@ _CLONE_TIMEOUT_SECONDS = 300
 
 
 def _clone_command(*, url: str, path: str, ref: str | None) -> str:
-    branch = f"--branch {shlex.quote(ref)} " if ref else ""
-    # The `[ -e ... ]` guard is what makes this idempotent and safe to run at the
-    # head of any command: an existing checkout short-circuits to true and git is
-    # never invoked at all.
+    """Mirror, fetch, then add a worktree -- unless something is already there.
+
+    The `[ -e ... ]` guard is what makes this idempotent and safe to run at the
+    head of any command: an existing checkout short-circuits to true, and is
+    left exactly as it is, whether it is a worktree or an older plain clone.
+    """
+    owner_repo = url.removeprefix("https://github.com/").removesuffix(".git")
+    mirror = f"{MIRRORS_ROOT}/{owner_repo}.git"
+    q_mirror, q_path, q_url = shlex.quote(mirror), shlex.quote(path), shlex.quote(url)
+    target = shlex.quote(ref) if ref else "HEAD"
     return (
-        f"[ -e {shlex.quote(path + '/.git')} ] || "
-        f"git clone {branch}{shlex.quote(url)} {shlex.quote(path)}"
+        f"[ -e {shlex.quote(path + '/.git')} ] || {{ "
+        f"mkdir -p {shlex.quote(mirror.rsplit('/', 1)[0])} && "
+        f"{{ [ -d {q_mirror} ] || git clone --mirror {q_url} {q_mirror}; }} && "
+        f"git -C {q_mirror} fetch --prune --quiet origin && "
+        f"mkdir -p {shlex.quote(path.rsplit('/', 1)[0])} && "
+        f"git -C {q_mirror} worktree add --detach {q_path} {target}; }}"
     )
 
 
@@ -89,8 +106,15 @@ async def ensure_project_checkout(
         return None
 
     url = f"https://github.com/{repo.owner}/{repo.repo}.git"
+    # On a shared machine the session already starts in the run's own copy
+    # of the project (`get_workspace_session`); everywhere else it is the
+    # conversation's project directory.
+    path = repo.cwd
+    session_cwd = getattr(workspace_session, "cwd", None)
+    if isinstance(session_cwd, str) and session_cwd.startswith(f"{RUNS_ROOT}/"):
+        path = session_cwd
     result = await workspace_session.exec_command(
-        cmd=_clone_command(url=url, path=repo.cwd, ref=repo.ref),
+        cmd=_clone_command(url=url, path=path, ref=repo.ref),
         timeout=_CLONE_TIMEOUT_SECONDS,
     )
     if result.get("exit_code") == 0:
@@ -107,8 +131,8 @@ async def ensure_project_checkout(
     # distinguishes a missing repo from an access failure from a bad ref.
     detail = str(result.get("stderr") or "").strip()
     return (
-        f"[workspace notice] {repo.full_name} could not be cloned into "
-        f"{repo.cwd}, so this directory is empty for a reason. "
+        f"[machine notice] {repo.full_name} could not be checked out into "
+        f"{path}, so this directory is empty for a reason. "
         f"{detail}".strip()
     )
 

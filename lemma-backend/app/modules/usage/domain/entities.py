@@ -22,6 +22,8 @@ class UsageKind(str, Enum):
     IMAGE = "IMAGE"
     AUDIO = "AUDIO"
     EMBEDDING = "EMBEDDING"
+    #: Machine time, in compute units (1 CU = one hour of a 2x4 machine).
+    COMPUTE = "COMPUTE"
 
     @classmethod
     def _missing_(cls, value: object) -> "UsageKind | None":

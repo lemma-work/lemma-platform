@@ -10,6 +10,44 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
+| `machine.browser.access` | POST | `/machines/{ref}/browser:access` | A signed link to a machine's browser |
+| `machine.browser.current_page_url` | GET | `/machines/{ref}/browser/current-page-url` | What page a sign-in's browser is actually showing |
+| `machine.browser.display` | POST | `/machines/{ref}/browser:display` | Set the size of a machine's browser display |
+| `machine.browser.navigate` | POST | `/machines/{ref}/browser:navigate` | Open a page in a machine's browser |
+| `machine.browser.status` | GET | `/machines/{ref}/browser` | Whether a machine's browser can be watched |
+| `machine.consent.grant` | POST | `/machine-consents` | Let an app run code on your machine |
+| `machine.consent.list` | GET | `/machine-consents` | Apps you let run code on your machine |
+| `machine.consent.revoke` | DELETE | `/machine-consents/{app_id}` | Stop an app running code on your machine |
+| `machine.files.content` | GET | `/machines/{ref}/files:content` | Read a file on a machine |
+| `machine.files.delete` | DELETE | `/machines/{ref}/files` | Delete a file or directory on a machine |
+| `machine.files.list` | GET | `/machines/{ref}/files` | List a directory on a machine |
+| `machine.files.move` | POST | `/machines/{ref}/files:move` | Move or rename a path on a machine |
+| `machine.files.stat` | GET | `/machines/{ref}/files:stat` | Stat one path on a machine |
+| `machine.files.sync` | POST | `/machines/{ref}/files:sync` | Copy files between a machine and pod files |
+| `machine.files.write` | PUT | `/machines/{ref}/files/content` | Write a file on a machine |
+| `machine.get` | GET | `/machines/{ref}` | Get one machine |
+| `machine.list` | GET | `/machines` | List the machines you can see |
+| `machine.pod.create` | POST | `/pods/{pod_id}/machines` | Create a machine the pod's agents share |
+| `machine.pod.delete` | DELETE | `/pods/{pod_id}/machines/{name}` | Delete a pod machine and its disk |
+| `machine.pod.grants.get` | GET | `/pods/{pod_id}/machines/{name}/grants` | Who is granted a pod machine |
+| `machine.pod.grants.set` | PUT | `/pods/{pod_id}/machines/{name}/grants` | Replace who is granted a pod machine |
+| `machine.pod.update` | PATCH | `/pods/{pod_id}/machines/{name}` | Rename, resize or change who sees a pod machine |
+| `machine.policy` | GET | `/machines:policy` | Which machines you or a pod may create |
+| `machine.preview.create` | POST | `/machines/{ref}/previews` | Open a port on a machine as a preview URL |
+| `machine.preview.list` | GET | `/machines/{ref}/previews` | A machine's live previews |
+| `machine.preview.open` | GET | `/machine-previews/{label}:open` | Open a private preview as the signed-in person |
+| `machine.preview.revoke` | DELETE | `/machines/{ref}/previews/{preview_id}` | Revoke a preview; its URL stops answering |
+| `machine.process.get` | GET | `/machines/{ref}/processes/{process_id}` | One process |
+| `machine.process.input` | POST | `/machines/{ref}/processes/{process_id}:input` | Type into a process |
+| `machine.process.kill` | DELETE | `/machines/{ref}/processes/{process_id}` | Stop a process |
+| `machine.process.list` | GET | `/machines/{ref}/processes` | What is running on a machine |
+| `machine.process.output` | GET | `/machines/{ref}/processes/{process_id}/output` | A page of a process's output |
+| `machine.process.resize` | POST | `/machines/{ref}/processes/{process_id}:resize` | Resize a process's terminal |
+| `machine.process.start` | POST | `/machines/{ref}/processes` | Start a process on a machine |
+| `machine.release` | POST | `/machines/{ref}:release` | Stop a machine's compute, keeping its disk |
+| `machine.reset` | POST | `/machines/{ref}:reset` | Clean a machine by scope |
+| `machine.restart` | POST | `/machines/{ref}:restart` | Stop a machine and start it again |
+| `machine.startup` | GET | `/machines/{ref}/startup` | Whether a machine is ready, without waking it |
 | `workspace.browser.access` | POST | `/workspace/apps/browser/access` | Create workspace browser access URL |
 | `workspace.browser.current_page_url` | GET | `/workspace/browser/current-page-url` | What page a sign-in's browser is actually showing |
 | `workspace.browser.resize_display` | POST | `/workspace/browser/display-size` | Fit the workspace display to the pane showing it |

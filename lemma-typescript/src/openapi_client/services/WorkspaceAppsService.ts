@@ -13,6 +13,7 @@ import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class WorkspaceAppsService {
     /**
+     * @deprecated
      * Create workspace browser access URL
      * @param requestBody
      * @returns WorkspaceAppAccessResponse Successful Response
@@ -32,6 +33,7 @@ export class WorkspaceAppsService {
         });
     }
     /**
+     * @deprecated
      * What page a sign-in's browser is actually showing
      * Polled by the sign-in page while its VNC pane is open.
      *
@@ -59,6 +61,7 @@ export class WorkspaceAppsService {
         });
     }
     /**
+     * @deprecated
      * Fit the workspace display to the pane showing it
      * Resize the sandbox display so the picture matches the pane.
      *
@@ -89,6 +92,7 @@ export class WorkspaceAppsService {
         });
     }
     /**
+     * @deprecated
      * Whether the workspace browser can be watched
      * @returns BrowserStatusResponse Successful Response
      * @throws ApiError

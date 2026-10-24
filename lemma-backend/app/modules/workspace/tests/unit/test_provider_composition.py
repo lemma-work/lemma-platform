@@ -25,13 +25,13 @@ def test_the_module_reads_its_own_env_var_names(monkeypatch) -> None:
     assert resolved.local_callback_url == "http://127.0.0.1:8710"
 
 
-def test_the_e2b_surface_is_exactly_six_settings() -> None:
+def test_the_e2b_surface_is_exactly_eight_settings() -> None:
     """`E2B_*_BUILD_ID` is a CI repository variable, not a backend setting.
 
     The workflows pin the exact template build their runs exercise with it.
     Reading it here would be reasonable and is not what happens, so an
     operator who sets it in a deployment environment is configuring nothing.
-    Anyone adding a seventh E2B setting should have to decide, deliberately,
+    Anyone adding a ninth E2B setting should have to decide, deliberately,
     whether `docs/configuration.md` is still true.
     """
     declared = {
@@ -50,6 +50,10 @@ def test_the_e2b_surface_is_exactly_six_settings() -> None:
         # A size a plan sells is a template, because E2B fixes CPU and memory
         # when a template is built. Unread unless a plan provider asks for one.
         "E2B_WORKSPACE_SIZE_TEMPLATES",
+        # The same pair for `workspace-docker` machines, which are built from
+        # a template of their own at the sizes Docker work needs.
+        "E2B_DOCKER_TEMPLATE",
+        "E2B_DOCKER_SIZE_TEMPLATES",
         # Deliberately not here: whether a sandbox answers the internet without
         # a credential. It was `E2B_ALLOW_PUBLIC_TRAFFIC` and is now
         # `CLOSED_TO_THE_INTERNET`, a constant. Nothing outside the backend ever

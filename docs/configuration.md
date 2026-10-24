@@ -288,6 +288,10 @@ E2B_METADATA_NAMESPACE=
 # Only for a deployment whose plans sell workspace sizes. JSON, keyed
 # `{cpu}x{memory_mb}`, one template per size.
 E2B_WORKSPACE_SIZE_TEMPLATES=
+# The template behind `workspace-docker` machines (dockerd, compose, buildx),
+# and its sizes the same way. A size with no entry uses E2B_DOCKER_TEMPLATE.
+E2B_DOCKER_TEMPLATE=lemma-workspace-docker
+E2B_DOCKER_SIZE_TEMPLATES=
 ```
 
 These six are the whole backend-side E2B surface. In particular:
@@ -389,10 +393,65 @@ WORKSPACE_CALLBACK_FRONTEND_URL=http://frontend:8080
 FUNCTION_RUNTIME_GATEWAY_URL=http://backend:8000
 ```
 
-`WORKSPACE_PORT_ACCESS_URL` publishes a port a workspace opened, for previewing
-something running inside it. It is a base URL (default `API_URL`); the signed
-URL is `<base>/public/workspace-ports/<grant>/`, unauthenticated by design,
-since the grant in the path is the credential.
+`WORKSPACE_PORT_ACCESS_URL` publishes a port a machine opened, for previewing
+something running on it. It is a base URL (default `API_URL`); the signed
+URL is `<base>/public/machine-ports/<grant>/`, unauthenticated by design,
+since the grant in the path is the credential. Previews a person or agent
+creates on purpose are served differently — on their own subdomain, below.
+
+## Machines
+
+A machine is a workspace sandbox seen from the product: every person's default
+machine, and the shared machines a pod's editors create. What a machine is, who
+may use one and how its compute is counted is in
+[architecture/machines.md](architecture/machines.md); these are the settings
+that decide which parts of it a deployment turns on.
+
+```dotenv
+# Serve /machines. Off answers every machine route with 404.
+MACHINES_API_ENABLED=true
+# Let pod editors create machines the pod's agents share.
+POD_MACHINES_ENABLED=true
+# Stop work at a compute allowance. Metering is always on; this decides
+# whether reaching 100% refuses new work and releases running machines.
+COMPUTE_BILLING_ENABLED=false
+# Move default machines still on the legacy 1x2 size to the plan's default
+# size on their next idle release, home and logins included.
+MACHINE_SIZE_MIGRATION_ENABLED=false
+```
+
+### Previews
+
+A preview turns a port on a machine into a URL people can open, each on its own
+origin so hot reload and root-absolute assets work:
+`<MACHINE_PREVIEW_SCHEME>://p-<id>.<MACHINE_PREVIEW_DOMAIN>/`.
+
+```dotenv
+# Unset (the default) turns previews off; the API says so in a sentence.
+MACHINE_PREVIEW_DOMAIN=machines.example.com
+# https, or http for a local stack on *.localhost.
+MACHINE_PREVIEW_SCHEME=https
+# The longest a `link` preview lives before it stops answering.
+MACHINE_PREVIEW_MAX_TTL_SECONDS=86400
+```
+
+The domain needs a wildcard DNS record and a wildcard certificate, both pointing
+at the API. A `private` preview asks the visitor to be signed in to Lemma and
+allowed on the machine; a `link` preview works for anyone until it expires.
+Either can be revoked, and a revoked one answers 404 at once.
+
+### Shared machines' disk
+
+A pod machine is shared by many runs on one disk, which on E2B is fixed in size.
+The disk janitor keeps it usable without touching anything protected (the
+browser profile, a running service):
+
+```dotenv
+# Prune finished runs, then Docker images and build cache, from this fraction.
+MACHINE_DISK_PRUNE_FRACTION=0.75
+# Refuse new runs on the machine from this fraction.
+MACHINE_DISK_REFUSE_FRACTION=0.9
+```
 
 ## Function execution
 
@@ -872,6 +931,26 @@ USAGE_ORG_LIMIT_OVERRIDES_JSON=
 An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
 `{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of
 organizations at once. Slugs are organization handles, not display names.
+
+Machine time is metered in **compute units**: one CU is one hour of a 2 vCPU /
+4 GB machine, and other sizes accrue them in proportion to their vCPUs (a 4x8
+machine, two an hour). A default
+machine's time counts against its person; a pod machine's against the
+organization. Set a price and it counts in the USD limits above, beside model
+calls; set an allowance and it is limited on its own as well.
+
+```dotenv
+# USD per compute unit. Unset records machine time at no cost.
+USAGE_COMPUTE_UNIT_USD=
+# Monthly allowances in compute units. Unset means none beyond the USD limits.
+USAGE_USER_MONTHLY_COMPUTE_UNITS=
+USAGE_ORG_MONTHLY_COMPUTE_UNITS=
+```
+
+An allowance is only enforced with `COMPUTE_BILLING_ENABLED=true` (see
+[Machines](#machines)): warnings at 80% and 95%, and at 100% no new processes,
+then a grace period, then the machine is released with its browser closed
+cleanly.
 
 Answering people outside an organization -- contacts, and strangers in groups --
 has a ceiling of its own, which an organization owner sets in Usage. Until one

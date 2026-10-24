@@ -17,6 +17,7 @@ import pytest
 from app.modules.usage.contracts import outside_audience_source, run_source_type
 from app.modules.usage.domain.accounting import (
     CONTACT_RUN,
+    ORG_ONLY_SOURCES,
     OUTSIDE_AUDIENCE_SOURCES,
     OUTSIDER_RUN,
     MeteringIdentity,
@@ -123,11 +124,12 @@ def test_a_run_is_recorded_under_whom_it_answers():
 
 def test_the_members_windows_leave_out_what_answering_outsiders_cost():
     """The ledger sums a window by user, so an outside run recorded under the
-    member who looks after it would otherwise still fill their allowance."""
+    member who looks after it would otherwise still fill their allowance --
+    and so would a pod machine's time, recorded under whoever created it."""
     windows = budget_windows(_identity("agent_run"), LIMITS, NOW)
 
     for window in windows:
-        expected = OUTSIDE_AUDIENCE_SOURCES if window.user_id is not None else ()
+        expected = ORG_ONLY_SOURCES if window.user_id is not None else ()
         assert window.excluded_source_types == expected, window.kind
 
 

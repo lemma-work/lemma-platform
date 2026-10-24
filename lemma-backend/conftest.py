@@ -252,6 +252,21 @@ async def held_worker():
         yield
 
 
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Clean up after e2e runs that ended without doing it themselves.
+
+    Only runs whose process is gone: their containers and sandbox volumes are
+    labelled with their invocation, and a live one's are never touched. Once
+    per invocation, not per xdist worker.
+    """
+    del session
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    from app.core.test_utils import sweep_gone_owners
+
+    sweep_gone_owners()
+
+
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
     del nextitem
     marker_names = {marker.name for marker in item.iter_markers()}

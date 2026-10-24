@@ -114,6 +114,9 @@ class Permissions:
     CONNECTOR_ACCOUNT_SHARE: ClassVar[str] = "connector_account.share"
     WEB_LOGIN_USE: ClassVar[str] = "web_login.use"
 
+    MACHINE_USE: ClassVar[str] = "machine.use"
+    MACHINE_MANAGE: ClassVar[str] = "machine.manage"
+
 
 PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
     PermissionDefinition(
@@ -387,6 +390,18 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "web_login",
         "Sign in to a saved site with a stored session",
     ),
+    PermissionDefinition(
+        Permissions.MACHINE_USE,
+        PermissionScope.POD,
+        "machine",
+        "Run commands, read and write files, and open previews on a pod machine",
+    ),
+    PermissionDefinition(
+        Permissions.MACHINE_MANAGE,
+        PermissionScope.POD,
+        "machine",
+        "Create, resize and delete the pod's machines",
+    ),
 )
 
 PERMISSION_BY_ID: dict[str, PermissionDefinition] = {
@@ -467,6 +482,10 @@ POD_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
         # the pod's -- not every member's. Those who answer for the pod see it.
         Permissions.CONTACT_READ,
         Permissions.POD_CONNECTOR_MANAGE,
+        # A pod machine runs whatever its users type, as the pod, on the org's
+        # compute. The people who change the pod's agents run its machines.
+        Permissions.MACHINE_USE,
+        Permissions.MACHINE_MANAGE,
     }
 )
 POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
@@ -538,6 +557,7 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
     ),
     # Writing to a contact is done looking at who they are and what they said.
     Permissions.CONTACT_MESSAGE: frozenset({Permissions.CONTACT_READ}),
+    Permissions.MACHINE_MANAGE: frozenset({Permissions.MACHINE_USE}),
     # Executing a workload requires reading its definition (an agent's
     # instructions, a function's source) to run it at all, so execute-only
     # grants must satisfy read checks. Read does NOT imply execute.

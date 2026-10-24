@@ -107,7 +107,10 @@ fn function_contract_is_read_only_ephemeral_and_exposes_only_its_runtime() {
     assert!(joined.contains("/tmp:rw,noexec,nosuid"));
     assert!(joined.contains("/run/lemma-function-cache:rw,exec"));
     assert!(joined.contains("0.0.0.0::8090"));
-    assert!(!joined.contains("dst=/workspace"));
+    assert!(
+        !joined.contains("dst=/home/user"),
+        "a function sandbox has no durable home to mount"
+    );
     assert!(
         !joined.contains("dst=/opt/lemma-runtime"),
         "a function sandbox has no overlay to keep"

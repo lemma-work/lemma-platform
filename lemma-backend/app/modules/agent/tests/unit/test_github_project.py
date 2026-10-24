@@ -100,18 +100,22 @@ async def test_clone_never_runs_over_an_existing_checkout(
     await github_project.ensure_project_checkout(_context(_REPO), session)
 
     command = session.commands[0]
-    assert command.startswith(
-        f"[ -e {WORKSPACE_ROOT}/repos/acme/web/.git ] || git clone "
-    )
+    tree = f"{WORKSPACE_ROOT}/repos/acme/web"
+    assert command.startswith(f"[ -e {tree}/.git ] || ")
     assert "https://github.com/acme/web.git" in command
-    assert command.endswith(f"{WORKSPACE_ROOT}/repos/acme/web")
-    # Nothing that could move or discard work in an existing tree.
-    for destructive in ("pull", "fetch", "reset", "checkout", "clean"):
+    # Nothing that could move or discard work in an existing tree: the only
+    # fetch is the mirror's, and the tree is only ever added, never changed.
+    for destructive in ("pull", "reset", "checkout", "clean"):
         assert destructive not in command
+    assert f"-C {tree} " not in command
+    assert "fetch --prune --quiet origin" in command
+    assert f"worktree add --detach {tree} HEAD" in command
 
 
 @pytest.mark.asyncio
-async def test_a_ref_is_cloned_as_a_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_ref_is_checked_out_from_the_mirror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     redis = _FakeRedis()
     monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
     repo = ProjectRepo(owner="acme", repo="web", ref="release/2.0")
@@ -122,7 +126,29 @@ async def test_a_ref_is_cloned_as_a_branch(monkeypatch: pytest.MonkeyPatch) -> N
     # No quoting appears because nothing needs it: a ref that reached this far
     # already passed a charset with no shell metacharacters in it. The
     # `shlex.quote` in the builder is the second line of defence, not the first.
-    assert "git clone --branch release/2.0 " in session.commands[0]
+    assert session.commands[0].endswith(
+        f"worktree add --detach {WORKSPACE_ROOT}/repos/acme/web release/2.0; }}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_pull_request_ref_comes_from_the_mirror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mirror fetches `refs/pull/*` with everything else, so a review checks
+    out the pull request itself rather than a branch that may be gone."""
+    redis = _FakeRedis()
+    monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
+    repo = ProjectRepo(owner="acme", repo="web", ref="pull/12/head")
+    session = _FakeSession()
+
+    await github_project.ensure_project_checkout(_context(repo), session)
+
+    command = session.commands[0]
+    assert "git clone --mirror https://github.com/acme/web.git" in command
+    assert command.endswith(
+        f"worktree add --detach {WORKSPACE_ROOT}/repos/acme/web pull/12/head; }}"
+    )
 
 
 @pytest.mark.asyncio

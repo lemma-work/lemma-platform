@@ -25,3 +25,14 @@ The table below is generated from the committed OpenAPI specification by `script
 | `pod.bundle.upload` | POST | `/pods/{pod_id}/bundle/uploads` | Stage A Local Bundle Upload |
 
 <!-- /generated:operations -->
+
+## Pod machines in a bundle
+
+`pod.bundle.export.start` writes each of the pod's own machines as
+`machines/<name>/<name>.json` (definition only: name, display name, template,
+size, visibility, run slots). `pod.bundle.import.*` plans one `MACHINE` step per
+bundled machine — `UPDATE` when the pod has one of that name, `CREATE`
+otherwise — ahead of the agents that run on it and the grants that name it.
+Creating one is refused as the `/pods/{pod_id}/machines` route refuses it: the
+importer must be a pod editor, and the plan must offer the template and size
+and have room for another machine; the step then fails with that reason.

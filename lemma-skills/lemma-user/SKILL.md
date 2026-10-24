@@ -59,9 +59,9 @@ lemma pods describe        # inventory: tables, agents, functions, workflows, sc
                            # tree shows 2 folder levels; --depth N / --full for more
 ```
 
-Workspace sessions inject `LEMMA_TOKEN`, `LEMMA_BASE_URL`, `LEMMA_ORG_ID`,
+Shells on a Lemma machine inject `LEMMA_TOKEN`, `LEMMA_BASE_URL`, `LEMMA_ORG_ID`,
 `LEMMA_POD_ID` (and `LEMMA_WORKSPACE_URL`) — use them; never invent bootstrap
-config. (Outside an injected workspace — e.g. running the CLI on a laptop —
+config. (Outside a Lemma machine — e.g. running the CLI on a laptop —
 project-root `.lemma.<server>.env` files supply the same `LEMMA_*` values per
 server for that folder; injected/real env always takes precedence.) Default output is a **compact,
 complete** table/detail view (schemas
@@ -165,7 +165,7 @@ signature, a scanned form, a layout. So: "what does page 3 *look* like?" →
 `files cat … --pages 3`.
 
 As an in-process tool, `view_image` takes exactly one of `pod_file_path` (the
-datastore, no download needed) or `workspace_file_path` (the sandbox) — it never
+datastore, no download needed) or `workspace_file_path` (your machine) — it never
 infers the store from the path, and both or neither is an error. It handles
 **images only**; hand it a PDF and it points you at `pod_view_document_pages`,
 which renders that document's pages directly and skips the `files child` round
@@ -291,7 +291,7 @@ no run is parked.
 A **conversation** in `WAITING` is a different thing, and the difference matters
 before you go chasing it: it is either blocked on you (an `ask_user` question or an
 approval card — answer it and the agent continues) or **waiting**, meaning the agent
-suspended itself on a timer, a sandbox process or a sub-agent run, and resumes on its
+suspended itself on a timer, a process on its machine or a sub-agent run, and resumes on its
 own within 24 hours (the ceiling; requests above it are clamped). A waiting
 conversation is healthy and needs nothing from you.
 The CLI does not distinguish the two — `conversations get` reports `status` and
@@ -439,7 +439,7 @@ the `lemma-builder` skill's job (`lemma-builder/references/surfaces.md`).
 
 Two ways in, and which one you have depends on how the agent was granted:
 
-- **Direct tools** (the `CONNECTORS` toolset) — in-process, no sandbox. These
+- **Direct tools** (the `CONNECTORS` toolset) — in-process, no machine. These
   are *deferred*: they are not in your prompt prefix, so reach them with
   `search_tools` first, then `search_connector_operations` and
   `run_connector_operation`. Prefer this when you have it — no shell involved.
@@ -448,7 +448,7 @@ Two ways in, and which one you have depends on how the agent was granted:
   tool in your prefix is not the same as not having it — go looking before
   concluding you cannot do something.)
 - **The CLI** (`lemma connectors …`, needs the `WORKSPACE_CLI` toolset) — same
-  operations through a sandbox round trip. Use it when you are driving a shell
+  operations through a round trip to your machine. Use it when you are driving a shell
   anyway, or when you need the discovery views below.
 
 Either way the authorization is identical: a `connector:<name>:use` grant per
@@ -504,8 +504,8 @@ run_connector_operation {"connector": "gmail", "operation": "GMAIL_SEND_EMAIL",
 
 `{"file_id": "..."}` works too, and a list of references where the field
 takes several. The file is read with *your* access, so it must be one you can
-read. A file that only exists in your sandbox has to go into the pod first
-(`lemma files upload ./q3.pdf /me/reports/`). This is the same on every
+read. A file that only exists on your machine has to go into the pod first
+(`lemma files upload ./q3.pdf /me/reports/`, or the `sync_files` tool). This is the same on every
 connector kind; `describe_connector_operation` shows which fields take files.
 
 On a native Gmail install, `send_message` and `create_draft` take `to`,
@@ -585,14 +585,35 @@ up a new form, use `lemma-form`; to change who may answer, `pod.tables.open_publ
 / `close_public_rows` (needs the right to change the table). Deleting a contact
 (`pod.contacts.delete`) also deletes their conversations — confirm with the person first.
 
-## Workspace execution notes
+## Machines
+
+Every person has a default machine (`me`); a pod can have shared machines
+(`pod:<name>`, or `pod:<pod>/<name>` from outside it), some with Docker. An
+agent runs on the machine its definition names, else on the default machine of
+whoever the run acts for. Reach them from the CLI:
+
+```bash
+lemma machine list                              # yours and your pods', with size and status
+lemma machine exec me 'ls ~/lemma'              # options go before the ref
+lemma machine exec pod:builder 'npm ci && npm test'
+lemma machine shell me                          # an interactive terminal
+lemma machine ps me                             # processes; `kill <ref> <id>` stops one
+lemma machine cp ./data.csv me:/home/user/lemma/data.csv
+lemma machine preview create me --port 5173     # a URL for a server on the machine
+lemma machine reset me -s caches -s runs        # free disk; home needs --confirm
+lemma machine logins list me                    # sites the browser is signed in to
+```
 
 - Long-running processes (dev servers, watchers, REPLs): keep one persistent
   interactive session and reuse it; one-shot shell commands for everything else.
-- Local services are `http://127.0.0.1:<port>` inside the container. There is no
-  user-constructible public preview URL for a workspace port — port access is a
-  signed, expiring link the platform mints. To show someone a running app, deploy
-  it (`lemma apps deploy`) rather than sharing a sandbox port.
+- Local services are `http://127.0.0.1:<port>` on the machine. To let someone
+  open one, make a preview (`expose_port` as an agent, `lemma machine preview
+  create` from the CLI): `private` asks them to sign in, `link` works for anyone
+  for at most 24 hours, and either can be revoked. To ship an app, deploy it
+  (`lemma apps deploy`).
+- The browser profile (`~/.lemma/browser/profile`) holds the person's logins.
+  Never delete or move it; only a person resetting the machine's home, with
+  confirmation, can sign the browser out.
 - To keep web sources, use the `browser` skill's `save-webpage <url> --formats
   markdown,pdf`; upload durable artifacts to `/me` or a shared folder.
 - Network errors (`Could not resolve host`, `ENOTFOUND`, TLS timeouts): check

@@ -196,7 +196,7 @@ async def _provision_and_bind(
     uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
 ) -> OnboardingOutcome:
     assert state.user_id is not None
-    workspace = await ensure_chat_workspace(
+    chat_workspace = await ensure_chat_workspace(
         uows,
         user_id=state.user_id,
         verified_phone=state.verified_phone,
@@ -207,10 +207,10 @@ async def _provision_and_bind(
     async with uows() as uow:
         pending = await uow.session.get(PendingChatOnboarding, state.id)
         assert pending is not None
-        if workspace.status == "organization_access_required":
+        if chat_workspace.status == "organization_access_required":
             pending.step = OnboardingStep.ORGANIZATION_ACCESS_REQUIRED
             return OnboardingOutcome(waiting_on_an_admin=True)
-        if workspace.pod_id is None or workspace.assistant_id is None:
+        if chat_workspace.pod_id is None or chat_workspace.assistant_id is None:
             raise NoRoomForWorkspace()
         if transport.surface is not None:
             # The destination goes on the identity row, which by now exists:
@@ -220,12 +220,12 @@ async def _provision_and_bind(
             )
             assert identity is not None
             identity.installation_surface_id = transport.surface.id
-            identity.pod_id = workspace.pod_id
+            identity.pod_id = chat_workspace.pod_id
         else:
             await _ensure_shared_surface(
                 uow,
-                pod_id=workspace.pod_id,
-                assistant_id=workspace.assistant_id,
+                pod_id=chat_workspace.pod_id,
+                assistant_id=chat_workspace.assistant_id,
                 user_id=user.id,
                 platform=transport.event.platform,
             )
@@ -233,9 +233,9 @@ async def _provision_and_bind(
         if pending.ready_at is None:
             pending.ready_at = datetime.now(timezone.utc)
             await hand_off_when_ready(uow, pending.id)
-        if workspace.entry == "invitation":
+        if chat_workspace.entry == "invitation":
             return OnboardingOutcome(
-                invited_pod_name=await pod_name(uow.session, workspace.pod_id)
+                invited_pod_name=await pod_name(uow.session, chat_workspace.pod_id)
             )
     return OnboardingOutcome()
 

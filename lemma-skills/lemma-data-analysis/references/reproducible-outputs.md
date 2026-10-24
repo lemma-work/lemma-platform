@@ -17,7 +17,7 @@ Use stable filenames. Do not overwrite raw inputs. Put assumptions and metric
 definitions in the report or source code, not only in chat. Pin randomness with
 an explicit seed when simulation, sampling, or stochastic models are involved.
 
-## Use the workspace Python stack
+## Use the machine's Python stack
 
 Confirm the intended runtime before analysis:
 
@@ -41,8 +41,8 @@ existing workbook, use `openpyxl` rather than a pandas round-trip that drops
 formulas or formatting. Keep transformation logic in a script; do not rely on
 manual cell changes. `openpyxl` does not calculate formulas: compute verified
 headline values in Python or recalculate with a spreadsheet engine before
-claiming formula results are validated. Matplotlib is already headless in the
-workspace — `MPLBACKEND=Agg` is set in the image — so don't spend a step
+claiming formula results are validated. Matplotlib is already headless on the
+machine — `MPLBACKEND=Agg` is set in the image — so don't spend a step
 configuring a backend; do set figure sizes and DPI explicitly.
 
 For a reproducible SQL result, call the CLI without a shell and retain the SQL in

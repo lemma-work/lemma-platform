@@ -257,9 +257,15 @@ class WorkspaceRuntimeClient:
             )
         truncated = response.headers.get("X-Lemma-Truncated-Before", "")
         exit_code = response.headers.get("X-Lemma-Exit-Code", "")
+        # The runtime's header is the number its *next* chunk will get; every
+        # caller passes `next_sequence` back as `after_sequence`, which reads
+        # strictly after it. Taken as is, that skipped one chunk per poll -- a
+        # terminal lost the line it was answering. Translated here, to the
+        # "last one read" meaning the E2B reader and the test double give it.
+        written = int(response.headers["X-Lemma-Next-Sequence"]) - 1
         return ProcessOutputSnapshot(
             chunks=tuple(chunks),
-            next_sequence=int(response.headers["X-Lemma-Next-Sequence"]),
+            next_sequence=max(after_sequence, written),
             truncated_before_sequence=int(truncated) if truncated else None,
             state=ProcessState(response.headers["X-Lemma-Process-State"]),
             exit_code=int(exit_code) if exit_code else None,

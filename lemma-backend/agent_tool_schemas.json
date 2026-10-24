@@ -1334,7 +1334,7 @@
   {
     "tool_name": "exec_command",
     "toolset": "WORKSPACE_CLI",
-    "description": "Run a shell command in the private conversation workspace.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is this container, not the\nLemma backend.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
+    "description": "Run a shell command on your machine, in this conversation's directory.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is the machine, not the\nLemma backend. Name `machine` to run on another one you may use (see\n`list_machines`); on a pod machine each run gets its own directory.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
     "input_schema": {
       "properties": {
         "cmd": {
@@ -1387,7 +1387,19 @@
             }
           ],
           "default": null,
-          "description": "Working directory; relative paths resolve inside the workspace."
+          "description": "Working directory; relative paths resolve inside your working directory."
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which machine to run on: `me`, `pod:<name>` for one of the pod's machines, or one from `list_machines`. Omit for your usual one."
         },
         "yield_time_ms": {
           "anyOf": [
@@ -1551,12 +1563,91 @@
           "maximum": 300,
           "minimum": 1,
           "type": "integer"
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which machine to run on: `me`, `pod:<name>` for one of the pod's machines, or one from `list_machines`. Omit for your usual one."
         }
       },
       "required": [
         "code"
       ],
       "title": "ExecutePythonRequest",
+      "type": "object"
+    },
+    "output_schema": {}
+  },
+  {
+    "tool_name": "expose_port",
+    "toolset": "WORKSPACE_CLI",
+    "description": "Turn a port on the machine into a preview URL people can open, e.g. a dev\nserver you started (`npm run dev` on 5173). The URL is its own origin, so\nhot reload and root-absolute assets work. `private` previews ask the person\nto be signed in to Lemma; `link` previews work for anyone for at most 24\nhours. Reply with the URL; the person can revoke it.",
+    "input_schema": {
+      "properties": {
+        "port": {
+          "description": "The port a server is listening on.",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "visibility": {
+          "default": "private",
+          "description": "`private`: people who can see this machine, after signing in. `link`: anyone with the URL, for at most 24 hours.",
+          "enum": [
+            "private",
+            "link"
+          ],
+          "type": "string"
+        },
+        "ttl_seconds": {
+          "anyOf": [
+            {
+              "minimum": 60,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How long the link lives (link previews: at most 24h)."
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which machine: `me`, `pod:<name>`, or one from `list_machines`. Omit for your usual one."
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "required": [
+        "port"
+      ],
+      "title": "ExposePortRequest",
       "type": "object"
     },
     "output_schema": {}
@@ -1713,6 +1804,30 @@
       "additionalProperties": true,
       "type": "object"
     }
+  },
+  {
+    "tool_name": "list_machines",
+    "toolset": "WORKSPACE_CLI",
+    "description": "The machines you may run commands on: your usual one, the pod's shared\nmachines you are allowed, with each one's size, whether it has Docker,\nand its status. Pass a `ref` as `machine` to `exec_command` and the other\nmachine tools.",
+    "input_schema": {
+      "properties": {
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "title": "ListMachinesRequest",
+      "type": "object"
+    },
+    "output_schema": {}
   },
   {
     "tool_name": "list_pod_members",
@@ -1874,11 +1989,11 @@
               "type": "string"
             },
             "pod_path": {
-              "description": "Pod file path of the skill's `SKILL.md`. This is a pod file path, not a path on the workspace filesystem: nothing mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from a workspace shell.",
+              "description": "Pod file path of the skill's `SKILL.md`. This is a pod file path, not a path on your machine: nothing mounts `/skills` on your machine, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from your machine's shell.",
               "type": "string"
             },
             "pod_dir": {
-              "description": "Pod file path of this skill's root directory. This is a pod file path, not a path on the workspace filesystem: nothing mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from a workspace shell.",
+              "description": "Pod file path of this skill's root directory. This is a pod file path, not a path on your machine: nothing mounts `/skills` on your machine, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from your machine's shell.",
               "type": "string"
             }
           },
@@ -2270,7 +2385,7 @@
               "type": "string"
             },
             "pod_path": {
-              "description": "Pod file path of the resource. This is a pod file path, not a path on the workspace filesystem: nothing mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from a workspace shell.",
+              "description": "Pod file path of the resource. This is a pod file path, not a path on your machine: nothing mounts `/skills` on your machine, so `cat`/`ls` on it fail. Read it with `load_skill`, or with `lemma files cat <path>` from your machine's shell.",
               "type": "string"
             },
             "kind": {
@@ -2373,7 +2488,7 @@
   {
     "tool_name": "manage_process",
     "toolset": "WORKSPACE_CLI",
-    "description": "Drive a process started by `exec_command`.\n\n`input` sends characters to a running process, or polls its output when\n`chars` is omitted. `kill` stops it. `list` shows tracked processes in this\nworkspace. `resize` changes an interactive terminal's `cols`/`rows`. All but\n`list` need `process_id`.",
+    "description": "Drive a process started by `exec_command`.\n\n`input` sends characters to a running process, or polls its output when\n`chars` is omitted. `kill` stops it. `list` shows tracked processes on the\nmachine (`machine` picks another). `resize` changes an interactive\nterminal's `cols`/`rows`. All but `list` need `process_id`.",
     "input_schema": {
       "description": "Drive a process started by `exec_command` (interactive or long-running).",
       "properties": {
@@ -2441,6 +2556,18 @@
           ],
           "default": null,
           "description": "Milliseconds to wait for new output."
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "For 'list': which machine. Other actions find the process's own."
         },
         "comment": {
           "anyOf": [
@@ -3846,9 +3973,62 @@
     }
   },
   {
+    "tool_name": "reset_machine",
+    "toolset": "WORKSPACE_CLI",
+    "description": "Free a machine's disk or stop stray work: `processes`, `runs` (finished\nruns' folders), `caches`, `docker`. Says how much space came back. Logins\nand services are never touched; only a person can reset a machine's home.",
+    "input_schema": {
+      "properties": {
+        "scopes": {
+          "description": "What to clean: `processes` (stops everything but services), `runs` (finished runs' folders), `caches` (package caches), `docker` (unused images, build cache, stopped containers). Logins are never touched.",
+          "items": {
+            "enum": [
+              "processes",
+              "runs",
+              "caches",
+              "docker"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which machine: `me`, `pod:<name>`, or one from `list_machines`. Omit for your usual one."
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "required": [
+        "scopes"
+      ],
+      "title": "ResetMachineRequest",
+      "type": "object"
+    },
+    "output_schema": {}
+  },
+  {
     "tool_name": "run_connector_operation",
     "toolset": "CONNECTORS",
-    "description": "Run an operation through one of the pod's connectors.\n\n`payload` must match the operation's input schema -- fetch it with\n`describe_connector_operation` first. Whose account the call runs as is the\nconnector's decision, not yours. To send a file (an email attachment, a\nDrive upload), pass it as `{\"pod_path\": \"/me/report.pdf\"}` in the file\nargument; a file in your sandbox has to be uploaded to the pod first. A\nfile result larger than the inline limit is written to the pod datastore\nand returned as a reference; pass `output_path` to choose where it lands.\nA `CONNECTION_REQUIRED` or `REAUTH_REQUIRED` answer carries a `connect_url`\nto hand your person.",
+    "description": "Run an operation through one of the pod's connectors.\n\n`payload` must match the operation's input schema -- fetch it with\n`describe_connector_operation` first. Whose account the call runs as is the\nconnector's decision, not yours. To send a file (an email attachment, a\nDrive upload), pass it as `{\"pod_path\": \"/me/report.pdf\"}` in the file\nargument; a file on your machine has to be uploaded to the pod first. A\nfile result larger than the inline limit is written to the pod datastore\nand returned as a reference; pass `output_path` to choose where it lands.\nA `CONNECTION_REQUIRED` or `REAUTH_REQUIRED` answer carries a `connect_url`\nto hand your person.",
     "input_schema": {
       "description": "No account argument: the connector decides whose account a call runs as.\n\nA per-member connector uses the account of the person you act for; a\nshared one uses the account its owner shared with the pod. An\n``account_id`` here was a free argument a model could fill in to act as a\ncolleague.",
       "properties": {
@@ -4074,9 +4254,66 @@
     }
   },
   {
+    "tool_name": "sync_files",
+    "toolset": "WORKSPACE_CLI",
+    "description": "Copy files between the machine and the pod's files without downloading\nthem yourself: `to_pod` puts a file or a folder's files into a pod folder\n(what you made, for people to see); `from_pod` brings one pod file onto\nthe machine.",
+    "input_schema": {
+      "properties": {
+        "direction": {
+          "description": "`to_pod` copies machine files into a pod folder; `from_pod` the reverse.",
+          "enum": [
+            "to_pod",
+            "from_pod"
+          ],
+          "type": "string"
+        },
+        "machine_path": {
+          "description": "A file or folder on the machine (absolute, or relative to your working directory).",
+          "type": "string"
+        },
+        "pod_path": {
+          "description": "`to_pod`: the pod folder to copy into (e.g. `/me/renders`). `from_pod`: the pod file to copy.",
+          "type": "string"
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which machine: `me`, `pod:<name>`, or one from `list_machines`. Omit for your usual one."
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "One-line statement of intent, shown to the user."
+        }
+      },
+      "required": [
+        "direction",
+        "machine_path",
+        "pod_path"
+      ],
+      "title": "SyncFilesRequest",
+      "type": "object"
+    },
+    "output_schema": {}
+  },
+  {
     "tool_name": "view_image",
     "toolset": "VIEW_IMAGE",
-    "description": "Load an image and return it as binary tool content, from either store.\n\nUse this for screenshots, generated images, charts, or any other visual artifact\nthat the agent should inspect.\n\nPATH HANDLING:\n- Set exactly one of `workspace_file_path` or `pod_file_path`. Setting both,\n  or neither, is refused \u2014 the store is the one you name, never inferred\n  from the shape of the path.\n- `workspace_file_path` is relative to the conversation's sandbox, e.g.\n  `images/output.png`. Use it for artifacts this run just produced.\n- `pod_file_path` is a datastore path, e.g. `/me/photo.jpg`. Use it for a\n  file that lives in the pod.\n- Images only. For a PDF, use `pod_view_document_pages` instead.",
+    "description": "Load an image and return it as binary tool content, from either store.\n\nUse this for screenshots, generated images, charts, or any other visual artifact\nthat the agent should inspect.\n\nPATH HANDLING:\n- Set exactly one of `workspace_file_path` or `pod_file_path`. Setting both,\n  or neither, is refused \u2014 the store is the one you name, never inferred\n  from the shape of the path.\n- `workspace_file_path` is relative to the conversation's directory on your\n  machine, e.g. `images/output.png`. Use it for artifacts this run just\n  produced.\n- `pod_file_path` is a datastore path, e.g. `/me/photo.jpg`. Use it for a\n  file that lives in the pod.\n- Images only. For a PDF, use `pod_view_document_pages` instead.",
     "input_schema": {
       "properties": {
         "pod_file_path": {
@@ -4101,7 +4338,7 @@
             }
           ],
           "default": null,
-          "description": "Image in the workspace sandbox, e.g. `images/output.png` \u2014 for artifacts you just produced. Set this or `pod_file_path`, not both."
+          "description": "Image on your machine, e.g. `images/output.png` \u2014 for artifacts you just produced. Set this or `pod_file_path`, not both."
         },
         "instructions": {
           "anyOf": [
@@ -4124,7 +4361,7 @@
   {
     "tool_name": "wait_for",
     "toolset": "WAIT",
-    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` \u2014 a child from `spawn_subagent`. You wake with its result.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait the sandbox may be reclaimed** \u2014\n  your files, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `channel_post` ends your turn and gets you a new one when\nthe answers arrive.",
+    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` \u2014 a child from `spawn_subagent`. You wake with its result.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait your machine may be reclaimed** \u2014\n  your files, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `channel_post` ends your turn and gets you a new one when\nthe answers arrive.",
     "input_schema": {
       "properties": {
         "reason": {
@@ -4296,7 +4533,7 @@
   {
     "tool_name": "web_fetch",
     "toolset": "WEB_SEARCH",
-    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. If you have no `exec_command`,\neach page's text comes back in its `content` instead, clipped to a budget.\nJSON and plain-text URLs are saved as they came. This is the right way to\nread anything longer than a search snippet.",
+    "description": "Capture web pages onto your machine so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. If you have no `exec_command`,\neach page's text comes back in its `content` instead, clipped to a budget.\nJSON and plain-text URLs are saved as they came. This is the right way to\nread anything longer than a search snippet.",
     "input_schema": {
       "properties": {
         "urls": {

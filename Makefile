@@ -2104,6 +2104,7 @@ QUALITY_GATES := \
 	qg-swallowed-errors \
 	qg-memory-hazards \
 	qg-public-prose \
+	qg-stale-machine-terms \
 	qg-migration-order \
 	qg-in-subject-test-doubles \
 	qg-import-budget \
@@ -2188,6 +2189,14 @@ qg-memory-hazards:
 qg-public-prose:
 	@echo "→ Public prose…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-public-prose
+
+# The per-user workspace sandbox became a machine. Old paths, deprecated
+# routes and SDK names, and "the sandbox" in agent-facing text all survive a
+# rename unless something reads for them, and an agent acts on what it reads.
+# The rules and the allowlist are in scripts/check_stale_machine_terms.py.
+qg-stale-machine-terms:
+	@echo "→ Stale machine terms…"
+	@python3 scripts/check_stale_machine_terms.py
 
 qg-migration-order:
 	@echo "→ Migration order…"

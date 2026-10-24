@@ -139,6 +139,7 @@ class AgentService:
         output_schema: JsonObject | None = None,
         visibility: ResourceVisibility | str | None = None,
         metadata: JsonObject | None = None,
+        machine: str | None = None,
         ctx: Context | None = None,
     ) -> Agent:
         await self._require_action(
@@ -302,6 +303,7 @@ class AgentService:
         output_schema: JsonObject | None | UnsetType = UNSET,
         visibility: ResourceVisibility | str | None | UnsetType = UNSET,
         metadata: JsonObject | None | UnsetType = UNSET,
+        machine: str | None | UnsetType = UNSET,
         requester_user_id: UUID | None = None,
         ctx: Context | None = None,
     ) -> Agent:
@@ -336,6 +338,8 @@ class AgentService:
             agent.visibility = _normalize_agent_visibility(visibility)
         if not isinstance(metadata, UnsetType):
             agent.metadata = metadata
+        if not isinstance(machine, UnsetType):
+            agent.machine = _machine_ref(machine)
         if not isinstance(agent_runtime, UnsetType):
             # Only when the runtime is what changed: a rename of a teammate on a
             # retired model should not be held hostage to it.
@@ -416,3 +420,20 @@ class AgentService:
                 raise AgentValidationError(f"{label} names cannot be empty")
             normalized.append(clean)
         return normalized
+
+
+def _machine_ref(value: str | None) -> str | None:
+    """A ref the machine resolver will be able to read, or None.
+
+    Checked for shape here and resolved per run: the machine it names may be
+    created after the agent, or deleted, and either is the run's problem to
+    report, not the definition's.
+    """
+    if value is None or not value.strip():
+        return None
+    from app.modules.workspace.contracts.machine_refs import parse_machine_ref
+
+    try:
+        return parse_machine_ref(value)
+    except ValueError as exc:
+        raise AgentValidationError(str(exc)) from None

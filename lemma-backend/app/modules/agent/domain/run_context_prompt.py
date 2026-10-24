@@ -134,3 +134,49 @@ def task_list_section(
         "message sends you somewhere else. Check each item off with "
         f'`write_todos` (`["- [x] {first_open}"]`) as soon as it is finished.'
     )
+
+
+MACHINE_HEADING = "## Machine"
+
+
+def machine_section(
+    *,
+    ref: str,
+    size: str,
+    docker: bool,
+    workdir: str | None,
+    disk_fraction: float | None,
+    compute_left: float | None,
+    compute_resets: str | None,
+) -> str:
+    """Where this run's commands go, and how much room they have.
+
+    Per run rather than in the stable prompt: the disk and the compute left
+    change between runs, and a run that knows its machine is nearly full
+    cleans up before a build fails halfway.
+    """
+    lines = [
+        MACHINE_HEADING,
+        f"- Machine: `{ref}`, {size} (vCPU x GB)" + (", with Docker" if docker else ""),
+    ]
+    if workdir:
+        lines.append(
+            f"- Shared with other runs: work in `{workdir}`, which is yours "
+            "for this run. Processes you leave running stop when the run "
+            "ends, unless started as a service."
+        )
+    if disk_fraction is not None:
+        lines.append(
+            f"- Disk: {disk_fraction:.0%} used"
+            + (
+                " -- free space with `reset_machine` before a big build."
+                if disk_fraction >= 0.7
+                else ""
+            )
+        )
+    if compute_left is not None:
+        lines.append(
+            f"- Compute left this month: {compute_left:.0%}"
+            + (f" (resets {compute_resets})" if compute_resets else "")
+        )
+    return "\n".join(lines)

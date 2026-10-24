@@ -1,7 +1,7 @@
 """Where an agent's two working directories are, and what it may assume there.
 
 Split out of ``prompts`` because it is a self-contained section of the system
-prompt with its own vocabulary -- a sandbox under ``/workspace``, a pod-files
+prompt with its own vocabulary -- a sandbox under ``~/lemma``, a pod-files
 directory under ``/me``, and for a coding agent on somebody's own machine a
 third one that ``pwd`` answers with.
 
@@ -42,9 +42,9 @@ def _workspace_cwd(ctx: AgentContext, conversation: Conversation) -> str:
     ``get_workspace_cwd()`` if present, then the conversation's own resolution.
 
     That last step delegates rather than formatting a path here. It used to
-    return ``/workspace/conversations/{id}``, which is not a directory this
+    return ``~/lemma/conversations/{id}``, which is not a directory this
     platform has made for a long time -- the cwd is persisted in conversation
-    metadata and falls back to ``/workspace/c/{date}/{slug}``. So whenever the
+    metadata and falls back to ``~/lemma/c/{date}/{slug}``. So whenever the
     context did not carry a cwd, the one section whose entire job is to say
     where the agent is named somewhere that does not exist.
 
@@ -98,7 +98,7 @@ def _directory_sections(
     """Which of the two working directories this run is told about.
 
     The agent has up to two, and which ones it needs depends on what it can
-    reach: a sandbox under ``/workspace`` if it can run commands there, and a
+    reach: a sandbox under ``~/lemma`` if it can run commands there, and a
     pod-files directory under ``/me`` if it can reach pod files at all. Kept
     together because the pair is one decision -- the workspace section has to
     know whether there is a pod directory to point at, and an agent told about
@@ -239,7 +239,7 @@ def _prompt_path(path: str) -> str:
 def _sandbox_root(cwd: str) -> str:
     """The sandbox's top-level directory, taken from the cwd this run was given.
 
-    Every sentence below used to name ``/workspace`` outright while the cwd
+    Every sentence below used to name the sandbox root outright while the cwd
     beside it came from the run. That is the same fact written twice, and the
     literal is the copy that cannot be right everywhere: an agent running as a
     native process is handed a cwd on the host, and telling it to `cd` to a

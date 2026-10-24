@@ -16,6 +16,7 @@ export type AgentActionResponse = {
     input_schema?: (Record<string, any> | null);
     instruction: string;
     kind?: AgentKind;
+    machine?: (string | null);
     metadata?: (Record<string, any> | null);
     name: string;
     output_schema?: (Record<string, any> | null);

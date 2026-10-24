@@ -68,6 +68,54 @@ BROWSER_PROFILE_ROOT = f"{HOME_ROOT}/.lemma/browser"
 BROWSER_PROFILE = f"{BROWSER_PROFILE_ROOT}/profile"
 
 
+#: Per-run working directories on a shared (pod) machine:
+#: ``~/lemma/runs/<agent>/<run>``. Concurrent runs on one machine each get their
+#: own, so two reviews never `npm ci` into the same tree.
+RUNS_ROOT = f"{WORKSPACE_ROOT}/runs"
+
+#: Long-lived services: ``~/lemma/services/<name>``. Exempt from the process
+#: lifetime cap and restarted when the machine resumes.
+SERVICES_ROOT = f"{WORKSPACE_ROOT}/services"
+
+#: Bare mirrors of repositories, fetched rather than re-cloned; checkouts are
+#: worktrees of these (``~/lemma/repos/<owner>/<repo>`` for the shared one,
+#: a run's own under its run directory).
+MIRRORS_ROOT = f"{HOME_ROOT}/.lemma/mirrors"
+
+#: What a person or agent may never delete, move or overwrite through any API,
+#: reset scope (except a confirmed `home`), the disk janitor or quiesce: the
+#: browser's profile, which is where every login lives. A login lost here is a
+#: person asked to sign in again by an agent that cannot tell them why.
+PROTECTED_PATHS = (BROWSER_PROFILE_ROOT,)
+
+#: What the `caches` reset scope and the janitor clear. Package-manager and
+#: tool caches only: everything here is rebuilt by the next install, and none
+#: of it is under a protected path.
+CACHE_PATHS = (
+    f"{HOME_ROOT}/.cache",
+    f"{HOME_ROOT}/.npm/_cacache",
+    f"{HOME_ROOT}/.local/share/pnpm/store",
+    f"{HOME_ROOT}/.yarn/berry/cache",
+    f"{HOME_ROOT}/.cargo/registry/cache",
+    f"{HOME_ROOT}/go/pkg/mod/cache",
+)
+
+
+def is_protected(path: str) -> bool:
+    """Whether ``path`` is, or is inside, or contains a protected path.
+
+    *Contains* too: deleting ``~/.lemma`` deletes the profile inside it as
+    surely as naming the profile does.
+    """
+    normalized = path.rstrip("/") or "/"
+    for protected in PROTECTED_PATHS:
+        if normalized == protected or normalized.startswith(f"{protected}/"):
+            return True
+        if protected.startswith(f"{normalized}/") or normalized == "/":
+            return True
+    return False
+
+
 def is_inside_home(path: str) -> bool:
     """Whether this absolute path is under the durable root.
 
@@ -176,7 +224,12 @@ def sandbox_command(name: str, *, overlay_bin: str = RUNTIME_OVERLAY_BIN) -> str
 __all__ = [
     "BROWSER_PROFILE",
     "BROWSER_PROFILE_ROOT",
+    "CACHE_PATHS",
     "HOME_ROOT",
+    "MIRRORS_ROOT",
+    "PROTECTED_PATHS",
+    "RUNS_ROOT",
+    "SERVICES_ROOT",
     "IMAGE_BIN",
     "OVERLAY_FIRST_ON_PATH",
     "RUNTIME_OVERLAY_BIN",
@@ -185,6 +238,7 @@ __all__ = [
     "RUNTIME_FILESYSTEM_ROOTS",
     "WORKSPACE_ROOT",
     "is_browser_private",
+    "is_protected",
     "is_inside_home",
     "running_runtime_version",
     "sandbox_command",

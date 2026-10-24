@@ -66,9 +66,20 @@ flowchart LR
 Every non-app apply step opens its own authorization/UoW scope and commits
 before the Redis `DONE` checkpoint. App steps self-scope around a sandbox
 build. A crash between commit and checkpoint replays an idempotent upsert. The
-format handles pod connectors, tables/data, files, functions,
+format handles pod connectors, tables/data, pod machines, files, functions,
 agents/grants/toolsets, workflows, schedules, apps/source, surfaces, and pod
 metadata.
+
+A pod machine travels as `machines/<name>/<name>.json` — `name`, optional
+`display_name`, `template` (`workspace` | `workspace-docker`), optional `size`
+(`<vcpu>x<GB>`), `visibility` (`pod` | `restricted`), optional `run_slots`. Its
+disk, instance and member grants do not travel. The MACHINE step is planned
+after tables and before every function, agent and `*_GRANTS` step, and applies
+through `workspace.contracts.pod_machines` (create, or update everything but
+the template, under the plan's machine policy as the importer). An agent's
+`machine` ref is exported portable (`pod:<source pod>/<name>` becomes
+`pod:<name>`) and cleared on re-import when the bundle carries none; an agent's
+or function's `machine.use` grant names the machine by `resource_type: machine`.
 
 **Pod connectors** (`connectors/<slug>/<slug>.json`) carry the catalog
 connector, mode, `required` and `purpose` -- never the installation or the

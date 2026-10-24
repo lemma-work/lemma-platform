@@ -77,6 +77,8 @@ class Agent(Entity):
     output_schema: JsonObject | None = None
     metadata: JsonObject | None = None
     allowed_actions: list[str] = Field(default_factory=list)
+    #: A machine ref (`pod:<name>`, ...); None runs on the default machine.
+    machine: str | None = None
 
 
 class Message(CreatedEntity):

@@ -121,6 +121,9 @@ export interface AgentDetail extends AgentRow {
      *  drops `model_name` from the payload entirely in that case, so an empty
      *  string here and a missing key there are the same fact. */
     runtime: PinnedRuntime | null;
+    /** The machine its commands run on, as a ref (`pod:<name>`). Null runs
+     *  them on the default machine of whoever the run acts for. */
+    machine: string | null;
     input: SchemaNote | null;
     output: SchemaNote | null;
     grants: AgentGrant[];
@@ -278,6 +281,7 @@ export function readAgentDetail(raw: unknown): AgentDetail {
                 selections: stringValues(runtime?.config_selections),
             }
             : null,
+        machine: text(item.machine) || null,
         input: readSchema(item.input_schema),
         output: readSchema(item.output_schema),
         grants: list(permissions?.grants).map((entry) => {
@@ -340,6 +344,8 @@ export interface AgentDraft {
     selections: Record<string, string>;
     /** Carried, not edited: the settings live on it, so saving them writes it. */
     runtime: PinnedRuntime | null;
+    /** A machine ref; empty is the default machine of whoever the run acts for. */
+    machine: string;
 }
 
 export function draftOfAgent(detail: AgentDetail | null | undefined): AgentDraft {
@@ -356,6 +362,7 @@ export function draftOfAgent(detail: AgentDetail | null | undefined): AgentDraft
         maxOutputTokens: typeof cap === "number" ? String(cap) : "",
         selections: { ...(detail?.runtime?.selections ?? {}) },
         runtime: detail?.runtime ?? null,
+        machine: detail?.machine ?? "",
     };
 }
 
@@ -392,15 +399,18 @@ function sameSelections(a: Record<string, string>, b: Record<string, string>): b
     return left.length === live(b).length && left.every(([key, value]) => b[key] === value);
 }
 
-/** Only what changed. `description` is nullable on the API and `instruction`
- *  is not — `UpdateAgentRequest` gives it `min_length=1` — so clearing the
- *  first is a null and clearing the second is not an edit the API accepts. */
-export function agentChanges(before: AgentDraft, after: AgentDraft): {
+export interface AgentPatch {
     description?: string | null;
     instruction?: string;
     agent_runtime?: AgentRuntimePatch;
-} {
-    const patch: { description?: string | null; instruction?: string; agent_runtime?: AgentRuntimePatch } = {};
+    machine?: string | null;
+}
+
+/** Only what changed. `description` is nullable on the API and `instruction`
+ *  is not — `UpdateAgentRequest` gives it `min_length=1` — so clearing the
+ *  first is a null and clearing the second is not an edit the API accepts. */
+export function agentChanges(before: AgentDraft, after: AgentDraft): AgentPatch {
+    const patch: AgentPatch = {};
     const description = after.description.trim();
     if (description !== before.description.trim()) {
         patch.description = description === "" ? null : description;
@@ -414,6 +424,11 @@ export function agentChanges(before: AgentDraft, after: AgentDraft): {
         !sameSelections(before.selections, after.selections);
     if (generation && after.runtime) {
         patch.agent_runtime = runtimeWithSettings(after.runtime, after);
+    }
+    /* Back to the default is a null, not an omission: omitted leaves the
+       machine it had. */
+    if (after.machine !== before.machine) {
+        patch.machine = after.machine || null;
     }
     return patch;
 }

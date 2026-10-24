@@ -68,6 +68,10 @@ class E2BProviderConfig:
     # E2B fixes CPU and memory when a template is built, so a size is a
     # template. A size with no template here gets `workspace_template`.
     workspace_size_templates: Mapping[str, str] = field(default_factory=dict)
+    # The `workspace-docker` template: the workspace plus dockerd. Built at
+    # the sizes Docker work needs, keyed like the workspace's.
+    docker_template: str = "lemma-workspace-docker"
+    docker_size_templates: Mapping[str, str] = field(default_factory=dict)
 
 
 def lifecycle_for(kind: SandboxKind) -> dict[str, object]:
@@ -112,8 +116,13 @@ def template_for(config: E2BProviderConfig, spec: ProviderCreateSpec) -> str:
     """
     if spec.kind is SandboxKind.FUNCTION:
         return config.function_template
+    docker = spec.template == "workspace-docker"
+    default = config.docker_template if docker else config.workspace_template
+    by_size = (
+        config.docker_size_templates if docker else config.workspace_size_templates
+    )
     if spec.size is not None:
-        sized = config.workspace_size_templates.get(spec.size.label)
+        sized = by_size.get(spec.size.label)
         if sized:
             return sized
         logger.warning(
@@ -121,4 +130,4 @@ def template_for(config: E2BProviderConfig, spec: ProviderCreateSpec) -> str:
             sandbox_id=str(spec.sandbox_id),
             size=spec.size.label,
         )
-    return config.workspace_template
+    return default

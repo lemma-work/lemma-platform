@@ -290,14 +290,14 @@ test("a malformed browser payload falls back rather than throwing", () => {
 test("a command carries its output and its exit status", () => {
     const card = call(
         "exec_command",
-        { cmd: "npm test", workdir: "/workspace/app" },
+        { cmd: "npm test", workdir: "/home/user/lemma/app" },
         { success: true, stdout: "2 passing\n", stderr: "", exit_code: 0, completed: true },
     );
     assert.equal(card?.kind, "terminal");
     assert.equal(card && card.kind === "terminal" && card.exitCode, 0);
     assert.equal(card && card.kind === "terminal" && card.failed, false);
     assert.equal(card && card.kind === "terminal" && card.output, "2 passing");
-    assert.equal(card && card.kind === "terminal" && card.workdir, "/workspace/app");
+    assert.equal(card && card.kind === "terminal" && card.workdir, "/home/user/lemma/app");
 });
 
 test("a non-zero exit is a failure and a live process is not", () => {
@@ -337,7 +337,7 @@ test("python keeps its value and renders its traceback", () => {
 });
 
 test("a command with no command is not a card", () => {
-    assert.equal(call("exec_command", { workdir: "/workspace" }), null);
+    assert.equal(call("exec_command", { workdir: "/home/user/lemma" }), null);
     assert.equal(call("execute_python", {}), null);
 });
 
@@ -481,7 +481,7 @@ test("an image the agent looked at names its file and which store holds it", () 
 
 test("a relative workspace path is flagged, because it resolves somewhere this app cannot guess", () => {
     // `images/output.png` is joined onto the *conversation's* directory by the
-    // agent's file manager and onto `/workspace` by this app's own route. Same
+    // agent's file manager and onto `~/lemma` by this app's own route. Same
     // string, two different files — so the card carries the fact and the view
     // fetches the directory before it fetches anything else.
     const card = look(
@@ -496,7 +496,7 @@ test("a relative workspace path is flagged, because it resolves somewhere this a
     assert.equal(card?.name, "output.png");
 
     const absolute = look(
-        call("view_image", { workspace_file_path: "/workspace/c/2026-09-18/a/out.png" }, { success: true, source: "workspace" }),
+        call("view_image", { workspace_file_path: "/home/user/lemma/c/2026-09-18/a/out.png" }, { success: true, source: "workspace" }),
     );
     assert.equal(absolute?.relative, false);
 });
@@ -506,10 +506,10 @@ test("the return's path wins over the argument", () => {
         call(
             "view_image",
             { workspace_file_path: "out.png" },
-            { success: true, file_path: "/workspace/c/2026-09-18/slug/out.png", source: "workspace" },
+            { success: true, file_path: "/home/user/lemma/c/2026-09-18/slug/out.png", source: "workspace" },
         ),
     );
-    assert.equal(card?.path, "/workspace/c/2026-09-18/slug/out.png");
+    assert.equal(card?.path, "/home/user/lemma/c/2026-09-18/slug/out.png");
     assert.equal(card?.relative, false);
 });
 
@@ -816,7 +816,7 @@ const host = (toolName: string, args: unknown, result?: unknown, answered = resu
     parseToolCard({ toolName, args, result, answered, metadata: { tool_source: "native", tool_title: toolName } });
 
 test("read_file names the file and keeps what was in it", () => {
-    const card = host("read_file", { file_path: "/workspace/fixture/notes.txt", offset: 10, limit: 5 }, { content: "one\ntwo\n" });
+    const card = host("read_file", { file_path: "/home/user/lemma/fixture/notes.txt", offset: 10, limit: 5 }, { content: "one\ntwo\n" });
     assert.equal(card?.kind, "file-read");
     if (card?.kind !== "file-read") return;
     assert.equal(card.name, "notes.txt");

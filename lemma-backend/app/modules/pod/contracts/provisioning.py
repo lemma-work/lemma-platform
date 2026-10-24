@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy import Select, select
+
 from app.core.authorization.context import Context
 from app.modules.pod.api.dependencies import get_pod_service
 from app.modules.pod.domain.pod_entities import PodEntity, PodRecipe, PodUpdateEntity
@@ -93,4 +95,19 @@ async def create_first_pod(
     )
 
 
-__all__ = ["append_recipe", "create_first_pod", "get_pod"]
+__all__ = [
+    "append_recipe",
+    "create_first_pod",
+    "get_pod",
+    "organization_pod_ids_query",
+]
+
+
+def organization_pod_ids_query(organization_id: UUID) -> Select[tuple[UUID]]:
+    """Every live pod of an organization, as a subquery of ids: what an
+    org-wide machine cap counts over, without reading the ids out."""
+    from app.modules.pod.infrastructure.models.pod_models import Pod
+
+    return select(Pod.id).where(
+        Pod.organization_id == organization_id, Pod.is_deleted.is_(False)
+    )

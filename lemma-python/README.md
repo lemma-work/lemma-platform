@@ -379,7 +379,31 @@ results = lemma.tools.web_search("vendor SLA policy", max_results=5)
 
 Facades: `lemma.orgs` · `lemma.org` · `lemma.pods` · `lemma.user` ·
 `lemma.connectors` · `lemma.tools` · `lemma.agent_hosts` · `lemma.web_logins` ·
-`lemma.org_runtime`.
+`lemma.machines` · `lemma.org_runtime`.
+
+### Machines
+
+A machine is addressed by ref: `me` (your default machine), `pod:<pod-id>/<name>`
+(`pod:<name>` for the client's pod), `mine:<name>`, or its id. Inside a
+function, `ctx.machines` is the same facade acting as the run.
+
+```python
+result = lemma.machines.run("me", "python --version")
+print(result.exit_code, result.output)
+
+stream = lemma.machines.exec("pod:builder", "npm test")   # live output
+for chunk in stream:
+    print(chunk.data, end="")
+print("exit", stream.exit_code)
+
+lemma.machines.files.write("me", "/home/user/lemma/notes.txt", "hello")
+data = lemma.machines.files.read("me", "/home/user/lemma/notes.txt")
+preview = lemma.machines.previews.create("me", 3000, visibility="private")
+lemma.machines.reset("me", ["processes", "caches"])
+```
+
+`exec` streams over a websocket when `websockets` is installed
+(`pip install "lemma-sdk[live]"`) and polls the output endpoint otherwise.
 
 ## Writing a function
 

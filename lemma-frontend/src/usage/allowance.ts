@@ -150,6 +150,34 @@ export function breakdown(source: Record<string, Record<string, unknown>> | unde
         .sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0));
 }
 
+/** Machine time in a window, read off the by-kind totals.
+ *
+ *  Compute is recorded in compute units rather than tokens — one unit is an
+ *  hour of a 2x4 machine — so it has no place in the token totals and gets its
+ *  own figure beside the spend. Null when the window recorded none, which is
+ *  most accounts that have never started a machine. */
+export function computeOf(byKind: Record<string, Record<string, unknown>> | undefined | null): { units: number; cost: number | null } | null {
+    const bucket = byKind?.["COMPUTE"];
+    if (!bucket) return null;
+    const units = typeof bucket["units"] === "number" ? bucket["units"] : 0;
+    const cost = typeof bucket["system_cost_usd"] === "number" ? bucket["system_cost_usd"] : null;
+    return { units, cost };
+}
+
+/** Compute units, to the precision a bill would show. A sliver is still
+ *  shown as a sliver rather than rounded to nothing. */
+export function formatComputeUnits(units: number): string {
+    if (!Number.isFinite(units) || units <= 0) return "0 CU";
+    if (units < 0.01) return "<0.01 CU";
+    return (units < 10 ? units.toFixed(2).replace(/\.?0+$/, "") : Math.round(units).toLocaleString("en-US")) + " CU";
+}
+
+/** The same figure in hours, for somebody who does not think in units yet. */
+export function computeHint(compute: { units: number; cost: number | null }): string {
+    const hours = formatComputeUnits(compute.units).replace(/ CU$/, "");
+    return "About " + hours + " hours of a 2x4 machine" + (compute.cost === null ? "" : " · " + formatCost(compute.cost));
+}
+
 /** When a window starts over, said the way a person would say it. */
 export function resetsIn(resetAt: string | null | undefined, now = new Date()): string {
     if (!resetAt) return "";

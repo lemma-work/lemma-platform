@@ -6,7 +6,7 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...models.workspace_file_list_response import WorkspaceFileListResponse
+from ...models.machine_file_list_response import MachineFileListResponse
 from ...types import UNSET, Response, Unset
 
 
@@ -48,9 +48,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | WorkspaceFileListResponse | None:
+) -> ErrorResponse | MachineFileListResponse | None:
     if response.status_code == 200:
-        response_200 = WorkspaceFileListResponse.from_dict(response.json())
+        response_200 = MachineFileListResponse.from_dict(response.json())
 
         return response_200
 
@@ -67,7 +67,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | WorkspaceFileListResponse]:
+) -> Response[ErrorResponse | MachineFileListResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -82,21 +82,20 @@ def sync_detailed(
     path: None | str | Unset = UNSET,
     wake: bool | Unset = False,
     after: None | str | Unset = UNSET,
-) -> Response[ErrorResponse | WorkspaceFileListResponse]:
+) -> Response[ErrorResponse | MachineFileListResponse]:
     """List workspace files
 
     Args:
         path (None | str | Unset):
-        wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
-        after (None | str | Unset): Continue after this entry's path, from a previous response's
-            `next_after`.
+        wake (bool | Unset):  Default: False.
+        after (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | WorkspaceFileListResponse]
+        Response[ErrorResponse | MachineFileListResponse]
     """
 
     kwargs = _get_kwargs(
@@ -118,21 +117,20 @@ def sync(
     path: None | str | Unset = UNSET,
     wake: bool | Unset = False,
     after: None | str | Unset = UNSET,
-) -> ErrorResponse | WorkspaceFileListResponse | None:
+) -> ErrorResponse | MachineFileListResponse | None:
     """List workspace files
 
     Args:
         path (None | str | Unset):
-        wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
-        after (None | str | Unset): Continue after this entry's path, from a previous response's
-            `next_after`.
+        wake (bool | Unset):  Default: False.
+        after (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | WorkspaceFileListResponse
+        ErrorResponse | MachineFileListResponse
     """
 
     return sync_detailed(
@@ -149,21 +147,20 @@ async def asyncio_detailed(
     path: None | str | Unset = UNSET,
     wake: bool | Unset = False,
     after: None | str | Unset = UNSET,
-) -> Response[ErrorResponse | WorkspaceFileListResponse]:
+) -> Response[ErrorResponse | MachineFileListResponse]:
     """List workspace files
 
     Args:
         path (None | str | Unset):
-        wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
-        after (None | str | Unset): Continue after this entry's path, from a previous response's
-            `next_after`.
+        wake (bool | Unset):  Default: False.
+        after (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | WorkspaceFileListResponse]
+        Response[ErrorResponse | MachineFileListResponse]
     """
 
     kwargs = _get_kwargs(
@@ -183,21 +180,20 @@ async def asyncio(
     path: None | str | Unset = UNSET,
     wake: bool | Unset = False,
     after: None | str | Unset = UNSET,
-) -> ErrorResponse | WorkspaceFileListResponse | None:
+) -> ErrorResponse | MachineFileListResponse | None:
     """List workspace files
 
     Args:
         path (None | str | Unset):
-        wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
-        after (None | str | Unset): Continue after this entry's path, from a previous response's
-            `next_after`.
+        wake (bool | Unset):  Default: False.
+        after (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | WorkspaceFileListResponse
+        ErrorResponse | MachineFileListResponse
     """
 
     return (

@@ -108,7 +108,7 @@ class _NothingExists:
         return set()
 
     table_names = function_names = agent_names = _none
-    workflow_names = schedule_names = app_names = surface_names = _none
+    workflow_names = schedule_names = app_names = surface_names = machine_names = _none
 
     async def table_manifest(self, _name):
         return None

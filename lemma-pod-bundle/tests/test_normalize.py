@@ -431,3 +431,62 @@ def test_a_one_time_schedule_is_past_only_when_its_moment_has_gone() -> None:
     assert not is_past_one_time_schedule(cron, now=now)
     trigger = {"schedule_type": "DATASTORE", "config": {"scheduled_at": "2020-01-01"}}
     assert not is_past_one_time_schedule(trigger, now=now)
+
+
+def test_normalize_agent_payload_makes_a_source_pod_machine_portable():
+    from lemma_pod_bundle.normalize import portable_machine_ref
+
+    agent = {"name": "builder-bot", "machine": "pod:p-1/builder"}
+    assert _normalize_agent_payload(agent, pod_id="p-1")["machine"] == "pod:builder"
+    assert portable_machine_ref("pod:p-1:builder", "p-1") == "pod:builder"
+    # Another pod's machine, or a person's own, is left as written.
+    assert portable_machine_ref("pod:p-2/builder", "p-1") == "pod:p-2/builder"
+    assert portable_machine_ref("mine:mac", "p-1") == "mine:mac"
+    # No machine is explicit, so a re-import clears one the target had.
+    assert _normalize_agent_payload({"name": "a"})["machine"] is None
+
+
+def test_normalize_machine_payload_keeps_the_definition_only():
+    from lemma_pod_bundle.normalize import _normalize_machine_payload
+
+    assert _normalize_machine_payload(
+        {
+            "id": "m-1",
+            "name": "builder",
+            "display_name": "builder",
+            "template": "workspace",
+            "size": "2x4",
+            "visibility": "pod",
+            "run_slots": 1,
+            "status": "running",
+            "home": "/home/user",
+        }
+    ) == {
+        "name": "builder",
+        "template": "workspace",
+        "size": "2x4",
+        "visibility": "pod",
+        "run_slots": 1,
+    }
+
+
+def test_validate_machine_payload(tmp_path: Path):
+    from lemma_pod_bundle.normalize import _validate_machine_payload
+
+    good = {"name": "builder", "template": "workspace", "visibility": "restricted"}
+    assert _validate_machine_payload(tmp_path, "builder", good) == []
+
+    messages = [
+        issue.message
+        for issue in _validate_machine_payload(
+            tmp_path,
+            "builder",
+            {"name": "builder", "size": "big", "run_slots": 0, "status": "x"},
+        )
+    ]
+    assert len(messages) == 5
+    assert any("status" in message for message in messages)
+    assert any("template" in message for message in messages)
+    assert any("visibility" in message for message in messages)
+    assert any("2x4" in message for message in messages)
+    assert any("run_slots" in message for message in messages)

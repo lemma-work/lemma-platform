@@ -12,6 +12,8 @@ import {
     type AgentDetail, type AgentDraft, type AgentRow,
 } from "@/data/agents";
 import { displayAgentName } from "@/data/agent-names";
+import { machineChoices } from "@/machines/machine-choices";
+import { usePodMachines } from "@/machines/pod-machines";
 import { isForbidden } from "@/session/auth-state";
 import { useSurfaces } from "@/shell/surfaces";
 import { Mark } from "@/shell/mark";
@@ -430,6 +432,8 @@ export function Editor({ podId, orgId, detail, onDone }: {
 
     const found = agentProblems(draft);
     const dirty = hasAgentChanges(before, draft);
+    const machines = usePodMachines(podId);
+    const machineOptions = machineChoices(machines.data, draft.machine);
 
     const save = useMutation({
         mutationFn: () => source.updateAgent(podId, detail.name, before, draft),
@@ -546,6 +550,25 @@ export function Editor({ podId, orgId, detail, onDone }: {
                     </div>
                 </div>
             )}
+
+            <div className="record-form__field">
+                <label htmlFor="agent-machine">Machine</label>
+                <small>
+                    Where its commands, files and browser run. The default is the machine of whoever it is
+                    working for, so each person’s runs stay on their own.
+                </small>
+                <select
+                    id="agent-machine"
+                    value={draft.machine}
+                    disabled={save.isPending}
+                    onChange={(event) => setDraft({ ...draft, machine: event.target.value })}
+                >
+                    {machineOptions.map((one) => (
+                        <option key={one.value} value={one.value}>{one.label}</option>
+                    ))}
+                </select>
+                {machines.isError && <em role="alert">The pod’s machines could not be listed.</em>}
+            </div>
 
             {/* Toolsets, visibility, the runtime and the schemas are all on
                 `UpdateAgentRequest` and none of them are here. Each is a

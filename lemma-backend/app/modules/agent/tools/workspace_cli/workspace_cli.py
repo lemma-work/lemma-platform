@@ -34,6 +34,11 @@ from app.modules.agent.tools.workspace_cli.helper import (
     trim_python_result,
 )
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
+from app.modules.agent.tools.workspace_cli.run_machine import (
+    machine_from_session,
+    place_on_machine,
+    tag_for_run,
+)
 from app.modules.agent.tools.workspace_cli.process_visibility import (
     visible_processes,
 )
@@ -133,6 +138,7 @@ async def get_workspace_session(
     session_id: str | None,
     close_on_exit: bool,
     runtime=None,
+    machine: str | None = None,
 ):
     # Every sandbox and host session a tool opens comes through here.
     refuse_owner_workspace(ctx)
@@ -140,8 +146,13 @@ async def get_workspace_session(
     principal = workspace_principal(ctx)
     if runtime is None:
         runtime = get_workspace_tool_runtime()
+    machine = machine or machine_from_session(session_id)
     host_workspace = getattr(ctx, "host_workspace", None)
-    if host_workspace is not None:
+    if (
+        host_workspace is not None
+        and machine is None
+        and not getattr(ctx, "machine", None)
+    ):
         # The user's Mac, chosen for this whole run; see
         # `host_execution_selection`. Never the VM for this run, whatever the
         # host is doing now -- a host that went away says so in the result.
@@ -160,6 +171,9 @@ async def get_workspace_session(
             close_on_exit=close_on_exit,
             conversation_id=ctx.conversation_id,
         )
+    session_id, initial_cwd, machine_id = await place_on_machine(
+        ctx, machine, session_id=session_id, initial_cwd=runtime_context.initial_cwd
+    )
     # Nothing names a browser session here any more. The image's
     # `AGENT_BROWSER_SESSION` is the only browser there is, so a shell that
     # inherits it, the relay, and the pane the person watches are all looking
@@ -174,9 +188,10 @@ async def get_workspace_session(
         workload_name=principal.workload_name,
         scope_key=runtime_context.scope_key,
         session_id=session_id,
-        initial_cwd=runtime_context.initial_cwd,
+        initial_cwd=initial_cwd,
         close_on_exit=close_on_exit,
         conversation_id=ctx.conversation_id,
+        machine_id=machine_id,
     )
 
 
@@ -318,6 +333,7 @@ async def exec_command_internal(
                 session_id=runtime_context.default_shell_session_id,
                 close_on_exit=False,
                 runtime=runtime,
+                machine=request.machine,
             )
         async with workspace_session:
             # A repo-backed conversation needs credentials for every command,
@@ -354,6 +370,7 @@ async def exec_command_internal(
                     process_id=process_id,
                     session_id=workspace_session.session_id,
                 )
+                await tag_for_run(ctx, workspace_session, process_id, request.cmd)
         stdout, stderr = render_terminal_result(
             result, tty=request.tty, max_output_tokens=request.max_output_tokens
         )
@@ -452,7 +469,6 @@ async def list_processes_internal(
     ctx: BaseAgentContext,
     request: ListProcessesRequest,
 ) -> ListProcessesResult:
-    del request
     try:
         runtime = get_workspace_tool_runtime()
         runtime_context = workspace_runtime_context(ctx)
@@ -460,6 +476,7 @@ async def list_processes_internal(
             ctx,
             session_id=runtime_context.default_shell_session_id,
             close_on_exit=False,
+            machine=getattr(request, "machine", None),
         )
         async with workspace_session:
             processes = await workspace_session.list_processes()
@@ -495,6 +512,7 @@ async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonR
             ctx,
             session_id=workspace_runtime_context(ctx).default_python_session_id,
             close_on_exit=False,
+            machine=request.machine,
         )
         async with workspace_session:
             project_notice = await prepare_project_directory(

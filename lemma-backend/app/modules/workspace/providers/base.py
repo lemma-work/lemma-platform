@@ -93,6 +93,10 @@ class ProviderCreateSpec:
     # What the owner's plan pays for. None is the provider's configured default.
     # Only a workspace is sized by plan; a function sandbox keeps its own.
     size: SandboxSize | None = None
+    # The machine template (`workspace`, `workspace-docker`). Only E2B builds
+    # more than one; the other fabrics refuse a template they cannot build
+    # before a create is ever attempted (see `machine_policy`).
+    template: str = "workspace"
     # Whether the `host.lemma.internal` alias resolves in the sandbox. Only
     # the Desktop guest acts on it. Every sandbox needs it -- the workspace
     # runtime's callbacks and the function gateway reach the backend through

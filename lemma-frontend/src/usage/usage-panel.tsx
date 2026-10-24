@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { live, useMyLimits, useMyStats, useMySummary } from "./queries";
-import { allowanceOf, breakdown, formatCost, formatPercent, planLabel, resetsIn } from "./allowance";
+import { allowanceOf, breakdown, computeHint, computeOf, formatComputeUnits, formatCost, formatPercent, planLabel, resetsIn } from "./allowance";
 
 /** What the account has spent, and what it is allowed to spend.
  *
@@ -26,6 +26,7 @@ export function UsagePanel({ orgId }: { orgId?: string | null }) {
     const state = allowanceOf(limits.data);
     const windows = limits.data?.windows ?? [];
     const byModel = breakdown(summary.data?.total_by_model);
+    const compute = computeOf(summary.data?.total_by_kind);
     const buckets = stats.data?.items ?? [];
     const peak = buckets.reduce((high, b) => Math.max(high, b.system_cost_usd ?? 0), 0);
 
@@ -81,6 +82,13 @@ export function UsagePanel({ orgId }: { orgId?: string | null }) {
                             <div><dt>Cost</dt><dd>{formatCost(summary.data.system_cost_usd)}</dd></div>
                             <div><dt>Tokens in</dt><dd>{(summary.data.total_input_tokens ?? 0).toLocaleString()}</dd></div>
                             <div><dt>Tokens out</dt><dd>{(summary.data.total_output_tokens ?? 0).toLocaleString()}</dd></div>
+                        {compute && (
+                            /* Machine time beside the spend, in its own unit.
+                               The cost is already inside "Cost" above. */
+                            <div title={computeHint(compute)}>
+                                <dt>Compute</dt><dd>{formatComputeUnits(compute.units)}</dd>
+                            </div>
+                        )}
                         </dl>
 
                         {/* One bar per day, scaled to the busiest. A day with no
@@ -114,7 +122,7 @@ export function UsagePanel({ orgId }: { orgId?: string | null }) {
                             </ul>
                         )}
 
-                        {summary.data.total_tokens === 0 && (
+                        {summary.data.total_tokens === 0 && !compute && (
                             <p className="usage-quiet">Nothing recorded in this window.</p>
                         )}
                     </>

@@ -146,6 +146,8 @@ async def build_run_context(
         runtime_profile=runtime_profile_snapshot,
         workspace_id=workspace_location.workspace_id,
         workspace_cwd=workspace_location.cwd,
+        machine=agent.machine,
+        started_in_lemma=_started_in_lemma(conversation, user_id),
         workspace_repo=workspace_location.repo,
         pod_cwd=pod_cwd,
         # Only the in-process pydantic (LEMMA) harness catches the
@@ -240,6 +242,7 @@ async def build_run_context(
             ctx.attached_document,
             task_list_section(conversation, toolsets=run_toolsets),
             ctx.open_questions,
+            await _machine_section(ctx, run_toolsets, for_outsider=for_outsider),
         )
     )
     # How image-returning tools answer on this run. Settled before the
@@ -287,3 +290,58 @@ def _harness_id(snapshot: dict[str, object | None] | None) -> UUID | None:
         return UUID(str(raw)) if raw else None
     except ValueError:
         return None
+
+
+async def _machine_section(
+    ctx: ConversationContext, toolsets, *, for_outsider: bool
+) -> str:
+    """The run's machine, for an agent that runs commands. Empty when it has
+    none -- a stranger's run, or one with no machine it may use -- and when
+    the machine cannot be read: a run is not worth failing over this."""
+    if for_outsider or AgentToolset.WORKSPACE_CLI not in toolsets:
+        return ""
+    from app.modules.agent.domain.run_context_prompt import machine_section
+    from app.modules.workspace.contracts.agent_machines import machine_brief
+
+    try:
+        brief = await machine_brief(
+            ref=ctx.machine,
+            user_id=ctx.user_id,
+            pod_id=ctx.pod_id,
+            agent_id=ctx.workload_id,
+            agent_name=ctx.agent_name,
+            conversation_id=ctx.conversation_id,
+            run_id=ctx.conversation_id,
+        )
+    except DomainError, SQLAlchemyError, OSError, TimeoutError:
+        logger.warning(
+            "agent.run.machine_section_unavailable.degraded",
+            conversation_id=str(ctx.conversation_id),
+            exc_info=True,
+        )
+        return ""
+    if brief is None:
+        return ""
+    return machine_section(
+        ref=brief.ref,
+        size=brief.size,
+        docker=brief.docker,
+        workdir=brief.workdir,
+        disk_fraction=brief.disk_fraction,
+        compute_left=brief.compute_left,
+        compute_resets=brief.compute_resets,
+    )
+
+
+def _started_in_lemma(conversation, user_id) -> bool:
+    """The same rule `contracts/run_origin` gives the machine resolver, read
+    off the conversation this builder already holds."""
+    from app.modules.agent.domain.value_objects import ConversationType
+
+    return (
+        conversation.user_id == user_id
+        and getattr(conversation, "channel_id", None) is None
+        and getattr(conversation, "contact_id", None) is None
+        and str(getattr(conversation, "conversation_type", "CHAT"))
+        not in (ConversationType.TASK.value, str(ConversationType.TASK))
+    )

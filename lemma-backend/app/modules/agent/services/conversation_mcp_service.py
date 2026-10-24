@@ -554,9 +554,9 @@ def _tool_context(
             runtime_profile, delegate_model_configured=vision_delegate_available()
         ),
         # The location fields: without them `get_workspace_cwd()` falls
-        # back to `/workspace/conversations/<uuid>`, so tools ran in a
+        # back to `~/lemma/conversations/<uuid>`, so tools ran in a
         # directory the agent's own prompt does not name -- the prompt
-        # says `/workspace/c/<date>/<slug>`, which is where the resolver
+        # says `~/lemma/c/<date>/<slug>`, which is where the resolver
         # actually put the conversation, and which is where a previous
         # turn's files are. `pod_cwd` has the same effect on the pod
         # filesystem, scattering writes under `/me/conversations/<uuid>`.

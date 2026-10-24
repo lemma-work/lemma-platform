@@ -166,7 +166,7 @@ over.
    display_resource(type="WIDGET", path="/me/c/2026-09-15/pulse.html")
    ```
 
-   Compose it straight into that call. Do not draft it in the workspace, run
+   Compose it straight into that call. Do not draft it on your machine, run
    it through a parser, or render it to check it: the backend validates what
    you display and says exactly what is wrong if anything is.
 
@@ -205,8 +205,9 @@ and work you get one shot at:
   broken reaches the person, so there is no need to read it back first.
 
 So: `pod_write_file` to `/me/c/<date>/<name>.html`, then
-`display_resource(type="WIDGET", path=...)`. A pod path, never a workspace one —
-the widget is read as the person looking at it, and they are not in your sandbox.
+`display_resource(type="WIDGET", path=...)`. A pod path, never one on your
+machine — the widget is read as the person looking at it, and they cannot reach
+your machine's files.
 
 `content` still takes an inline fragment, for something small you are sure of.
 It is frozen in the tool call the moment it succeeds: no editing it, no taking

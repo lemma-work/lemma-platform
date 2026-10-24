@@ -117,8 +117,10 @@ def test_toolset_resolver_returns_exactly_the_selected_toolsets():
         ]
     )
 
-    assert len(toolsets) == 2
-    assert toolsets[0] is not toolsets[1]
+    # WORKSPACE_CLI brings the machine tools with it, as a toolset of their
+    # own so the pod's assistant can defer them.
+    assert len(toolsets) == 3
+    assert len({id(item) for item in toolsets}) == 3
     assert all(item.__class__.__name__.endswith("Toolset") for item in toolsets)
 
 
@@ -577,7 +579,7 @@ def test_display_resource_validates_widget_form_and_table_payloads():
 def test_display_resource_rejects_the_agents_own_sandbox_paths():
     """A workspace path is caught here, where the agent can still fix it.
 
-    `/workspace/...` is the agent's cwd, so it is the path in hand when it
+    `~/lemma/...` is the agent's cwd, so it is the path in hand when it
     decides to show a file it just made. It used to pass validation and fail
     three layers down, where the only thing left was a card whose "Open file"
     button pointed into a pod directory that does not exist.
@@ -1147,7 +1149,7 @@ def test_a_finished_plan_is_shown_as_history_rather_than_as_work():
 
 def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
     """On a repo, the scratchpad orientation is not just unhelpful but wrong:
-    there is no sibling `/workspace/c/<date>/<slug>` holding earlier work, and
+    there is no sibling `~/lemma/c/<date>/<slug>` holding earlier work, and
     an empty directory means a failed clone rather than a new conversation."""
 
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
@@ -1177,15 +1179,15 @@ def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
     # A shared checkout: warn before it tidies up someone else's work.
     assert "git status" in prompt
     assert "reset --hard" in prompt
-    assert "list `/workspace/c/`" not in prompt
+    assert f"list `{WORKSPACE_ROOT}/c/`" not in prompt
 
 
 def test_workspace_directory_falls_back_to_the_resolved_location():
     """A context with no cwd still names the directory the tools use.
 
-    This asserted `/workspace/conversations/{id}` — a path shape the platform
+    This asserted `~/lemma/conversations/{id}` — a path shape the platform
     stopped making when the cwd moved into conversation metadata with a
-    `/workspace/c/{date}/{slug}` default. The test was pinning the stale answer
+    `~/lemma/c/{date}/{slug}` default. The test was pinning the stale answer
     in place, so the one section whose job is to say where the agent is pointed
     at a directory that does not exist.
     """

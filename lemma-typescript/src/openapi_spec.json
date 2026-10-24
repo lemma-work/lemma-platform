@@ -518,6 +518,17 @@
             "$ref": "#/components/schemas/AgentKind",
             "default": "USER"
           },
+          "machine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Machine"
+          },
           "metadata": {
             "anyOf": [
               {
@@ -664,6 +675,17 @@
           "kind": {
             "$ref": "#/components/schemas/AgentKind",
             "default": "USER"
+          },
+          "machine": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Machine"
           },
           "metadata": {
             "anyOf": [
@@ -3422,6 +3444,38 @@
         "title": "AvailableSurfacesResponse",
         "type": "object"
       },
+      "BrowserAccessRequest": {
+        "properties": {
+          "ttl_seconds": {
+            "default": 1800,
+            "maximum": 3600.0,
+            "minimum": 60.0,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "BrowserAccessRequest",
+        "type": "object"
+      },
+      "BrowserAccessResponse": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expires_at"
+        ],
+        "title": "BrowserAccessResponse",
+        "type": "object"
+      },
       "BrowserStatusResponse": {
         "description": "What the pane can say without waking anything.\n\n`asleep` the computer is paused or was never started; `stopped` it is up but\nthe browser is not (the resting state after five idle minutes); `running` a\nbrowser is there now; `unavailable` the relay did not answer, which on an\nolder image is permanent until it is replaced; `unsupported` this fabric\ncannot reach a port at all.",
         "properties": {
@@ -6023,6 +6077,59 @@
         "title": "ConnectorStatusResponse",
         "type": "object"
       },
+      "ConsentListResponse": {
+        "properties": {
+          "consents": {
+            "items": {
+              "$ref": "#/components/schemas/ConsentResponse"
+            },
+            "title": "Consents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "consents"
+        ],
+        "title": "ConsentListResponse",
+        "type": "object"
+      },
+      "ConsentResponse": {
+        "properties": {
+          "app_id": {
+            "format": "uuid",
+            "title": "App Id",
+            "type": "string"
+          },
+          "app_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Name"
+          },
+          "granted_at": {
+            "format": "date-time",
+            "title": "Granted At",
+            "type": "string"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_id",
+          "pod_id",
+          "granted_at"
+        ],
+        "title": "ConsentResponse",
+        "type": "object"
+      },
       "ContactAnswer": {
         "description": "Whom a bot answers in a private chat, beyond the pod's members.",
         "enum": [
@@ -6764,6 +6871,19 @@
             "title": "Instruction",
             "type": "string"
           },
+          "machine": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where this agent's commands run: a machine ref such as `pod:<name>` for one of the pod's machines. Unset runs on the default machine of whoever the run acts for.",
+            "title": "Machine"
+          },
           "metadata": {
             "anyOf": [
               {
@@ -7335,6 +7455,108 @@
           "base_url"
         ],
         "title": "CreateOpenAICompatibleRuntimeProfileRequest",
+        "type": "object"
+      },
+      "CreatePodMachineRequest": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "name": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "run_slots": {
+            "default": 1,
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Run Slots",
+            "type": "integer"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Defaults to the plan's default size.",
+            "title": "Size"
+          },
+          "template": {
+            "default": "workspace",
+            "enum": [
+              "workspace",
+              "workspace-docker"
+            ],
+            "title": "Template",
+            "type": "string"
+          },
+          "visibility": {
+            "default": "pod",
+            "enum": [
+              "pod",
+              "restricted"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreatePodMachineRequest",
+        "type": "object"
+      },
+      "CreatePreviewRequest": {
+        "properties": {
+          "port": {
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Port",
+            "type": "integer"
+          },
+          "ttl_seconds": {
+            "anyOf": [
+              {
+                "minimum": 60.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How long it lives. Required-ish for `link`: capped at 24 hours.",
+            "title": "Ttl Seconds"
+          },
+          "visibility": {
+            "default": "private",
+            "description": "`private`: people who can see the machine, after signing in. `link`: anyone with the URL, for at most 24 hours.",
+            "enum": [
+              "private",
+              "link"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "port"
+        ],
+        "title": "CreatePreviewRequest",
         "type": "object"
       },
       "CreateRecordRequest": {
@@ -11818,6 +12040,20 @@
         "title": "GenerationSettings",
         "type": "object"
       },
+      "GrantConsentRequest": {
+        "properties": {
+          "app_id": {
+            "format": "uuid",
+            "title": "App Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_id"
+        ],
+        "title": "GrantConsentRequest",
+        "type": "object"
+      },
       "GranteeRef": {
         "properties": {
           "grantee_id": {
@@ -13248,6 +13484,488 @@
         "title": "LoopNodeResponse",
         "type": "object"
       },
+      "MachineCapabilitiesModel": {
+        "properties": {
+          "browser": {
+            "title": "Browser",
+            "type": "boolean"
+          },
+          "docker": {
+            "title": "Docker",
+            "type": "boolean"
+          },
+          "files": {
+            "title": "Files",
+            "type": "boolean"
+          },
+          "previews": {
+            "title": "Previews",
+            "type": "boolean"
+          },
+          "processes": {
+            "title": "Processes",
+            "type": "boolean"
+          },
+          "pty": {
+            "title": "Pty",
+            "type": "boolean"
+          },
+          "python": {
+            "title": "Python",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "processes",
+          "pty",
+          "python",
+          "files",
+          "previews",
+          "browser",
+          "docker"
+        ],
+        "title": "MachineCapabilitiesModel",
+        "type": "object"
+      },
+      "MachineFileEntry": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "file",
+              "directory",
+              "symlink"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "modified_at": {
+            "format": "date-time",
+            "title": "Modified At",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "kind",
+          "size_bytes",
+          "modified_at"
+        ],
+        "title": "MachineFileEntry",
+        "type": "object"
+      },
+      "MachineFileListResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/MachineFileEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "exists": {
+            "default": true,
+            "title": "Exists",
+            "type": "boolean"
+          },
+          "home_root": {
+            "default": "/home/user",
+            "title": "Home Root",
+            "type": "string"
+          },
+          "next_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sleeping": {
+            "default": false,
+            "description": "The machine is paused and was not woken; ask with `wake=true`.",
+            "title": "Sleeping",
+            "type": "boolean"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "workspace_root": {
+            "default": "/home/user/lemma",
+            "title": "Workspace Root",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "MachineFileListResponse",
+        "type": "object"
+      },
+      "MachineGrantsModel": {
+        "description": "Who may use a pod machine beyond what visibility already allows.\n\nAgents and functions by name; people by user id. A RESTRICTED machine is\nusable only by those named here (and pod admins).",
+        "properties": {
+          "agents": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "functions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Functions",
+            "type": "array"
+          },
+          "members": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Members",
+            "type": "array"
+          }
+        },
+        "title": "MachineGrantsModel",
+        "type": "object"
+      },
+      "MachineListResponse": {
+        "properties": {
+          "machines": {
+            "items": {
+              "$ref": "#/components/schemas/MachineResponse"
+            },
+            "title": "Machines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "machines"
+        ],
+        "title": "MachineListResponse",
+        "type": "object"
+      },
+      "MachinePolicyResponse": {
+        "description": "What a person or pod may create, for a screen to offer and no more.",
+        "properties": {
+          "default_size": {
+            "title": "Default Size",
+            "type": "string"
+          },
+          "max_connected_machines": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Connected Machines"
+          },
+          "max_pod_machines": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Pod Machines"
+          },
+          "max_running": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Running"
+          },
+          "templates": {
+            "items": {
+              "$ref": "#/components/schemas/SizeOffer"
+            },
+            "title": "Templates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "default_size",
+          "templates"
+        ],
+        "title": "MachinePolicyResponse",
+        "type": "object"
+      },
+      "MachineResponse": {
+        "properties": {
+          "access": {
+            "description": "What the caller may do with it.",
+            "enum": [
+              "status",
+              "use",
+              "manage"
+            ],
+            "title": "Access",
+            "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/MachineCapabilitiesModel"
+          },
+          "compute_units_this_month": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Compute used this calendar month (1 CU = one hour at 2x4).",
+            "title": "Compute Units This Month"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "fabric": {
+            "title": "Fabric",
+            "type": "string"
+          },
+          "home": {
+            "title": "Home",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "default",
+              "pod",
+              "connected"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pod Id"
+          },
+          "ref": {
+            "description": "How to name this machine in a call: `me`, `pod:<pod-id>/<name>` or `mine:<name>`. In a URL path use `:` for the slash.",
+            "title": "Ref",
+            "type": "string"
+          },
+          "run_slots": {
+            "title": "Run Slots",
+            "type": "integer"
+          },
+          "size": {
+            "description": "`<vcpu>x<memory GB>`, e.g. `2x4`.",
+            "title": "Size",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "running",
+              "starting",
+              "stopped",
+              "offline",
+              "error",
+              "deleted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "template": {
+            "enum": [
+              "workspace",
+              "workspace-docker"
+            ],
+            "title": "Template",
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "private",
+              "pod",
+              "restricted"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ref",
+          "kind",
+          "name",
+          "display_name",
+          "template",
+          "size",
+          "fabric",
+          "capabilities",
+          "visibility",
+          "status",
+          "access",
+          "run_slots",
+          "home"
+        ],
+        "title": "MachineResponse",
+        "type": "object"
+      },
+      "MachineStartupResponse": {
+        "description": "Whether the machine is ready and, if not, what it is doing. Never wakes it.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "disk_total_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Total Bytes"
+          },
+          "disk_used_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Used Bytes"
+          },
+          "done_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Done Mb"
+          },
+          "state": {
+            "description": "`ready`: running. `downloading`: fetching its image, which the first start after an update does. `starting`: coming up. `asleep`: not running, and starts on first use. `unavailable`: could not be asked.",
+            "enum": [
+              "ready",
+              "downloading",
+              "starting",
+              "asleep",
+              "unavailable"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "total_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Mb"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "MachineStartupResponse",
+        "type": "object"
+      },
       "MakeDecisionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -13715,6 +14433,28 @@
         "title": "MessageResponseSchema",
         "type": "object"
       },
+      "MoveRequest": {
+        "properties": {
+          "destination": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Destination",
+            "type": "string"
+          },
+          "source": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "destination"
+        ],
+        "title": "MoveRequest",
+        "type": "object"
+      },
       "MyMembershipResponse": {
         "properties": {
           "can_manage": {
@@ -13895,6 +14635,50 @@
           "warning_percent"
         ],
         "title": "MyUsageLimitsResponse",
+        "type": "object"
+      },
+      "NavigateRequest": {
+        "properties": {
+          "url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "NavigateRequest",
+        "type": "object"
+      },
+      "NavigateResponse": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "NavigateResponse",
         "type": "object"
       },
       "NavigationOrganizationResponse": {
@@ -15181,6 +15965,35 @@
           }
         },
         "title": "OrganizationUpdateRequest",
+        "type": "object"
+      },
+      "OutputChunkModel": {
+        "properties": {
+          "channel": {
+            "enum": [
+              "stdout",
+              "stderr",
+              "pty"
+            ],
+            "title": "Channel",
+            "type": "string"
+          },
+          "data": {
+            "description": "UTF-8, with undecodable bytes replaced.",
+            "title": "Data",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "channel",
+          "data"
+        ],
+        "title": "OutputChunkModel",
         "type": "object"
       },
       "OutreachDelivery": {
@@ -17436,6 +18249,278 @@
         "title": "PodUpdateRequest",
         "type": "object"
       },
+      "PreviewListResponse": {
+        "properties": {
+          "previews": {
+            "items": {
+              "$ref": "#/components/schemas/PreviewResponse"
+            },
+            "title": "Previews",
+            "type": "array"
+          }
+        },
+        "required": [
+          "previews"
+        ],
+        "title": "PreviewListResponse",
+        "type": "object"
+      },
+      "PreviewResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "port": {
+            "title": "Port",
+            "type": "integer"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "visibility": {
+            "enum": [
+              "private",
+              "link"
+            ],
+            "title": "Visibility",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "port",
+          "visibility",
+          "url",
+          "created_at"
+        ],
+        "title": "PreviewResponse",
+        "type": "object"
+      },
+      "ProcessInputRequest": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Text to type.",
+            "title": "Data"
+          },
+          "data_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Raw bytes, base64.",
+            "title": "Data Base64"
+          }
+        },
+        "title": "ProcessInputRequest",
+        "type": "object"
+      },
+      "ProcessListResponse": {
+        "properties": {
+          "processes": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessResponse"
+            },
+            "title": "Processes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "processes"
+        ],
+        "title": "ProcessListResponse",
+        "type": "object"
+      },
+      "ProcessOutputResponse": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "$ref": "#/components/schemas/OutputChunkModel"
+            },
+            "title": "Chunks",
+            "type": "array"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "next_sequence": {
+            "title": "Next Sequence",
+            "type": "integer"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "truncated_before_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Truncated Before Sequence"
+          }
+        },
+        "required": [
+          "chunks",
+          "next_sequence",
+          "state"
+        ],
+        "title": "ProcessOutputResponse",
+        "type": "object"
+      },
+      "ProcessResponse": {
+        "properties": {
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "cwd": {
+            "title": "Cwd",
+            "type": "string"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "started_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started By"
+          },
+          "state": {
+            "enum": [
+              "reserved",
+              "starting",
+              "unknown",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "timed_out"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tty": {
+            "default": false,
+            "title": "Tty",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "command",
+          "cwd",
+          "state"
+        ],
+        "title": "ProcessResponse",
+        "type": "object"
+      },
       "PublicAudience": {
         "description": "Who outside the pod may add rows.",
         "enum": [
@@ -18085,6 +19170,102 @@
         "title": "ReportFeedbackResponse",
         "type": "object"
       },
+      "ResetRequest": {
+        "properties": {
+          "confirm": {
+            "default": false,
+            "description": "Required for `home`, which replaces the machine's disk.",
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "forget_logins": {
+            "default": false,
+            "description": "With `home`: do not restore the browser's logins onto the new disk. Logins survive every other scope untouched.",
+            "title": "Forget Logins",
+            "type": "boolean"
+          },
+          "scopes": {
+            "items": {
+              "enum": [
+                "processes",
+                "runs",
+                "caches",
+                "docker",
+                "browser-session",
+                "home"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scopes"
+        ],
+        "title": "ResetRequest",
+        "type": "object"
+      },
+      "ResetResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ResetScopeResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "ResetResponse",
+        "type": "object"
+      },
+      "ResetScopeResult": {
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "freed_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Freed Bytes"
+          },
+          "scope": {
+            "enum": [
+              "processes",
+              "runs",
+              "caches",
+              "docker",
+              "browser-session",
+              "home"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "ResetScopeResult",
+        "type": "object"
+      },
       "ResolveUserApprovalRequest": {
         "properties": {
           "decision": {
@@ -18322,7 +19503,8 @@
           "connector",
           "connector_account",
           "web_login",
-          "connector_auth_config"
+          "connector_auth_config",
+          "machine"
         ],
         "title": "ResourceType",
         "type": "string"
@@ -19710,6 +20892,31 @@
         "title": "SignedUrlSummary",
         "type": "object"
       },
+      "SizeOffer": {
+        "properties": {
+          "sizes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sizes",
+            "type": "array"
+          },
+          "template": {
+            "enum": [
+              "workspace",
+              "workspace-docker"
+            ],
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template",
+          "sizes"
+        ],
+        "title": "SizeOffer",
+        "type": "object"
+      },
       "SlackAppCreateRequest": {
         "properties": {
           "agent_id": {
@@ -20274,6 +21481,96 @@
           }
         },
         "title": "SourceUpdateRequest",
+        "type": "object"
+      },
+      "StartProcessRequest": {
+        "properties": {
+          "command": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "title": "Command",
+            "type": "string"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absolute, inside the machine's home. Defaults to ~/lemma.",
+            "title": "Cwd"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Env",
+            "type": "object"
+          },
+          "restart_on_resume": {
+            "default": false,
+            "description": "With `service`: start it again after a pause.",
+            "title": "Restart On Resume",
+            "type": "boolean"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stop it when this run ends (pod machines tag agent work this way).",
+            "title": "Run Id"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Run as a named service: no lifetime cap, not stopped when the run that started it ends, listed under Processes as a service.",
+            "title": "Service"
+          },
+          "timeout_seconds": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How long it may run. Capped at the machine's process lifetime.",
+            "title": "Timeout Seconds"
+          },
+          "tty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TerminalSizeModel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Run in a terminal of this size (for a shell)."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "title": "StartProcessRequest",
         "type": "object"
       },
       "StepRecordResponse": {
@@ -21475,6 +22772,66 @@
         "title": "SurfaceWhatsAppConfigInput",
         "type": "object"
       },
+      "SyncRequest": {
+        "properties": {
+          "direction": {
+            "enum": [
+              "to_pod",
+              "from_pod"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "machine_path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Machine Path",
+            "type": "string"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "pod_path": {
+            "description": "`to_pod`: the pod folder to put the files in. `from_pod`: the pod file to copy onto the machine.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Pod Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "direction",
+          "machine_path",
+          "pod_id",
+          "pod_path"
+        ],
+        "title": "SyncRequest",
+        "type": "object"
+      },
+      "SyncResponse": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "files": {
+            "description": "What was written, where it landed.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Files",
+            "type": "array"
+          }
+        },
+        "required": [
+          "files",
+          "bytes"
+        ],
+        "title": "SyncResponse",
+        "type": "object"
+      },
       "TableColumn": {
         "properties": {
           "description": {
@@ -21979,6 +23336,28 @@
         "title": "TelegramManagedBotSetupResponse",
         "type": "object"
       },
+      "TerminalSizeModel": {
+        "properties": {
+          "cols": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Cols",
+            "type": "integer"
+          },
+          "rows": {
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Rows",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cols",
+          "rows"
+        ],
+        "title": "TerminalSizeModel",
+        "type": "object"
+      },
       "ThreadResponse": {
         "properties": {
           "has_more": {
@@ -22278,6 +23657,19 @@
               }
             ],
             "title": "Instruction"
+          },
+          "machine": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where this agent's commands run: a machine ref such as `pod:<name>` for one of the pod's machines. Unset runs on the default machine of whoever the run acts for.",
+            "title": "Machine"
           },
           "metadata": {
             "anyOf": [
@@ -22774,6 +24166,63 @@
           }
         },
         "title": "UpdateOpenAICompatibleRuntimeProfileRequest",
+        "type": "object"
+      },
+      "UpdatePodMachineRequest": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "run_slots": {
+            "anyOf": [
+              {
+                "maximum": 16.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Slots"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pod",
+                  "restricted"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibility"
+          }
+        },
+        "title": "UpdatePodMachineRequest",
         "type": "object"
       },
       "UpdateRecordRequest": {
@@ -26238,194 +27687,6 @@
         "title": "WorkspaceAppAccessResponse",
         "type": "object"
       },
-      "WorkspaceFileEntry": {
-        "properties": {
-          "kind": {
-            "description": "What this entry is.",
-            "enum": [
-              "file",
-              "directory",
-              "symlink"
-            ],
-            "title": "Kind",
-            "type": "string"
-          },
-          "mode": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "POSIX permission bits, when the fabric reports them. A viewer showing a file it cannot write should be able to say so.",
-            "title": "Mode"
-          },
-          "modified_at": {
-            "description": "Last modification time.",
-            "format": "date-time",
-            "title": "Modified At",
-            "type": "string"
-          },
-          "name": {
-            "description": "Final path segment.",
-            "title": "Name",
-            "type": "string"
-          },
-          "path": {
-            "description": "Absolute path inside the workspace.",
-            "title": "Path",
-            "type": "string"
-          },
-          "sha256": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Content hash, when the fabric computes one. Doubles as the `ETag` on a read, so re-opening a file a viewer already has is a 304 rather than the bytes again.",
-            "title": "Sha256"
-          },
-          "size_bytes": {
-            "description": "Size in bytes; 0 for a directory.",
-            "title": "Size Bytes",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "path",
-          "name",
-          "kind",
-          "size_bytes",
-          "modified_at"
-        ],
-        "title": "WorkspaceFileEntry",
-        "type": "object"
-      },
-      "WorkspaceFileListResponse": {
-        "properties": {
-          "entries": {
-            "items": {
-              "$ref": "#/components/schemas/WorkspaceFileEntry"
-            },
-            "title": "Entries",
-            "type": "array"
-          },
-          "exists": {
-            "default": true,
-            "description": "False when the directory is not there. A directory that does not exist and one that is merely empty used to answer identically, which is why a pane pointed at the wrong path looked like a working, empty folder rather than a mistake.",
-            "title": "Exists",
-            "type": "boolean"
-          },
-          "home_root": {
-            "default": "/home/user",
-            "description": "The durable root, and the furthest up a caller may browse. Served rather than assumed: this path has moved once already, and the clients that had hardcoded the old one went on asking for a directory that no longer existed.",
-            "title": "Home Root",
-            "type": "string"
-          },
-          "next_after": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Pass as `after` to get the next page. Null when this is the last one. A directory with more entries than fit was previously a dead end: the rest could be counted and never reached.",
-            "title": "Next After"
-          },
-          "path": {
-            "description": "The directory that was listed.",
-            "title": "Path",
-            "type": "string"
-          },
-          "sleeping": {
-            "default": false,
-            "description": "True when the workspace is paused and was not woken to answer. Entries are empty; ask again with `wake=true` to start it.",
-            "title": "Sleeping",
-            "type": "boolean"
-          },
-          "truncated": {
-            "default": false,
-            "description": "True when the directory holds more entries than were returned.",
-            "title": "Truncated",
-            "type": "boolean"
-          },
-          "workspace_root": {
-            "default": "/home/user/lemma",
-            "description": "Where projects and conversation directories live. Inside `home_root`, and the sensible place for a file browser to open.",
-            "title": "Workspace Root",
-            "type": "string"
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "title": "WorkspaceFileListResponse",
-        "type": "object"
-      },
-      "WorkspaceStatusResponse": {
-        "properties": {
-          "detail": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "A sentence for a person.",
-            "title": "Detail"
-          },
-          "done_mb": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "While `downloading`: megabytes fetched so far.",
-            "title": "Done Mb"
-          },
-          "state": {
-            "description": "`ready`: running. `downloading`: fetching its image, which the first start after an update does. `starting`: coming up. `asleep`: not running, and starts on first use. `unavailable`: could not be asked.",
-            "enum": [
-              "ready",
-              "downloading",
-              "starting",
-              "asleep",
-              "unavailable"
-            ],
-            "title": "State",
-            "type": "string"
-          },
-          "total_mb": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "While `downloading`: megabytes in total.",
-            "title": "Total Mb"
-          }
-        },
-        "required": [
-          "state"
-        ],
-        "title": "WorkspaceStatusResponse",
-        "type": "object"
-      },
       "WriteIntent": {
         "enum": [
           "normal",
@@ -26890,6 +28151,2176 @@
           "resource": "icon",
           "result": "entity",
           "verb": "upload"
+        }
+      }
+    },
+    "/machine-consents": {
+      "get": {
+        "operationId": "machine.consent.list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Apps you let run code on your machine",
+        "tags": [
+          "Machine Consents"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.consent",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "operationId": "machine.consent.grant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantConsentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Let an app run code on your machine",
+        "tags": [
+          "Machine Consents"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.consent"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.consent",
+          "result": "entity",
+          "verb": "grant"
+        }
+      }
+    },
+    "/machine-consents/{app_id}": {
+      "delete": {
+        "operationId": "machine.consent.revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "App Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop an app running code on your machine",
+        "tags": [
+          "Machine Consents"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.consent"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.consent",
+          "result": "void",
+          "verb": "revoke"
+        }
+      }
+    },
+    "/machine-previews/{label}:open": {
+      "get": {
+        "operationId": "machine.preview.open",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "label",
+            "required": true,
+            "schema": {
+              "title": "Label",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open a private preview as the signed-in person",
+        "tags": [
+          "Machine Previews"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.preview",
+          "result": "entity",
+          "verb": "open"
+        }
+      }
+    },
+    "/machines": {
+      "get": {
+        "operationId": "machine.list",
+        "parameters": [
+          {
+            "description": "Also list this pod's machines.",
+            "in": "query",
+            "name": "pod_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Also list this pod's machines.",
+              "title": "Pod Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List the machines you can see",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/machines/{ref}": {
+      "get": {
+        "operationId": "machine.get",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get one machine",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/machines/{ref}/browser": {
+      "get": {
+        "operationId": "machine.browser.status",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether a machine's browser can be watched",
+        "tags": [
+          "Machine Browser"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.browser",
+          "result": "entity",
+          "verb": "status"
+        }
+      }
+    },
+    "/machines/{ref}/browser/current-page-url": {
+      "get": {
+        "description": "Polled by the sign-in page while its VNC pane is open.\n\nVNC is pixels, not events -- it carries no navigation signal the way the\nJSON stream this replaced did with its `url` message on every\nnavigation. This is what the anti-phishing host display on\n`sign-in-to-site/[conversationId]/[toolCallId]/page.tsx` reads instead,\nso a person mid-SSO-redirect still sees which site they are actually on.",
+        "operationId": "machine.browser.current_page_url",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origin",
+            "required": true,
+            "schema": {
+              "title": "Origin",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentPageUrlResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What page a sign-in's browser is actually showing",
+        "tags": [
+          "Machine Browser"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.browser",
+          "result": "entity",
+          "verb": "current_page_url"
+        }
+      }
+    },
+    "/machines/{ref}/browser/logins": {
+      "get": {
+        "operationId": "machine.browser.logins.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Start the machine if it is paused.",
+            "in": "query",
+            "name": "wake",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Start the machine if it is paused.",
+              "title": "Wake",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLoginListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The sites a machine's browser is signed in to",
+        "tags": [
+          "Machine Logins"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.browser.logins",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/machines/{ref}/browser/logins/{site}": {
+      "delete": {
+        "description": "Explicit and per site: the only way a login is removed from a machine\nshort of a confirmed `home` reset.",
+        "operationId": "machine.browser.logins.forget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "site",
+            "required": true,
+            "schema": {
+              "title": "Site",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sign a machine's browser out of a site",
+        "tags": [
+          "Machine Logins"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.browser.logins"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.browser.logins",
+          "result": "entity",
+          "verb": "forget"
+        }
+      }
+    },
+    "/machines/{ref}/browser:access": {
+      "post": {
+        "operationId": "machine.browser.access",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserAccessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserAccessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A signed link to a machine's browser",
+        "tags": [
+          "Machine Browser"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.browser"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.browser",
+          "result": "entity",
+          "verb": "access"
+        }
+      }
+    },
+    "/machines/{ref}/browser:display": {
+      "post": {
+        "description": "Resize the sandbox display so the picture matches the pane.\n\nThe alternative, and what this replaces, is one fixed display scaled to\nfit: a 3:2 screen letterboxed into whatever box it lands in, small and\nringed with dead space. Resizing the display itself means the pixels sent\nare the pixels shown -- and a narrow pane gets a narrow *viewport*, so a\nsite serves its mobile layout to somebody signing in on a phone.\n\nA failure here is not an error for the person: they keep the display they\nhad. So an unreachable or sleeping sandbox answers with no size rather\nthan a status code the pane would have to special-case.",
+        "operationId": "machine.browser.display",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisplaySizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisplaySizeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set the size of a machine's browser display",
+        "tags": [
+          "Machine Browser"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.browser"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.browser",
+          "result": "entity",
+          "verb": "display"
+        }
+      }
+    },
+    "/machines/{ref}/browser:navigate": {
+      "post": {
+        "operationId": "machine.browser.navigate",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NavigateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavigateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open a page in a machine's browser",
+        "tags": [
+          "Machine Browser"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.browser"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.browser",
+          "result": "entity",
+          "verb": "navigate"
+        }
+      }
+    },
+    "/machines/{ref}/files": {
+      "delete": {
+        "operationId": "machine.files.delete",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "recursive",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Recursive",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete a file or directory on a machine",
+        "tags": [
+          "Machine Files"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.files"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.files",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "get": {
+        "operationId": "machine.files.list",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Path"
+            }
+          },
+          {
+            "description": "Start the machine if it is paused.",
+            "in": "query",
+            "name": "wake",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Start the machine if it is paused.",
+              "title": "Wake",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineFileListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List a directory on a machine",
+        "tags": [
+          "Machine Files"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "machine.files",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/machines/{ref}/files/content": {
+      "put": {
+        "operationId": "machine.files.write",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineFileEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Write a file on a machine",
+        "tags": [
+          "Machine Files"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.files"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.files",
+          "result": "entity",
+          "verb": "write"
+        }
+      }
+    },
+    "/machines/{ref}/files:content": {
+      "get": {
+        "operationId": "machine.files.content",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "length",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 8388608,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Length"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-None-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read a file on a machine",
+        "tags": [
+          "Machine Files"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "machine.files",
+          "result": "entity",
+          "verb": "content"
+        }
+      }
+    },
+    "/machines/{ref}/files:move": {
+      "post": {
+        "operationId": "machine.files.move",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineFileEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Move or rename a path on a machine",
+        "tags": [
+          "Machine Files"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.files"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.files",
+          "result": "entity",
+          "verb": "move"
+        }
+      }
+    },
+    "/machines/{ref}/files:stat": {
+      "get": {
+        "operationId": "machine.files.stat",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineFileEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stat one path on a machine",
+        "tags": [
+          "Machine Files"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.files",
+          "result": "entity",
+          "verb": "stat"
+        }
+      }
+    },
+    "/machines/{ref}/files:sync": {
+      "post": {
+        "description": "Server-side, so a render's output or a pod's input does not make a round\ntrip through whoever asked. ``to_pod`` copies a file, or a directory's files\n(at most 500, 256 MB), into a pod folder; ``from_pod`` copies one pod file\nonto the machine.",
+        "operationId": "machine.files.sync",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Copy files between a machine and pod files",
+        "tags": [
+          "Machine Files"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.files"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.files",
+          "result": "entity",
+          "verb": "sync"
+        }
+      }
+    },
+    "/machines/{ref}/previews": {
+      "get": {
+        "operationId": "machine.preview.list",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A machine's live previews",
+        "tags": [
+          "Machine Previews"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.preview",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "operationId": "machine.preview.create",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open a port on a machine as a preview URL",
+        "tags": [
+          "Machine Previews"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.preview"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.preview",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/machines/{ref}/previews/{preview_id}": {
+      "delete": {
+        "operationId": "machine.preview.revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preview_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Preview Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke a preview; its URL stops answering",
+        "tags": [
+          "Machine Previews"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.preview"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.preview",
+          "result": "void",
+          "verb": "revoke"
+        }
+      }
+    },
+    "/machines/{ref}/processes": {
+      "get": {
+        "operationId": "machine.process.list",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What is running on a machine",
+        "tags": [
+          "Machine Processes"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.process",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "operationId": "machine.process.start",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartProcessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start a process on a machine",
+        "tags": [
+          "Machine Processes"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.process"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.process",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/machines/{ref}/processes/{process_id}": {
+      "delete": {
+        "operationId": "machine.process.kill",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "process_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Process Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop a process",
+        "tags": [
+          "Machine Processes"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.process"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.process",
+          "result": "void",
+          "verb": "kill"
+        }
+      },
+      "get": {
+        "operationId": "machine.process.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "process_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Process Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One process",
+        "tags": [
+          "Machine Processes"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.process",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/machines/{ref}/processes/{process_id}/output": {
+      "get": {
+        "operationId": "machine.process.output",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "process_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Process Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Return output after this sequence.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Return output after this sequence.",
+              "minimum": 0,
+              "title": "After",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Wait this long for new output.",
+            "in": "query",
+            "name": "wait_seconds",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Wait this long for new output.",
+              "maximum": 30,
+              "minimum": 0,
+              "title": "Wait Seconds",
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessOutputResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A page of a process's output",
+        "tags": [
+          "Machine Processes"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "machine.process",
+          "result": "entity",
+          "verb": "output"
+        }
+      }
+    },
+    "/machines/{ref}/processes/{process_id}:input": {
+      "post": {
+        "operationId": "machine.process.input",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "process_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Process Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessInputRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Type into a process",
+        "tags": [
+          "Machine Processes"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.process"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.process",
+          "result": "void",
+          "verb": "input"
+        }
+      }
+    },
+    "/machines/{ref}/processes/{process_id}:resize": {
+      "post": {
+        "operationId": "machine.process.resize",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "process_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Process Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalSizeModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resize a process's terminal",
+        "tags": [
+          "Machine Processes"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.process"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.process",
+          "result": "void",
+          "verb": "resize"
+        }
+      }
+    },
+    "/machines/{ref}/startup": {
+      "get": {
+        "operationId": "machine.startup",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineStartupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Whether a machine is ready, without waking it",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine",
+          "result": "entity",
+          "verb": "startup"
+        }
+      }
+    },
+    "/machines/{ref}:release": {
+      "post": {
+        "operationId": "machine.release",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop a machine's compute, keeping its disk",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine",
+          "result": "entity",
+          "verb": "release"
+        }
+      }
+    },
+    "/machines/{ref}:reset": {
+      "post": {
+        "operationId": "machine.reset",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clean a machine by scope",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine",
+          "result": "entity",
+          "verb": "reset"
+        }
+      }
+    },
+    "/machines/{ref}:restart": {
+      "post": {
+        "operationId": "machine.restart",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop a machine and start it again",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine",
+          "result": "entity",
+          "verb": "restart"
+        }
+      }
+    },
+    "/machines:policy": {
+      "get": {
+        "operationId": "machine.policy",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pod_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pod Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachinePolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Which machines you or a pod may create",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine",
+          "result": "entity",
+          "verb": "policy"
         }
       }
     },
@@ -44095,6 +47526,323 @@
         }
       }
     },
+    "/pods/{pod_id}/machines": {
+      "post": {
+        "operationId": "machine.pod.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePodMachineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create a machine the pod's agents share",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.pod"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.pod",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/pods/{pod_id}/machines/{name}": {
+      "delete": {
+        "operationId": "machine.pod.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete a pod machine and its disk",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.pod"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.pod",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "patch": {
+        "operationId": "machine.pod.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePodMachineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rename, resize or change who sees a pod machine",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.pod"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.pod",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/machines/{name}/grants": {
+      "get": {
+        "operationId": "machine.pod.grants.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineGrantsModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Who is granted a pod machine",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "machine.pod.grants",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "put": {
+        "operationId": "machine.pod.grants.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MachineGrantsModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineGrantsModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace who is granted a pod machine",
+        "tags": [
+          "Machines"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.pod.grants"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.pod.grants",
+          "result": "entity",
+          "verb": "set"
+        }
+      }
+    },
     "/pods/{pod_id}/members": {
       "get": {
         "description": "List all members of a pod",
@@ -53147,6 +56895,7 @@
     },
     "/workspace/apps/browser/access": {
       "post": {
+        "deprecated": true,
         "operationId": "workspace.browser.access",
         "requestBody": {
           "content": {
@@ -53193,11 +56942,14 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "access"
-        }
+        },
+        "x-lemma-replacement": "POST /machines/me/browser:access",
+        "x-lemma-sunset": "2027-01-31"
       }
     },
     "/workspace/browser/current-page-url": {
       "get": {
+        "deprecated": true,
         "description": "Polled by the sign-in page while its VNC pane is open.\n\nVNC is pixels, not events -- it carries no navigation signal the way the\nJSON stream this replaced did with its `url` message on every\nnavigation. This is what the anti-phishing host display on\n`sign-in-to-site/[conversationId]/[toolCallId]/page.tsx` reads instead,\nso a person mid-SSO-redirect still sees which site they are actually on.",
         "operationId": "workspace.browser.current_page_url",
         "parameters": [
@@ -53243,11 +56995,14 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "current_page_url"
-        }
+        },
+        "x-lemma-replacement": "GET /machines/me/browser/current-page-url",
+        "x-lemma-sunset": "2027-01-31"
       }
     },
     "/workspace/browser/display-size": {
       "post": {
+        "deprecated": true,
         "description": "Resize the sandbox display so the picture matches the pane.\n\nThe alternative, and what this replaces, is one fixed display scaled to\nfit: a 3:2 screen letterboxed into whatever box it lands in, small and\nringed with dead space. Resizing the display itself means the pixels sent\nare the pixels shown -- and a narrow pane gets a narrow *viewport*, so a\nsite serves its mobile layout to somebody signing in on a phone.\n\nA failure here is not an error for the person: they keep the display they\nhad. So an unreachable or sleeping sandbox answers with no size rather\nthan a status code the pane would have to special-case.",
         "operationId": "workspace.browser.resize_display",
         "requestBody": {
@@ -53295,11 +57050,14 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "resize_display"
-        }
+        },
+        "x-lemma-replacement": "POST /machines/me/browser:display",
+        "x-lemma-sunset": "2027-01-31"
       }
     },
     "/workspace/browser/status": {
       "get": {
+        "deprecated": true,
         "operationId": "workspace.browser.status",
         "responses": {
           "200": {
@@ -53323,11 +57081,14 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "status"
-        }
+        },
+        "x-lemma-replacement": "GET /machines/me/browser",
+        "x-lemma-sunset": "2027-01-31"
       }
     },
     "/workspace/files": {
       "get": {
+        "deprecated": true,
         "operationId": "workspace.files.list",
         "parameters": [
           {
@@ -53348,19 +57109,16 @@
             }
           },
           {
-            "description": "Start the workspace if it is paused. Off by default.",
             "in": "query",
             "name": "wake",
             "required": false,
             "schema": {
               "default": false,
-              "description": "Start the workspace if it is paused. Off by default.",
               "title": "Wake",
               "type": "boolean"
             }
           },
           {
-            "description": "Continue after this entry's path, from a previous response's `next_after`.",
             "in": "query",
             "name": "after",
             "required": false,
@@ -53374,7 +57132,6 @@
                   "type": "null"
                 }
               ],
-              "description": "Continue after this entry's path, from a previous response's `next_after`.",
               "title": "After"
             }
           }
@@ -53384,7 +57141,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkspaceFileListResponse"
+                  "$ref": "#/components/schemas/MachineFileListResponse"
                 }
               }
             },
@@ -53411,11 +57168,14 @@
           "resource": "workspace.files",
           "result": "collection",
           "verb": "list"
-        }
+        },
+        "x-lemma-replacement": "GET /machines/me/files",
+        "x-lemma-sunset": "2027-01-31"
       }
     },
     "/workspace/files:content": {
       "get": {
+        "deprecated": true,
         "operationId": "workspace.files.content",
         "parameters": [
           {
@@ -53516,11 +57276,14 @@
           "resource": "workspace.files",
           "result": "entity",
           "verb": "content"
-        }
+        },
+        "x-lemma-replacement": "GET /machines/me/files:content",
+        "x-lemma-sunset": "2027-01-31"
       }
     },
     "/workspace/files:stat": {
       "get": {
+        "deprecated": true,
         "operationId": "workspace.files.stat",
         "parameters": [
           {
@@ -53540,7 +57303,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkspaceFileEntry"
+                  "$ref": "#/components/schemas/MachineFileEntry"
                 }
               }
             },
@@ -53567,18 +57330,21 @@
           "resource": "workspace.files",
           "result": "entity",
           "verb": "stat"
-        }
+        },
+        "x-lemma-replacement": "GET /machines/me/files:stat",
+        "x-lemma-sunset": "2027-01-31"
       }
     },
     "/workspace/status": {
       "get": {
+        "deprecated": true,
         "operationId": "workspace.status",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkspaceStatusResponse"
+                  "$ref": "#/components/schemas/MachineStartupResponse"
                 }
               }
             },
@@ -53595,7 +57361,9 @@
           "resource": "workspace",
           "result": "entity",
           "verb": "status"
-        }
+        },
+        "x-lemma-replacement": "GET /machines/me/startup",
+        "x-lemma-sunset": "2027-01-31"
       }
     }
   }

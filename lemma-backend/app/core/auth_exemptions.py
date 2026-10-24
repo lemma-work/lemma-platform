@@ -225,9 +225,34 @@ def exemption_of(path: str, method: str) -> str | None:
     return None
 
 
+_MACHINE_WS_TAILS = (("browser", "view"), ("processes", "*", "stream"))
+
+
+def _is_machine_ws_path(path: str) -> bool:
+    """``/machines/{ref}/browser/view`` and ``/machines/{ref}/processes/{id}/stream``.
+
+    Matched here because their second segment is a ref. Both handlers check
+    the page's origin and read the session themselves, before resolving the
+    machine the way every other machine route does.
+    """
+    parts = path.strip("/").split("/")
+    if len(parts) < 3 or parts[0] != "machines":
+        return False
+    tail = parts[2:]
+    return any(
+        len(tail) == len(shape)
+        and all(want in ("*", got) for want, got in zip(shape, tail, strict=True))
+        for shape in _MACHINE_WS_TAILS
+    )
+
+
 def is_self_authenticated_websocket(path: str) -> bool:
     """Whether a websocket handshake on this path authenticates itself."""
-    return _under_any(path, SELF_AUTHENTICATED_WEBSOCKETS) or _is_pod_live_ws_path(path)
+    return (
+        _under_any(path, SELF_AUTHENTICATED_WEBSOCKETS)
+        or _is_pod_live_ws_path(path)
+        or _is_machine_ws_path(path)
+    )
 
 
 __all__ = [

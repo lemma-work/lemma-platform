@@ -6,7 +6,7 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...models.workspace_file_entry import WorkspaceFileEntry
+from ...models.machine_file_entry import MachineFileEntry
 from ...types import UNSET, Response
 
 
@@ -32,9 +32,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | WorkspaceFileEntry | None:
+) -> ErrorResponse | MachineFileEntry | None:
     if response.status_code == 200:
-        response_200 = WorkspaceFileEntry.from_dict(response.json())
+        response_200 = MachineFileEntry.from_dict(response.json())
 
         return response_200
 
@@ -51,7 +51,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | WorkspaceFileEntry]:
+) -> Response[ErrorResponse | MachineFileEntry]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -64,7 +64,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     path: str,
-) -> Response[ErrorResponse | WorkspaceFileEntry]:
+) -> Response[ErrorResponse | MachineFileEntry]:
     """Stat one workspace file
 
     Args:
@@ -75,7 +75,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | WorkspaceFileEntry]
+        Response[ErrorResponse | MachineFileEntry]
     """
 
     kwargs = _get_kwargs(
@@ -93,7 +93,7 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     path: str,
-) -> ErrorResponse | WorkspaceFileEntry | None:
+) -> ErrorResponse | MachineFileEntry | None:
     """Stat one workspace file
 
     Args:
@@ -104,7 +104,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | WorkspaceFileEntry
+        ErrorResponse | MachineFileEntry
     """
 
     return sync_detailed(
@@ -117,7 +117,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     path: str,
-) -> Response[ErrorResponse | WorkspaceFileEntry]:
+) -> Response[ErrorResponse | MachineFileEntry]:
     """Stat one workspace file
 
     Args:
@@ -128,7 +128,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | WorkspaceFileEntry]
+        Response[ErrorResponse | MachineFileEntry]
     """
 
     kwargs = _get_kwargs(
@@ -144,7 +144,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     path: str,
-) -> ErrorResponse | WorkspaceFileEntry | None:
+) -> ErrorResponse | MachineFileEntry | None:
     """Stat one workspace file
 
     Args:
@@ -155,7 +155,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | WorkspaceFileEntry
+        ErrorResponse | MachineFileEntry
     """
 
     return (

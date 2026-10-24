@@ -88,7 +88,7 @@ async def wait_for(
       badly, and a timer elapsing says nothing at all. Check.
     - **Every wake replays the whole conversation**, so one real wait beats a
       loop of short ones. Never call this repeatedly to poll something.
-    - **Across a plain `seconds` wait the sandbox may be reclaimed** —
+    - **Across a plain `seconds` wait your machine may be reclaimed** —
       your files, background processes and your shell cwd can be gone. Waiting
       on a `process_id` holds it, because the process is what holds it. Write
       anything you need to keep to the pod first.

@@ -185,6 +185,11 @@ NO_REFS_CONSTRUCTED = frozenset(
         # An org installation. Managing one is `org.installation.manage`, an
         # org permission checked without a resource; nothing builds a ref.
         ResourceType.CONNECTOR_AUTH_CONFIG,
+        # Decided by the workspace module's machine resolver, which reads the
+        # grant rows itself: a default machine has no pod, and a pod machine's
+        # matrix (viewer status, RESTRICTED grants, the run's own user) is
+        # not the generic owner/visibility rule.
+        ResourceType.MACHINE,
     }
 )
 

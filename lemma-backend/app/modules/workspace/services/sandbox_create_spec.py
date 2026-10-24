@@ -41,6 +41,7 @@ def provider_create_spec(
         volume_name=volume_name,
         mounts=sandbox.mounts,
         size=size,
+        template=sandbox.template,
         # This Mac's loopback relay; see `host_loopback_policy`.
         host_loopback=host_loopback,
     )

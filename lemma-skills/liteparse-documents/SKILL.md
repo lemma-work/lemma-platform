@@ -18,7 +18,7 @@ Common flow: `lit screenshot` or `lit parse` an outside file to inspect it, then
 
 ## Tooling
 
-The workspace image installs `lit` (and the `liteparse` alias) from
+The machine image installs `lit` (and the `liteparse` alias) from
 `@llamaindex/liteparse`, alongside Node and a headed Chromium. That is what you
 can count on:
 
@@ -27,7 +27,7 @@ lit --help
 ```
 
 **Everything else is a probe, not a promise.** LibreOffice, ImageMagick and
-Tesseract language data are *not* installed by the workspace image, and nothing
+Tesseract language data are *not* installed by the machine image, and nothing
 sets `$TESSDATA_PREFIX`. Some runtimes inherit them from their base image and
 some do not, so check before you plan around them rather than after a parse
 fails:
@@ -99,9 +99,9 @@ lit batch-parse input-directory output-directory --recursive --format json
 
 ## Troubleshooting
 
-- If Office files fail to parse, check `libreoffice --version` (or `soffice`). The workspace image does not install it; when it is absent, upload the file and read the pod's converted markdown instead.
-- If image inputs fail, check `magick --version` or `convert --version`. Same story — not installed by the workspace image.
-- OCR needs Tesseract and its language data, neither of which the workspace image installs. If `tesseract --version` works, pass `--ocr-language <lang>` and make sure the matching `.traineddata` file exists in `$TESSDATA_PREFIX`. If it does not, render pages with `lit screenshot` and read them with the image-viewing capability rather than reaching for OCR.
+- If Office files fail to parse, check `libreoffice --version` (or `soffice`). The machine image does not install it; when it is absent, upload the file and read the pod's converted markdown instead.
+- If image inputs fail, check `magick --version` or `convert --version`. Same story — not installed by the machine image.
+- OCR needs Tesseract and its language data, neither of which the machine image installs. If `tesseract --version` works, pass `--ocr-language <lang>` and make sure the matching `.traineddata` file exists in `$TESSDATA_PREFIX`. If it does not, render pages with `lit screenshot` and read them with the image-viewing capability rather than reaching for OCR.
 - If the document is password protected, use `--password <password>` only when the user has provided the password.
 
 ## See also

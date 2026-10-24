@@ -29,6 +29,7 @@ _RESOURCE_META = [
     ("tables", "Tables", "🗃️"),
     ("schedules", "Schedules", "⏰"),
     ("surfaces", "Connectors", "🔌"),
+    ("machines", "Machines", "🖥️"),
 ]
 
 # The Lemma bar-chart mark, in white, used as the install badge's logo. Kept tiny

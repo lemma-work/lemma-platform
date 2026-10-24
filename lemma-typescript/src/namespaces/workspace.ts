@@ -1,109 +1,71 @@
-import { ApiError } from "../http.js";
-import type { HttpClient } from "../http.js";
+import { noteDeprecation, type HttpClient } from "../http.js";
+import { MachinesNamespace } from "./machines.js";
 
-/**
- * The most the server will return from one read, whatever is asked for.
- *
- * `_MAX_CONTENT_BYTES` in the files controller. Kept here so the chunked
- * reader clamps to it rather than discovering it a slice at a time.
- */
-export const MAX_READ_BYTES = 8 * 1024 * 1024;
+export { MAX_READ_BYTES } from "./machines.js";
 
-function contentPath(path: string, options: { offset?: number; length?: number } = {}): string {
-  const query = new URLSearchParams({ path });
-  if (options.offset) query.set("offset", String(options.offset));
-  if (options.length) query.set("length", String(options.length));
-  return `/workspace/files:content?${query.toString()}`;
-}
-
-function rangeHeader(range: { start: number; end: number }): Record<string, string> {
-  return { Range: `bytes=${range.start}-${range.end}` };
-}
-
-/**
- * Whether a response to `Range: bytes=<start>-…` is the slice asked for: a
- * 206, or a `Content-Range` that starts at `start`. A `Content-Range` that
- * starts anywhere else is a different slice, whatever the status.
- */
-function rangeHonoured(status: number, contentRange: string | null, start: number): boolean {
-  if (contentRange) {
-    const match = /^bytes (\d+)-\d+\/(?:\d+|\*)$/.exec(contentRange.trim());
-    return match !== null && Number(match[1]) === start;
-  }
-  return status === 206;
-}
+/** The ref every `workspace` call is for: the person's own default machine. */
+const ME = "me";
 
 /** One entry in a workspace directory listing. */
 export interface WorkspaceFileEntry {
-  path: string;
-  name: string;
-  kind: "file" | "directory" | "symlink";
-  size_bytes: number;
-  modified_at: string;
+    path: string;
+    name: string;
+    kind: "file" | "directory" | "symlink";
+    size_bytes: number;
+    modified_at: string;
 }
 
 export interface WorkspaceFileListResponse {
-  path: string;
-  /**
-   * The durable root, and the furthest up a caller may browse.
-   *
-   * Served rather than assumed. This path has moved once already, and the
-   * clients holding a hardcoded copy went on asking for a directory that no
-   * longer existed — which lists identically to an empty one.
-   */
-  home_root: string;
-  /** Where projects live, inside `home_root`. Where a browser should open. */
-  workspace_root: string;
-  /** The workspace is paused and was not started to answer. */
-  sleeping: boolean;
-  /** The directory holds more entries than were returned. */
-  truncated: boolean;
-  /** Pass back as `after` for the next page; null on the last one. */
-  next_after?: string | null;
-  /** False when the directory is not there, as against merely empty. */
-  exists: boolean;
-  entries: WorkspaceFileEntry[];
+    path: string;
+    /**
+     * The durable root, and the furthest up a caller may browse.
+     *
+     * Served rather than assumed. This path has moved once already, and the
+     * clients holding a hardcoded copy went on asking for a directory that no
+     * longer existed — which lists identically to an empty one.
+     */
+    home_root: string;
+    /** Where projects live, inside `home_root`. Where a browser should open. */
+    workspace_root: string;
+    /** The workspace is paused and was not started to answer. */
+    sleeping: boolean;
+    /** The directory holds more entries than were returned. */
+    truncated: boolean;
+    /** Pass back as `after` for the next page; null on the last one. */
+    next_after?: string | null;
+    /** False when the directory is not there, as against merely empty. */
+    exists: boolean;
+    entries: WorkspaceFileEntry[];
 }
 
-/**
- * The caller's own sandbox files, read-only.
- *
- * Hand-written rather than generated because these routes are keyed by the
- * session's user rather than by a pod, so they carry no `podId` and sit outside
- * every pod-scoped service the generator produces.
- *
- * `list` does not start a paused workspace unless asked. That is the whole point
- * of `sleeping`: a file pane that started a sandbox on every render would hold
- * compute open for as long as it was on screen.
- */
 export interface WebLogin {
-  /**
-   * The site, as a person would name it.
-   *
-   * Grouped by registrable domain, so `lemma.work` and `api.lemma.work` are one
-   * login rather than two — the second being the half nobody visited on
-   * purpose.
-   */
-  site: string;
-  /** How many cookies it has. A rough sense of scale, not a health check. */
-  cookie_count: number;
-  /**
-   * When the soonest of them lapses, which is the closest a browser can come
-   * to "when will I have to sign in again". Null when they are all session
-   * cookies.
-   */
-  expires: string | null;
-  /**
-   * Whether somebody answered "yes, I signed in" to a sign-in request for
-   * this site.
-   *
-   * The cookies cannot say this on their own, and that is measured rather
-   * than assumed: a real profile held two HttpOnly session cookies for a
-   * site somebody was signed in to, and six HttpOnly cookies for one that
-   * had merely had a video played on it. `false` means "nobody said so", not
-   * "no session" — the browser may well still be signed in.
-   */
-  signed_in: boolean;
+    /**
+     * The site, as a person would name it.
+     *
+     * Grouped by registrable domain, so `lemma.work` and `api.lemma.work` are one
+     * login rather than two — the second being the half nobody visited on
+     * purpose.
+     */
+    site: string;
+    /** How many cookies it has. A rough sense of scale, not a health check. */
+    cookie_count: number;
+    /**
+     * When the soonest of them lapses, which is the closest a browser can come
+     * to "when will I have to sign in again". Null when they are all session
+     * cookies.
+     */
+    expires: string | null;
+    /**
+     * Whether somebody answered "yes, I signed in" to a sign-in request for
+     * this site.
+     *
+     * The cookies cannot say this on their own, and that is measured rather
+     * than assumed: a real profile held two HttpOnly session cookies for a
+     * site somebody was signed in to, and six HttpOnly cookies for one that
+     * had merely had a video played on it. `false` means "nobody said so", not
+     * "no session" — the browser may well still be signed in.
+     */
+    signed_in: boolean;
 }
 
 /** An agent waiting for somebody to sign a site in.
@@ -112,22 +74,22 @@ export interface WebLogin {
  * request, so "still waiting" is whether this comes back at all.
  */
 export interface PendingSignIn {
-  tool_call_id: string;
-  origin: string;
-  /** What the agent is doing, in its own words, to show the person. */
-  reason: string;
+    tool_call_id: string;
+    origin: string;
+    /** What the agent is doing, in its own words, to show the person. */
+    reason: string;
 }
 
 /** What came of somebody answering. */
 export interface SignInOutcome {
-  origin: string;
-  signed_in: boolean;
-  /**
-   * Whether the site stopped asking for a login straight afterwards.
-   * Reported, not enforced — the check is a heuristic and the person has
-   * already done what was asked.
-   */
-  working: boolean;
+    origin: string;
+    signed_in: boolean;
+    /**
+     * Whether the site stopped asking for a login straight afterwards.
+     * Reported, not enforced — the check is a heuristic and the person has
+     * already done what was asked.
+     */
+    working: boolean;
 }
 
 /**
@@ -139,277 +101,204 @@ export interface SignInOutcome {
  * never leave the sandbox at all.
  */
 export class WebLoginsNamespace {
-  constructor(private readonly http: HttpClient) {}
+    constructor(private readonly http: HttpClient) {}
 
-  /**
-   * Every site the browser is signed in to.
-   *
-   * Not paged: this is what one browser is holding, not a table that grows.
-   * `wake` is off by default so that rendering the list is never what starts
-   * somebody's computer — a paused one answers `sleeping`.
-   */
-  list(
-    options: { wake?: boolean } = {},
-  ): Promise<{ items: WebLogin[]; sleeping: boolean }> {
-    const params: Record<string, string | number> = {};
-    if (options.wake) params.wake = "true";
-    return this.http.request("GET", "/web-logins", { params });
-  }
+    /**
+     * Every site the browser is signed in to.
+     *
+     * Not paged: this is what one browser is holding, not a table that grows.
+     * `wake` is off by default so that rendering the list is never what starts
+     * somebody's computer — a paused one answers `sleeping`.
+     */
+    list(
+        options: { wake?: boolean } = {},
+    ): Promise<{ items: WebLogin[]; sleeping: boolean }> {
+        const params: Record<string, string | number> = {};
+        if (options.wake) params.wake = "true";
+        return this.http.request("GET", "/web-logins", { params });
+    }
 
-  /**
-   * Sign the browser out of a site.
-   *
-   * Really signs it out, which its predecessor did not: that removed Lemma's
-   * encrypted copy and left the browser as it was. Needs the computer
-   * running, and says so rather than reporting a success it did not achieve.
-   */
-  remove(origin: string): Promise<{ site: string; forgotten: boolean }> {
-    return this.http.request("DELETE", "/web-logins", {
-      params: { origin },
-    });
-  }
+    /**
+     * Sign the browser out of a site.
+     *
+     * Really signs it out, which its predecessor did not: that removed Lemma's
+     * encrypted copy and left the browser as it was. Needs the computer
+     * running, and says so rather than reporting a success it did not achieve.
+     */
+    remove(origin: string): Promise<{ site: string; forgotten: boolean }> {
+        return this.http.request("DELETE", "/web-logins", {
+            params: { origin },
+        });
+    }
 
-  /** What a sign-in link is asking for, addressed by the pause it is for.
-   *
-   * The conversation and tool call are a lookup, not a credential: the server
-   * resolves both against the caller's own session, so a forwarded link answers
-   * exactly as an invented one does.
-   */
-  pendingSignIn(conversationId: string, toolCallId: string): Promise<PendingSignIn> {
-    return this.http.request<PendingSignIn>(
-      "GET",
-      `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}`,
+    /** What a sign-in link is asking for, addressed by the pause it is for.
+     *
+     * The conversation and tool call are a lookup, not a credential: the server
+     * resolves both against the caller's own session, so a forwarded link answers
+     * exactly as an invented one does.
+     */
+    pendingSignIn(
+        conversationId: string,
+        toolCallId: string,
+    ): Promise<PendingSignIn> {
+        return this.http.request<PendingSignIn>(
+            "GET",
+            `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}`,
+        );
+    }
+
+    /**
+     * Say whether you signed in, so the waiting run can carry on.
+     *
+     * One call for both answers because it is one answer. Nothing is stored:
+     * the browser holds the session, so finishing is the person finishing. The
+     * reply says whether the site stopped asking, which the agent is told.
+     */
+    answerSignIn(
+        conversationId: string,
+        toolCallId: string,
+        options: { signedIn: boolean },
+    ): Promise<SignInOutcome> {
+        return this.http.request<SignInOutcome>(
+            "POST",
+            `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
+            { body: { signed_in: options.signedIn } },
+        );
+    }
+}
+
+/**
+ * The caller's own computer, as it was addressed before machines.
+ *
+ * @deprecated Use `client.machines` with the ref `"me"`. Every method here
+ * keeps its old signature and answer but calls the `/machines/me` route, and
+ * the alias goes in the next minor release.
+ */
+/** Warn once per method, the way a deprecated route's header does. */
+function deprecated(use: string, replacement: string): void {
+    noteDeprecation(
+        new Headers({
+            "x-lemma-deprecation": `${use} is deprecated: use ${replacement}.`,
+        }),
     );
-  }
-
-  /**
-   * Say whether you signed in, so the waiting run can carry on.
-   *
-   * One call for both answers because it is one answer. Nothing is stored:
-   * the browser holds the session, so finishing is the person finishing. The
-   * reply says whether the site stopped asking, which the agent is told.
-   */
-  answerSignIn(
-    conversationId: string,
-    toolCallId: string,
-    options: { signedIn: boolean },
-  ): Promise<SignInOutcome> {
-    return this.http.request<SignInOutcome>(
-      "POST",
-      `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
-      { body: { signed_in: options.signedIn } },
-    );
-  }
 }
 
 export class WorkspaceNamespace {
-  constructor(private readonly http: HttpClient) {}
+    private readonly machines: MachinesNamespace;
 
-  listFiles(
-    options: { path?: string; wake?: boolean; after?: string } = {},
-  ): Promise<WorkspaceFileListResponse> {
-    return this.http.request<WorkspaceFileListResponse>("GET", "/workspace/files", {
-      params: {
-        ...(options.path ? { path: options.path } : {}),
-        ...(options.wake ? { wake: true } : {}),
-        // From a previous response's `nextAfter`. A directory bigger than one
-        // page was otherwise a dead end.
-        ...(options.after ? { after: options.after } : {}),
-      },
-    });
-  }
-
-  statFile(path: string): Promise<WorkspaceFileEntry> {
-    return this.http.request<WorkspaceFileEntry>("GET", "/workspace/files:stat", {
-      params: { path },
-    });
-  }
-
-  /**
-   * A signed, short-lived URL for the live browser view.
-   *
-   * Minting one starts the workspace if it is paused, so ask whether it is
-   * awake before calling this rather than after.
-   */
-  browserAccess(ttlSeconds = 1800): Promise<{
-    app: string;
-    url: string;
-    expires_at: string;
-  }> {
-    return this.http.request("POST", "/workspace/apps/browser/access", {
-      body: { ttl_seconds: ttlSeconds },
-    });
-  }
-
-  /**
-   * Whether this person's computer is ready, without starting anything.
-   *
-   * `ready` it is running; `downloading` it is fetching its image, which the
-   * first start after an update does; `starting` it is coming up; `asleep` it
-   * is not running and starts on first use; `unavailable` it could not be asked.
-   * While `downloading`, `done_mb` and `total_mb` say how far it has got, once
-   * that can be measured.
-   */
-  status(): Promise<{
-    state: "ready" | "downloading" | "starting" | "asleep" | "unavailable";
-    detail: string | null;
-    done_mb?: number | null;
-    total_mb?: number | null;
-  }> {
-    return this.http.request("GET", "/workspace/status");
-  }
-
-  /**
-   * Whether the browser can be watched, without starting anything.
-   *
-   * `asleep` the computer is paused; `stopped` it is up but the browser is not
-   * (its resting state after two idle minutes); `running` there is one now;
-   * `unavailable` the relay did not answer, which on an older image stays true
-   * until it is replaced; `unsupported` this kind of computer cannot do it.
-   */
-  browserStatus(): Promise<{ state: string; detail: string | null }> {
-    return this.http.request("GET", "/workspace/browser/status");
-  }
-
-  /**
-   * What page the browser signing in to `origin` is actually showing.
-   *
-   * Polled by the sign-in page's anti-phishing host display while its VNC
-   * pane is open: VNC is pixels, not events, so there is nothing on the wire
-   * to react to the way the JSON stream this replaced had with its `url`
-   * message on every navigation. `null` when nothing can be read.
-   */
-  browserCurrentPageUrl(origin: string): Promise<{ url: string | null }> {
-    return this.http.request("GET", "/workspace/browser/current-page-url", {
-      params: { origin },
-    });
-  }
-
-  /**
-   * Fit the workspace display to the pane showing it.
-   *
-   * The pane is a box of an arbitrary shape and the display is a real screen
-   * with a fixed size, so one of them has to move. Scaling the picture is
-   * what made the browser a small letterboxed rectangle; resizing the display
-   * means the pixels sent are the pixels shown, and a narrow pane gets a
-   * narrow *viewport* — so sites serve their mobile layout on a phone.
-   *
-   * `size` is what the display actually became, which may be smaller than
-   * asked for: the sandbox's framebuffer is a ceiling. `null` when nothing
-   * could be resized (a sleeping computer, an older image), which is not an
-   * error — the pane keeps the picture it had.
-   */
-  browserResizeDisplay(
-    width: number,
-    height: number,
-  ): Promise<{ size: string | null }> {
-    return this.http.request("POST", "/workspace/browser/display-size", {
-      body: { width, height },
-    });
-  }
-
-  /**
-   * Raw bytes of one file, from `offset`, at most `length` bytes.
-   *
-   * The query is built into the path because `requestBytes` takes no options —
-   * it is the byte-returning sibling of `request`, not a full request builder.
-   */
-  /**
-   * A file, or a slice of one.
-   *
-   * `range` sends an HTTP `Range` header and gets a 206 back. That is how a
-   * file larger than the server's single-read ceiling is reachable at all:
-   * ask for it a piece at a time. See `readWholeFile`, which does that for
-   * you.
-   */
-  readFile(
-    path: string,
-    options: { offset?: number; length?: number; range?: { start: number; end: number } } = {},
-  ): Promise<Blob> {
-    return this.http.requestBytes("GET", contentPath(path, options), {
-      headers: options.range ? rangeHeader(options.range) : undefined,
-    });
-  }
-
-  /**
-   * A whole file, however big, in as many requests as that takes.
-   *
-   * The server caps one read at 8 MiB, which used to mean a larger file
-   * could be listed and never opened — the pane offered a download that
-   * silently returned the first 8 MiB under the full name. Ranges are
-   * requested in order and stitched, so what a person saves is the file.
-   *
-   * **The size is discovered, not trusted.** This took a `sizeBytes` and
-   * stopped there, which made the caller's bookkeeping load-bearing for
-   * whether a download was complete. The explorer's was wrong on the case
-   * that matters: the open file lives in the URL and its size lived in React
-   * state, so a reload restored the path with a size of 0 and every download
-   * after it truncated at 8 MiB, under the whole file's name. Reading until
-   * the server returns a short slice needs nobody to have remembered
-   * anything. `sizeBytes` survives only as a hint that lets a small file skip
-   * straight to a single unranged read; passing 0 or nothing is correct.
-   *
-   * `chunk` is clamped to the server's ceiling rather than trusted either.
-   * Asking for 64 MiB got 8 MiB back and advanced the cursor by 64, so seven
-   * eighths of the file was skipped and the result was a corrupt download of
-   * roughly the right length — the same failure, reintroduced by the
-   * parameter meant to tune it.
-   */
-  async readWholeFile(
-    path: string,
-    sizeBytes = 0,
-    chunk = MAX_READ_BYTES,
-  ): Promise<Blob> {
-    const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
-    const parts: Blob[] = [];
-    let start = 0;
-    if (sizeBytes > 0 && sizeBytes <= step) {
-      const only = await this.readFile(path);
-      // Short of the server's ceiling means that was the whole file. Exactly
-      // the ceiling means the hint was stale -- the file grew after the
-      // listing that measured it -- and returning here would truncate at
-      // 8 MiB, which is the failure this method exists to prevent. So keep
-      // what arrived and carry on reading from where it stopped.
-      if (only.size < MAX_READ_BYTES) return only;
-      parts.push(only);
-      start = only.size;
+    constructor(http: HttpClient, machines?: MachinesNamespace) {
+        this.machines = machines ?? new MachinesNamespace(http);
     }
-    for (;;) {
-      let part: Blob;
-      let honoured: boolean;
-      try {
-        const answer = await this.http.requestBytesResponse("GET", contentPath(path), {
-          headers: rangeHeader({ start, end: start + step - 1 }),
-        });
-        part = answer.blob;
-        honoured = rangeHonoured(answer.status, answer.contentRange, start);
-      } catch (error) {
-        // 416. The file ended exactly on a chunk boundary, or it is empty:
-        // both are "there is nothing at this offset", and neither is a
-        // failure. Any other status is.
-        if (error instanceof ApiError && error.statusCode === 416) break;
-        throw error;
-      }
-      if (!honoured) {
-        // The server ignored the Range and sent the file from byte 0. Read
-        // again at the next offset and it does the same, so the loop never
-        // ends and holds another copy each time. From the start, short of the
-        // ceiling, that is simply the whole file; anywhere else it cannot be
-        // stitched into one.
-        if (start === 0 && part.size < MAX_READ_BYTES) return part;
-        throw new Error(
-          `The server ignored the Range header reading "${path}" at byte ${start}; ` +
-            "stopping rather than stitching repeated copies of the file.",
+
+    /** @deprecated Use `machines.files.list("me", options)`. */
+    listFiles(
+        options: { path?: string; wake?: boolean; after?: string } = {},
+    ): Promise<WorkspaceFileListResponse> {
+        deprecated("workspace.listFiles", 'machines.files.list("me")');
+        return this.machines.files.list(
+            ME,
+            options,
+        ) as unknown as Promise<WorkspaceFileListResponse>;
+    }
+
+    /** @deprecated Use `machines.files.stat("me", path)`. */
+    statFile(path: string): Promise<WorkspaceFileEntry> {
+        deprecated("workspace.statFile", 'machines.files.stat("me", path)');
+        return this.machines.files.stat(
+            ME,
+            path,
+        ) as unknown as Promise<WorkspaceFileEntry>;
+    }
+
+    /**
+     * A signed, short-lived URL for the live browser view.
+     *
+     * @deprecated Use `machines.browser.access("me", { ttlSeconds })`, which
+     * answers without the `app` field: there is only ever the browser.
+     */
+    async browserAccess(ttlSeconds = 1800): Promise<{
+        app: string;
+        url: string;
+        expires_at: string;
+    }> {
+        deprecated("workspace.browserAccess", 'machines.browser.access("me")');
+        const access = await this.machines.browser.access(ME, { ttlSeconds });
+        return {
+            app: "browser",
+            url: access.url,
+            expires_at: access.expires_at,
+        };
+    }
+
+    /**
+     * Whether this person's computer is ready, without starting anything.
+     *
+     * @deprecated Use `machines.startup("me")`.
+     */
+    async status(): Promise<{
+        state: "ready" | "downloading" | "starting" | "asleep" | "unavailable";
+        detail: string | null;
+        done_mb?: number | null;
+        total_mb?: number | null;
+    }> {
+        deprecated("workspace.status", 'machines.startup("me")');
+        const startup = await this.machines.startup(ME);
+        return {
+            state: startup.state as
+                "ready" | "downloading" | "starting" | "asleep" | "unavailable",
+            detail: startup.detail ?? null,
+            done_mb: startup.done_mb,
+            total_mb: startup.total_mb,
+        };
+    }
+
+    /** @deprecated Use `machines.browser.status("me")`. */
+    async browserStatus(): Promise<{ state: string; detail: string | null }> {
+        deprecated("workspace.browserStatus", 'machines.browser.status("me")');
+        const status = await this.machines.browser.status(ME);
+        return { state: status.state, detail: status.detail ?? null };
+    }
+
+    /** @deprecated Use `machines.browser.currentPageUrl("me", origin)`. */
+    browserCurrentPageUrl(origin: string): Promise<{ url: string | null }> {
+        deprecated(
+            "workspace.browserCurrentPageUrl",
+            'machines.browser.currentPageUrl("me", origin)',
         );
-      }
-      if (part.size === 0) break;
-      parts.push(part);
-      start += part.size;
-      // Short of what was asked for means the server ran out of file, which
-      // is the ordinary way this ends — one request more than the file
-      // needs, rather than a 416 every time.
-      if (part.size < step) break;
+        return this.machines.browser.currentPageUrl(ME, origin);
     }
-    return new Blob(parts);
-  }
+
+    /** @deprecated Use `machines.browser.display("me", { width, height })`. */
+    browserResizeDisplay(
+        width: number,
+        height: number,
+    ): Promise<{ size: string | null }> {
+        deprecated(
+            "workspace.browserResizeDisplay",
+            'machines.browser.display("me", size)',
+        );
+        return this.machines.browser.display(ME, { width, height });
+    }
+
+    /** @deprecated Use `machines.files.read("me", path, options)`. */
+    readFile(
+        path: string,
+        options: {
+            offset?: number;
+            length?: number;
+            range?: { start: number; end: number };
+        } = {},
+    ): Promise<Blob> {
+        deprecated("workspace.readFile", 'machines.files.read("me", path)');
+        return this.machines.files.read(ME, path, options);
+    }
+
+    /** @deprecated Use `machines.files.readWhole("me", path, sizeBytes, chunk)`. */
+    readWholeFile(path: string, sizeBytes = 0, chunk?: number): Promise<Blob> {
+        deprecated(
+            "workspace.readWholeFile",
+            'machines.files.readWhole("me", path)',
+        );
+        return this.machines.files.readWhole(ME, path, sizeBytes, chunk);
+    }
 }

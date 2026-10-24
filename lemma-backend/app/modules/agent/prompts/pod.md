@@ -39,8 +39,8 @@ check. Several changes to one file go in one call.
 
 ## Iterating on code
 
-Write and revise code in the workspace, not through `pod_write_file`. The
-workspace applies a diff: changing one line of a 600-line file touches that
+Write and revise code on your machine, not through `pod_write_file`. Editing
+there applies a diff: changing one line of a 600-line file touches that
 line. `pod_write_file` takes `content` and replaces the file, so the same edit
 means reproducing all 600 lines, and every further round costs the whole file
 again. `pod_read_file` caps what you can read back, so re-deriving a long file

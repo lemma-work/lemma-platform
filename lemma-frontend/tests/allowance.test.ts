@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { MyUsageLimitsResponse, UsageAllowanceResponse } from "lemma-sdk";
 import {
-    allowanceOf, bindingWindow, breakdown, costState, formatCost, formatPercent,
+    allowanceOf, bindingWindow, breakdown, computeHint, computeOf, costState, formatComputeUnits, formatCost, formatPercent,
     planLabel, resetsIn, worthShowing,
 } from "../src/usage/allowance.ts";
 
@@ -136,4 +136,23 @@ test("a reset reads in the units a person would use", () => {
     assert.equal(resetsIn("2026-09-18T11:00:00Z", now), "resets now");
     assert.equal(resetsIn(null, now), "");
     assert.equal(resetsIn("not a date", now), "");
+});
+
+test("compute is read off the by-kind totals, in units rather than tokens", () => {
+    const compute = computeOf({
+        LLM: { total_tokens: 900, units: 0, system_cost_usd: 0.4 },
+        COMPUTE: { total_tokens: 0, units: 2.5, system_cost_usd: 0.25 },
+    });
+    assert.deepEqual(compute, { units: 2.5, cost: 0.25 });
+    assert.equal(computeOf({ LLM: { units: 0 } }), null);
+    assert.equal(computeOf(undefined), null);
+    assert.equal(computeHint({ units: 2.5, cost: null }), "About 2.5 hours of a 2x4 machine");
+});
+
+test("compute units read like a bill, and a sliver is not rounded to nothing", () => {
+    assert.equal(formatComputeUnits(2.5), "2.5 CU");
+    assert.equal(formatComputeUnits(3), "3 CU");
+    assert.equal(formatComputeUnits(0.004), "<0.01 CU");
+    assert.equal(formatComputeUnits(0), "0 CU");
+    assert.equal(formatComputeUnits(1234.4), "1,234 CU");
 });

@@ -103,6 +103,10 @@ class AgentModel(UUIDAuditBase):
     input_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     output_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     agent_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # The machine ref this agent's commands run on; NULL is the default machine
+    # of whoever the run acts for. Resolved per run, so a ref naming a machine
+    # that was since deleted fails that run rather than this row.
+    machine: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     pod: Mapped[Any] = relationship("Pod", foreign_keys=[pod_id])
     owner: Mapped[Any] = relationship("User", foreign_keys=[user_id])
@@ -128,4 +132,5 @@ class AgentModel(UUIDAuditBase):
             input_schema=self.input_schema,
             output_schema=self.output_schema,
             metadata=self.agent_metadata,
+            machine=self.machine,
         )

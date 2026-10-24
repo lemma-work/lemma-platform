@@ -17,6 +17,7 @@ session decides whose browser this is.
 
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 import asyncio
@@ -27,6 +28,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, WebSocket, status
 from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser
+from app.core.api.deprecation import deprecated_route
 from app.core.app_pin import app_host_slug
 from app.core.request_context import create_inherited_task
 
@@ -39,6 +41,7 @@ from app.modules.workspace.services.browser_relay_client import (
 )
 from app.modules.workspace.api.controllers.browser_view_session import (
     UserIdResolver,
+    session_user_id,
     user_id_resolver,
 )
 from app.modules.workspace.api.controllers.browser_view_hangup import (
@@ -66,6 +69,10 @@ from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxError
 from sandbox_runtime.errors import SandboxUnavailable
 
 logger = get_logger(__name__)
+
+#: The `/workspace/browser` routes are `/machines/me/browser`'s, under the old
+#: path; they stop answering then.
+SUNSET = date(2027, 1, 31)
 
 
 def _ws_error() -> type[Exception]:
@@ -183,7 +190,11 @@ def browser_view_service() -> BrowserViewService:
 @router.get(
     "/status",
     response_model=BrowserStatusResponse,
-    operation_id="workspace.browser.status",
+    **deprecated_route(
+        operation_id="workspace.browser.status",
+        replacement="GET /machines/me/browser",
+        sunset=SUNSET,
+    ),
     summary="Whether the workspace browser can be watched",
 )
 async def browser_status(
@@ -206,7 +217,11 @@ class CurrentPageUrlResponse(BaseModel):
 @router.get(
     "/current-page-url",
     response_model=CurrentPageUrlResponse,
-    operation_id="workspace.browser.current_page_url",
+    **deprecated_route(
+        operation_id="workspace.browser.current_page_url",
+        replacement="GET /machines/me/browser/current-page-url",
+        sunset=SUNSET,
+    ),
     summary="What page a sign-in's browser is actually showing",
 )
 async def current_page_url(
@@ -251,7 +266,11 @@ class DisplaySizeResponse(BaseModel):
 @router.post(
     "/display-size",
     response_model=DisplaySizeResponse,
-    operation_id="workspace.browser.resize_display",
+    **deprecated_route(
+        operation_id="workspace.browser.resize_display",
+        replacement="POST /machines/me/browser:display",
+        sunset=SUNSET,
+    ),
     summary="Fit the workspace display to the pane showing it",
 )
 async def resize_display(
@@ -380,17 +399,12 @@ async def browser_view(
         await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
         return
 
-    try:
-        user_id = await resolve_user_id(websocket)
-    except Exception:
-        # Broad because the session library raises several unrelated types for
-        # the same fact -- expired, malformed, revoked -- and the answer to all
-        # of them is the same close code. Logged with the traceback so a
-        # genuine failure in that library is not read as somebody's token
-        # having expired.
-        logger.warning(
-            "workspace.browser_view.session_unreadable.degraded", exc_info=True
-        )
+    user_id = await session_user_id(
+        websocket,
+        resolve_user_id,
+        socket="browser_view",
+    )
+    if user_id is None:
         await _refuse(websocket, CLOSE_UNAUTHENTICATED)
         return
 

@@ -29,6 +29,7 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/blog/[slug]",
     "/changelog",
     "/connectors",
+    "/consent/machine",
     "/contact",
     "/conversations",
     "/create-pod",

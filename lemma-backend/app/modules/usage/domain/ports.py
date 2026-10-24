@@ -95,6 +95,13 @@ class UsageLimitValues:
     #: What the organization lets its bots spend answering contacts and group
     #: outsiders, a month -- the cap an organization admin sets.
     contacts_monthly_limit_usd: float | None = None
+    #: A monthly compute allowance, in compute units, on top of the USD
+    #: windows machine time already counts in. ``None`` is no allowance.
+    user_monthly_compute_units: float | None = None
+    org_monthly_compute_units: float | None = None
+    #: What one compute unit costs, so machine time counts in the USD windows
+    #: beside model spend. ``None`` records compute at no cost.
+    compute_unit_usd: float | None = None
 
     def has_applicable_limit(
         self, organization_id: UUID | None, *, outside_audience: bool = False

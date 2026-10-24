@@ -39,6 +39,8 @@ class CreateAgentRequest:
         description (None | str | Unset):
         icon_url (None | str | Unset):
         input_schema (CreateAgentRequestInputSchemaType0 | None | Unset):
+        machine (None | str | Unset): Where this agent's commands run: a machine ref such as `pod:<name>` for one of the
+            pod's machines. Unset runs on the default machine of whoever the run acts for.
         metadata (CreateAgentRequestMetadataType0 | None | Unset):
         output_schema (CreateAgentRequestOutputSchemaType0 | None | Unset):
         permissions (AgentPermissionsReplaceRequest | None | Unset): Optional resource grants to apply to the new agent
@@ -55,6 +57,7 @@ class CreateAgentRequest:
     description: None | str | Unset = UNSET
     icon_url: None | str | Unset = UNSET
     input_schema: CreateAgentRequestInputSchemaType0 | None | Unset = UNSET
+    machine: None | str | Unset = UNSET
     metadata: CreateAgentRequestMetadataType0 | None | Unset = UNSET
     output_schema: CreateAgentRequestOutputSchemaType0 | None | Unset = UNSET
     permissions: AgentPermissionsReplaceRequest | None | Unset = UNSET
@@ -109,6 +112,12 @@ class CreateAgentRequest:
         else:
             input_schema = self.input_schema
 
+        machine: None | str | Unset
+        if isinstance(self.machine, Unset):
+            machine = UNSET
+        else:
+            machine = self.machine
+
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
             metadata = UNSET
@@ -160,6 +169,8 @@ class CreateAgentRequest:
             field_dict["icon_url"] = icon_url
         if input_schema is not UNSET:
             field_dict["input_schema"] = input_schema
+        if machine is not UNSET:
+            field_dict["machine"] = machine
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
         if output_schema is not UNSET:
@@ -248,6 +259,15 @@ class CreateAgentRequest:
 
         input_schema = _parse_input_schema(d.pop("input_schema", UNSET))
 
+        def _parse_machine(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        machine = _parse_machine(d.pop("machine", UNSET))
+
         def _parse_metadata(
             data: object,
         ) -> CreateAgentRequestMetadataType0 | None | Unset:
@@ -330,6 +350,7 @@ class CreateAgentRequest:
             description=description,
             icon_url=icon_url,
             input_schema=input_schema,
+            machine=machine,
             metadata=metadata,
             output_schema=output_schema,
             permissions=permissions,

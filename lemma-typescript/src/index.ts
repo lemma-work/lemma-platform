@@ -46,6 +46,31 @@ export { readSSE, parseSSEJson } from "./streams.js";
 export type { SseRawEvent } from "./streams.js";
 export { watchDatastoreChanges } from "./datastore-changes.js";
 export { isEmbeddedInHost } from "./embedded.js";
+export {
+  MACHINE_CONSENT_MESSAGE_TYPE,
+  MACHINE_CONSENT_REQUIRED,
+  MachineConsentRequiredError,
+  MachineExecution,
+  machinePathRef,
+} from "./namespaces/machines.js";
+export type {
+  ExecOptions,
+  Machine,
+  MachineBrowserAccess,
+  MachineBrowserStatus,
+  MachineConsent,
+  MachineFileEntry,
+  MachineFileListResponse,
+  MachineGrants,
+  MachinePolicy,
+  MachinePreview,
+  MachineProcess,
+  MachineProcessEvent,
+  MachineProcessOutput,
+  MachineResetResult,
+  MachineStartup,
+  MachinesNamespace,
+} from "./namespaces/machines.js";
 export type {
   DatastoreChangeFrame,
   ChangeStreamStatus,
