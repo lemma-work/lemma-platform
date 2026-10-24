@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useRecordForm } from "lemma-sdk/react";
 import type { RecordSchemaField } from "lemma-sdk";
+import { source } from "@/data";
 import { lemma } from "@/session/client";
 import { Modal } from "@/shell/modal";
-import type { Row } from "./record-cache";
+import { rowLabel, type Row } from "./record-cache";
 import type { TableProfile } from "./profile";
 import { readableName } from "./reading";
 
@@ -93,6 +95,7 @@ export function RecordEditor({
                             value={form.values[field.name]}
                             problem={form.fieldErrors[field.name]}
                             known={known(profile, field.name)}
+                            podId={podId}
                             onChange={(value) => form.setValue(field.name, value)}
                         />
                     ))}
@@ -131,16 +134,16 @@ function known(profile: TableProfile | null | undefined, column: string): string
 
 /** One column, drawn as what its type says it is.
  *
- *  `foreign-key` and `uuid` get a plain text box on purpose. A picker for a
- *  foreign key needs the other table's rows and a way to name them, which is a
- *  real feature rather than a widget — and a box that takes the id is honest
- *  about what it wants, where a half-built picker would not be.
+ *  A link to another table's row is picked from that table's rows, by what
+ *  each one is called (`LinkPicker`); a `uuid` that links nowhere is still a
+ *  plain text box.
  */
 function RecordField({
     field,
     value,
     problem,
     known,
+    podId,
     onChange,
 }: {
     field: RecordSchemaField;
@@ -148,6 +151,7 @@ function RecordField({
     problem?: string;
     /** Values this column is known to hold, read off the table's own rows. */
     known: string[];
+    podId: string;
     onChange: (value: unknown) => void;
 }) {
     const id = "rf-" + field.name;
@@ -170,7 +174,9 @@ function RecordField({
                 {field.label}{field.required && <i aria-hidden="true"> *</i>}
             </label>
             {hint && <small>{hint}</small>}
-            {field.kind === "select" ? (
+            {field.foreignKey ? (
+                <LinkPicker id={id} podId={podId} reference={field.foreignKey} value={value} onChange={onChange} />
+            ) : field.kind === "select" ? (
                 <select id={id} value={String(value ?? "")} onChange={(event) => onChange(event.target.value)}>
                     <option value="">—</option>
                     {field.options.map((option) => (
@@ -217,5 +223,50 @@ function RecordField({
             )}
             {problem && <em role="alert">{problem}</em>}
         </div>
+    );
+}
+
+/** A link to a row in another table, picked by what that row is called.
+ *
+ *  It used to be a box for the other row's id, which nobody filling in a row
+ *  knows: they know the customer is Northwind, not what Northwind's id is.
+ *  So the other table's first page of rows is read and offered by name. A
+ *  table longer than that page still takes a typed id, and so does one whose
+ *  rows cannot be read, rather than leaving the field impossible to fill. */
+export function LinkPicker({ id, podId, reference, value, onChange }: {
+    id: string;
+    podId: string;
+    reference: { table: string; column: string };
+    value: unknown;
+    onChange: (value: unknown) => void;
+}) {
+    const rows = useQuery({
+        queryKey: ["table", podId, reference.table, "linkable"],
+        queryFn: () => source.tableRows(podId, reference.table),
+        staleTime: 60_000,
+        retry: false,
+    });
+    const [typing, setTyping] = useState(false);
+    const current = value === null || value === undefined ? "" : String(value);
+    const options = (rows.data?.items ?? []).flatMap((row) => {
+        const key = row[reference.column];
+        return key === null || key === undefined ? [] : [{ value: String(key), label: rowLabel(row, reference.column) }];
+    });
+    if (typing || rows.isError || (rows.isSuccess && options.length === 0)) {
+        return <input id={id} type="text" value={current} onChange={(event) => onChange(event.target.value)} />;
+    }
+    return (
+        <>
+            <select id={id} value={current} disabled={rows.isPending} onChange={(event) => onChange(event.target.value)}>
+                <option value="">{rows.isPending ? "Reading " + readableName(reference.table) + "…" : "—"}</option>
+                {current && !options.some((option) => option.value === current) && <option value={current}>{current}</option>}
+                {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            {rows.data?.next && (
+                <button type="button" className="record-form__revert" onClick={() => setTyping(true)}>
+                    Not listed? Type its id
+                </button>
+            )}
+        </>
     );
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chooseForm, profileTable, rankedFields, type Form } from "../src/library/profile.ts";
+import { chooseForm, profileTable, rankedFields, statusOptions, type Form } from "../src/library/profile.ts";
 
 /** A fixed day, so a table looks the same in March as it does in September. */
 const NOW = new Date("2026-09-19T10:00:00Z");
@@ -577,4 +577,16 @@ test("a board needs something to write at the top of a card", () => {
     }));
 
     assert.equal(form(["id", "actor", "action", "status", "duration_ms"], rows).form, "grid");
+});
+
+test("a status the schema fixes offers every option it allows, and nothing it would refuse", () => {
+    const rows = [{ id: "1", stage: "open" }, { id: "2", stage: "open" }, { id: "3", stage: "legacy" }];
+    const profile = profileTable([{ name: "id" }, { name: "stage", type: "ENUM", options: ["open", "waiting", "closed"] }], rows, { complete: true, now: NOW });
+    const stage = profile.columns.find((column) => column.name === "stage");
+    assert.deepEqual(stage?.fixed, ["open", "waiting", "closed"]);
+    assert.deepEqual(statusOptions(stage!), ["open", "waiting", "closed", "legacy"], "every option, then what the rows hold that it does not");
+
+    const free = profileTable([{ name: "id" }, { name: "stage", type: "TEXT" }], rows, { complete: true, now: NOW }).columns.find((column) => column.name === "stage");
+    assert.equal(free?.fixed, undefined, "free text keeps the rows' own values, and a way to add one");
+    assert.deepEqual(statusOptions(free!), ["open", "legacy"]);
 });
