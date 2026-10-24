@@ -40,6 +40,18 @@ const ndjson = (frames: unknown[], size = 7) => {
     }), { status: 200 });
 };
 
+/** A stream that stays open, for the test to send frames on as it goes. */
+const liveStream = () => {
+    let feed: ReadableStreamDefaultController<Uint8Array> | null = null;
+    return {
+        route: () => new Response(new ReadableStream<Uint8Array>({ start(controller) { feed = controller; } })),
+        hear: (...frames: unknown[]) => {
+            for (const frame of frames) feed?.enqueue(new TextEncoder().encode(JSON.stringify(frame) + "\n"));
+        },
+        close: () => feed?.close(),
+    };
+};
+
 /** No chat and no form: the script only loads, for its pure pieces. */
 const QUIET = 'data-lemma-chat="off"';
 
@@ -285,6 +297,87 @@ test("the visitor's own message is drawn once, matched by the name the page gave
         ["user", "same words"],
         ["assistant", "Answered there"],
     ]);
+});
+
+test("an answer is drawn below its question, whichever tab asked it", async () => {
+    // Every tab on the site streams the visitor's one conversation, so a tab
+    // hears the answer to a question asked in another. History numbers the
+    // run's thinking too but never returns it, so the numbers here skip.
+    type Stored = { role: string; text: string; sequence: number; client_nonce: string | null };
+    const stored: Stored[] = [
+        { role: "user", text: "hello", sequence: 0, client_nonce: "an-earlier-visit" },
+        { role: "assistant", text: "Hello there.", sequence: 1, client_nonce: null },
+    ];
+    const stream = liveStream();
+    const page = load({
+        routes: {
+            "POST /messages": (call) => {
+                stored.push({ role: "user", text: String(call.body?.text), sequence: 5, client_nonce: String(call.body?.client_nonce) });
+                return json({ ok: true }, 202);
+            },
+            "GET /stream": stream.route,
+            "GET /history": (call) => {
+                const after = Number(new URL(call.path, API).searchParams.get("after"));
+                return json({ messages: stored.filter((message) => message.sequence > after) });
+            },
+        },
+    });
+    const answer = (text: string, sequence: number) => {
+        stored.push({ role: "assistant", text, sequence, client_nonce: null });
+        stream.hear({ type: "typing" }, { type: "delta", text }, { type: "message", text, sequence }, { type: "done" });
+    };
+    await openChat(page);
+    stream.hear({ type: "open" });
+    await settle();
+
+    // Asked in the other tab: this one only hears the answer.
+    stored.push({ role: "user", text: "can I change my booking?", sequence: 2, client_nonce: "the-other-tab" });
+    answer("Yes, up to a day before.", 4);
+    await settle();
+    // Asked here: drawn as it is sent, and not again when history has it.
+    await say(page, "and cancel it?");
+    answer("That too, up to a day before.", 7);
+    await settle();
+
+    const log = Array.from(page.shadow().querySelectorAll(".lw-msg:not(.lw-typing)")).slice(1);
+    assert.deepEqual(log.map((node) => [node.classList.contains("lw-user") ? "user" : "assistant", node.textContent]), [
+        ["user", "hello"],
+        ["assistant", "Hello there."],
+        ["user", "can I change my booking?"],
+        ["assistant", "Yes, up to a day before."],
+        ["user", "and cancel it?"],
+        ["assistant", "That too, up to a day before."],
+    ]);
+    stream.close();
+});
+
+test("an answer is drawn even when the history read before it never comes back", async () => {
+    let stalled = false;
+    const stream = liveStream();
+    const page = load({
+        routes: {
+            "GET /stream": stream.route,
+            "GET /history": () => (stalled ? new Promise<Response>(() => {}) : json({ messages: [] })),
+        },
+    });
+    // The chat's long waits end when the test says, not on the clock.
+    const waits: (() => void)[] = [];
+    const realTimeout = page.window.setTimeout.bind(page.window);
+    page.window.setTimeout = ((run: () => void, delay = 0) => {
+        if (delay < 1000) return realTimeout(run, delay);
+        waits.push(run);
+        return 0;
+    }) as typeof page.window.setTimeout;
+    await openChat(page);
+    stream.hear({ type: "open" });
+    await settle();
+    stalled = true;
+    stream.hear({ type: "message", text: "Here it is.", sequence: 3 }, { type: "done" });
+    await settle();
+    for (const run of waits.splice(0)) run();
+    await settle();
+    assert.deepEqual(bubbles(page, "assistant").slice(1), ["Here it is."]);
+    stream.close();
 });
 
 test("a message the server refuses comes off the log, with the server's reason", async () => {
