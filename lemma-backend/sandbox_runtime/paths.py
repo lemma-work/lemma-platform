@@ -100,6 +100,41 @@ def is_browser_private(path: str) -> bool:
     return path == BROWSER_PROFILE_ROOT or path.startswith(f"{BROWSER_PROFILE_ROOT}/")
 
 
+#: The image's own interpreter, by absolute path. Lemma's processes start from
+#: this rather than from ``python`` on ``PATH``, whose first entries are the
+#: home's ``~/.python/bin`` and ``~/.local/bin``: anything in a sandbox can write
+#: there, and on Docker the home outlives the container, so a ``python`` left
+#: there would be what the next container's runtime ran.
+LEMMA_PYTHON = "/opt/lemma-python/bin/python"
+
+#: Where ``pip install`` puts packages (``PIP_PREFIX=~/.python``), which the
+#: Lemma interpreter puts first on ``sys.path`` -- except under ``python -I``,
+#: where the image's ``.pth`` leaves it out. A Lemma process started that way
+#: imports only image and overlay code, and adds this back itself, after its own
+#: imports, when it is about to run the user's code.
+USER_SITE_PACKAGES = f"{HOME_ROOT}/.python/lib/python3.14/site-packages"
+
+#: The parent of each session's private directory: the delegated token's file,
+#: and E2B's saved Python namespace. Under ``/tmp`` so none of it reaches the
+#: durable disk, and one ``0700`` directory per session. That mode is a boundary
+#: only between Linux users, and every session runs as the same one today; it
+#: keeps a session from reading another's files by accident, not on purpose.
+SESSION_ROOT = "/tmp/lemma-sess"
+
+
+def user_code_sys_path(cwd: str, sys_path: list[str]) -> list[str]:
+    """``sys_path`` with what the user's code expects in front of it.
+
+    The working directory first, as ``python -m`` and a REPL put it, so a module
+    the agent wrote beside its work imports; then the user's own packages, ahead
+    of the image's, as the ``.pth`` orders them for every non-isolated
+    interpreter. For a process started with ``-I``, after it has imported
+    everything of its own.
+    """
+    front = [path for path in (cwd, USER_SITE_PACKAGES) if path not in sys_path]
+    return [*front, *sys_path]
+
+
 #: Where the backend installs the runtime overlay: Lemma's own sandbox code,
 #: newer than the copy the image bakes. Outside the home on purpose -- platform
 #: code, not the user's files.
@@ -178,14 +213,18 @@ __all__ = [
     "BROWSER_PROFILE_ROOT",
     "HOME_ROOT",
     "IMAGE_BIN",
+    "LEMMA_PYTHON",
     "OVERLAY_FIRST_ON_PATH",
     "RUNTIME_OVERLAY_BIN",
     "RUNTIME_FLOOR",
     "RUNTIME_OVERLAY_ROOT",
     "RUNTIME_FILESYSTEM_ROOTS",
+    "SESSION_ROOT",
+    "USER_SITE_PACKAGES",
     "WORKSPACE_ROOT",
     "is_browser_private",
     "is_inside_home",
     "running_runtime_version",
     "sandbox_command",
+    "user_code_sys_path",
 ]

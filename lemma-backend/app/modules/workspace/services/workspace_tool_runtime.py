@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -11,6 +12,11 @@ from uuid import UUID
 import httpx
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from app.core.authorization.delegation import (
+    CLAIM_EXPIRES_AT,
+    CLAIM_ISSUED_AT,
+    CLAIM_SESSION_ID,
+)
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
@@ -27,7 +33,9 @@ _workspace_tool_runtime: "WorkspaceToolRuntime | None" = None
 _DEFAULT_SCOPE = "default"
 
 
-def _decode_jwt_expiry(token: str | None) -> Optional[datetime]:
+def _decode_jwt_payload(token: str | None) -> dict[str, object] | None:
+    """The claims of a token this process minted, unverified: read only to
+    decide how long to keep it."""
     if not token:
         return None
     try:
@@ -40,12 +48,49 @@ def _decode_jwt_expiry(token: str | None) -> Optional[datetime]:
             "utf-8"
         )
         data = json.loads(decoded)
-        exp = data.get("exp")
-        if not isinstance(exp, (int, float)):
-            return None
-        return datetime.fromtimestamp(float(exp), tz=timezone.utc)
     except Exception:
         return None
+    return data if isinstance(data, dict) else None
+
+
+def _decode_jwt_expiry(token: str | None) -> Optional[datetime]:
+    """When the token stops working: its own short lifetime when it carries
+    one, else the access token's ``exp``."""
+    data = _decode_jwt_payload(token) or {}
+    exp = data.get(CLAIM_EXPIRES_AT, data.get("exp"))
+    if not isinstance(exp, (int, float)):
+        return None
+    return datetime.fromtimestamp(float(exp), tz=timezone.utc)
+
+
+#: Whether a delegation session ended after a token issued at the given time.
+SessionEnded = Callable[[str, float], Awaitable[bool]]
+
+
+async def _session_ended(session_id: str, issued_at: float) -> bool:
+    from app.core.authorization.delegation_revocation import (
+        delegation_session_ended,
+    )
+
+    return await delegation_session_ended(session_id=session_id, issued_at=issued_at)
+
+
+async def _cached_token_spent(
+    env_vars: dict[str, str], session_ended: SessionEnded
+) -> bool:
+    """Whether a cached environment's token belongs to a session that ended.
+
+    Ending a conversation refuses its short-lived tokens; one minted before
+    then may still be cached, and the conversation's next run would be handed
+    a token the API now refuses. One read, and only for tokens that can be
+    ended.
+    """
+    data = _decode_jwt_payload(env_vars.get("LEMMA_TOKEN")) or {}
+    session_id = data.get(CLAIM_SESSION_ID)
+    issued_at = data.get(CLAIM_ISSUED_AT)
+    if not isinstance(session_id, str) or not isinstance(issued_at, (int, float)):
+        return False
+    return await session_ended(session_id, float(issued_at))
 
 
 class WorkspaceToolRuntime:
@@ -56,8 +101,10 @@ class WorkspaceToolRuntime:
         env_cache: WorkspaceEnvCachePort | None = None,
         process_store: WorkspaceProcessStore | None = None,
         default_env_ttl_seconds: int | None = None,
+        session_ended: SessionEnded | None = None,
     ):
         self.workspace_service = workspace_service or WorkspaceSandboxService()
+        self._session_ended = session_ended or _session_ended
         self.env_cache = env_cache or RedisWorkspaceEnvCache()
         self.process_store = process_store or WorkspaceProcessStore()
         self.default_env_ttl_seconds = (
@@ -99,7 +146,10 @@ class WorkspaceToolRuntime:
         seconds_until_expiry = int((token_expiry - now).total_seconds())
         if seconds_until_expiry <= 0:
             return 1
-        return min(self.default_env_ttl_seconds, seconds_until_expiry)
+        # Half its remaining life: every command writes the cached token to
+        # the session's file, and a process reading it from there should find
+        # one with time left, not one about to lapse.
+        return max(1, min(self.default_env_ttl_seconds, seconds_until_expiry // 2))
 
     def _get_cache_key(
         self,
@@ -154,6 +204,13 @@ class WorkspaceToolRuntime:
             session_id=session_id,
         )
         cached_env_vars = env_vars or await self.env_cache.get(cache_key)
+        if (
+            cached_env_vars is not None
+            and env_vars is None
+            and await _cached_token_spent(cached_env_vars, self._session_ended)
+        ):
+            await self.env_cache.delete(cache_key)
+            cached_env_vars = None
 
         if cached_env_vars is not None:
             try:

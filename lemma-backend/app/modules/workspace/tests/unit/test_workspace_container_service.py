@@ -858,3 +858,83 @@ async def test_a_stalled_storage_generation_read_costs_the_notice_not_the_sessio
 
     assert elapsed < 5, f"the storage read held the session {elapsed:.1f}s"
     assert session is not None
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_session_gets_a_short_lived_token_and_a_file_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every session in the sandbox can read every other's environment, so the
+    token there counts for minutes; the file is how a fresh one reaches a
+    process that is already running."""
+    asked: list[dict[str, object]] = []
+
+    async def mint(**kwargs: object) -> str:
+        asked.append(kwargs)
+        return "short-lived"
+
+    monkeypatch.setattr(
+        "app.modules.identity.contracts.delegated_tokens.mint_delegated_token", mint
+    )
+    monkeypatch.setattr(workspace_settings, "delegated_token_ttl_seconds", 600)
+    service = _service(_FakeSandbox(), manager_client=_FakeManagerClient())
+
+    first = await service.get_session(
+        user_id=uuid4(), pod_id=None, session_id="shell-one"
+    )
+    second = await service.get_session(
+        user_id=uuid4(), pod_id=None, session_id="shell-two"
+    )
+
+    assert asked[0]["ttl_seconds"] == 600
+    assert first.env_vars["LEMMA_TOKEN"] == "short-lived"
+    assert first.env_vars["LEMMA_TOKEN_FILE"] == "/tmp/lemma-sess/shell-one/lemma-token"
+    assert (
+        second.env_vars["LEMMA_TOKEN_FILE"] == "/tmp/lemma-sess/shell-two/lemma-token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_cached_environment_is_pointed_at_this_sessions_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Added after the cache, so an environment cached before the file existed,
+    or for another session, still names this session's."""
+    service = _service(_FakeSandbox(), manager_client=_FakeManagerClient())
+
+    session = await service.get_session(
+        user_id=uuid4(),
+        pod_id=None,
+        session_id="shell-three",
+        env_vars={
+            "LEMMA_TOKEN": "cached",
+            "LEMMA_TOKEN_FILE": "/tmp/lemma-sess/elsewhere/lemma-token",
+        },
+    )
+
+    assert session.env_vars["LEMMA_TOKEN_FILE"] == (
+        "/tmp/lemma-sess/shell-three/lemma-token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_host_and_remote_environments_keep_the_hour_long_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Their holders refresh their own credential; the lifetime is the shared
+    sandbox's."""
+    asked: list[dict[str, object]] = []
+
+    async def mint(**kwargs: object) -> str:
+        asked.append(kwargs)
+        return "hour-long"
+
+    monkeypatch.setattr(
+        "app.modules.identity.contracts.delegated_tokens.mint_delegated_token", mint
+    )
+    service = _service(_FakeSandbox(), manager_client=_FakeManagerClient())
+
+    env = await service.get_env_vars(uuid4(), None, organization_id=uuid4())
+
+    assert asked[0]["ttl_seconds"] is None
+    assert "LEMMA_TOKEN_FILE" not in env

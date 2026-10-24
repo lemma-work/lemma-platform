@@ -34,6 +34,13 @@ CLAIM_SESSION_ID = "gpy_session_id"
 CLAIM_SCOPE = "gpy_scope"
 CLAIM_INVOKED_BY_USER_ID = "gpy_invoked_by_user_id"
 CLAIM_DELEGATION_VERSION = "gpy_delegation_version"
+#: When a short-lived token was minted and when it stops counting, in epoch
+#: seconds with a fraction. Optional together: only a token minted with a
+#: lifetime of its own carries them, and the access token's own ``exp`` -- set
+#: by the SuperTokens core for every session alike -- still bounds it from
+#: above. See ``mint_delegated_token(ttl_seconds=)``.
+CLAIM_ISSUED_AT = "gpy_issued_at"
+CLAIM_EXPIRES_AT = "gpy_expires_at"
 
 DELEGATION_VERSION = 1
 DEFAULT_POD_AGENT_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -156,6 +163,8 @@ class DelegationClaims(BaseModel):
     scope: list[str] = Field(default_factory=list)
     invoked_by_user_id: UUID
     delegation_version: int
+    issued_at: float | None = None
+    expires_at: float | None = None
 
 
 def is_default_pod_agent_claims(claims: DelegationClaims | None) -> bool:
@@ -230,6 +239,13 @@ def parse_delegation_claims(payload: dict[str, Any]) -> DelegationClaims | None:
     if version != DELEGATION_VERSION:
         raise DelegationClaimsError("Unsupported delegation version")
 
+    issued_at = _optional_instant(payload.get(CLAIM_ISSUED_AT))
+    expires_at = _optional_instant(payload.get(CLAIM_EXPIRES_AT))
+    if (issued_at is None) != (expires_at is None):
+        # Half a lifetime is not a lifetime: honouring it would read as a token
+        # with no expiry of its own, which is the long-lived kind.
+        raise DelegationClaimsError("Delegated token lifetime is incomplete")
+
     return DelegationClaims(
         actor_type=parsed_actor_type,
         actor_id=parsed_actor_id,
@@ -243,4 +259,14 @@ def parse_delegation_claims(payload: dict[str, Any]) -> DelegationClaims | None:
         scope=scope,
         invoked_by_user_id=invoked_by_user_id,
         delegation_version=version,
+        issued_at=issued_at,
+        expires_at=expires_at,
     )
+
+
+def _optional_instant(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DelegationClaimsError("Invalid delegated token lifetime")
+    return float(value)

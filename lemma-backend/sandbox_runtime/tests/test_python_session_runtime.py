@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 from datetime import datetime, timedelta, timezone
 import os
@@ -186,3 +187,49 @@ async def test_python_timeout_resets_only_that_worker_and_delete_kills_descendan
         await asyncio.sleep(0.01)
     else:
         raise AssertionError("Python session descendant survived deletion")
+
+
+async def test_the_worker_imports_its_own_code_before_anything_the_session_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker starts isolated: its imports come from the interpreter, not from
+    the conversation's folder or a ``PYTHONPATH`` -- both of which anything in
+    the sandbox can set up -- and only then is the user's path opened to the
+    user's code.
+
+    Each call's environment, a delegated token included, passes through this
+    process, so a module that shadowed one of its imports would see every one.
+    """
+    marker = tmp_path / "shadowed"
+    planted = tmp_path / "planted"
+    planted.mkdir()
+    for directory in (tmp_path, planted):
+        (directory / "ast.py").write_text(f"open({str(marker)!r}, 'w').close()\n")
+    (tmp_path / "helper.py").write_text("VALUE = 7\n")
+    monkeypatch.setenv("PYTHONPATH", str(planted))
+    session_id = uuid4()
+    app = create_app(token=TOKEN, allowed_roots=(str(tmp_path),))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://runtime.test"
+    ) as client:
+        await client.put(
+            f"/python-sessions/{session_id}",
+            headers=HEADERS,
+            json=create_body(tmp_path, "isolated"),
+        )
+        ran = await client.post(
+            f"/python-sessions/{session_id}:execute",
+            headers=HEADERS,
+            json=execute_body(
+                "import sys, helper\n(helper.VALUE, sys.flags.isolated, sys.path[0])"
+            ),
+        )
+        await client.delete(f"/python-sessions/{session_id}", headers=HEADERS)
+
+    assert ran.json()["state"] == "succeeded", ran.json()
+    assert not marker.exists(), "the worker imported a module the session planted"
+    value, isolated, first = ast.literal_eval(ran.json()["result"])
+    assert (value, isolated) == (7, 1)
+    assert first == str(tmp_path), "the user's code imports from beside its work"

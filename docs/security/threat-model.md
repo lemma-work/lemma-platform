@@ -49,6 +49,20 @@ keys and deterministic dedup keys are required where available. Already committe
 pod-bundle steps are not compensated automatically; cancellation exposes
 `PARTIALLY_CANCELLED` and its committed steps.
 
+A person's workspace sandbox is one Linux user shared by every session of every
+agent of theirs, so a restricted agent can read another session's environment
+and files, the pod assistant's delegated token among them. That token counts
+for `WORKSPACE_DELEGATED_TOKEN_TTL_SECONDS` (15 minutes) and not at all once its
+conversation ends; the runtime and its Python workers start from the image's
+interpreter with `-I`, so nothing in the home is imported ahead of their code;
+and E2B's saved Python namespace is sealed per session. Still open: same-user
+reads of a live token, shims planted in the home (`~/.profile`, `~/.python`,
+`~/.local/bin`) that pick up every fresh token, the runtime overlay in
+`/opt/lemma-runtime`, which the sandbox user can write and which persists on
+Docker, and the signed-in browser, whose CDP, VNC and X11 endpoints take any
+local client. A Linux user per agent closes the first three; the browser needs
+a service of its own.
+
 The architecture baseline is a debt ratchet, not proof that existing cycles are
 safe. The violations it tolerates are enumerated in
 `lemma-backend/architecture-baseline.json` and enforced by `make architecture`,

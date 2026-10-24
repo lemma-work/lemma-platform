@@ -28,7 +28,11 @@ from app.core.authorization.delegation import (
     DelegationClaimsError,
     parse_delegation_claims,
 )
-from app.core.authorization.delegation_revocation import is_delegation_revoked
+from app.core.authorization.delegation_revocation import (
+    delegation_expired,
+    delegation_session_ended,
+    is_delegation_revoked,
+)
 from app.core.authorization.function_run import (
     admit_function_run,
     function_run_bearer,
@@ -225,16 +229,29 @@ class PrincipalRefused(Exception):
         self.message = message
 
 
+#: Refusals that mean "this credential is spent", answered 401 rather than 403:
+#: a 401 is what sends a client back for a fresh token -- the SDK re-reads
+#: ``LEMMA_TOKEN_FILE`` on one -- where a 403 says to stop asking.
+LAPSED_DELEGATION_CODES = frozenset({"DELEGATION_EXPIRED", "DELEGATION_SESSION_ENDED"})
+
+
 @dataclass(frozen=True, slots=True)
 class PrincipalLookups:
-    """The two reads :func:`resolve_delegated_principal` makes, as a seam."""
+    """The reads :func:`resolve_delegated_principal` makes, as a seam."""
 
     account_standing: Callable[[UUID], Awaitable[AccountStanding | None]]
     delegation_revoked: Callable[[UUID], Awaitable[bool]]
+    #: ``(session_id, issued_at)``: whether that session ended after the token
+    #: was issued. Defaulted, so a seam built before it existed keeps working.
+    session_ended: Callable[[str, float], Awaitable[bool]] | None = None
 
 
 async def _revocation_of(actor_id: UUID) -> bool:
     return await is_delegation_revoked(actor_id=actor_id)
+
+
+async def _session_end_of(session_id: str, issued_at: float) -> bool:
+    return await delegation_session_ended(session_id=session_id, issued_at=issued_at)
 
 
 def _default_lookups() -> PrincipalLookups:
@@ -243,6 +260,7 @@ def _default_lookups() -> PrincipalLookups:
     return PrincipalLookups(
         account_standing=_get_local_auth_state,
         delegation_revoked=_revocation_of,
+        session_ended=_session_end_of,
     )
 
 
@@ -311,7 +329,29 @@ async def resolve_delegated_principal(
         raise PrincipalRefused(
             "DELEGATION_REVOKED", "Delegated workload has been revoked."
         )
+    await require_unlapsed(claims, found)
     return claims
+
+
+async def require_unlapsed(
+    claims: DelegationClaims, lookups: PrincipalLookups | None = None
+) -> None:
+    """A token with a lifetime of its own, refused once it is spent.
+
+    Such a token is the one a workspace sandbox holds, where every session of
+    every agent shares one Linux user and so can read another's: it counts
+    for minutes, and not at all once its conversation has ended.
+    """
+    if claims.expires_at is None or claims.issued_at is None:
+        return
+    if delegation_expired(claims):
+        raise PrincipalRefused("DELEGATION_EXPIRED", "Delegated token has expired.")
+    session_ended = (lookups.session_ended if lookups else None) or _session_end_of
+    if await session_ended(claims.session_id, claims.issued_at):
+        raise PrincipalRefused(
+            "DELEGATION_SESSION_ENDED",
+            "The session this token was issued for has ended.",
+        )
 
 
 # Define the security scheme for OpenAPI
@@ -379,7 +419,9 @@ async def verify_auth(connection: HTTPConnection):
                 )
             except PrincipalRefused as refused:
                 raise HTTPException(
-                    status_code=403,
+                    status_code=(
+                        401 if refused.code in LAPSED_DELEGATION_CODES else 403
+                    ),
                     detail={"code": refused.code, "message": refused.message},
                 ) from refused
 

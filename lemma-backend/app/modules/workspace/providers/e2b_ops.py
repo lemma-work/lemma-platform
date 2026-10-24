@@ -63,6 +63,7 @@ from app.modules.workspace.providers.e2b_process_lifetime import (
     seconds_until,
     watch_for_exit,
 )
+from app.modules.workspace.contracts.session_token_file import with_token_file
 from app.modules.workspace.providers import e2b_python_sessions
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
@@ -231,6 +232,10 @@ class E2BOpsMixin(E2BReachMixin):
                         process_id, channel=ProcessOutputChannel.PTY, data=data
                     )
 
+                # Written by a command of its own: typed in ahead of the
+                # command below, it would be echoed into the terminal.
+                if (written := with_token_file("true", environment)) != "true":
+                    await sandbox.commands.run(written, envs=environment, timeout=30)
                 handle = await sandbox.pty.create(
                     self._pty_size(rows=request.tty.rows, cols=request.tty.cols),
                     on_data=on_pty,
@@ -249,7 +254,7 @@ class E2BOpsMixin(E2BReachMixin):
                     )
             else:
                 handle = await sandbox.commands.run(
-                    command,
+                    with_token_file(command, environment),
                     background=True,
                     cwd=request.cwd,
                     envs=environment,

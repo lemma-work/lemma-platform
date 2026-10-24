@@ -224,7 +224,10 @@ class FakeE2B:
                 if background:
                     world._next += 1
                     return FakeCommandHandle(pid=world._next)
-                if world.python_raises is not None and cmd.startswith("python3 "):
+                if (
+                    world.python_raises is not None
+                    and '" -I /tmp/lemma-sess/python-' in cmd
+                ):
                     raise CommandExitException(
                         exit_code=1, stdout="", stderr=world.python_raises
                     )

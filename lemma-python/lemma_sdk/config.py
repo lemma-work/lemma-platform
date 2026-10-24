@@ -53,11 +53,19 @@ def _token_from_env() -> str | None:
     `LEMMA_TOKEN_FILE` wins over `LEMMA_TOKEN` because a process's environment
     cannot be rewritten after it is spawned. An Agent Host run is given a
     delegated session that lives about an hour, and Lemma refreshes it for runs
-    that outlast it -- a refresh reaches a process that is already running only
-    by way of the file. The variable stays as the fallback, for every caller
-    that is not an Agent Host run and for a run whose file could not be
+    that outlast it; a workspace sandbox session's token lives minutes and is
+    rewritten on every command. A refresh reaches a process that is already
+    running only by way of the file. The variable stays as the fallback, for
+    every caller that is not one of those and for a run whose file could not be
     written.
+
+    Except when the variable is the fresher of the two: both come from whoever
+    started the process, for the same identity, so the later expiry is the
+    later credential. A command whose sandbox could not write the file -- an
+    older image, a terminal -- is spawned with a new token beside an old file,
+    and the file's would be refused.
     """
+    variable = os.getenv("LEMMA_TOKEN") or None
     path = os.getenv("LEMMA_TOKEN_FILE")
     if path:
         try:
@@ -69,8 +77,39 @@ def _token_from_env() -> str | None:
         except OSError, UnicodeError:
             token = ""
         if token:
+            if variable is not None and _expires_after(variable, token):
+                return variable
             return token
-    return os.getenv("LEMMA_TOKEN") or None
+    return variable
+
+
+def _expires_after(first: str, second: str) -> bool:
+    """Whether token ``first`` expires strictly later than ``second``.
+
+    False whenever either expiry cannot be read, which keeps the file's
+    precedence for anything that is not a JWT.
+    """
+    first_expiry, second_expiry = _token_expiry(first), _token_expiry(second)
+    return (
+        first_expiry is not None
+        and second_expiry is not None
+        and first_expiry > second_expiry
+    )
+
+
+def _token_expiry(token: str) -> float | None:
+    """A JWT's ``exp``, unverified: only ever compared with another's."""
+    import base64
+
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(
+            base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        )
+        expiry = claims.get("exp") if isinstance(claims, dict) else None
+    except IndexError, ValueError:
+        return None
+    return float(expiry) if isinstance(expiry, (int, float)) else None
 
 
 def _load_json(raw: str) -> Any:

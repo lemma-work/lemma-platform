@@ -67,6 +67,7 @@ class Lemma:
                 timeout=self.settings.timeout,
                 verify_ssl=self.settings.verify_ssl,
                 refresh_token=self.settings.refresh_token,
+                reread_token=self.settings.token_from_env,
             )
         self.org_id = self.settings.org_id
         self.default_pod_id = self.settings.pod_id

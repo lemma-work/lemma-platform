@@ -14,8 +14,10 @@ nothing that an argument does not.
 from __future__ import annotations
 
 from datetime import datetime
+import shlex
 from typing import Protocol
 
+from sandbox_runtime.paths import LEMMA_PYTHON, SESSION_ROOT, USER_SITE_PACKAGES
 from sandbox_runtime.protocol import (
     CreatePythonSessionRequest,
     ExecutePythonRequest,
@@ -23,6 +25,7 @@ from sandbox_runtime.protocol import (
     PythonSessionRef,
 )
 
+from app.modules.workspace.contracts.session_token_file import TOKEN_FILE_SHELL_PREFIX
 from app.modules.workspace.providers.base import ProviderInstance, PythonResult
 from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
 from app.modules.workspace.providers.e2b_common import (
@@ -32,6 +35,58 @@ from app.modules.workspace.providers.e2b_common import (
 )
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
+
+
+#: What the per-session key is derived for, so it is never another signature.
+_STATE_KEY_PURPOSE = "workspace.e2b-python-state"
+
+
+def python_session_dir(session_id: object) -> str:
+    """This Python session's own directory: its saved namespace and each call's
+    files. ``0700``, made so by the command that runs the call.
+
+    It was ``/tmp/lemma-python-<session>.pkl``: a name anyone could work out, in
+    a directory anyone can write, holding a pickle the next call unpickled --
+    which is to say ran.
+    """
+    return f"{SESSION_ROOT}/python-{session_id}"
+
+
+def python_state_key(sandbox_id: str, session_id: object) -> str:
+    """The key this session's saved namespace is sealed with.
+
+    Derived rather than stored: any backend process computes the same one from
+    the signing keyring, and nothing in the sandbox can, so a state file that
+    verifies was written by a call the backend made for this session. Rotating
+    the signing key changes it, and a session then starts once with an empty
+    namespace -- what a recreated sandbox does anyway.
+    """
+    from app.core.crypto.factory import get_secret_signer
+
+    return get_secret_signer().sign(
+        _STATE_KEY_PURPOSE, f"{sandbox_id}:{session_id}".encode()
+    )
+
+
+def python_command(session_dir: str, runner_path: str) -> str:
+    """The shell command one call runs.
+
+    The image's interpreter by absolute path and isolated (``-I``), never
+    ``python3`` from ``PATH``: that starts with the home's ``~/.python/bin``, and
+    a script run by path puts its own directory -- here, before this, ``/tmp`` --
+    first on ``sys.path``. A template from before ``/opt/lemma-python`` falls
+    back to the system interpreter, still isolated.
+
+    The session's token file is written first, as for any other command: the
+    call's environment carries the session's newest token.
+    """
+    directory = shlex.quote(session_dir)
+    return TOKEN_FILE_SHELL_PREFIX + (
+        f"umask 077 && /bin/mkdir -p {directory} && /bin/chmod 700 {directory} && "
+        f"if [ -x {LEMMA_PYTHON} ]; then _py={LEMMA_PYTHON}; "
+        "else _py=/usr/bin/python3; fi && "
+        f'exec "$_py" -I {shlex.quote(runner_path)}'
+    )
 
 
 class SessionHost(Protocol):
@@ -111,10 +166,11 @@ async def execute_python(
     own directory, so a file one tool wrote by relative path was invisible
     to the other.
     """
-    state_path = f"/tmp/lemma-python-{session.session_id}.pkl"
-    code_path = f"/tmp/lemma-python-{request.operation_id}.code"
-    result_path = f"/tmp/lemma-python-{request.operation_id}.result"
-    runner_path = f"/tmp/lemma-python-{request.operation_id}.py"
+    session_dir = python_session_dir(session.session_id)
+    state_path = f"{session_dir}/state.pkl"
+    code_path = f"{session_dir}/{request.operation_id}.code"
+    result_path = f"{session_dir}/{request.operation_id}.result"
+    runner_path = f"{session_dir}/{request.operation_id}.py"
 
     # Registered like any other process, because the idle sweep decides
     # what to release from this index and nothing put `execute_python` in
@@ -142,13 +198,15 @@ async def execute_python(
                 await sandbox.files.write(
                     runner_path,
                     PYTHON_RUNNER.format(
+                        key=python_state_key(instance.provider_id, session.session_id),
                         state_path=state_path,
                         code_path=code_path,
                         result_path=result_path,
+                        user_site=USER_SITE_PACKAGES,
                     ),
                 )
                 outcome = await sandbox.commands.run(
-                    f"python3 {runner_path}",
+                    python_command(session_dir, runner_path),
                     cwd=session.cwd,
                     envs={item.name: item.value for item in request.environment},
                     # `None` here meant unbounded, so `execute_python`'s
@@ -200,4 +258,11 @@ async def delete_python_session(
 ) -> None:
     # Nothing to forget is success.
     with sdk_best_effort():
-        await sandbox.files.remove(f"/tmp/lemma-python-{session_id}.pkl")
+        await sandbox.files.remove(python_session_dir(session_id))
+    # Where a session's state lived before it had a directory of its own.
+    for legacy in (
+        f"/tmp/lemma-python-{session_id}.pkl",
+        f"/tmp/lemma-python-{session_id}.pkl.modules",
+    ):
+        with sdk_best_effort():
+            await sandbox.files.remove(legacy)

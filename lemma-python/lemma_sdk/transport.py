@@ -138,6 +138,7 @@ class LemmaTransport:
         verify_ssl: bool = True,
         max_retries: int = 2,
         refresh_token: str | None = None,
+        reread_token: bool = False,
     ) -> None:
         self.generated = AuthenticatedClient(
             base_url=base_url.rstrip("/"),
@@ -149,6 +150,7 @@ class LemmaTransport:
         self._timeout = timeout
         self._max_retries = max(0, max_retries)
         self._refresh_token = refresh_token
+        self._reread_token = reread_token
 
     @property
     def timeout(self) -> float:
@@ -183,6 +185,8 @@ class LemmaTransport:
         as "your session expired", not as whatever went wrong while trying to
         renew it.
         """
+        if self._reread_token and self._reread_environment_token():
+            return True
         if not self._refresh_token:
             return False
         client = self.generated.get_httpx_client()
@@ -205,6 +209,23 @@ class LemmaTransport:
         # like the refresh never happened at all.
         self._refresh_token = rotated or self._refresh_token
         self.set_token(access_token)
+        return True
+
+    def _reread_environment_token(self) -> bool:
+        """Pick up a token rewritten since this one was read.
+
+        A workspace sandbox session's token lives minutes, and Lemma rewrites
+        ``LEMMA_TOKEN_FILE`` with a fresh one on every command the session
+        runs. A process that outlives its token -- a server, a long loop --
+        finds the new one here rather than failing from then on. False when
+        nothing new is there, so a dead token is not replayed.
+        """
+        from .config import _token_from_env
+
+        token = _token_from_env()
+        if not token or token == self.generated.token:
+            return False
+        self.set_token(token)
         return True
 
     def close(self) -> None:

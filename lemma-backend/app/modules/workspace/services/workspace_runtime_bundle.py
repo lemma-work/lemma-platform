@@ -49,7 +49,7 @@ from app.modules.workspace.providers.base import (
     ProviderRejected,
 )
 from sandbox_runtime import runtime_install
-from sandbox_runtime.paths import RUNTIME_OVERLAY_ROOT
+from sandbox_runtime.paths import LEMMA_PYTHON, RUNTIME_OVERLAY_ROOT
 from sandbox_runtime.errors import SandboxError
 from sandbox_runtime.protocol import (
     ProcessOutputSnapshot,
@@ -73,8 +73,11 @@ ARCHIVE_PATH = "/tmp/lemma-runtime-bundle.zip"
 #: The interpreter that owns the site-packages the `.pth` must land in. Naming
 #: it explicitly rather than `python3`: the overlay is only ever ahead of *this*
 #: environment, and a different interpreter would write the file somewhere it is
-#: never read.
-_SANDBOX_PYTHON = "/opt/lemma-python/bin/python"
+#: never read. Run with `-I`: the installer is stdlib-only, and otherwise
+#: `/tmp`, where it is staged and anything can write, and the home's
+#: site-packages would both be on `sys.path` ahead of the standard library --
+#: under `sudo`, where the sandbox has it.
+_SANDBOX_PYTHON = f"{LEMMA_PYTHON} -I"
 
 #: Long enough to upload 1.6 MB and unpack it on one vCPU, short enough that a
 #: wedged sandbox does not hold a session open. Only paid when the version moves.

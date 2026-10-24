@@ -1479,3 +1479,82 @@ async def test_a_command_exit_is_classified_by_type_not_by_its_stderr(
     assert isinstance(classified, ProviderRejected)
     assert not isinstance(classified, SandboxUnavailable)
     assert classified.result is exc
+
+
+# ---------------------------------------------------------------------------
+# A session's token file, which E2B has no runtime of ours to write
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("tty", [None, TerminalSize(rows=24, cols=80)])
+async def test_a_command_writes_its_sessions_token_file_first(
+    provider: E2BSandboxProvider, world: FakeE2B, monkeypatch, tty
+) -> None:
+    """The token lives minutes; the file is how a running process sees the next
+    one. Typed into a terminal it would be echoed, so a PTY gets it written by
+    a command of its own."""
+    from app.modules.workspace.contracts.session_token_file import (
+        TOKEN_FILE_SHELL_PREFIX,
+    )
+    from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+
+    buffer = InMemoryOutputBuffer()
+    monkeypatch.setattr(provider, "_output", buffer)
+    monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.start_process(
+        instance,
+        StartProcessRequest(
+            operation_id=uuid4(),
+            shell_command="echo hi",
+            argv=None,
+            cwd=WORKSPACE_ROOT,
+            environment=(
+                EnvironmentVariable(name="LEMMA_TOKEN", value="t"),
+                EnvironmentVariable(
+                    name="LEMMA_TOKEN_FILE", value="/tmp/lemma-sess/s/lemma-token"
+                ),
+            ),
+            tty=tty,
+            output_limit_bytes=1024,
+            deadline_at=_deadline(),
+            initial_input=None,
+        ),
+        deadline_at=_deadline(),
+    )
+
+    if tty is None:
+        assert world.commands[-1] == TOKEN_FILE_SHELL_PREFIX + "echo hi"
+    else:
+        assert TOKEN_FILE_SHELL_PREFIX + "true" in world.commands
+        assert world.commands[-1] == "echo hi; exit $?", "nothing extra is typed"
+
+
+async def test_a_command_without_a_token_file_runs_as_it_was_sent(
+    provider: E2BSandboxProvider, world: FakeE2B, monkeypatch
+) -> None:
+    from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+
+    buffer = InMemoryOutputBuffer()
+    monkeypatch.setattr(provider, "_output", buffer)
+    monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.start_process(
+        instance,
+        StartProcessRequest(
+            operation_id=uuid4(),
+            shell_command="echo hi",
+            argv=None,
+            cwd=WORKSPACE_ROOT,
+            environment=(EnvironmentVariable(name="LEMMA_TOKEN", value="t"),),
+            tty=None,
+            output_limit_bytes=1024,
+            deadline_at=_deadline(),
+            initial_input=None,
+        ),
+        deadline_at=_deadline(),
+    )
+
+    assert world.commands[-1] == "echo hi"

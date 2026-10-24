@@ -17,6 +17,8 @@ from sandbox_runtime.protocol import (
     PythonResult,
 )
 
+from .session_token import deliver_token_file
+
 
 @dataclass(slots=True)
 class ManagedPythonSession:
@@ -77,6 +79,10 @@ class PythonSessionManager:
                 return existing
             if session.process.returncode is not None:
                 raise RuntimeError("Python session worker exited")
+            await asyncio.to_thread(
+                deliver_token_file,
+                {item.name: item.value for item in request.environment},
+            )
             assert session.process.stdin is not None
             assert session.process.stdout is not None
             payload = (
@@ -170,8 +176,13 @@ class PythonSessionManager:
             for key, value in os.environ.items()
             if key not in {"LEMMA_RUNTIME_TOKEN", "LEMMA_RUNTIME_TOKEN_FILE"}
         }
+        # `-I`: no `PYTHON*` variables, no user site, and neither the working
+        # directory -- a conversation's own folder -- nor anything the home
+        # put on `sys.path` ahead of the worker's own imports. The worker opens
+        # those to the user's code once it is running.
         return await asyncio.create_subprocess_exec(
             sys.executable,
+            "-I",
             "-m",
             "sandbox_runtime.workspace.python_worker",
             cwd=request.cwd,

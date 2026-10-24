@@ -452,6 +452,54 @@ def test_no_refresh_token_means_the_401_is_simply_raised():
     assert server.requests == []
 
 
+def test_a_401_rereads_a_rewritten_token_file_and_replays(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """A sandbox session's token lives minutes and its file is rewritten under
+    the running process; the process picks the new one up instead of failing
+    for the rest of its life."""
+    token_file = tmp_path / "lemma-token"
+    token_file.write_text("rewritten", encoding="utf-8")
+    monkeypatch.setenv("LEMMA_TOKEN_FILE", str(token_file))
+    monkeypatch.delenv("LEMMA_TOKEN", raising=False)
+    transport = _transport_with_refresh(None, reread_token=True)
+    client = transport.generated.get_httpx_client()
+    endpoint = FakeEndpoint([FakeResponse(401), FakeResponse(200, parsed={"ok": 1})])
+
+    assert transport.call(endpoint) == {"ok": 1}
+    assert endpoint.calls == 2
+    assert client.headers["Authorization"] == "Bearer rewritten"
+
+
+def test_an_unchanged_token_file_is_not_replayed(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    token_file = tmp_path / "lemma-token"
+    token_file.write_text("stale", encoding="utf-8")
+    monkeypatch.setenv("LEMMA_TOKEN_FILE", str(token_file))
+    transport = _transport_with_refresh(None, reread_token=True)
+    endpoint = FakeEndpoint([FakeResponse(401)] * 3)
+
+    with pytest.raises(LemmaAuthError):
+        transport.call(endpoint)
+    assert endpoint.calls == 1
+
+
+def test_a_token_the_caller_passed_is_never_swapped_for_the_environments(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """`token=` is the caller's credential, as with the refresh token."""
+    token_file = tmp_path / "lemma-token"
+    token_file.write_text("someone-elses", encoding="utf-8")
+    monkeypatch.setenv("LEMMA_TOKEN_FILE", str(token_file))
+    transport = _transport_with_refresh(None)
+    endpoint = FakeEndpoint([FakeResponse(401), FakeResponse(200, parsed={})])
+
+    with pytest.raises(LemmaAuthError):
+        transport.call(endpoint)
+    assert transport.generated.token == "stale"
+
+
 def test_a_refusing_refresh_endpoint_surfaces_the_original_401():
     """ "Your session expired", not whatever went wrong while renewing it."""
     server = _RefreshServer(status=401, payload={"message": "refresh token expired"})

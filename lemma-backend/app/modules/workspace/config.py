@@ -124,6 +124,20 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("WORKSPACE_RUNTIME_CREDENTIAL_KEY"),
         description="At least 32 bytes; signs in-sandbox runtime credentials",
     )
+    delegated_token_ttl_seconds: int = Field(
+        default=900,
+        ge=0,
+        validation_alias=AliasChoices("WORKSPACE_DELEGATED_TOKEN_TTL_SECONDS"),
+        description=(
+            "How long the delegated LEMMA_TOKEN a workspace sandbox session is "
+            "given counts for, against the access token's hour. Every session "
+            "of every agent shares the sandbox's one Linux user, so a token "
+            "there can be read by the others: this bounds how long a lifted "
+            "one is any use. The session's LEMMA_TOKEN_FILE is rewritten with "
+            "a fresh token on every command, so a running process keeps "
+            "working while its conversation does. 0 turns the lifetime off."
+        ),
+    )
     port_access_url: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("WORKSPACE_PORT_ACCESS_URL"),

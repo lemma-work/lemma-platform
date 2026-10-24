@@ -25,6 +25,10 @@ from sandbox_runtime.protocol import (
     WorkloadKind,
 )
 from app.modules.workspace.contracts import SandboxInfo
+from app.modules.workspace.contracts.session_token_file import (
+    TOKEN_FILE_VARIABLE,
+    session_token_path,
+)
 from app.modules.workspace.sandbox_session import (
     SandboxWorkspaceSession,
     canonical_workspace_cwd,
@@ -321,7 +325,14 @@ class WorkspaceSandboxService(
         scope: list[str] | None = None,
         session_id: str | None = None,
         conversation_id: UUID | None = None,
+        token_ttl_seconds: int | None = None,
     ) -> dict[str, str]:
+        """The environment a session's commands run with, a fresh token in it.
+
+        ``token_ttl_seconds`` gives that token a lifetime of its own, for the
+        shared sandbox (``get_session``). The Agent Host and remote harnesses
+        hold theirs differently and leave it unset.
+        """
         from app.modules.identity.contracts.delegated_tokens import (
             mint_delegated_token,
         )
@@ -345,6 +356,7 @@ class WorkspaceSandboxService(
             workload_name=workload_name,
             scope=scope,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+            ttl_seconds=token_ttl_seconds,
         )
         api_url = self._resolve_workspace_api_url()
         auth_url = (
@@ -446,9 +458,24 @@ class WorkspaceSandboxService(
                         scope=scope,
                         session_id=session_id,
                         conversation_id=conversation_id,
+                        token_ttl_seconds=(
+                            workspace_settings.delegated_token_ttl_seconds or None
+                        ),
                     ),
                     budget.remaining(),
                 )
+        # Named for the session here, not left to the session object, because
+        # the environment has to name it too. The token also goes to a file
+        # the environment names: it lives minutes, and the file -- rewritten by
+        # the runtime on every command -- is how a fresh one reaches a process
+        # that is already running. Added after the cache, so an environment
+        # cached before this existed still gets it.
+        resolved_session_id = session_id or str(uuid4())
+        if env_vars.get("LEMMA_TOKEN"):
+            env_vars = {
+                **env_vars,
+                TOKEN_FILE_VARIABLE: session_token_path(resolved_session_id),
+            }
 
         # Tell this session, once, if the disk it is about to use is not the one
         # it saw last. Without it an agent cannot distinguish a recreated
@@ -475,7 +502,7 @@ class WorkspaceSandboxService(
         return SandboxWorkspaceSession(
             client=self._get_manager_client(),
             sandbox_id=str(user_id),
-            session_id=session_id,
+            session_id=resolved_session_id,
             env_vars=env_vars,
             initial_cwd=resolved_cwd,
             auto_close=close_on_exit,

@@ -186,3 +186,107 @@ async def test_a_host_command_gets_addresses_the_mac_resolves_and_its_conversati
     assert env["LEMMA_HOST_ORIGIN"] == emitted["FRONTEND_URL"]
     assert "LEMMA_WORKSPACE_URL" not in env
     assert not [name for name, value in env.items() if "host.lemma.internal" in value]
+
+
+def _jwt(claims: dict[str, object]) -> str:
+    import base64
+    import json
+
+    body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode()
+    return f"header.{body.rstrip('=')}.signature"
+
+
+async def test_a_short_lived_token_is_cached_for_half_its_remaining_life():
+    """Every command writes the cached token to the session's file, and a
+    process reading it from there should find one with time left."""
+    import time
+
+    from app.core.authorization.delegation import CLAIM_EXPIRES_AT, CLAIM_ISSUED_AT
+
+    now = time.time()
+    runtime = WorkspaceToolRuntime(
+        workspace_service=FakeWorkspaceService(),
+        env_cache=FakeEnvCache(),
+        default_env_ttl_seconds=300,
+    )
+    token = _jwt({"exp": now + 3600, CLAIM_ISSUED_AT: now, CLAIM_EXPIRES_AT: now + 240})
+
+    ttl = runtime._resolve_env_ttl_seconds({"LEMMA_TOKEN": token})
+
+    assert 115 <= ttl <= 120
+
+
+async def test_a_cached_token_from_an_ended_conversation_is_minted_again():
+    """Ending a conversation refuses its tokens; one still cached would be
+    handed to the conversation's next run and refused by every call it made."""
+    import time
+
+    from app.core.authorization.delegation import (
+        CLAIM_EXPIRES_AT,
+        CLAIM_ISSUED_AT,
+        CLAIM_SESSION_ID,
+    )
+
+    now = time.time()
+    asked: list[tuple[str, float]] = []
+
+    async def ended(session_id: str, issued_at: float) -> bool:
+        asked.append((session_id, issued_at))
+        return True
+
+    cache = FakeEnvCache()
+    workspace_service = FakeWorkspaceService()
+    runtime = WorkspaceToolRuntime(
+        workspace_service=workspace_service,
+        env_cache=cache,
+        default_env_ttl_seconds=300,
+        session_ended=ended,
+    )
+    user_id, pod_id = uuid4(), uuid4()
+    key = runtime._get_cache_key(
+        user_id=user_id,
+        pod_id=pod_id,
+        organization_id=None,
+        workload_type=None,
+        workload_id=None,
+        workload_name=None,
+        scope_key=None,
+        scope=None,
+        session_id="shell-c",
+    )
+    spent = _jwt(
+        {
+            CLAIM_SESSION_ID: "conversation",
+            CLAIM_ISSUED_AT: now,
+            CLAIM_EXPIRES_AT: now + 900,
+        }
+    )
+    cache.values[key] = {"LEMMA_TOKEN": spent}
+
+    session = await runtime.get_session(
+        user_id=user_id, pod_id=pod_id, session_id="shell-c"
+    )
+
+    assert asked == [("conversation", now)]
+    assert cache.delete_calls == [key]
+    assert workspace_service.calls[0].get("env_vars") is None
+    assert session.env_vars == {"LEMMA_TOKEN": "fresh-token"}
+
+
+async def test_a_cached_hour_long_token_is_not_checked_against_session_ends():
+    async def ended(session_id: str, issued_at: float) -> bool:
+        raise AssertionError("a token without a lifetime was looked up")
+
+    cache = FakeEnvCache()
+    workspace_service = FakeWorkspaceService()
+    runtime = WorkspaceToolRuntime(
+        workspace_service=workspace_service,
+        env_cache=cache,
+        default_env_ttl_seconds=300,
+        session_ended=ended,
+    )
+    user_id = uuid4()
+    await runtime.get_session(user_id=user_id, pod_id=None, session_id="s")
+    await runtime.get_session(user_id=user_id, pod_id=None, session_id="s")
+
+    assert workspace_service.calls[1]["env_vars"] == {"LEMMA_TOKEN": "fresh-token"}

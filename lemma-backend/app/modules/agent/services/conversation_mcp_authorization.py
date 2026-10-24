@@ -53,6 +53,7 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.security import PrincipalRefused, require_unlapsed
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import TERMINAL_AGENT_RUN_STATUSES
 from app.modules.agent.infrastructure.repositories import (
@@ -176,6 +177,11 @@ async def _read_run_token(token: str) -> _RunToken | None:
             return None
         if await is_delegation_revoked(actor_id=claims.actor_id):
             _denied("delegation_revoked", None, None)
+            return None
+        try:
+            await require_unlapsed(claims)
+        except PrincipalRefused as refused:
+            _denied(refused.code.lower(), None, None)
             return None
     return _RunToken(user_id=UUID(session.get_user_id()), claims=claims)
 

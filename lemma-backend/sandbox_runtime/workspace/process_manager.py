@@ -19,6 +19,7 @@ from sandbox_runtime.protocol import ProcessState, StartProcessRequest
 from sandbox_runtime.tasks import create_inherited_task
 
 from .models import OutputChannel, RuntimeProcessResponse
+from .session_token import deliver_token_file
 
 
 _OUTPUT_DRAIN_GRACE_SECONDS = 0.25
@@ -388,6 +389,7 @@ class ProcessManager:
         environment.pop("LEMMA_RUNTIME_TOKEN", None)
         environment.pop("LEMMA_RUNTIME_TOKEN_FILE", None)
         environment.update({item.name: item.value for item in request.environment})
+        await asyncio.to_thread(deliver_token_file, environment)
         output = OutputBuffer(request.output_limit_bytes)
         if request.tty is not None:
             master_fd, slave_fd = pty.openpty()

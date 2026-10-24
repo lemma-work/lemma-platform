@@ -34,6 +34,10 @@ class LemmaSettings:
     #: `LemmaTransport._refresh_session`. `None` when there is none to use, or
     #: when the caller passed `token=` and therefore owns the credential.
     refresh_token: str | None = None
+    #: Whether the token came from the environment, so a 401 may re-read it:
+    #: `LEMMA_TOKEN_FILE` is rewritten under a running process. Never when the
+    #: caller passed `token=`, for the reason `refresh_token` is withheld then.
+    token_from_env: bool = False
 
 
 def load_settings(
@@ -116,4 +120,5 @@ def load_settings(
         server=selected_server,
         config_path=path,
         refresh_token=None if token else get_refresh_token_from_config(config),
+        token_from_env=use_env_server and not token,
     )

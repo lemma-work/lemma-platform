@@ -98,3 +98,35 @@ def test_a_token_file_that_is_not_text_falls_back(
     monkeypatch.setenv("LEMMA_TOKEN_FILE", str(token_file))
 
     assert _token_from_env() == "still-usable"
+
+
+def _jwt(expiry: int) -> str:
+    import base64
+    import json
+
+    body = base64.urlsafe_b64encode(json.dumps({"exp": expiry}).encode()).decode()
+    return f"header.{body.rstrip('=')}.signature"
+
+
+def test_a_fresher_variable_beats_a_stale_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A command spawned with a new token beside a file nobody rewrote -- an
+    older sandbox image, a terminal -- must not present the file's dead one."""
+    token_file = tmp_path / "lemma-token"
+    token_file.write_text(_jwt(1_000), encoding="utf-8")
+    monkeypatch.setenv("LEMMA_TOKEN", _jwt(2_000))
+    monkeypatch.setenv("LEMMA_TOKEN_FILE", str(token_file))
+
+    assert _token_from_env() == _jwt(2_000)
+
+
+def test_a_fresher_file_still_beats_the_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token_file = tmp_path / "lemma-token"
+    token_file.write_text(_jwt(2_000), encoding="utf-8")
+    monkeypatch.setenv("LEMMA_TOKEN", _jwt(1_000))
+    monkeypatch.setenv("LEMMA_TOKEN_FILE", str(token_file))
+
+    assert _token_from_env() == _jwt(2_000)

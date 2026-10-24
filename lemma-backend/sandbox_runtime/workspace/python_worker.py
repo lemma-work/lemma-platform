@@ -9,6 +9,8 @@ import traceback as traceback_module
 from types import ModuleType
 from typing import Any, TextIO
 
+from sandbox_runtime.paths import user_code_sys_path
+
 
 def _clip_text(value: str | None, budget: int) -> tuple[str | None, int, bool]:
     if value is None:
@@ -163,6 +165,14 @@ def main() -> None:
     os.close(devnull)
     os.environ.pop("LEMMA_RUNTIME_TOKEN", None)
     os.environ.pop("LEMMA_RUNTIME_TOKEN_FILE", None)
+    # Started with `-I`, so everything above came from the image or the overlay
+    # and nothing from the home. The user's code gets the path it would have
+    # had without the flag; ours is already imported and stays as it is.
+    sys.path[:] = user_code_sys_path(os.getcwd(), sys.path)
+    # `-I` also ignores every PYTHON* variable, and the image sets this one so
+    # that importing never litters the user's directories with bytecode.
+    if os.environ.get("PYTHONDONTWRITEBYTECODE"):
+        sys.dont_write_bytecode = True
     run(control_input, control_output)
 
 

@@ -42,3 +42,49 @@ def test_validate_delegation_claims_payload_keeps_plain_payload():
     payload = {"foo": "bar"}
 
     assert validate_delegation_claims_payload(payload) == payload
+
+
+def test_a_token_minted_with_a_lifetime_carries_it():
+    """`ttl_seconds` is what makes a sandbox session's token short-lived."""
+    import time
+    from uuid import uuid4
+
+    from app.core.authorization.delegation import CLAIM_EXPIRES_AT, CLAIM_ISSUED_AT
+    from app.modules.identity.contracts.delegated_tokens import _delegation_claims
+
+    before = time.time()
+    claims = _delegation_claims(
+        user_id=uuid4(),
+        workload_type="AGENT",
+        workload_id=uuid4(),
+        pod_id=uuid4(),
+        session_id="conversation",
+        workload_name=None,
+        scope=None,
+        delegated_tokens_enabled=True,
+        ttl_seconds=600,
+    )
+
+    assert claims is not None
+    assert before <= claims[CLAIM_ISSUED_AT] <= time.time()
+    assert claims[CLAIM_EXPIRES_AT] == claims[CLAIM_ISSUED_AT] + 600
+
+
+def test_a_token_minted_without_one_carries_none():
+    from uuid import uuid4
+
+    from app.core.authorization.delegation import CLAIM_EXPIRES_AT
+    from app.modules.identity.contracts.delegated_tokens import _delegation_claims
+
+    claims = _delegation_claims(
+        user_id=uuid4(),
+        workload_type="AGENT",
+        workload_id=uuid4(),
+        pod_id=uuid4(),
+        session_id="conversation",
+        workload_name=None,
+        scope=None,
+        delegated_tokens_enabled=True,
+    )
+
+    assert claims is not None and CLAIM_EXPIRES_AT not in claims

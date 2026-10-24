@@ -109,7 +109,7 @@ RUN uv sync \
         --no-install-package lemma-terminal \
         --no-install-package lemma-pod-bundle \
     && printf '%s\n' \
-        'import sys; p="/home/user/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
+        'import sys; p="/home/user/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path and not sys.flags.isolated else None' \
         > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-overlay.pth \
     && uv cache clean
 
@@ -308,7 +308,14 @@ COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
 # site-packages holding it, so the shared environment stays available to
 # `execute_python` and invisible to a venv. Missing directories are skipped, so
 # this is safe before /home/user/.python exists.
-RUN printf '/app\n/home/user/.python/lib/python3.14/site-packages\n' \
+#
+# The user's site-packages is the overlay `.pth` above, and only that: it puts
+# the directory first for every interpreter *except* one started with `-I`.
+# Lemma's own processes -- the runtime, a Python worker before it runs any user
+# code -- start that way (`start-workspace-runtime`), so nothing in the home,
+# which every session can write and which outlives the container, is imported
+# by them. A path line here cannot be conditional, so it no longer names it.
+RUN printf '/app\n' \
       > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-paths.pth
 
 # Where the backend installs first-party code into a running sandbox. The copy

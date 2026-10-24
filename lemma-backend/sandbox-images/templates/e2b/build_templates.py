@@ -277,7 +277,8 @@ def workspace_template():
             "printf '%s\\n' "
             "'import sys; "
             'p="/home/user/.python/lib/python3.14/site-packages"; '
-            "sys.path.insert(0, p) if p not in sys.path else None' "
+            "sys.path.insert(0, p) "
+            "if p not in sys.path and not sys.flags.isolated else None' "
             "> /opt/lemma-python/lib/python3.14/site-packages/"
             "lemma-workspace-overlay.pth && "
             # `/app` for the `sandbox_runtime` floor and the user's own
@@ -285,8 +286,11 @@ def workspace_template():
             # as `Dockerfile.workspace` does and for its reason: `PYTHONPATH`
             # reaches every interpreter, virtualenvs included, and lands ahead
             # of a venv's own packages. A `.pth` is read only by the
-            # interpreter whose site-packages holds it.
-            "printf '/app\\n/home/user/.python/lib/python3.14/site-packages\\n' "
+            # interpreter whose site-packages holds it. The user's
+            # site-packages only through the `.pth` above, which skips it
+            # under `python -I`: Lemma's own processes start isolated so that
+            # nothing in the home is imported before their own code.
+            "printf '/app\\n' "
             "> /opt/lemma-python/lib/python3.14/site-packages/"
             "lemma-workspace-paths.pth && "
             # Where the backend installs the first-party code this image also
@@ -473,9 +477,9 @@ def workspace_template():
                 "NODE_PATH": "/opt/lemma-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
                 "PIP_PREFIX": "/home/user/.python",
-                # No PYTHONPATH: `lemma-workspace-paths.pth` above gives the
-                # Lemma interpreter `/app` and the user's site-packages, and
-                # nothing else. See `Dockerfile.workspace`.
+                # No PYTHONPATH: the `.pth` files above give the Lemma
+                # interpreter `/app` and, unless it runs with `-I`, the user's
+                # site-packages, and nothing else. See `Dockerfile.workspace`.
                 #
                 # The overlay's commands ahead of the image's copies of the
                 # same scripts, as on Docker. Login shells get the same order

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import time
 from uuid import UUID
 
 from app.core.config import settings
@@ -58,6 +59,7 @@ def _delegation_claims(
     workload_name: str | None,
     scope: list[str] | None,
     delegated_tokens_enabled: bool,
+    ttl_seconds: int | None = None,
 ) -> dict[str, object] | None:
     """The workload's claims, or ``None`` when this token cannot carry any.
 
@@ -65,6 +67,11 @@ def _delegation_claims(
     a delegation claim that cannot name what is acting, or the pod it is acting
     in, is not a narrowing of the token -- it is an unscoped impersonation with
     extra fields.
+
+    ``ttl_seconds`` gives the token a lifetime of its own, shorter than the
+    access token's hour, which every API entry point enforces
+    (``app.core.security``) -- and it marks the token as one its delegation
+    session can end (``end_delegation_session``).
     """
     if not (
         delegated_tokens_enabled
@@ -73,6 +80,7 @@ def _delegation_claims(
         and pod_id is not None
     ):
         return None
+    issued_at = time.time() if ttl_seconds else None
     return build_delegation_claims(
         workload_type=workload_type,
         workload_id=workload_id,
@@ -81,6 +89,10 @@ def _delegation_claims(
         invoked_by_user_id=user_id,
         workload_name=workload_name,
         scope=scope,
+        issued_at=issued_at,
+        expires_at=(
+            issued_at + ttl_seconds if issued_at is not None and ttl_seconds else None
+        ),
     )
 
 
@@ -94,8 +106,14 @@ async def mint_delegated_token(
     workload_name: str | None,
     scope: list[str] | None,
     delegated_tokens_enabled: bool,
+    ttl_seconds: int | None = None,
 ) -> str:
-    """A token for this workload, for a caller that spends it straight away."""
+    """A token for this workload, for a caller that spends it straight away.
+
+    ``ttl_seconds``, when given, is how long it counts for: see
+    ``_delegation_claims``. A token that can carry no delegation claims carries
+    no lifetime either, and lives as long as the access token does.
+    """
     return await get_user_token(
         user_id,
         delegation_claims=_delegation_claims(
@@ -107,6 +125,7 @@ async def mint_delegated_token(
             workload_name=workload_name,
             scope=scope,
             delegated_tokens_enabled=delegated_tokens_enabled,
+            ttl_seconds=ttl_seconds,
         ),
     )
 
