@@ -1898,7 +1898,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                                 callError={huddle.error}
                                                 callRefresh={callConversationId === openConversationId
                                                     ? `${huddle.active}:${huddle.thinking}:${huddle.expanded}`
-                                                    : huddle.lastCallId === openConversationId ? `settled:${huddle.settled}` : ""}
+                                                    : huddle.settled?.callId === openConversationId ? `settled:${huddle.settled.count}` : ""}
                                             />
                                         ) : (
                                             <ConversationPane

@@ -103,16 +103,20 @@ export class CallConnection {
         if (this.open()) this.socket.send(JSON.stringify(control));
     }
 
-    /** Ask the server to end the call, and resolve once it has: it saves the
-     *  call's transcript before it closes, so whoever reloads the
-     *  conversation on this sees it. A server that does not answer in time is
-     *  closed on. */
-    close(): Promise<void> {
+    /** Ask the server to end the call. Resolves true once the server has
+     *  closed it, which it does only after saving the call's transcript, so
+     *  whoever reloads the conversation on that sees it; false when the
+     *  server did not answer in time and this side closed instead. */
+    close(): Promise<boolean> {
         const socket = this.socket;
         return new Promise((resolve) => {
-            if (socket.readyState === WebSocket.CLOSED) { resolve(); return; }
-            const done = () => { window.clearTimeout(timer); resolve(); };
-            const timer = window.setTimeout(() => { socket.close(1000); resolve(); }, END_TIMEOUT_MS);
+            if (socket.readyState === WebSocket.CLOSED) { resolve(false); return; }
+            const done = () => { window.clearTimeout(timer); resolve(true); };
+            const timer = window.setTimeout(() => {
+                socket.removeEventListener("close", done);
+                socket.close(1000);
+                resolve(false);
+            }, END_TIMEOUT_MS);
             socket.addEventListener("close", done, { once: true });
             if (this.open()) this.send({ type: "end" });
             else socket.close(1000);

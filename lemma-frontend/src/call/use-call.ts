@@ -23,10 +23,16 @@ export function useCall({ podId }: { podId: string }) {
     const [working, setWorking] = useState(false);
     const [canvas, setCanvas] = useState<CanvasItem[]>([]);
     const [level, setLevel] = useState(0);
-    /** Calls the server has finished with, transcript saved. Counts up so a
-     *  conversation can reload on it; the transcript is written as the
-     *  server ends the call, after this tab has stopped listening. */
-    const [settled, setSettled] = useState(0);
+    /** The last call the server has finished with, transcript saved, and a
+     *  count that moves each time so its conversation can reload on it. The
+     *  transcript is written as the server ends the call, after this tab has
+     *  stopped listening; the id goes with it because the next call may
+     *  already have started by then. */
+    const [settled, setSettled] = useState<{ callId: string; count: number } | null>(null);
+    const callIdRef = useRef<string | null>(null);
+    const settle = useCallback((callId: string | null) => {
+        if (callId) setSettled((last) => ({ callId, count: (last?.count ?? 0) + 1 }));
+    }, []);
 
     const attemptRef = useRef(0);
     const connectionRef = useRef<CallConnection | null>(null);
@@ -44,12 +50,13 @@ export function useCall({ podId }: { podId: string }) {
     const end = useCallback(() => {
         ++attemptRef.current;
         const connection = connectionRef.current;
+        const callId = callIdRef.current;
         teardown();
-        void connection?.close().then(() => setSettled((count) => count + 1));
+        void connection?.close().then((saved) => { if (saved) settle(callId); });
         setMuted(false); mutedRef.current = false;
         setWorking(false);
         setStatus((current) => (current === "error" ? current : "ended"));
-    }, [teardown]);
+    }, [teardown, settle]);
 
     useEffect(() => end, [end]);
 
@@ -80,6 +87,7 @@ export function useCall({ podId }: { podId: string }) {
 
     const start = useCallback(async (callId: string, details: CallStart) => {
         if (connectionRef.current) return;
+        callIdRef.current = callId;
         const attempt = ++attemptRef.current;
         setError(null); setTranscript([]); setCanvas([]); setWorking(false);
         setStatus("connecting");
@@ -98,7 +106,7 @@ export function useCall({ podId }: { podId: string }) {
                     if (attempt !== attemptRef.current) return;
                     ++attemptRef.current;
                     teardown();
-                    setSettled((count) => count + 1);
+                    settle(callId);
                     if (reason) { setError(reason); setStatus("error"); } else setStatus("ended");
                 },
             });
@@ -114,7 +122,7 @@ export function useCall({ podId }: { podId: string }) {
             setStatus("error");
             end();
         }
-    }, [podId, onFrame, end, teardown]);
+    }, [podId, onFrame, end, teardown, settle]);
 
     /* The ref first, outside React's updater: the microphone callback reads it
        on its own schedule, and an updater runs when React gets to it (twice in

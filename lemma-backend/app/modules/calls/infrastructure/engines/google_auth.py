@@ -43,8 +43,9 @@ def service_account_headers(
 ) -> Headers:
     async def headers() -> Mapping[str, str]:
         try:
+            # Never through a proxy: the metadata server answers only directly.
             async with httpx.AsyncClient(
-                timeout=_METADATA_TIMEOUT_SECONDS, transport=transport
+                timeout=_METADATA_TIMEOUT_SECONDS, transport=transport, trust_env=False
             ) as client:
                 response = await client.get(
                     token_url, headers={"Metadata-Flavor": "Google"}

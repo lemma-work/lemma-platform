@@ -267,6 +267,10 @@ class CascadeEngine:
             await self._say(reply, pending.strip())
         if not reply.spoken:
             return
+        await self._heard_out()
+
+    async def _heard_out(self) -> None:
+        """Flush what was sent to be spoken, and wait until it has been."""
         async with self._speaker.flushed:
             target = self._speaker.flush_count + 1
             await self._speaker.flush()
@@ -287,9 +291,11 @@ class CascadeEngine:
     async def _apologise(self) -> None:
         self._dropping_audio = False
         # The speaker may be what failed; then the caption is all there is.
-        with contextlib.suppress(ConnectionClosed, EngineUnavailable, OSError):
+        with contextlib.suppress(
+            ConnectionClosed, EngineUnavailable, OSError, TimeoutError
+        ):
             await self._speaker.speak(_SORRY)
-            await self._speaker.flush()
+            await self._heard_out()
         self._history.append(Line("voice", _SORRY))
         offer(self._events, Said(_SORRY, final=True))
 

@@ -248,7 +248,6 @@ class CallSession:
                     }
                 )
             case Heard(text=text, final=True):
-                self.stats.caller_turns += 1
                 self._floor.caller_finished(now)
                 await self.send(
                     {
@@ -288,6 +287,7 @@ class CallSession:
         return self._said_count
 
     def _finished_turn(self, text: str) -> None:
+        self.stats.caller_turns += 1
         recent = self._lines[-_RECENT_LINES:]
         number = self._remember(f"Caller: {text}")
         create_inherited_task(

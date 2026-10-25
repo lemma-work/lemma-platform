@@ -343,6 +343,8 @@ async def test_a_call_counts_the_audio_and_turns_it_carried() -> None:
     await voice.out.put(Heard("hello", final=True))
     await voice.out.put(Said("Hi there.", final=True))
     await _until(lambda: session.stats.voice_lines)
+    caller.inbox.put_nowait(json.dumps({"type": "text", "text": "and Pune?"}))
     caller.inbox.put_nowait(json.dumps({"type": "end"}))
     await running
-    assert session.stats == CallStats(audio_in_bytes=640, caller_turns=1, voice_lines=1)
+    # A typed turn is a turn too.
+    assert session.stats == CallStats(audio_in_bytes=640, caller_turns=2, voice_lines=1)

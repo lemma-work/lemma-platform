@@ -28,9 +28,9 @@ export function useHuddle({ pod, teammate, conversationId }: {
      *  just because you are looking at something else. */
     const [expanded, setExpanded] = useState(false);
     const [callId, setCallId] = useState<string | null>(null);
-    /** The last call's conversation, kept after it ends: its transcript lands
-     *  there once the server has finished with it. */
-    const [lastCallId, setLastCallId] = useState<string | null>(null);
+    /** A call is being set up or is on: a second press opens it rather than
+     *  placing another, which would have no connection of its own. */
+    const busy = useRef(false);
     const [setupError, setSetupError] = useState<string | null>(null);
     const setupAttempt = useRef(0);
     const queryClient = useQueryClient();
@@ -57,6 +57,8 @@ export function useHuddle({ pod, teammate, conversationId }: {
     const { start: startCall, end: endCall } = call;
 
     const start = useCallback(async () => {
+        if (busy.current || call.active) { setExpanded(true); return; }
+        busy.current = true;
         const attempt = ++setupAttempt.current;
         setSetupError(null);
         setExpanded(true);
@@ -67,7 +69,6 @@ export function useHuddle({ pod, teammate, conversationId }: {
             });
             if (attempt !== setupAttempt.current) return;
             setCallId(opened.call_id);
-            setLastCallId(opened.call_id);
             const brief = await context();
             if (attempt !== setupAttempt.current) return;
             await startCall(opened.call_id, { teammate, pod: pod.name, context: brief });
@@ -76,14 +77,17 @@ export function useHuddle({ pod, teammate, conversationId }: {
             setCallId(null);
             setSetupError(problem instanceof Error ? problem.message : "Could not start the call.");
             setExpanded(false);
+        } finally {
+            if (attempt === setupAttempt.current) busy.current = false;
         }
-    }, [pod.id, pod.name, teammate, context, startCall]);
+    }, [pod.id, pod.name, teammate, context, startCall, call.active]);
 
     /* The call's id goes with it: the shell adopts the call's conversation
        while one is set, and an ended call must not pull the person back to it
        when they open something else. */
     const end = useCallback(() => {
         setupAttempt.current++;
+        busy.current = false;
         setSetupError(null);
         setCallId(null);
         endCall();
@@ -108,7 +112,6 @@ export function useHuddle({ pod, teammate, conversationId }: {
         active: call.active,
         canvas: call.canvas,
         callConversationId: callId,
-        lastCallId,
         settled: call.settled,
         expanded: expanded && call.active,
         expand: useCallback(() => setExpanded(true), []),
