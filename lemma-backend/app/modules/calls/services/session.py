@@ -325,9 +325,11 @@ class CallSession:
                 content += (
                     "\n\nBefore the call, the voice was told:\n" + self._background
                 )
-                self._background = None
             try:
                 await self._agents.send_turn(content)
+                # Only once delivered: a turn the agents never got leaves the
+                # brief for the next one.
+                self._background = None
             except DomainError, SQLAlchemyError, OSError:
                 # The agents did not get it. The voice is told, so it does not
                 # promise work nobody is doing.

@@ -375,3 +375,32 @@ async def test_the_agents_are_told_what_the_voice_was_told_once_with_their_first
     assert "Before the call, the voice was told:" in first
     assert "Goa venues for 12" in first
     assert "Goa venues" not in second
+
+
+async def test_a_turn_the_agents_never_got_leaves_the_brief_for_the_next() -> None:
+    caller, voice = Caller(), Voice()
+
+    class FailsOnce(Agents):
+        async def send_turn(self, content: str) -> None:
+            if not self.turns:
+                self.turns.append("")  # the failed attempt
+                raise ConnectionError("database unavailable")
+            await super().send_turn(content)
+
+    agents = FailsOnce()
+    session = CallSession(
+        socket=caller,
+        engine=voice,  # type: ignore[arg-type]
+        agents=agents,  # type: ignore[arg-type]
+        gate=_gate({}),
+        limits=CallLimits(max_seconds=30, quiet_window_ms=0),
+        background="Recent chat: Goa venues for 12.",
+    )
+    running = asyncio.create_task(session.run())
+    await voice.out.put(Heard("make it fifteen", final=True))
+    await _until(lambda: voice.injected)
+    await voice.out.put(Heard("make it fifteen", final=True))
+    await _until(lambda: len(agents.turns) == 2)
+    caller.inbox.put_nowait(None)
+    await running
+    assert "Goa venues for 12" in agents.turns[1]

@@ -55,7 +55,9 @@ export function useHuddle({ pod, teammate, conversationId }: {
                next call with it made the new voice talk about things "on the
                screen" that were on the last call's canvas, not this one's. */
             const open = await client.conversations.get(conversationId, { pod_id: pod.id }).catch(() => null);
-            if (!isCallConversation(open)) {
+            // Unread is not "not a call": a conversation that cannot be told
+            // apart is left out rather than risk briefing from the last call.
+            if (open && !isCallConversation(open)) {
                 const page = await client.conversations.messages.list(conversationId, { pod_id: pod.id, limit: 80 }).catch(() => null);
                 const history = page ? historyBrief(buildTurns(page.items), teammate) : "";
                 if (history) parts.push(history);
