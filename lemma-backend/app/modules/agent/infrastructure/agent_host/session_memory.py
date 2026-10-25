@@ -205,7 +205,7 @@ def _prompted_binding(
     # that prompt's history ran (`seen_through`), promoted from the run's
     # pending prompt the same way.
     if checkpoint.state in _STATES_PROVING_THE_PROMPT_LANDED:
-        return _landed_prompt(stored, str(checkpoint.run_id))
+        return _landed_prompt(stored, str(checkpoint.run_id), same_session)
     kept = ("prompted_run_id", "prompted_through") if same_session else ()
     result: JsonObject = {key: stored[key] for key in kept if key in stored}
     if "pending_prompt" in stored:
@@ -213,15 +213,22 @@ def _prompted_binding(
     return result
 
 
-def _landed_prompt(stored: JsonObject, run_id: str) -> JsonObject:
+def _landed_prompt(stored: JsonObject, run_id: str, same_session: bool) -> JsonObject:
     result: JsonObject = {"prompted_run_id": run_id}
     pending = stored.get("pending_prompt")
     if isinstance(pending, dict) and pending.get("run_id") == run_id:
         if isinstance(pending.get("seen_through"), int):
             result["prompted_through"] = pending["seen_through"]
-    elif pending is not None:
+        return result
+    if pending is not None:
         # Another run's promise, still owed.
         result["pending_prompt"] = pending
+    # Every heartbeat of a run that has landed lands again, with its promise
+    # already kept: what it recorded stays.
+    if same_session and stored.get("prompted_run_id") == run_id:
+        through = stored.get("prompted_through")
+        if isinstance(through, int):
+            result["prompted_through"] = through
     return result
 
 

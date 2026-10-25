@@ -207,6 +207,14 @@ async def test_how_far_a_prompt_ran_is_recorded_only_once_it_landed(
     assert repository.stored["prompted_run_id"] == str(dispatched_run)
     assert "pending_prompt" not in repository.stored
 
+    # Every later heartbeat of the same run lands again, with nothing pending:
+    # the mark it promoted stays.
+    for state in (AgentHostRunState.RUNNING, AgentHostRunState.SUCCEEDED):
+        await memory.remember_provider_session(
+            uow, _checkpoint(dispatched_run, "sess-1", state)
+        )
+        assert repository.stored["prompted_through"] == 41
+
 
 class TestASessionIdIsNotProofThePromptLanded:
     """The host writes `provider_session_id` in `before_prompt` -- *before*
