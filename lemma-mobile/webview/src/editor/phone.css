@@ -1,0 +1,506 @@
+/* The web's page editor, dressed as the phone app.
+
+   The editor and its blocks keep the web's markup and class names; this is
+   the stylesheet those names get on a phone, written for it rather than
+   copied from the desktop's: Albert Sans at 400 and 500 and nothing heavier,
+   the app's palette (set on :root by main.tsx, light or dark), rules rather
+   than boxes, one column at the phone's width, and targets a thumb can hit.
+   Every colour is a variable, so the page follows the app into dark. */
+
+:root {
+    --font: "Albert Sans", -apple-system, system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --gutter: 20px;
+    --on-accent: var(--onInk);
+    --accent-line: var(--line2);
+    --warn: var(--amber);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font);
+    font-weight: 400;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+}
+
+b, strong, th, h1, h2, h3, h4 { font-weight: 500; }
+
+button, input, select, textarea { font-family: inherit; font-weight: 400; }
+
+.phone-page { padding: 6px 0 45vh; }
+.phone-page__slot { display: none; }
+
+/* ── the document ──────────────────────────────────────────────────── */
+
+.doc-host { position: relative; }
+.doc-host__status { display: none; }
+
+.md.doc {
+    min-height: 60vh;
+    padding: 0 var(--gutter);
+    font-size: 16.5px;
+    line-height: 1.55;
+    color: var(--ink);
+    caret-color: var(--violet);
+    outline: none;
+    overflow-wrap: anywhere;
+}
+.md.doc:focus, .md.doc:focus-visible { outline: none; }
+.md.doc ::selection { background: var(--violetWash); }
+
+.md.doc > * + * { margin-top: 0.7em; }
+.md.doc p { margin: 0.55em 0; }
+.md.doc h1 { font-size: 26px; line-height: 1.22; letter-spacing: -0.02em; margin: 0.2em 0 0.45em; }
+.md.doc h2 { font-size: 20px; line-height: 1.3; letter-spacing: -0.01em; margin: 1.3em 0 0.35em; }
+.md.doc h3 { font-size: 17px; line-height: 1.35; margin: 1.1em 0 0.3em; }
+.md.doc a { color: var(--violetInk); text-decoration: underline; text-underline-offset: 2px; }
+.md.doc ul, .md.doc ol { padding-left: 1.3em; margin: 0.5em 0; }
+.md.doc li { margin: 0.2em 0; }
+.md.doc li > p { margin: 0.1em 0; }
+.md.doc blockquote {
+    margin: 0.8em 0;
+    padding: 2px 0 2px 14px;
+    border-left: 2px solid var(--line2);
+    color: var(--ink2);
+}
+.md.doc hr { border: 0; border-top: 1px solid var(--line2); margin: 1.4em 0; }
+.md.doc code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    padding: 1px 5px;
+    border-radius: 6px;
+    background: var(--wash);
+}
+.md.doc pre {
+    margin: 0.8em 0;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--chrome);
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.md.doc pre code { padding: 0; background: none; font-size: inherit; }
+.md.doc img { max-width: 100%; }
+
+/* Tables scroll sideways inside the page, never the page itself. */
+.md.doc .tableWrapper { overflow-x: auto; margin: 0.8em calc(-1 * var(--gutter)); padding: 0 var(--gutter); }
+.md.doc .tableWrapper table { border-collapse: collapse; table-layout: auto; font-size: 14.5px; }
+.md.doc .tableWrapper :is(th, td) {
+    position: relative;
+    min-width: 90px;
+    padding: 8px 10px;
+    border: 1px solid var(--line2);
+    vertical-align: top;
+    text-align: left;
+}
+.md.doc .tableWrapper th { background: var(--chrome); color: var(--ink2); }
+.md.doc .tableWrapper :is(th, td) p { margin: 0; }
+.md.doc .selectedCell::after { content: ""; position: absolute; inset: 0; background: var(--violetWash); pointer-events: none; }
+
+/* Placeholders: an empty line says what it can become. */
+.md.doc p.is-editor-empty:first-child::before,
+.md.doc :is(p, h1, h2, h3).is-empty::before {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+    color: var(--ink3);
+}
+
+/* To-dos: a box a thumb can tick. */
+.md.doc ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+.md.doc ul[data-type="taskList"] li { display: flex; align-items: flex-start; gap: 10px; }
+.md.doc ul[data-type="taskList"] li > label { flex: none; margin-top: 0.12em; }
+.md.doc ul[data-type="taskList"] li p { margin: 0; }
+.md.doc ul[data-type="taskList"] li > label input {
+    appearance: none;
+    -webkit-appearance: none;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    border: 1.5px solid var(--ink3);
+    border-radius: 6px;
+    background: var(--paper);
+}
+.md.doc ul[data-type="taskList"] li > label input:checked { background: var(--ink); border-color: var(--ink); }
+.md.doc ul[data-type="taskList"] li > label input:checked::after {
+    content: "";
+    width: 10px;
+    height: 5px;
+    margin-top: -2px;
+    border-left: 2px solid var(--onInk);
+    border-bottom: 2px solid var(--onInk);
+    transform: rotate(-45deg);
+}
+.md.doc ul[data-type="taskList"] li > div { flex: 1; min-width: 0; }
+.md.doc ul[data-type="taskList"] li[data-checked="true"] > div { color: var(--ink3); text-decoration: line-through; }
+
+.md.doc .ProseMirror-gapcursor { display: none; position: relative; pointer-events: none; }
+.md.doc .ProseMirror-gapcursor::after { content: ""; display: block; position: absolute; top: -2px; width: 22px; border-top: 1px solid var(--ink); }
+.md.doc.ProseMirror-focused .ProseMirror-gapcursor { display: block; }
+
+.doc-front {
+    margin: 0 var(--gutter) 18px;
+    padding: 10px 12px;
+    border-left: 2px solid var(--line2);
+    background: var(--chrome);
+    border-radius: 0 10px 10px 0;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: var(--ink3);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* Where comments are, and the line the Lemma is writing into. */
+.cmt-mark {
+    background: var(--amberWash);
+    border-bottom: 2px solid color-mix(in srgb, var(--amber) 55%, transparent);
+}
+.cmt-mark--active { background: color-mix(in srgb, var(--amber) 32%, transparent); }
+.writing-marker {
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--violetWash);
+    color: var(--violetInk);
+    font-style: italic;
+    animation: writing 1.6s ease-in-out infinite;
+}
+@keyframes writing { 50% { opacity: 0.55; } }
+
+/* ── blocks: sub-pages, files, images, live views, HTML ─────────────── */
+
+.fblock { margin: 6px 0; }
+.fblock__open {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 6px 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+    font-size: 15.5px;
+}
+.fblock[data-selected] .fblock__open { background: var(--faint); }
+.fblock__open > svg { flex: none; color: var(--ink3); }
+.fblock__icon { flex: none; display: grid; place-items: center; width: 28px; color: var(--ink2); }
+.fblock__text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.fblock__title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fblock__text small { font-size: 12.5px; color: var(--ink3); }
+
+.pimage { margin: 12px 0; }
+.pimage img { display: block; max-width: 100%; border-radius: 12px; }
+.pimage[data-selected] img { outline: 2px solid var(--line2); outline-offset: 2px; }
+.pimage__missing { display: block; padding: 16px; border-radius: 12px; background: var(--wash); font-size: 13px; color: var(--ink3); }
+
+.pblock {
+    position: relative;
+    margin: 16px 0;
+    border-top: 1px solid var(--line2);
+    border-bottom: 1px solid var(--line2);
+    background: var(--paper);
+}
+.pblock[data-selected] { background: var(--faint); }
+.pblock__bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px;
+    min-height: 40px;
+    padding: 2px 0;
+    font-size: 13px;
+    color: var(--ink3);
+}
+.pblock__kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: auto;
+    min-width: 0;
+    max-width: 60%;
+    color: var(--ink2);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pblock__meta { margin-right: 4px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pblock__bar button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink2);
+    font-size: 13px;
+    white-space: nowrap;
+}
+.pblock__bar button:active { background: var(--wash); }
+.pblock__grip { display: none; }
+.pblock__frame .resource, .pblock__frame figure { margin: 0; border: 0; box-shadow: none; }
+.pblock__empty { margin: 0; padding: 14px 0; font-size: 14px; color: var(--ink3); }
+.pblock__empty--bad { color: var(--amber); font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; }
+.pblock__ask, .pblock__editor { padding: 10px 0; border-top: 1px solid var(--line); }
+.pblock__ask { display: flex; gap: 8px; }
+.pblock__ask input, .vbuild__title {
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--line2);
+    border-radius: 10px;
+    background: var(--paper);
+    color: var(--ink);
+    font-size: 15px;
+    outline: none;
+}
+.pblock__ask button, .caret-prompt button, .seltool__form button, .cpanel__primary {
+    flex: none;
+    height: 40px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--ink);
+    color: var(--onInk);
+    font-size: 14.5px;
+    font-weight: 500;
+}
+.pblock__ask button:disabled, .caret-prompt button:disabled, .seltool__form button:disabled, .cpanel__primary:disabled {
+    background: var(--idle);
+    color: var(--idleInk);
+}
+.pblock__editor textarea, .vbuild__sql {
+    width: 100%;
+    min-height: 180px;
+    padding: 10px 12px;
+    border: 1px solid var(--line2);
+    border-radius: 10px;
+    background: var(--chrome);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    outline: none;
+}
+.pblock__acts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+.pblock__acts button:not(.cpanel__primary) {
+    height: 40px;
+    padding: 0 14px;
+    border: 1px solid var(--line2);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink);
+    font-size: 14.5px;
+}
+.pblock__table { max-height: 420px; overflow: auto; margin: 0 calc(-1 * var(--gutter)); padding: 0 var(--gutter); }
+.pblock__table table { min-width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.pblock__table th {
+    position: sticky;
+    top: 0;
+    padding: 8px 12px 8px 0;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line2);
+    text-align: left;
+    font-size: 12.5px;
+    color: var(--ink3);
+    text-transform: capitalize;
+    white-space: nowrap;
+}
+.pblock__table td {
+    padding: 9px 12px 9px 0;
+    border-bottom: 1px solid var(--line);
+    max-width: 240px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pblock__table tr:last-child td { border-bottom: 0; }
+
+/* An HTML block is the widget itself, with its two controls above it. */
+.pblock--widget { border: 0; background: transparent; }
+.pblock--widget > .pblock__bar { justify-content: flex-end; min-height: 36px; }
+.pblock--widget > .pblock__bar .pblock__kind { display: none; }
+.pblock--widget .pblock__frame .embed__acts { display: none; }
+
+/* The live view's builder: one field a row, the phone's own pickers. */
+.vbuild { display: flex; flex-direction: column; gap: 12px; padding: 12px 0 14px; border-top: 1px solid var(--line); }
+.vbuild__row { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.vbuild__modes { display: flex; gap: 4px; }
+.vbuild__modes button {
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid var(--line2);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink2);
+    font-size: 13.5px;
+}
+.vbuild__modes button[aria-selected="true"] { background: var(--ink); border-color: var(--ink); color: var(--onInk); }
+.vbuild__field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+.vbuild__field > span { color: var(--ink3); }
+.vbuild select, .vbuild input:not(.vbuild__title) {
+    height: 40px;
+    max-width: 100%;
+    padding: 0 10px;
+    border: 1px solid var(--line2);
+    border-radius: 10px;
+    background: var(--paper);
+    color: var(--ink);
+    font-size: 15px;
+}
+.vbuild__chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vbuild__chips button {
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--line2);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink2);
+    font-size: 13.5px;
+}
+.vbuild__chips button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--onInk); }
+.vbuild__chips small { font-size: 12.5px; color: var(--ink3); }
+.vbuild__stack { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.vbuild__filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vbuild__filter button { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 50%; background: transparent; color: var(--ink3); }
+.vbuild__add {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--line2);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ink2);
+    font-size: 13.5px;
+}
+
+/* A widget's frame (the web's EmbedPreview). */
+.embed { position: relative; width: 100%; min-width: 0; border-radius: 12px; overflow: hidden; }
+.embed__frame { width: 100%; border: 0; display: block; background: transparent; opacity: 0; transition: opacity 0.18s ease, height 0.24s ease; }
+.embed[data-ready] .embed__frame { opacity: 1; }
+.embed__waiting { position: absolute; inset: 0; display: grid; place-items: center; font-size: 13px; color: var(--ink3); }
+.embed__acts { display: none; }
+
+/* ── the chrome: slash menu, selection toolbar, prompt ──────────────── */
+
+/* The slash menu takes the width of the phone, as a sheet would. */
+.slash {
+    position: fixed;
+    z-index: 60;
+    left: 8px !important;
+    right: 8px;
+    width: auto;
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 6px;
+    border-radius: 16px;
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--line2), 0 16px 40px rgb(0 0 0 / 0.16);
+    -webkit-overflow-scrolling: touch;
+}
+.slash__group { margin: 10px 10px 4px; font-size: 12.5px; color: var(--ink3); }
+.slash__item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink);
+    font-size: 15px;
+    text-align: left;
+}
+.slash__item[data-active] { background: var(--wash); }
+.slash__glyph { flex: none; display: grid; place-items: center; width: 28px; height: 28px; color: var(--ink2); }
+.slash__h { font-size: 12px; font-weight: 500; }
+.slash__title { flex: none; }
+.slash__hint { flex: 1; min-width: 0; font-size: 13px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slash__item kbd { display: none; }
+
+.caret-prompt {
+    position: absolute;
+    z-index: 40;
+    left: 12px !important;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 6px 12px;
+    border-radius: 14px;
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--line2), 0 12px 32px rgb(0 0 0 / 0.14);
+    color: var(--violet);
+}
+.caret-prompt input { flex: 1; min-width: 0; height: 40px; border: 0; outline: none; background: transparent; color: var(--ink); font-size: 15.5px; }
+
+.seltool {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    max-width: calc(100vw - 16px);
+    padding: 4px;
+    border-radius: 14px;
+    background: var(--paper);
+    box-shadow: 0 0 0 1px var(--line2), 0 10px 28px rgb(0 0 0 / 0.16);
+    z-index: 40;
+    /* Two rows on a phone rather than a strip that runs off its edge. */
+    flex-wrap: wrap;
+    justify-content: center;
+}
+.seltool > * { flex: none; }
+.seltool button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 40px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink);
+    font-size: 14px;
+    white-space: nowrap;
+}
+.seltool button[aria-pressed="true"] { background: var(--wash); }
+.seltool__icon { width: 40px; justify-content: center; padding: 0 !important; }
+.seltool__icon b, .seltool__icon i, .seltool__icon s { font-size: 15px; font-weight: 500; }
+.seltool__sep { flex: none; width: 1px; height: 20px; margin: 0 2px; background: var(--line2); }
+.seltool__form { display: flex; align-items: center; gap: 6px; padding-left: 8px; width: calc(100vw - 24px); }
+.seltool__form input { flex: 1; min-width: 0; height: 40px; border: 0; outline: none; background: transparent; color: var(--ink); font-size: 15px; }
+.seltool__menu { display: flex; flex-direction: column; min-width: 200px; padding: 2px; }
+.seltool__menu button { justify-content: flex-start; }
+.seltool__menu button[aria-checked="true"] { background: var(--wash); }
+
+/* Dragging a block is a pointer's job; on a phone the slash menu adds one. */
+.bhandle { display: none; }
+
+/* A block that is selected as a whole is outlined by its ground, not by
+   painting every word inside it as selected text. */
+.md.doc :is(.pblock, .fblock, .pimage) ::selection { background: transparent; }
+:focus-visible { outline: 2px solid var(--line2); outline-offset: 1px; }
+:is(.vbuild select, .vbuild input, .pblock__ask input, .pblock__editor textarea, .caret-prompt input, .seltool__form input):focus { outline: none; border-color: var(--ink3); }
+.vbuild__row .vbuild__title { flex: none; }

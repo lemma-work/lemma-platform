@@ -55,8 +55,15 @@ const CLOSE_REASONS: Record<number, string> = {
     4503: "The voice is not available right now.",
 };
 
-export function openCallSocket(url: string, start: CallStart, handlers: CallSocketHandlers): CallConnection {
-    const socket = new WebSocket(url);
+/** `open` makes the socket: the browser's by default. The phone app makes
+ *  its own, which can carry the token in a header as well as the address. */
+export function openCallSocket(
+    url: string,
+    start: CallStart,
+    handlers: CallSocketHandlers,
+    open: (url: string) => WebSocket = (address) => new WebSocket(address),
+): CallConnection {
+    const socket = open(url);
     socket.binaryType = "arraybuffer";
     let ended = false;
     const end = (reason: string | null) => {
@@ -96,7 +103,7 @@ export class CallConnection {
     sendAudio(pcm: Int16Array): void {
         // Behind on sending means the network cannot keep up; late microphone
         // audio is worse than missing audio, so it is dropped rather than queued.
-        if (this.open() && this.socket.bufferedAmount < 64 * 1024) this.socket.send(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength));
+        if (this.open() && this.socket.bufferedAmount < 64 * 1024) this.socket.send(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength) as ArrayBuffer);
     }
 
     send(control: Record<string, unknown>): void {
