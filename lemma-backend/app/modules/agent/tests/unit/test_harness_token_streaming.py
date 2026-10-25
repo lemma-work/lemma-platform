@@ -30,6 +30,10 @@ from app.modules.agent.infrastructure.harnesses.streaming import (
     DEFAULT_TOKEN_FLUSH_SECONDS,
 )
 
+#: The reading-pace promise, written down apart from the setting that keeps it,
+#: so a longer interval fails here instead of lowering what this test expects.
+_FLUSH_CONTRACT_SECONDS = 0.05
+
 pytestmark = pytest.mark.unit
 
 _ANSWER = (
@@ -187,7 +191,8 @@ async def test_a_reply_written_at_reading_pace_reaches_the_reader_as_it_grows(
     produced_over = (-(-len(reply) // chars) - 1) * gap
     # A frame per interval, with room for each to wait one more delta: a delta
     # landing just short of the interval holds its text for the next one.
-    expected = produced_over / (2 * DEFAULT_TOKEN_FLUSH_SECONDS)
+    assert DEFAULT_TOKEN_FLUSH_SECONDS <= _FLUSH_CONTRACT_SECONDS
+    expected = produced_over / (2 * _FLUSH_CONTRACT_SECONDS)
     assert len(frames) >= expected, (
         f"{len(frames)} token frames over a {produced_over:.3f}s reply -- the "
         f"reader saw it jump rather than grow (expected at least {expected:.1f})"
