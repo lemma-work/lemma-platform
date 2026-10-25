@@ -15,8 +15,14 @@ model is about to read already names it:
 
 * a ``search_tools`` return in history found it;
 * history shows it being called;
-* the instructions, the wake-up or a person's message names it as a call,
-  ``name(``.
+* the wake-up or a person's message names it as a call, ``name(``.
+
+Not the instructions: a deferred toolset's own usage guidance names its tools
+and rides in every prompt, so reading it would reveal messaging and waiting on
+every run of the pod assistant -- the deferral undone.
+
+The reveal goes in before the run's prompt, not after it: the latest thing the
+model reads stays the wake-up or the person's message.
 
 Only tools this run defines *and* defers: this can surface nothing the agent was
 not granted, and leaves every visible tool alone. It reveals the way
@@ -55,12 +61,10 @@ _SEARCH_TOOLS = "search_tools"
 _CALL_SHAPED = re.compile(r"\b([a-z][a-z0-9_]*)\(")
 
 
-def referenced_tool_names(
-    messages: Iterable[ModelMessage], instructions: Iterable[str] = ()
-) -> set[str]:
-    """Every tool name the model is about to read as found, called or named."""
+def referenced_tool_names(messages: Iterable[ModelMessage]) -> set[str]:
+    """Every tool name the conversation shows found, called or named as a call."""
     names: set[str] = set()
-    texts: list[str] = list(instructions)
+    texts: list[str] = []
     for message in messages:
         if isinstance(message, ModelResponse):
             names.update(
@@ -103,6 +107,15 @@ def _texts(content: object) -> list[str]:
     return []
 
 
+def _before_the_prompt(
+    messages: list[ModelMessage], delta: ModelRequest
+) -> list[ModelMessage]:
+    """``messages`` with ``delta`` just before the run's prompt, or last."""
+    if messages and isinstance(messages[-1], ModelRequest):
+        return [*messages[:-1], delta, messages[-1]]
+    return [*messages, delta]
+
+
 class RevealReferencedToolsCapability(AbstractCapability[Any]):
     """Reveals, before a run's first request, the deferred tools it is told about."""
 
@@ -119,8 +132,7 @@ class RevealReferencedToolsCapability(AbstractCapability[Any]):
         }
         if not deferred:
             return request_context
-        instructions = [part.content for part in parameters.instruction_parts or ()]
-        referenced = referenced_tool_names(request_context.messages, instructions)
+        referenced = referenced_tool_names(request_context.messages)
         tools_added = sorted(
             (referenced & deferred)
             - ctx.discovered_tool_names
@@ -129,8 +141,8 @@ class RevealReferencedToolsCapability(AbstractCapability[Any]):
         if not tools_added:
             return request_context
         delta = ModelRequest(parts=[ToolAvailabilityDeltaPart(tools_added=tools_added)])
-        request_context.messages = [*request_context.messages, delta]
-        ctx.messages.append(delta)
+        request_context.messages = _before_the_prompt(request_context.messages, delta)
+        ctx.messages[:] = _before_the_prompt(ctx.messages, delta)
         ctx.discovered_tool_names.update(tools_added)
         request_context.model_request_parameters = replace(
             parameters,

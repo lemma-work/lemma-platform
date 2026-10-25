@@ -134,9 +134,57 @@ async def test_a_tool_named_nowhere_stays_deferred():
 
 
 def test_what_counts_as_referenced():
-    history = _earlier_run()
+    names = referenced_tool_names(
+        [*_earlier_run(), ModelRequest(parts=[UserPromptPart(WAKE)])]
+    )
 
-    names = referenced_tool_names(history, instructions=["Use wait_for(...) to pause."])
-
-    assert {"channel_post", "channel_read", "search_tools", "wait_for"} <= names
+    assert {"channel_post", "channel_read", "search_tools"} <= names
     assert "Ask" not in names
+
+
+async def test_instructions_naming_a_deferred_tool_do_not_reveal_it():
+    """A deferred toolset's own guidance names its tools on every run; reading
+    it would undo the deferral for the pod assistant."""
+    offered: list[set[str]] = []
+
+    def respond(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        offered.append({tool.name for tool in info.function_tools})
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = Agent(
+        FunctionModel(respond),
+        instructions="Read answers with channel_read(asked_by_me=True).",
+        capabilities=[
+            ToolSearch(),
+            ToolsetCapability(_messaging().defer_loading()),
+            RevealReferencedToolsCapability(),
+        ],
+    )
+    await agent.run("What's on today?")
+
+    assert "channel_read" not in offered[0]
+
+
+async def test_the_prompt_stays_the_last_thing_the_model_reads():
+    """The reveal goes in before the wake-up, not after it."""
+    seen: list[list[ModelMessage]] = []
+
+    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        seen.append(messages)
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = Agent(
+        FunctionModel(respond),
+        capabilities=[
+            ToolSearch(),
+            ToolsetCapability(_messaging().defer_loading()),
+            RevealReferencedToolsCapability(),
+        ],
+    )
+    await agent.run(WAKE, message_history=_earlier_run())
+
+    last = seen[0][-1]
+    assert isinstance(last, ModelRequest)
+    assert any(
+        isinstance(part, UserPromptPart) and part.content == WAKE for part in last.parts
+    )
