@@ -37,7 +37,7 @@ from app.core.security import (
 )
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.services.mcp_content import (
+from app.modules.agent.infrastructure.mcp_content import (
     tool_call_error,
     tool_call_result,
 )

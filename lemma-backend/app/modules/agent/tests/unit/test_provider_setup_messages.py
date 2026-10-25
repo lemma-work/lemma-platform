@@ -21,7 +21,7 @@ from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.infrastructure.transport_errors import (
     local_model_server_down_message,
 )
-from app.modules.agent.services import runtime_provider_discovery as discovery
+from app.modules.agent.infrastructure.providers import discovery
 from app.modules.agent.services.run_finalizer import run_failure_message
 
 pytestmark = pytest.mark.unit

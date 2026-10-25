@@ -36,7 +36,7 @@ from pydantic_ai.usage import RunUsage
 from app.modules.agent.capabilities.run_context import RunContextCapability
 from app.modules.agent.capabilities.run_notices import RunNoticeCapability
 from app.modules.agent.domain.run_notices import RunNotices
-from app.modules.agent.infrastructure.harnesses.history_compaction import (
+from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
     HistoryCompactor,
 )
 from app.modules.agent.infrastructure.pydantic_ai_compat import ModelRequestContext
@@ -196,7 +196,7 @@ async def test_a_notice_is_measured_by_the_ceiling_it_has_to_fit_inside():
     Pinned on the assembled order rather than by measuring tokens, because the
     ordering *is* the guarantee.
     """
-    from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness
+    from app.modules.agent.infrastructure.harness.lemma import harness
 
     source = inspect.getsource(harness.PydanticAIHarness)
     notice_at = source.index("capabilities.append(RunNoticeCapability")

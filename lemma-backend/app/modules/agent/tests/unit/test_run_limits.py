@@ -171,7 +171,7 @@ async def test_the_node_loop_pauses_a_run_repeating_one_call():
         AgentEventType,
         MessageDraft,
     )
-    from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import (
+    from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
     )
     from app.modules.agent.tools.tool_errors import AgentInputRequired
@@ -284,7 +284,7 @@ async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
     from app.modules.agent.domain.harness_options import HarnessOptions
     from app.modules.agent.domain.run_budget_pause import is_budget_pause
     from app.modules.agent.domain.value_objects import AgentEventType
-    from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import (
+    from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
     )
     from app.modules.agent.tools.tool_errors import AgentInputRequired
@@ -329,7 +329,7 @@ async def test_a_run_with_no_budget_is_never_interrupted():
     import asyncio
 
     from app.modules.agent.domain.harness_options import HarnessOptions
-    from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import (
+    from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
     )
 
@@ -453,7 +453,7 @@ async def test_a_paused_run_does_not_export_as_a_failed_run():
     from opentelemetry.trace import StatusCode
 
     from app.modules.agent.domain.harness_options import HarnessOptions
-    from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import (
+    from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
     )
     from app.modules.agent.tools.tool_errors import AgentInputRequired

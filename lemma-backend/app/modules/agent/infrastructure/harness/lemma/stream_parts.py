@@ -20,11 +20,11 @@ from pydantic_ai.messages import TextPart, ThinkingPart, ToolCallPart
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import MessageDraft
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     parse_tool_call_args,
     tool_call_identity,
 )
-from app.modules.agent.infrastructure.harnesses.streaming import CharStreamBuffer
+from app.modules.agent.infrastructure.harness.lemma.streaming import CharStreamBuffer
 
 logger = get_logger(__name__)
 

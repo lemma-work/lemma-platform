@@ -23,7 +23,7 @@ from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 

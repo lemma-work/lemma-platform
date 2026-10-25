@@ -28,10 +28,10 @@ from app.modules.agent.domain.private_notes import (
     PRIVATE_NOTE_REQUEST_KEY,
     WRITTEN_BY_KEEPER_LABEL,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     MAX_UNATTACHED_MESSAGES,
     without_private_runs,

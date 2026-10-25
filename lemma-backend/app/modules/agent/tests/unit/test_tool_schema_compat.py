@@ -15,6 +15,9 @@ from uuid import uuid4
 
 from pydantic_ai.tools import Tool
 
+from app.modules.agent.infrastructure.harness.lemma.run_options import (
+    final_answer_output,
+)
 from app.modules.agent.capabilities.assembler import _visible_capability
 from app.modules.agent.capabilities.todo import build_todo_toolset
 from app.modules.agent.domain.entities import Agent, Conversation
@@ -130,7 +133,7 @@ def test_openai_compatible_transformer_inlines_all_defs():
     no provider-side resolution is needed. Guards the whole pod-default surface
     against "Error resolving schema reference '#/$defs/...'".
     """
-    from app.modules.agent.services.openai_schema_compat import (
+    from app.modules.agent.infrastructure.providers.openai_schema_compat import (
         InlineDefsOpenAIJsonSchemaTransformer,
     )
 
@@ -159,7 +162,7 @@ def test_pod_write_record_data_advertises_object_or_json_string():
     lets those models write data, so the transformed tool schema must keep both
     branches (and never collapse `data` to a strict, closed empty object).
     """
-    from app.modules.agent.services.openai_schema_compat import (
+    from app.modules.agent.infrastructure.providers.openai_schema_compat import (
         InlineDefsOpenAIJsonSchemaTransformer,
     )
     from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
@@ -200,7 +203,6 @@ def test_task_always_gets_final_answer_tool_chat_never_does():
     # The final_answer tool drives the TASK lifecycle (status WAITING/COMPLETED),
     # so every TASK conversation gets it regardless of output schema. CHAT never
     # does (plain text). The output *schema* is only applied when configured.
-    runner = _runner()
     pod_id, user_id = uuid4(), uuid4()
     task = Conversation(pod_id=pod_id, user_id=user_id, type=ConversationType.TASK)
     chat = Conversation(pod_id=pod_id, user_id=user_id, type=ConversationType.CHAT)
@@ -217,10 +219,10 @@ def test_task_always_gets_final_answer_tool_chat_never_does():
         output_schema={"type": "object", "properties": {"answer": {"type": "string"}}},
     )
 
-    assert runner._resolve_output_type(plain_agent, task) is not None
-    assert runner._resolve_output_type(schema_agent, task) is not None
-    assert runner._resolve_output_type(plain_agent, chat) is None
-    assert runner._resolve_output_type(schema_agent, chat) is None
+    assert final_answer_output(plain_agent, task) is not None
+    assert final_answer_output(schema_agent, task) is not None
+    assert final_answer_output(plain_agent, chat) is None
+    assert final_answer_output(schema_agent, chat) is None
 
 
 def test_final_answer_tool_schema_clean_with_output_schema():

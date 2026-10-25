@@ -45,7 +45,7 @@ from app.modules.agent.domain.memory_pass_turn import (
     the_persons_words,
 )
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.prompts import load_memory_pass_prompt
+from app.modules.agent.domain.prompt.templates import load_memory_pass_prompt
 from app.modules.agent.domain.runtime_choice import RuntimePurpose
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
@@ -60,7 +60,7 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
-from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
+from app.modules.agent.services.context_brief.memory import AgentMemoryBriefBuilder
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.services.generation_settings import unreasoned_model_settings
 from app.modules.agent.domain.background import (

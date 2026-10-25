@@ -29,13 +29,13 @@ from pydantic_ai.messages import (
 )
 
 from app.core.log.log import get_logger
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
+from app.modules.agent.infrastructure.harness.lemma.thinking import (
     PendingThoughts,
 )
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.message_state import MessageState
-from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+from app.modules.agent.domain.prompt.user_turn_text import (
     timed_user_prompt_text,
 )
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol

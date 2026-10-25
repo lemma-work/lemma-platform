@@ -14,6 +14,7 @@ already been settled, so they can be read and tested separately from it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -24,14 +25,10 @@ from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
     RuntimeCredentials,
+    refuse_redacted_values,
     reveal_credentials,
 )
 from app.modules.agent.domain.sentinels import UnsetType
-from app.modules.agent.services.runtime_profile_creation import (
-    normalize_profile_name,
-    normalize_headers,
-    normalize_model_settings,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,8 +65,14 @@ def resolve_provider_patch(
     headers,
     model_settings,
     refresh_models: bool,
+    validate_settings: Callable[[dict[str, object] | None], dict[str, object]]
+    | None = None,
 ) -> ProviderProfilePatch:
-    """Settle a PATCH against the stored profile."""
+    """Settle a PATCH against the stored profile.
+
+    ``validate_settings`` refuses model settings a run could not use; the
+    caller supplies it, because only the provider adapter knows.
+    """
     changes = _label_changes(name=name, description=description)
 
     next_base_url = _next_base_url(base_url, stored, is_anthropic=is_anthropic)
@@ -83,7 +86,7 @@ def resolve_provider_patch(
     next_settings = (
         stored.model_settings
         if isinstance(model_settings, UnsetType)
-        else normalize_model_settings(model_settings)
+        else _model_settings(model_settings, validate_settings)
     )
 
     origin_changed = base_url_changed and provider_origin(
@@ -140,6 +143,34 @@ class KeyMustBeReenteredError(RuntimeProfileValidationError):
             "The provider address moved to a different host. Re-enter the API "
             "key, and any custom headers, for the new address."
         )
+
+
+def normalize_profile_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized:
+        raise RuntimeProfileValidationError("Profile name cannot be empty")
+    return normalized
+
+
+def normalize_headers(headers: dict[str, str] | None) -> dict[str, str]:
+    refuse_redacted_values(headers, field="headers")
+    normalized: dict[str, str] = {}
+    for key, value in (headers or {}).items():
+        header_name = key.strip()
+        header_value = value.strip()
+        if header_name and header_value:
+            normalized[header_name] = header_value
+    return normalized
+
+
+def _model_settings(
+    model_settings: dict[str, object] | None,
+    validate: Callable[[dict[str, object] | None], dict[str, object]] | None,
+) -> dict[str, object]:
+    refuse_redacted_values(model_settings, field="model_settings")
+    return (
+        validate(model_settings) if validate is not None else dict(model_settings or {})
+    )
 
 
 def _label_changes(*, name, description) -> dict[str, object]:

@@ -15,7 +15,7 @@ import pytest
 
 from app.modules.agent.capabilities.memory import MemoryCapability
 from app.modules.agent.domain.agent_memory_paths import memory_kept_after_turn
-from app.modules.agent.domain.prompts import (
+from app.modules.agent.domain.prompt.templates import (
     FRAGMENT_BY_TOOLSET,
     load_memory_pass_prompt,
     load_memory_prompt,

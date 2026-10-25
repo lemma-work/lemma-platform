@@ -106,7 +106,7 @@ def test_the_agent_host_prompt_teaches_both_ways_of_waiting():
     describing the old refusal is worse than one saying nothing: an agent that
     believes asking is unavailable will not ask.
     """
-    from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+    from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
 
     prompt = load_agent_host_runtime_prompt()
 

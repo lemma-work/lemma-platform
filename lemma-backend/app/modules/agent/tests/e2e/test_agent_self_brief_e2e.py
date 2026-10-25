@@ -27,8 +27,10 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.infrastructure.repositories import AgentRepository
-from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
-from app.modules.agent.services import agent_context_brief as brief_mod
+from app.modules.agent.services.context_brief.agent_brief import (
+    AgentContextBriefBuilder,
+)
+from app.modules.agent.services.context_brief import agent_brief as brief_mod
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
     auth_headers,

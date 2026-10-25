@@ -23,7 +23,7 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     ELISION_BLOCK_RUNS,
     STOPPED_BY_MEMBER,
     bound_runtime_history,

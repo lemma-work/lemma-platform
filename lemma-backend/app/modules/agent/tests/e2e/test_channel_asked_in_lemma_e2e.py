@@ -35,7 +35,7 @@ from app.modules.agent.contracts.conversations import merge_conversation_metadat
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.domain.asked_questions import batch_of, message_ref
 from app.modules.agent.domain.private_notes import run_delivers_to_surface
-from app.modules.agent.domain.surface_prompts import surface_platform_guidance
+from app.modules.agent.domain.prompt.surface import surface_platform_guidance
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,

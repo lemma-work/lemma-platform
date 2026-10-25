@@ -35,7 +35,7 @@ from uuid import UUID
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.factory import create_authorization_data_service
-from app.modules.agent.services.brief_seams import (
+from app.modules.agent.infrastructure.context_brief_repository import (
     AuthorizationFactory,
     RepositoryFactory,
 )

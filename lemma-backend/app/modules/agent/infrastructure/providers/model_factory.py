@@ -33,10 +33,10 @@ from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
-from app.modules.agent.services.model_stream_budget import (
+from app.modules.agent.infrastructure.providers.model_stream_budget import (
     ModelStreamBudgetTransport,
 )
-from app.modules.agent.services.openai_schema_compat import (
+from app.modules.agent.infrastructure.providers.openai_schema_compat import (
     openai_compatible_model_profile,
 )
 
@@ -268,7 +268,7 @@ def _unmetered_model_from_runtime_profile(
     # agent.run) is the deterministic FunctionModel — no real provider, no key.
     # The harness layers conversation-scripted behaviour on top via its own
     # build_mock_model(conversation); here (no conversation) it's the default.
-    from app.modules.agent.infrastructure.harnesses.mock_model import (
+    from app.modules.agent.infrastructure.harness.lemma.mock_model import (
         build_mock_model,
         is_mock_llm_enabled,
     )
@@ -323,7 +323,7 @@ def _unmetered_model_from_runtime_profile(
         from pydantic_ai.providers.anthropic import AnthropicProvider
         from anthropic import AsyncAnthropic
 
-        from app.modules.agent.services.anthropic_thinking import (
+        from app.modules.agent.infrastructure.providers.anthropic_thinking import (
             AdaptiveThinkingAnthropicModel,
         )
 

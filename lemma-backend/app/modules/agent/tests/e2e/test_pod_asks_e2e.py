@@ -40,7 +40,9 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
-from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
+from app.modules.agent.services.context_brief.agent_brief import (
+    AgentContextBriefBuilder,
+)
 from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )

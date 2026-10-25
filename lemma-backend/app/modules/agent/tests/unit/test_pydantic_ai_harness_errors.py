@@ -11,7 +11,7 @@ from pydantic_ai.exceptions import (
 )
 
 from app.modules.agent.domain.value_objects import AgentEventType
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
 
 
 @pytest.mark.asyncio
@@ -172,7 +172,7 @@ def test_provider_error_identifiers_extract_the_code_not_the_prose() -> None:
     The logging contract forbids logging bodies, so only the short enum-like
     identifiers are pulled out — never the message, which echoes the request.
     """
-    from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+    from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
         provider_error_identifiers,
     )
 
@@ -197,7 +197,7 @@ def test_provider_error_identifiers_extract_the_code_not_the_prose() -> None:
 
 def test_provider_error_identifiers_refuse_prose_and_secrets() -> None:
     """Anything long enough to be prose is dropped rather than truncated."""
-    from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+    from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
         provider_error_identifiers,
     )
 
@@ -242,7 +242,7 @@ class TestAProviderRefusalSaysWhichRefusalItWas:
     """
 
     def _message(self, status_code: int, body: object) -> str:
-        from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+        from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
             user_facing_error_message,
         )
 
@@ -313,7 +313,7 @@ class TestAFailureMessageNamesOnlyControlsThatWork:
     """
 
     def _message(self, exc: Exception) -> str:
-        from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+        from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
             user_facing_error_message,
         )
 
@@ -328,7 +328,7 @@ class TestAFailureMessageNamesOnlyControlsThatWork:
         assert "send another message" in message
 
     def test_a_part_way_cancellation_does_not_advertise_retry(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
+        from app.modules.agent.infrastructure.harness.lemma.retry import (
             HarnessDriverCancelled,
         )
 

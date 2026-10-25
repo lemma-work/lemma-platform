@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.domain.prompt_names import clean_name, quoted_name
+from app.modules.agent.domain.prompt.names import clean_name, quoted_name
 from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
 )

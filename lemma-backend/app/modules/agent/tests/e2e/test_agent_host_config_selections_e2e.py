@@ -17,6 +17,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
+from app.modules.agent.application.agents.manage_runtime_profiles import (
+    RuntimeProfileCreation,
+)
 import pytest
 from sqlalchemy import select, update
 from starlette import status
@@ -73,7 +76,6 @@ from app.modules.agent.infrastructure.runtime_models import (
 )
 from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.runtime_profile_service import (
-    AgentRuntimeProfileService,
     runtime_profile_service_for,
 )
 from app.modules.agent.tests.e2e.agent_host_helpers import (
@@ -164,7 +166,7 @@ async def _machine_with_profile(
     )
     await db_session.flush()
     uow = SqlAlchemyUnitOfWork(db_session)
-    profile = await AgentRuntimeProfileService(
+    profile = await RuntimeProfileCreation(
         AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
         AgentHostRepository(uow),
     ).create_agent_host_profile(

@@ -42,10 +42,10 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
+from app.modules.agent.infrastructure.harness.lemma.thinking import (
     replays_prior_run_reasoning,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
 from app.modules.agent.services.run_identity import RunIdentity

@@ -48,7 +48,7 @@ from pydantic_ai.messages import (
     ToolCallPartDelta,
 )
 
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_stream_parts import (
+from app.modules.agent.infrastructure.harness.lemma.stream_parts import (
     StreamingParts,
 )
 

@@ -25,6 +25,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
+from app.modules.agent.application.agents.manage_runtime_profiles import (
+    RuntimeProfileCreation,
+)
 import pytest
 from sqlalchemy import select, update
 
@@ -102,7 +105,9 @@ async def _profile_for_a_host_that(db_session, scenario, *, reports_images: bool
         AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
         AgentHostRepository(uow),
     )
-    profile = await service.create_agent_host_profile(
+    profile = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_agent_host_profile(
         harness_id=machine["harness_id"],
         organization_id=UUID(scenario.org_id),
         user_id=UUID(scenario.owner_user["id"]),

@@ -26,7 +26,7 @@ from pydantic_ai.exceptions import (
 
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.transient_errors import is_transient_database_error
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
+from app.modules.agent.infrastructure.harness.lemma.retry import (
     HarnessDriverCancelled,
 )
 from app.modules.agent.infrastructure.transport_errors import (

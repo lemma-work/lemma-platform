@@ -157,7 +157,7 @@ def test_showing_your_work_is_taught_on_both_paths():
     system prompt. It answered in prose and never displayed anything.
     """
     from app.modules.agent.capabilities.assembler import _instructions_for
-    from app.modules.agent.domain.prompts import FRAGMENT_BY_TOOLSET
+    from app.modules.agent.domain.prompt.templates import FRAGMENT_BY_TOOLSET
     from app.modules.agent.tools.user_interaction.pydantic_adapter import (
         user_interaction_toolset,
     )
@@ -176,7 +176,7 @@ def test_independent_calls_are_invited_into_one_turn_on_both_paths():
     a run made one read per model turn. The reply rules are the one prompt every
     run gets on both harnesses, so that is where the invitation lives."""
     from app.modules.agent.domain.entities import Agent, Conversation
-    from app.modules.agent.domain.prompts import build_agent_instructions
+    from app.modules.agent.domain.prompt.templates import build_agent_instructions
 
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
     agent = Agent(
@@ -218,7 +218,7 @@ def test_the_memory_contract_is_taught_on_both_paths():
     notices if only one of the two paths keeps it.
     """
     from app.modules.agent.capabilities.memory import MemoryCapability
-    from app.modules.agent.domain.prompts import FRAGMENT_BY_TOOLSET
+    from app.modules.agent.domain.prompt.templates import FRAGMENT_BY_TOOLSET
 
     in_process = MemoryCapability().get_instructions()
     assert "/memory" in in_process and "AGENTS.md" in in_process
@@ -232,7 +232,7 @@ def test_the_memory_contract_is_written_down_exactly_once():
     """It used to be three hand-synced copies: this fragment, and paragraphs in
     the `pod_write_file` and `pod_read_file` docstrings. Two of those could
     drift from the truth without anything failing."""
-    from app.modules.agent.domain.prompts import load_workspace_cli_prompt
+    from app.modules.agent.domain.prompt.templates import load_workspace_cli_prompt
     from app.modules.agent.tools.pod.pod_file_tools import pod_read_file, pod_write_file
 
     for docstring in (pod_write_file.__doc__ or "", pod_read_file.__doc__ or ""):
@@ -1240,7 +1240,7 @@ async def test_pod_is_visible_and_names_itself_the_default_for_pod_data(monkeypa
         )
 
     # And the CLI fragment must not still teach the operations it just lost.
-    from app.modules.agent.domain.prompts import load_workspace_cli_prompt
+    from app.modules.agent.domain.prompt.templates import load_workspace_cli_prompt
 
     cli = load_workspace_cli_prompt()
     for duplicated in (
@@ -1358,7 +1358,7 @@ def test_the_hint_stays_within_a_token_budget():
     """It is only worth carrying while it stays a rounding error against the
     schemas it stands in for."""
     from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
-    from app.modules.agent.services.history_tokens import count_text_tokens
+    from app.modules.agent.infrastructure.providers.tokens import count_text_tokens
     from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
 
     hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))

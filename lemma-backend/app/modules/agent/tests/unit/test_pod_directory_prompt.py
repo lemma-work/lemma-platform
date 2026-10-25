@@ -27,8 +27,8 @@ import pytest
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.prompt_directories import _pod_cwd, _workspace_cwd
-from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.domain.prompt.directories import _pod_cwd, _workspace_cwd
+from app.modules.agent.domain.prompt.templates import build_agent_instructions
 from app.modules.agent.domain.workspace_location import resolve_workspace_location
 
 pytestmark = pytest.mark.unit

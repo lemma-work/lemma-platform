@@ -11,8 +11,8 @@ import pytest
 
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import ConversationOrigin, RunTrigger
-from app.modules.agent.services import agent_self_brief as self_mod
-from app.modules.agent.services import brief_lines
+from app.modules.agent.services.context_brief import agent_self as self_mod
+from app.modules.agent.services.context_brief import lines as brief_lines
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreDataType,

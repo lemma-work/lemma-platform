@@ -29,7 +29,7 @@ from app.modules.agent.infrastructure.transport_errors import (
     is_retryable_stream_error,
     response_budget_message,
 )
-from app.modules.agent.services.model_stream_budget import (
+from app.modules.agent.infrastructure.providers.model_stream_budget import (
     ModelStreamBudgetTransport,
     budgeted_stream,
 )

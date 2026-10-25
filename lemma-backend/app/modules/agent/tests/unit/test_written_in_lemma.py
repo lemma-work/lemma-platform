@@ -37,7 +37,7 @@ from app.modules.agent.domain.private_notes import (
     run_state_for,
     written_in_lemma_into,
 )
-from app.modules.agent.domain.surface_prompts import (
+from app.modules.agent.domain.prompt.surface import (
     is_group_conversation,
     surface_platform_guidance,
 )
@@ -46,11 +46,11 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     WrittenIn,
 )
-from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+from app.modules.agent.domain.prompt.user_turn_text import (
     user_prompt_text,
 )
 from app.modules.agent.application.turns import admit as turns
-from app.modules.agent.services.outsider_brief import render_outsider_brief
+from app.modules.agent.services.context_brief.outsider import render_outsider_brief
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.messaging.models import AskAPersonRequest
 from app.modules.agent.tools.messaging.pydantic_adapter import ask_a_person

@@ -23,7 +23,7 @@ from app.modules.datastore.contracts.agent_tools import (
 )
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.domain.vision import AgentVisionMode
-from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
+from app.modules.agent.services.context_brief.memory import invalidate_memory_brief
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
 from app.modules.agent.tools.pod.memory_write_feedback import memory_write_warning

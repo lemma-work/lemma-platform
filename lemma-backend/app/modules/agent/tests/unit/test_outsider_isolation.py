@@ -31,18 +31,18 @@ from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.conversations import client_tags
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.run_state import RunState
-from app.modules.agent.domain.surface_prompts import audience_notice
+from app.modules.agent.domain.prompt.surface import audience_notice
 from app.modules.agent.domain.value_objects import MessageKind
-from app.modules.agent.infrastructure.harnesses.channel_context import (
+from app.modules.agent.domain.prompt.channel_context import (
     channel_context_block as _channel_context_block,
 )
-from app.modules.agent.infrastructure.harnesses.channel_context import (
+from app.modules.agent.domain.prompt.channel_context import (
     participants_block as _participants_block,
 )
-from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+from app.modules.agent.domain.prompt.user_turn_text import (
     user_prompt_text,
 )
-from app.modules.agent.services.runtime_history import without_private_runs
+from app.modules.agent.domain.runtime_history import without_private_runs
 
 pytestmark = pytest.mark.unit
 
@@ -158,7 +158,7 @@ def test_a_private_run_reads_its_own_note():
 
 def test_the_strangers_brief_carries_no_email_and_no_id():
     """The brief is read by a model a stranger can talk to."""
-    from app.modules.agent.services.outsider_brief import render_outsider_brief
+    from app.modules.agent.services.context_brief.outsider import render_outsider_brief
 
     named = render_outsider_brief(pod_name="Sales", owner_display_name="Priya")
     unnamed = render_outsider_brief(pod_name="Sales", owner_display_name=None)
@@ -174,7 +174,7 @@ def test_the_strangers_brief_names_the_member_where_it_means_to():
     """Every placeholder in the brief is filled: a literal `{owner_name}` reads
     to the model as a name nobody has, at the one line telling it whom it is
     calling in."""
-    from app.modules.agent.services.outsider_brief import (
+    from app.modules.agent.services.context_brief.outsider import (
         render_contact_brief,
         render_outsider_brief,
     )

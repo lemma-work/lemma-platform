@@ -19,14 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from uuid import UUID
 
-from app.modules.agent.domain.background import (
-    BackgroundCall,
-    BackgroundLimits,
-    ImagePart,
-    PromptPart,
-)
 from app.modules.agent.domain.runtime_choice import RuntimePurpose
-from app.modules.agent.services.background_model import BackgroundModel
 from app.modules.usage.contracts.execution import (
     UsageExecutionContext,
     current_usage_context,
@@ -117,7 +110,9 @@ async def _resolve_vision_model(
     """
     model_name = configured_vision_model_name()
     # Imported here: resolution reaches the profile service, which reaches
-    # back into services that import the harness.
+    # back into services that import the harness -- and the background model
+    # has no place in every process's startup imports.
+    from app.modules.agent.services.background_model import BackgroundModel
     from app.modules.agent.services.runtime_resolution import RuntimeRequest
     from app.modules.agent.services.runtime_system_profiles import (
         system_profile_configured,
@@ -171,6 +166,14 @@ async def describe_images(
     model = await _resolve_vision_model(
         organization_id=organization_id, user_id=user_id
     )
+
+    from app.modules.agent.domain.background import (
+        BackgroundCall,
+        BackgroundLimits,
+        ImagePart,
+        PromptPart,
+    )
+    from app.modules.agent.services.background_model import BackgroundModel
 
     prompt: list[PromptPart] = [
         (instructions or _DEFAULT_INSTRUCTIONS).strip(),

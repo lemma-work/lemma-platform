@@ -36,18 +36,18 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import AgentEventType
-from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
     failure_event,
     user_facing_error_message,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.run_failure_classification import (
     PROVIDER_HTTP_ERROR,
     TRANSIENT_DATABASE_ERROR,
     classify_run_failure,
     run_failure_reason,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
+from app.modules.agent.infrastructure.harness.lemma.retry import (
     HarnessDriverCancelled,
 )
 from app.modules.agent.infrastructure.transport_errors import (

@@ -58,8 +58,8 @@ from app.modules.agent.infrastructure.harnesses.agent_host.events_terminal impor
     permission_request_events,
     terminal_events,
 )
-from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffer
-from app.modules.agent.infrastructure.harnesses.tool_returns import (
+from app.modules.agent.infrastructure.harness.lemma.streaming import TextStreamBuffer
+from app.modules.agent.infrastructure.harness.lemma.tool_returns import (
     missing_tool_return_events,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.tool_calls import (

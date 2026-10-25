@@ -37,12 +37,12 @@ from app.modules.agent.domain.runtime_profiles import (
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, HarnessKind
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
-from app.modules.agent.services.runtime_provider_check import (
+from app.modules.agent.application.agents.check_provider import (
     ProviderCheckCollaborators,
     ProviderCheckResult,
     check_saved_provider_connection,
 )
-from app.modules.agent.services.runtime_provider_discovery import (
+from app.modules.agent.infrastructure.providers.discovery import (
     DiscoveredModel,
     ProviderKeyRejectedError,
     ProviderListingError,

@@ -30,7 +30,7 @@ from app.modules.agent.domain.agent_host import (
 )
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
-from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.channels import poke_host

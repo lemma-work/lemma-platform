@@ -23,7 +23,7 @@ from app.modules.agent.domain.runtime_profiles import (
     reveal_credentials,
 )
 from app.modules.agent.domain.sentinels import UNSET
-from app.modules.agent.services.runtime_provider_patch import (
+from app.modules.agent.domain.runtime_provider_patch import (
     KeyMustBeReenteredError,
     ProviderProfilePatch,
     provider_origin,

@@ -261,7 +261,7 @@ class TestMcpBridgeCarriesImages:
         picture they never received."""
         from pydantic_ai import BinaryContent, ToolReturn
 
-        from app.modules.agent.services.mcp_content import image_contents
+        from app.modules.agent.infrastructure.mcp_content import image_contents
 
         result = ToolReturn(
             return_value={"success": True, "file_path": "/a.png"},
@@ -278,7 +278,7 @@ class TestMcpBridgeCarriesImages:
         assert base64.b64decode(images[0].data) == b"\x89PNG-bytes"
 
     def test_a_plain_result_contributes_no_images(self) -> None:
-        from app.modules.agent.services.mcp_content import image_contents
+        from app.modules.agent.infrastructure.mcp_content import image_contents
 
         assert image_contents({"success": True}) == []
         assert image_contents(None) == []
@@ -287,7 +287,7 @@ class TestMcpBridgeCarriesImages:
         """A client that rejects the image would lose the text result with it."""
         from pydantic_ai import BinaryContent, ToolReturn
 
-        from app.modules.agent.services.mcp_content import (
+        from app.modules.agent.infrastructure.mcp_content import (
             MAX_MCP_IMAGE_BYTES,
             image_contents,
         )
@@ -306,7 +306,7 @@ class TestMcpBridgeCarriesImages:
     def test_non_image_binary_is_not_sent_as_an_image(self) -> None:
         from pydantic_ai import BinaryContent, ToolReturn
 
-        from app.modules.agent.services.mcp_content import image_contents
+        from app.modules.agent.infrastructure.mcp_content import image_contents
 
         audio = ToolReturn(
             return_value={"success": True},

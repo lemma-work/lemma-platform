@@ -13,7 +13,7 @@ from uuid import UUID
 
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.agent_memory_paths import agent_memory_paths_for_name
-from app.modules.agent.services.agent_memory_brief import guaranteed_index_chars
+from app.modules.agent.services.context_brief.memory import guaranteed_index_chars
 from app.modules.agent.tools.pod.pod_paths import to_me_path
 
 _SHARED_MEMORY_ROOT = "/memory/"

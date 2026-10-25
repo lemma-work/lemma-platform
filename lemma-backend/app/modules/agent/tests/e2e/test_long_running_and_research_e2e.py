@@ -795,10 +795,12 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
     )
 
     from app.modules.agent.domain.harness_options import HarnessOptions
-    from app.modules.agent.infrastructure.harnesses.history import (
+    from app.modules.agent.infrastructure.harness.lemma.history import (
         build_history_processors,
     )
-    from app.modules.agent.services.history_tokens import count_model_message_tokens
+    from app.modules.agent.infrastructure.providers.tokens import (
+        count_model_message_tokens,
+    )
 
     ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
 

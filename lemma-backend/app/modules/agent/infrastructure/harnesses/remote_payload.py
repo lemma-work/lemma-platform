@@ -16,7 +16,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
-from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+from app.modules.agent.domain.prompt.user_turn_text import (
     user_prompt_text,
 )
 from app.modules.workspace.contracts.host_execution import (
@@ -26,10 +26,12 @@ from app.modules.workspace.contracts.host_execution import (
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 from app.modules.agent.domain.outsiders import OutsiderRunRefused, run_audience
 from app.modules.agent.domain.context import AgentContext
-from app.modules.agent.services.runtime_model_factory import provider_model_settings
+from app.modules.agent.infrastructure.providers.model_factory import (
+    provider_model_settings,
+)
 from app.modules.agent.domain.entities import Agent, Conversation, Message
-from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.domain.run_context_prompt import run_context_for
+from app.modules.agent.domain.prompt.templates import build_agent_instructions
+from app.modules.agent.domain.prompt.run_context import run_context_for
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     ConversationType,

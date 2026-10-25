@@ -180,7 +180,7 @@ async def test_view_image_reads_a_pod_image_intact_without_leaking_bytes(
     from PIL import Image
 
     from app.modules.agent.domain.vision import AgentVisionMode
-    from app.modules.agent.services.mcp_content import tool_call_result
+    from app.modules.agent.infrastructure.mcp_content import tool_call_result
     from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
     from app.modules.agent.tools.workspace_cli.workspace_cli import view_image_internal
 

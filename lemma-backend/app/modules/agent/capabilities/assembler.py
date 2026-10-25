@@ -50,15 +50,15 @@ from app.modules.agent.capabilities.open_questions import (
     OpenQuestionsCapability,
 )
 from app.modules.agent.capabilities.run_context import RunContextCapability
-from app.modules.agent.domain.run_context_prompt import run_context_for
+from app.modules.agent.domain.prompt.run_context import run_context_for
 from app.modules.agent.capabilities.surface_platform import SurfacePlatformCapability
-from app.modules.agent.domain.surface_prompts import is_group_conversation
+from app.modules.agent.domain.prompt.surface import is_group_conversation
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
 from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
-from app.modules.agent.domain.prompts import (
+from app.modules.agent.domain.prompt.templates import (
     load_connectors_prompt,
     load_messaging_prompt,
     load_pod_prompt,

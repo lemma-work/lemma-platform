@@ -4,6 +4,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+from app.modules.agent.infrastructure.harness.lemma.run_options import (
+    final_answer_output,
+)
 import pytest
 
 import app.modules.agent.tools.user_interaction.pydantic_adapter as user_interaction_adapter
@@ -11,8 +14,8 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.domain.run_context_prompt import task_list_section
+from app.modules.agent.domain.prompt.templates import build_agent_instructions
+from app.modules.agent.domain.prompt.run_context import task_list_section
 from app.modules.agent.tools.toolset_selection import (
     AgentGrantSummary,
     resolve_toolset_names,
@@ -26,12 +29,14 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.harnesses.history import build_history_processors
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.history import (
+    build_history_processors,
+)
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
 from app.modules.agent.domain.workspace_location import ProjectRepo
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     ELISION_BLOCK_RUNS,
     FULL_HISTORY_AGENT_RUN_COUNT,
     select_runtime_history,
@@ -1788,7 +1793,6 @@ def test_runner_uses_final_answer_tool_for_structured_output_agents():
         },
     )
 
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     conversation = Conversation(
         pod_id=agent.pod_id,
         user_id=agent.user_id,
@@ -1796,9 +1800,7 @@ def test_runner_uses_final_answer_tool_for_structured_output_agents():
         type=ConversationType.TASK,
     )
 
-    assert runner._resolve_output_type(agent, conversation).output.__name__ == (
-        "final_answer"
-    )
+    assert final_answer_output(agent, conversation).output.__name__ == ("final_answer")
 
 
 def test_final_answer_tool_output_becomes_normal_assistant_message():

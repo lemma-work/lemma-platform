@@ -15,7 +15,6 @@ import time
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from pydantic_ai import UsageLimits
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.transient_errors import is_database_unavailable
@@ -25,7 +24,10 @@ from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.services.brief_lines import run_is_unattended, run_trigger_of
+from app.modules.agent.services.context_brief.lines import (
+    run_is_unattended,
+    run_trigger_of,
+)
 
 logger = get_logger(__name__)
 
@@ -52,21 +54,6 @@ def budget_for_run(run: object) -> RunSpend:
             repeated_identical_calls=agent_settings.agent_run_budget_repeated_calls,
         )
     )
-
-
-def harness_usage_limits() -> UsageLimits:
-    """The limits pydantic-ai enforces inside one run: none on request count.
-
-    `RunSpend` is the run's request budget. It warns the run as it nears the
-    end and pauses to ask a person whether to carry on, which is what the run's
-    own instructions promise. A second, lower count inside pydantic-ai ended the
-    run instead -- before the warning, before the pause -- with an error telling
-    the reader to check model settings that were never the problem.
-
-    Explicitly `None` rather than omitted: pydantic-ai substitutes its own
-    default of 50 requests when it is handed no limits at all.
-    """
-    return UsageLimits(request_limit=None)
 
 
 def make_stop_checker(

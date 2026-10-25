@@ -5,7 +5,7 @@ import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
-from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
     user_facing_error_message,
 )
 from app.modules.agent.infrastructure.transport_errors import is_retryable_stream_error

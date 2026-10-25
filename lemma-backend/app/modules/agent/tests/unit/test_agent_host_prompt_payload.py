@@ -33,8 +33,8 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
-from app.modules.agent.domain.run_context_prompt import render_run_context
+from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
+from app.modules.agent.domain.prompt.run_context import render_run_context
 from app.modules.agent.infrastructure.agent_host.session_memory import (
     instructions_digest,
 )
@@ -569,7 +569,7 @@ class TestNativeAndSandboxDirectories:
         told to `cd` to a root nothing mounted for it produces a command that
         simply fails -- which is what a user reported.
         """
-        from app.modules.agent.domain.prompt_directories import _sandbox_root
+        from app.modules.agent.domain.prompt.directories import _sandbox_root
 
         assert (
             _sandbox_root(f"{WORKSPACE_ROOT}/c/2026-09-10/ab12cd34") == WORKSPACE_ROOT
@@ -603,7 +603,7 @@ class TestNativeAndSandboxDirectories:
         directory: the characters become data and the path is still stated
         exactly, rather than silently rewritten into one that does not exist.
         """
-        from app.modules.agent.domain.prompt_directories import _prompt_path
+        from app.modules.agent.domain.prompt.directories import _prompt_path
 
         # The ordinary case is unchanged, so the prompt still reads as prose.
         assert _prompt_path(f"{WORKSPACE_ROOT}/c/2026-09-10/ab12cd34") == (
@@ -644,7 +644,7 @@ class TestNativeAndSandboxDirectories:
         from conversation metadata, and an instruction that reads as something
         else is not a failure worth leaving to chance.
         """
-        from app.modules.agent.domain.prompt_directories import _sandbox_root
+        from app.modules.agent.domain.prompt.directories import _sandbox_root
 
         for hostile in [
             "/work`space/c/x",

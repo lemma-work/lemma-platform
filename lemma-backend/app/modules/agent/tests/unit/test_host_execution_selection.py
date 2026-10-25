@@ -25,8 +25,8 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.entities import AgentRun, Conversation
-from app.modules.agent.domain.prompt_directories import _directory_sections
-from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+from app.modules.agent.domain.prompt.directories import _directory_sections
+from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.infrastructure.agent_host.host_execution import (
     host_execution_of,

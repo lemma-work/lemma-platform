@@ -13,10 +13,10 @@ from uuid import UUID
 
 from app.core.infrastructure.db.transient_errors import is_transient_database_error
 from app.core.infrastructure.work import LeaseLost
-from app.modules.agent.infrastructure.harnesses.tool_returns import (
+from app.modules.agent.infrastructure.harness.lemma.tool_returns import (
     OutstandingToolCalls,
 )
-from app.modules.agent.infrastructure.harnesses.mock_model import (
+from app.modules.agent.infrastructure.harness.lemma.mock_model import (
     build_mock_model,
     is_mock_llm_enabled,
 )
@@ -29,26 +29,26 @@ from pydantic_ai.exceptions import (
 from pydantic_ai.messages import (
     ModelMessage,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_driver import (
+from app.modules.agent.infrastructure.harness.lemma.driver import (
     STOP_WHILE_BUSY,
     next_event_or_stop,
     teardown_driver,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import NodeLoop
+from app.modules.agent.infrastructure.harness.lemma.node_loop import NodeLoop
 from app.modules.agent.infrastructure.unavailable_models import (
     remember_provider_refusal,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
+from app.modules.agent.infrastructure.harness.lemma.retry import (
     drive_with_retry,
     reraise_driver_failure,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
+from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
     ModelRequestStreamer,
 )
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.entities import Agent, Conversation, Message
-from app.modules.agent.domain.prompts import build_agent_instruction_parts
+from app.modules.agent.domain.prompt.templates import build_agent_instruction_parts
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.harness_options import HarnessOptions
@@ -65,24 +65,24 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.capabilities.lease_gate import LeaseGateCapability
 from app.modules.agent.capabilities.outsider_gate import OutsiderToolGateCapability
 from app.modules.agent.capabilities.run_notices import RunNoticeCapability
-from app.modules.agent.infrastructure.harnesses.history import history_capabilities
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history import history_capabilities
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
+from app.modules.agent.infrastructure.harness.lemma.thinking import (
     replays_prior_run_reasoning,
 )
-from app.modules.agent.infrastructure.harnesses.provider_error_log import (
+from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
     failure_event,
     log_model_http_error,
 )
 from app.modules.agent.config import agent_settings
 from app.modules.usage.contracts.metering import with_external_stream_retries
-from app.modules.agent.services.runtime_model_factory import (
+from app.modules.agent.infrastructure.providers.model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
     provider_model_settings,
 )
-from app.modules.agent.services.summarization_model import (
+from app.modules.agent.infrastructure.providers.summarization import (
     lazy_compaction_target,
 )
 from app.modules.agent.tools.final_answer.final_answer_text import final_answer_text

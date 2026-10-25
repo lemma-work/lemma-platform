@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pydantic_ai.capabilities import AbstractCapability
 
-from app.modules.agent.domain.prompts import load_memory_prompt
+from app.modules.agent.domain.prompt.templates import load_memory_prompt
 
 
 class MemoryCapability(AbstractCapability[object]):

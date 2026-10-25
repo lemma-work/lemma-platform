@@ -43,12 +43,14 @@ from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
-from app.modules.agent.services.runtime_profile_creation import (
-    normalize_profile_name,
+from app.modules.agent.services.generation_settings import validated_stored_settings
+from app.modules.agent.application.agents.manage_runtime_profiles import (
+    RuntimeProfileCreation,
 )
-from app.modules.agent.services.runtime_provider_patch import (
+from app.modules.agent.domain.runtime_provider_patch import (
     KeyMustBeReenteredError,
     ProviderProfilePatch,
+    normalize_profile_name,
     resolve_catalog_names,
     resolve_provider_patch,
 )
@@ -59,7 +61,7 @@ from app.modules.agent.services.runtime_system_profiles import (
 
 # Imported as a module so a patched discovery function is the one that runs.
 from app.core.infrastructure.db.transaction_locks import connection_released
-from app.modules.agent.services import runtime_provider_discovery as discovery
+from app.modules.agent.infrastructure.providers import discovery
 
 logger = get_logger(__name__)
 
@@ -222,7 +224,9 @@ class AgentRuntimeProfileEditor:
                 raise RuntimeProfileValidationError(
                     "This runtime profile is not bound to a harness"
                 )
-            harness = await self._service.require_ready_harness(
+            harness = await RuntimeProfileCreation(
+                self._service.repository, self._service.host_repository
+            ).require_ready_harness(
                 harness_id=profile.harness_id,
                 organization_id=organization_id,
                 user_id=user_id,
@@ -409,6 +413,7 @@ class AgentRuntimeProfileEditor:
                 headers=headers,
                 model_settings=model_settings,
                 refresh_models=refresh_models,
+                validate_settings=validated_stored_settings,
             ),
             profile_id=profile.id,
             organization_id=organization_id,

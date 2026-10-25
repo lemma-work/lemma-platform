@@ -26,7 +26,7 @@ from uuid import UUID
 from pydantic_ai.exceptions import ModelHTTPError
 
 from app.core.log.log import get_logger
-from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
+from app.modules.agent.infrastructure.harness.lemma.run_failure_classification import (
     classify_run_failure,
     provider_error_identifiers as provider_error_identifiers,
     run_failure_reason,

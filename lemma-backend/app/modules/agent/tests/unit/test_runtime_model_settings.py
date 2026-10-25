@@ -3,7 +3,9 @@
 import pytest
 from pydantic import ValidationError
 
-from app.modules.agent.services.runtime_model_factory import provider_model_settings
+from app.modules.agent.infrastructure.providers.model_factory import (
+    provider_model_settings,
+)
 
 
 def test_provider_settings_preserve_extensions_and_validate_known_fields() -> None:

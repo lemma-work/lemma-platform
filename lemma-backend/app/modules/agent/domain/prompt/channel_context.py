@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from app.modules.agent.domain.surface_prompts import (
+from app.modules.agent.domain.prompt.surface import (
     audience_notice,
     group_participants_notice,
     withheld_background_note,

@@ -60,7 +60,7 @@ from app.modules.agent.infrastructure.pod_ask_queries import (
     askable_pods,
 )
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
-from app.modules.agent.services.askable_pods_brief import narrowed
+from app.modules.agent.services.context_brief.askable_pods import narrowed
 from app.modules.agent.services.pod_ask_delivery import BUSY, settled_answer
 from app.modules.agent.services.pod_link_guards import (
     refuse_past_link_cap,

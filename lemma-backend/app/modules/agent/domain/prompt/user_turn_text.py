@@ -13,18 +13,18 @@ from datetime import datetime, timezone
 
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.private_notes import defuse_lemma_labels, lemma_label
-from app.modules.agent.domain.surface_prompts import attachment_listing_block
+from app.modules.agent.domain.prompt.surface import attachment_listing_block
 from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
     to_json_value,
 )
-from app.modules.agent.infrastructure.harnesses.channel_context import (
+from app.modules.agent.domain.prompt.channel_context import (
     audience_block,
     channel_context_block,
     participants_block,
 )
-from app.modules.agent.infrastructure.harnesses.sender_labels import (
+from app.modules.agent.domain.prompt.sender_labels import (
     quoted_message_block,
     sender_label,
 )

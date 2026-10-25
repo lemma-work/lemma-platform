@@ -35,7 +35,7 @@ from uuid import UUID, uuid4
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 
-from app.modules.agent.services.runtime_model_factory import (
+from app.modules.agent.infrastructure.providers.model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
     usage_limits_for,
 )

@@ -21,6 +21,9 @@ import json
 from uuid import uuid4
 
 import httpx2
+from app.modules.agent.infrastructure.harness.lemma.run_options import (
+    final_answer_output,
+)
 import pytest
 from anthropic import AsyncAnthropic
 from pydantic_ai import Agent as PydanticAgent
@@ -40,10 +43,9 @@ from pydantic_ai.settings import ModelSettings
 
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import ConversationType, JsonObject
-from app.modules.agent.infrastructure.harnesses import mock_model
-from app.modules.agent.services import runtime_model_factory as factory
-from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.anthropic_thinking import (
+from app.modules.agent.infrastructure.harness.lemma import mock_model
+from app.modules.agent.infrastructure.providers import model_factory as factory
+from app.modules.agent.infrastructure.providers.anthropic_thinking import (
     AdaptiveThinkingAnthropicModel,
     adaptive_in_place_of_budget,
     nearest_thinking_effort,
@@ -210,14 +212,13 @@ async def _output_mode(output_type: OutputSpec[object]) -> str:
 
 def _task_output_type() -> OutputSpec[object]:
     agent = Agent(pod_id=uuid4(), user_id=uuid4(), name="a", instruction="")
-    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     conversation = Conversation(
         pod_id=agent.pod_id,
         user_id=agent.user_id,
         agent_id=agent.id,
         type=ConversationType.TASK,
     )
-    output_type = runner._resolve_output_type(agent, conversation)
+    output_type = final_answer_output(agent, conversation)
     assert output_type is not None
     return output_type
 

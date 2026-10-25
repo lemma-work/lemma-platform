@@ -44,10 +44,10 @@ from app.modules.agent.domain.folded_turns import folded_from
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
 )

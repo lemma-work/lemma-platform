@@ -37,7 +37,10 @@ from app.modules.agent.domain.runtime_profiles import (
 from app.modules.agent.services import runtime_system_profiles
 from app.modules.agent.domain.runtime_choice import choose_organization_runtime
 from app.modules.agent.services.runtime_resolution import local_default_runtime
-from app.modules.agent.services.runtime_profile_editor import (
+from app.modules.agent.application.agents.manage_runtime_profiles import (
+    RuntimeProfileCreation,
+)
+from app.modules.agent.application.agents.edit_runtime_profile import (
     AgentRuntimeProfileEditor,
 )
 from app.modules.agent.services.runtime_profile_service import (
@@ -268,8 +271,9 @@ async def create_runtime_profile(
             Permissions.ORG_UPDATE, ResourceRef.organization(organization_id)
         )
     service = _runtime_profile_service(uow)
+    creation = RuntimeProfileCreation(service.repository, service.host_repository)
     if isinstance(data, CreateAgentHostRuntimeProfileRequest):
-        profile = await service.create_agent_host_profile(
+        profile = await creation.create_agent_host_profile(
             organization_id=organization_id,
             user_id=user.id,
             harness_id=data.harness_id,
@@ -283,7 +287,7 @@ async def create_runtime_profile(
             ),
         )
     elif isinstance(data, CreateOpenAICompatibleRuntimeProfileRequest):
-        profile = await service.create_openai_compatible_profile(
+        profile = await creation.create_openai_compatible_profile(
             organization_id=organization_id,
             name=data.name,
             base_url=data.base_url,
@@ -297,7 +301,7 @@ async def create_runtime_profile(
             model_settings=data.model_settings,
         )
     elif isinstance(data, CreateAnthropicCompatibleRuntimeProfileRequest):
-        profile = await service.create_anthropic_compatible_profile(
+        profile = await creation.create_anthropic_compatible_profile(
             organization_id=organization_id,
             name=data.name,
             api_key=data.api_key,

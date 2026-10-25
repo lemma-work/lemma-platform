@@ -23,8 +23,8 @@ from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
 from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.retry import (
     RETRY_AFTER_CAP_SECONDS,
     _retry_delay,
 )

@@ -15,7 +15,7 @@ from __future__ import annotations
 from pydantic_ai.capabilities import AbstractCapability
 
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.surface_prompts import surface_platform_guidance
+from app.modules.agent.domain.prompt.surface import surface_platform_guidance
 
 
 class SurfacePlatformCapability(AbstractCapability[object]):

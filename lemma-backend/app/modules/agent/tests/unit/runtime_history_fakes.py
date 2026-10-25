@@ -29,7 +29,7 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     QueueState,
 )
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
 )

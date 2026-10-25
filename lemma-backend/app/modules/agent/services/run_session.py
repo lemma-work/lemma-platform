@@ -77,7 +77,7 @@ from app.modules.agent.services.conversation_access import (
     validate_conversation_access,
 )
 from app.modules.agent.services.run_phase_spans import record_history_size, run_phase
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
     without_private_runs,

@@ -32,9 +32,9 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import (
+from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.node_loop import (
     settle_response_answers,
 )
 

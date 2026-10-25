@@ -13,20 +13,8 @@ included), and are written for the provider's own developers.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-
-import httpx2
-from pydantic_ai.direct import model_request
-from pydantic_ai.exceptions import (
-    ModelAPIError,
-    ModelHTTPError,
-    UnexpectedModelBehavior,
-)
-from pydantic_ai.messages import ModelRequest
-from pydantic_ai.models import Model
-from pydantic_ai.settings import ModelSettings
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
@@ -36,12 +24,17 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileKind,
     RuntimeProfileProtocol,
 )
-from app.modules.agent.infrastructure.transport_errors import (
-    local_model_server_name,
+from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.infrastructure.providers import (
+    model_factory as runtime_model_factory,
 )
-from app.modules.agent.services import runtime_model_factory
+from app.modules.agent.infrastructure.providers.connection_check import (
+    NoAnswer,
+    ProviderDidNotAnswer,
+    send_test_message,
+)
 from app.modules.agent.services.generation_settings import run_generation_settings
-from app.modules.agent.services import runtime_provider_discovery as discovery
+from app.modules.agent.infrastructure.providers import discovery
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 
 logger = get_logger(__name__)
@@ -52,7 +45,6 @@ _COMPLETION_TIMEOUT_SECONDS = 60.0
 # The reply is thrown away; this only has to be enough for any model to emit
 # something rather than fail on a zero budget.
 _COMPLETION_MAX_TOKENS = 16
-_KEY_REJECTED_STATUSES = frozenset({401, 403})
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +57,7 @@ class ProviderCheckResult:
 
 
 type _ModelLister = Callable[..., Awaitable[list[discovery.DiscoveredModel]]]
-type _ModelBuilder = Callable[..., Model | None]
+type _ModelBuilder = Callable[..., object | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,35 +174,25 @@ async def _answer_one_message(
     if model is None:
         raise _CheckFailed(f"{profile.name} can't be tested from here.")
     try:
-        async with asyncio.timeout(_COMPLETION_TIMEOUT_SECONDS):
-            await model_request(
-                model,
-                [ModelRequest.user_text_prompt("Reply with the word OK.")],
-                model_settings=_check_model_settings(resolved),
-            )
-    except ModelHTTPError as exc:
-        _log_failure(resolved, exc)
-        if exc.status_code in _KEY_REJECTED_STATUSES:
-            raise _CheckFailed(discovery.key_rejected_message(profile.name)) from exc
-        raise _CheckFailed(_did_not_answer_message(resolved)) from exc
-    except (TimeoutError, httpx2.TimeoutException) as exc:
-        _log_failure(resolved, exc)
-        raise _CheckFailed(_unreachable_message(profile.name, None)) from exc
-    except (ModelAPIError, UnexpectedModelBehavior, httpx2.HTTPError) as exc:
-        # Anything else the provider or its SDK raises -- a refused connection
-        # wrapped in the SDK's own error type, a response it could not parse.
-        # `httpx2`, not `httpx`: the completion goes through the provider SDK's
-        # client, and neither stack's errors subclass the other's.
+        await send_test_message(
+            model,
+            model_settings=_check_model_settings(resolved),
+            timeout_seconds=_COMPLETION_TIMEOUT_SECONDS,
+        )
+    except ProviderDidNotAnswer as failed:
         # Logged in full here; the person gets a fixed sentence, never the
         # provider's text.
-        _log_failure(resolved, exc)
-        server = local_model_server_name(exc)
-        if server is not None:
-            raise _CheckFailed(_unreachable_message(profile.name, server)) from exc
-        raise _CheckFailed(_did_not_answer_message(resolved)) from exc
+        _log_failure(resolved, failed.cause)
+        if failed.kind is NoAnswer.KEY_REJECTED:
+            raise _CheckFailed(discovery.key_rejected_message(profile.name)) from failed
+        if failed.kind is NoAnswer.UNREACHABLE:
+            raise _CheckFailed(
+                _unreachable_message(profile.name, failed.local_server_name)
+            ) from failed
+        raise _CheckFailed(_did_not_answer_message(resolved)) from failed
 
 
-def _check_model_settings(resolved: ResolvedAgentRuntime) -> ModelSettings | None:
+def _check_model_settings(resolved: ResolvedAgentRuntime) -> JsonObject:
     """The saved settings a run would send, with the reply kept tiny.
 
     Sending only an output cap reported a profile as working while every run
@@ -224,9 +206,7 @@ def _check_model_settings(resolved: ResolvedAgentRuntime) -> ModelSettings | Non
         # A thinking budget must sit under the output cap, or the provider
         # refuses the request for a reason no run would hit.
         reply_cap += thinking["budget_tokens"]
-    return runtime_model_factory.provider_model_settings(
-        {**saved, "max_tokens": reply_cap}
-    )
+    return {**saved, "max_tokens": reply_cap}
 
 
 def _config_data(config: object) -> object:

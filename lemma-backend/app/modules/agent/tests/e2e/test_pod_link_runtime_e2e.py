@@ -22,7 +22,7 @@ from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.pod_asks import ANSWER_SOURCE, AskMode
 from app.modules.agent.domain.value_objects import ConversationStatus, MessageKind
-from app.modules.agent.infrastructure.harnesses.mock_model import (
+from app.modules.agent.infrastructure.harness.lemma.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
 )
 from app.modules.agent.infrastructure.db.conversations import Conversations

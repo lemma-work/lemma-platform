@@ -396,7 +396,7 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     monkeypatch,
 ):
     """Provider profiles discover models and reject unsafe or unusable config."""
-    from app.modules.agent.services.runtime_provider_discovery import (
+    from app.modules.agent.infrastructure.providers.discovery import (
         DiscoveredModel,
         _validate_public_base_url,
     )
@@ -411,12 +411,12 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
         return [DiscoveredModel("mock-safe-model", supports_vision=True)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_anthropic_compatible_models",
         discover_anthropic_models,
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_openai_compatible_models",
         discover_openai_models,
     )
@@ -2295,13 +2295,13 @@ async def test_public_runtime_profile_edit_archive_and_restore(
     sends only `name`, and the stored API key must survive it. Anything that
     made `api_key` required would silently blank the credential on every save.
     """
-    from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
+    from app.modules.agent.infrastructure.providers.discovery import DiscoveredModel
 
     async def discover_openai_models(**_kwargs):
         return [DiscoveredModel("mock-safe-model", supports_vision=True)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_openai_compatible_models",
         discover_openai_models,
     )
@@ -2401,7 +2401,7 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
     credentials on an OPENAI_COMPATIBLE profile but is rejected outright on an
     ANTHROPIC_COMPATIBLE one, which always requires a key.
     """
-    from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
+    from app.modules.agent.infrastructure.providers.discovery import DiscoveredModel
 
     discovery_calls: list[str] = []
 
@@ -2410,7 +2410,7 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
         return [DiscoveredModel("mock-safe-model", supports_vision=False)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_openai_compatible_models",
         discover_initial,
     )
@@ -2438,7 +2438,7 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
         return [DiscoveredModel("moved-model", supports_vision=False)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_openai_compatible_models",
         discover_after_move,
     )
@@ -2481,7 +2481,7 @@ async def test_public_runtime_profile_update_rediscovers_and_clears_credentials(
         return [DiscoveredModel("mock-safe-model", supports_vision=True)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_provider_discovery."
+        "app.modules.agent.infrastructure.providers.discovery."
         "_discover_anthropic_compatible_models",
         discover_anthropic,
     )

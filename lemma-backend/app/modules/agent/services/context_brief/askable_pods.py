@@ -13,12 +13,12 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.services.agent_self_brief import READ_FAILED
+from app.modules.agent.services.context_brief.agent_self import READ_FAILED
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pod_ask_rules import AskingRun, OpenModes, open_modes
 from app.modules.agent.infrastructure.pod_ask_queries import Teammate
 from app.modules.agent.services.surface_context import surface_conversation_kind
-from app.modules.agent.services.brief_seams import RepositoryFactory
+from app.modules.agent.infrastructure.context_brief_repository import RepositoryFactory
 
 logger = get_logger(__name__)
 

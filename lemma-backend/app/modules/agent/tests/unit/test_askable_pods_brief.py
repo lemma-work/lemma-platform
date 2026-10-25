@@ -14,7 +14,7 @@ import pytest
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import ConversationOrigin, ConversationType
 from app.modules.agent.infrastructure.pod_ask_queries import Teammate
-from app.modules.agent.services.askable_pods_brief import askable_pod_lines
+from app.modules.agent.services.context_brief.askable_pods import askable_pod_lines
 
 pytestmark = pytest.mark.unit
 

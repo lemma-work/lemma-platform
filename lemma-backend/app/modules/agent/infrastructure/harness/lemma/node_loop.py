@@ -67,10 +67,10 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
     to_json_value,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_streaming import (
+from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
     ModelRequestStreamer,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
+from app.modules.agent.infrastructure.harness.lemma.usage import (
     warn_if_implausible_usage,
 )
 from app.modules.agent.services.run_input_settings import shorter_answer_settings

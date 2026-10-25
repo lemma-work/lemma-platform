@@ -26,7 +26,9 @@ from app.modules.agent.domain.background import (
     ToolReturnRecord,
 )
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
-from app.modules.agent.services import runtime_model_factory
+from app.modules.agent.infrastructure.providers import (
+    model_factory as runtime_model_factory,
+)
 
 #: A strict endpoint refuses a request field it does not know with one of these.
 _REFUSED_FIELD = (400, 422)

@@ -14,7 +14,10 @@ import pytest
 from app.core.config import settings
 from app.core.domain.errors import DomainError
 from app.modules.agent.config import agent_settings
-from app.modules.agent.services import summarization_model, vision_service
+from app.modules.agent.services import vision_service
+from app.modules.agent.infrastructure.providers import (
+    summarization as summarization_model,
+)
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )

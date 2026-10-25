@@ -1,6 +1,6 @@
 """What the agent is told about the third-party platform it is conversing on.
 
-The text is the agent's own (`app/modules/agent/domain/surface_prompts.py`); the
+The text is the agent's own (`app/modules/agent/domain/prompt/surface.py`); the
 surface contributes typed facts only (`PlatformFacts`). Every claim the prompt
 makes about a platform -- files as attachments, buttons, a voice bubble, a
 channel-history tool -- is pinned here against the fact that justifies it.
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.domain.surface_prompts import (
+from app.modules.agent.domain.prompt.surface import (
     attachment_listing_block,
     background_channel_context_note,
     surface_platform_guidance,

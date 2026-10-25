@@ -25,13 +25,13 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.value_objects import JsonObject, MessageKind, MessageRole
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_stream_parts import (
+from app.modules.agent.infrastructure.harness.lemma.stream_parts import (
     StreamingParts,
 )
-from app.modules.agent.services.runtime_model_factory import (
+from app.modules.agent.infrastructure.providers.model_factory import (
     _UsageOnlyStreamOptionsChatModel,
 )
 

@@ -26,7 +26,7 @@ from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepo
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
-from app.modules.agent.services.runtime_profile_editor import (
+from app.modules.agent.application.agents.edit_runtime_profile import (
     AgentRuntimeProfileEditor,
 )
 from app.modules.agent.services.runtime_profile_service import (

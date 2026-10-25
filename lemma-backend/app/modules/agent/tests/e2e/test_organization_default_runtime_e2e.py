@@ -27,7 +27,7 @@ from app.modules.agent.domain.errors import OrganizationDefaultConflictError
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
-from app.modules.agent.services.organization_default_service import (
+from app.modules.agent.application.agents.choose_organization_default import (
     OrganizationDefaultService,
 )
 from app.modules.agent.services.runtime_resolution import (

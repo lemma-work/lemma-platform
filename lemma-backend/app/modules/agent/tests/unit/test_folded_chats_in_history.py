@@ -34,10 +34,10 @@ from app.modules.agent.domain.folded_turns import (
     FOLDED_CHAT_ENDS,
     FOLDED_CHAT_OPENS,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     MAX_FOLDED_MESSAGES,
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,

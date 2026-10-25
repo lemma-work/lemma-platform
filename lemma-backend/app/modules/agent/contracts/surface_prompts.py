@@ -12,6 +12,6 @@ imports.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.surface_prompts import background_channel_context_note
+from app.modules.agent.domain.prompt.surface import background_channel_context_note
 
 __all__ = ["background_channel_context_note"]

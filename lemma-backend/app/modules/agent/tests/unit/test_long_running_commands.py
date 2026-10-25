@@ -80,7 +80,7 @@ def test_exec_command_docstring_teaches_waiting_not_looping() -> None:
 
 
 def test_workspace_prompt_covers_long_commands() -> None:
-    from app.modules.agent.domain.prompts import load_workspace_cli_prompt
+    from app.modules.agent.domain.prompt.templates import load_workspace_cli_prompt
 
     prompt = load_workspace_cli_prompt()
     assert "Long-running commands" in prompt

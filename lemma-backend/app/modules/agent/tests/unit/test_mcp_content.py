@@ -14,7 +14,7 @@ import pytest
 from pydantic import BaseModel
 from pydantic_ai import BinaryContent, ToolReturn
 
-from app.modules.agent.services.mcp_content import (
+from app.modules.agent.infrastructure.mcp_content import (
     tool_call_result,
     MAX_MCP_IMAGE_BYTES,
     MAX_MCP_IMAGE_BYTES_TOTAL,
@@ -184,7 +184,7 @@ def test_a_large_result_crosses_the_bridge_once_not_twice():
     """A dict went out as its JSON text and again as `structuredContent`, so a
     big query result reached the Agent Host bridge's 8 MiB cap on half the
     data. The text -- what every client hands its model -- is the copy kept."""
-    from app.modules.agent.services.mcp_content import STRUCTURED_COPY_LIMIT_CHARS
+    from app.modules.agent.infrastructure.mcp_content import STRUCTURED_COPY_LIMIT_CHARS
 
     rows = [{"id": index, "note": "x" * 100} for index in range(5_000)]
     payload = {"success": False, "rows": rows}

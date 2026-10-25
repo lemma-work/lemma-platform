@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.prompt_names import clean_name, quoted_name
+from app.modules.agent.domain.prompt.names import clean_name, quoted_name
 from app.modules.agent_surfaces.contracts.platforms import (
     PlatformFacts,
     ProgressStyle,

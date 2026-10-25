@@ -22,7 +22,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from app.modules.agent.services.runtime_model_factory import (
+from app.modules.agent.infrastructure.providers.model_factory import (
     supports_token_precount,
     usage_limits_for,
 )

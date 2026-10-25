@@ -44,9 +44,11 @@ from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
 )
 from app.modules.agent.infrastructure.repositories import AgentRepository
-from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
-from app.modules.agent.services.granted_resources_brief import GrantedResourcesBrief
-from app.modules.agent.services.brief_lines import (
+from app.modules.agent.services.context_brief.memory import AgentMemoryBriefBuilder
+from app.modules.agent.services.context_brief.granted_resources import (
+    GrantedResourcesBrief,
+)
+from app.modules.agent.services.context_brief.lines import (
     MAX_RESOURCES as _MAX_RESOURCES,
     more_note,
     table_line,
@@ -54,7 +56,7 @@ from app.modules.agent.services.brief_lines import (
     run_framing,
     user_lines,
 )
-from app.modules.agent.services.agent_self_brief import (
+from app.modules.agent.services.context_brief.agent_self import (
     AgentSelfBriefBuilder,
     READ_FAILED,
 )
@@ -65,9 +67,9 @@ from app.modules.datastore.contracts.agent_tools import (
 )
 from app.modules.function.contracts import agent_tools as function_tools
 from app.modules.pod.contracts.directory import list_pod_members
-from app.modules.agent.services.askable_pods_brief import askable_pod_lines
+from app.modules.agent.services.context_brief.askable_pods import askable_pod_lines
 from app.core.authorization.factory import create_authorization_data_service
-from app.modules.agent.services.brief_seams import (
+from app.modules.agent.infrastructure.context_brief_repository import (
     AuthorizationFactory,
     RepositoryFactory,
 )

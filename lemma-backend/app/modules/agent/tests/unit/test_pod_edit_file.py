@@ -1,6 +1,6 @@
 """`pod_edit_file` places every edit or none, and says which one it could not."""
 
-from app.modules.agent.services.attached_document_brief import (
+from app.modules.agent.services.context_brief.attached_document import (
     attached_file_path,
     render_attached_document,
 )

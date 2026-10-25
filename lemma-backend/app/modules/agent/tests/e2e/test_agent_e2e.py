@@ -2772,7 +2772,7 @@ class TestAgentRuntimeConfigApis:
         fixed_test_user,
         monkeypatch,
     ):
-        from app.modules.agent.services.runtime_provider_discovery import (
+        from app.modules.agent.infrastructure.providers.discovery import (
             DiscoveredModel,
         )
 
@@ -2785,7 +2785,7 @@ class TestAgentRuntimeConfigApis:
             return []
 
         monkeypatch.setattr(
-            "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+            "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
             fake_openai_discovery,
         )
 
@@ -2887,7 +2887,7 @@ class TestAgentRuntimeConfigApis:
 
         # The route is not real; its model list comes from the request.
         monkeypatch.setattr(
-            "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+            "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
             nothing_discovered,
         )
 

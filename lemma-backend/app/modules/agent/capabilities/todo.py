@@ -30,7 +30,7 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.capabilities.todo_storage import ConversationTodoStore
-from app.modules.agent.domain.prompts import load_todo_prompt
+from app.modules.agent.domain.prompt.templates import load_todo_prompt
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.tools.context import BaseAgentContext
 

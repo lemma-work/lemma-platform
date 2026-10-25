@@ -7,6 +7,8 @@ profiles, the other only reads one and talks to its provider.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -31,9 +33,11 @@ from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
-from app.modules.agent.services.organization_default_service import (
-    OrganizationDefaultService,
-)
+
+if TYPE_CHECKING:
+    from app.modules.agent.application.agents.choose_organization_default import (
+        OrganizationDefaultService,
+    )
 
 router = APIRouter(tags=["agent_runtime"])
 
@@ -41,6 +45,12 @@ _DEFAULT_PATH = "/organizations/{organization_id}/agent-runtime/default"
 
 
 def _default_service(uow: UoWDep) -> OrganizationDefaultService:
+    # Imported on use, like the connection check below: the write side of the
+    # default has no place in the API's startup imports.
+    from app.modules.agent.application.agents.choose_organization_default import (
+        OrganizationDefaultService,
+    )
+
     return OrganizationDefaultService(
         AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher())
     )
@@ -126,7 +136,7 @@ async def check_runtime_profile_connection(
     async with connection_released(uow.session):
         # Imported here: it builds provider clients, whose import graph is the
         # whole of openai's, and only this one endpoint needs it.
-        from app.modules.agent.services.runtime_provider_check import (
+        from app.modules.agent.application.agents.check_provider import (
             check_saved_provider_connection,
         )
 

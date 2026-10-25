@@ -16,18 +16,20 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.capabilities.open_questions import open_question_text
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
-from app.modules.agent.domain.run_context_prompt import (
+from app.modules.agent.domain.prompt.run_context import (
     render_run_context,
     task_list_section,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
-from app.modules.agent.services.attached_document_brief import (
+from app.modules.agent.services.context_brief.agent_brief import (
+    AgentContextBriefBuilder,
+)
+from app.modules.agent.services.context_brief.attached_document import (
     build_attached_document_section,
 )
-from app.modules.agent.services.brief_lines import run_trigger_of
-from app.modules.agent.services.link_brief import link_brief
-from app.modules.agent.services.outsider_brief import outsider_brief
+from app.modules.agent.services.context_brief.lines import run_trigger_of
+from app.modules.agent.services.context_brief.link import link_brief
+from app.modules.agent.services.context_brief.outsider import outsider_brief
 from app.modules.agent.tools.context import ConversationContext
 
 from uuid import UUID

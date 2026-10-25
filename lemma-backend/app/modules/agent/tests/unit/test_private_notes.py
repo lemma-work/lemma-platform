@@ -23,7 +23,7 @@ from app.modules.agent.domain.private_notes import (
 )
 from app.modules.agent.domain.run_state import RunPrivacy, RunState
 from app.modules.agent.domain.value_objects import RunTrigger
-from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+from app.modules.agent.domain.prompt.user_turn_text import (
     user_prompt_text,
 )
 

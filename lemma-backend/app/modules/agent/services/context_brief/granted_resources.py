@@ -17,12 +17,12 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent
-from app.modules.agent.services.brief_lines import (
+from app.modules.agent.services.context_brief.lines import (
     MAX_RESOURCES as _MAX_RESOURCES,
     more_note,
     table_line,
 )
-from app.modules.agent.services.brief_seams import (
+from app.modules.agent.infrastructure.context_brief_repository import (
     AuthorizationFactory,
     RepositoryFactory,
 )

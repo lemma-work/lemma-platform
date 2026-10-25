@@ -36,17 +36,19 @@ from pydantic_ai import RunContext
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.agent.domain.run_notices import RunNotices
-from app.modules.agent.infrastructure.harnesses.context_window import (
+from app.modules.agent.infrastructure.harness.lemma.context_window import (
     ContextFootprint,
 )
-from app.modules.agent.infrastructure.harnesses.history import (
+from app.modules.agent.infrastructure.harness.lemma.history import (
     find_safe_cutoff,
     is_pinned_message,
     is_tool_result_part,
 )
 from app.modules.agent.services.run_input_settings import summary_only_settings
-from app.modules.agent.services.runtime_model_factory import provider_model_settings
-from app.modules.agent.services.summarization_model import (
+from app.modules.agent.infrastructure.providers.model_factory import (
+    provider_model_settings,
+)
+from app.modules.agent.infrastructure.providers.summarization import (
     CompactionTarget,
     LazyCompactionTarget,
     SummarizationModel,

@@ -31,13 +31,13 @@ from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 from app.modules.agent.infrastructure.pydantic_ai_compat import HistoryProcessor
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.infrastructure.harnesses.context_window import (
+from app.modules.agent.infrastructure.harness.lemma.context_window import (
     ContextFootprint,
     FitReplyToWindow,
     MeasureRequestFootprint,
 )
-from app.modules.agent.services.history_tokens import count_model_message_tokens
-from app.modules.agent.services.summarization_model import SummarizationModel
+from app.modules.agent.infrastructure.providers.tokens import count_model_message_tokens
+from app.modules.agent.infrastructure.providers.summarization import SummarizationModel
 
 logger = get_logger(__name__)
 
@@ -98,7 +98,7 @@ def _is_synthetic(message: object) -> bool:
     A note prepended to real user text is a different thing: that message is the
     user's, and it stays.
     """
-    from app.modules.agent.services.runtime_history import SYNTHETIC_NOTICE_PREFIX
+    from app.modules.agent.domain.runtime_history import SYNTHETIC_NOTICE_PREFIX
 
     for part in getattr(message, "parts", ()) or ():
         content = getattr(part, "content", None)
@@ -278,7 +278,7 @@ def _with_drop_notice(
     """
     from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-    from app.modules.agent.services.runtime_history import SYNTHETIC_NOTICE_PREFIX
+    from app.modules.agent.domain.runtime_history import SYNTHETIC_NOTICE_PREFIX
 
     leading_pins = 0
     for message in messages:
@@ -368,7 +368,7 @@ def build_history_processors[DepsT](
     # First: detach images the model has already had several turns to read.
     # pydantic-ai re-uploads every image on every model request for the life of
     # the run, so this runs before anything measures the history.
-    from app.modules.agent.infrastructure.harnesses.history_compaction import (
+    from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
         strip_stale_images,
     )
 
@@ -382,7 +382,7 @@ def build_history_processors[DepsT](
     # Then: shrink tool output the model has long since read. A large result is
     # re-sent on every request for the rest of the run; past a few steps, its
     # head and tail and a way back to the rest are what is worth carrying.
-    from app.modules.agent.infrastructure.harnesses.stale_tool_output import (
+    from app.modules.agent.infrastructure.harness.lemma.stale_tool_output import (
         clip_stale_tool_returns,
     )
 
@@ -399,7 +399,7 @@ def build_history_processors[DepsT](
     ):
         # Imported here rather than at module scope: the compactor imports this
         # module back for the pinning predicate and the cutoff.
-        from app.modules.agent.infrastructure.harnesses.history_compaction import (
+        from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
             HistoryCompactor,
         )
 
@@ -432,7 +432,7 @@ def build_history_processors[DepsT](
             return working
         from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-        from app.modules.agent.services.runtime_history import (
+        from app.modules.agent.domain.runtime_history import (
             SYNTHETIC_NOTICE_PREFIX,
         )
 

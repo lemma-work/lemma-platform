@@ -20,8 +20,8 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.domain.run_context_prompt import task_list_section
+from app.modules.agent.domain.prompt.templates import build_agent_instructions
+from app.modules.agent.domain.prompt.run_context import task_list_section
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.capabilities.prompt_caching import (
     _ANTHROPIC_CACHE_TTL,
@@ -127,7 +127,7 @@ class TestAnthropicCachesToolDefinitionsToo:
 def test_no_heading_is_said_twice_across_the_prompt_and_the_run_context() -> None:
     """The todo guidance and the stored list both opened `# Task list`, so the
     model read one section title over two different things."""
-    from app.modules.agent.domain.run_context_prompt import render_run_context
+    from app.modules.agent.domain.prompt.run_context import render_run_context
 
     conversation = _conversation()
     run_toolsets, _ = resolve_toolset_names(None, conversation)

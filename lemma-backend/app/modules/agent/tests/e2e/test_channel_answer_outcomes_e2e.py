@@ -52,13 +52,13 @@ from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
     ConversationModel,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.db.history_reads import HistoryReads
-from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
+from app.modules.agent.domain.runtime_history import MAX_HISTORY_AGENT_RUNS
 from app.modules.agent.services.channel_answers import (
     COULD_NOT_ANSWER,
     STOPPED_BEFORE_ANSWERING,
@@ -71,7 +71,7 @@ from app.modules.agent.services.contact_run_failures import RUN_FAILED_REASON
 from app.modules.agent.services import channel_answers
 from app.modules.agent.services.message_reply_service import REPLY_SOURCE
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     STOPPED_BY_MEMBER,
     assemble_runtime_history,
 )

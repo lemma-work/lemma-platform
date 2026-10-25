@@ -21,14 +21,14 @@ from app.core.authorization.context import ActorType
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.context import ApprovedExecution
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.surface_prompts import surface_platform_guidance
+from app.modules.agent.domain.prompt.surface import surface_platform_guidance
 from app.modules.agent.domain.value_objects import AgentRunStatus, AgentToolset
 from app.modules.agent.services.run_finalizer import RunFinalizer
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_usage_recorder import usage_source_for
 from app.modules.usage.contracts import AgentRunUsage
 from app.modules.usage.domain.accounting import CONTACT_RUN, OUTSIDER_RUN
-from app.modules.agent.infrastructure.harnesses.channel_context import (
+from app.modules.agent.domain.prompt.channel_context import (
     channel_context_block as _channel_context_block,
 )
 from app.modules.agent.tools.authority import tool_authorization_context
@@ -310,7 +310,7 @@ async def test_a_members_run_has_nobody_to_call_in(monkeypatch):
 
 def test_a_doc_the_owner_opened_beside_it_is_never_a_strangers_to_read():
     """The doc is read as the conversation's user, who here is the owner."""
-    from app.modules.agent.services.attached_document_brief import (
+    from app.modules.agent.services.context_brief.attached_document import (
         ATTACHED_FILE_KEY,
         attached_file_path,
     )

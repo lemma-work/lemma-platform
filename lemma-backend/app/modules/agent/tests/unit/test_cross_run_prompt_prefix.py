@@ -31,10 +31,10 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.run_context_prompt import render_run_context
+from app.modules.agent.domain.prompt.run_context import render_run_context
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
-from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
 from app.modules.agent.tools.context import ConversationContext
 
 pytestmark = pytest.mark.unit

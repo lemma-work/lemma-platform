@@ -57,18 +57,15 @@ from app.modules.agent.infrastructure.runtime_models import (
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
-from app.modules.agent.services import runtime_provider_discovery as discovery
+from app.modules.agent.infrastructure.providers import discovery
 from app.modules.agent.services.generation_settings import validated_stored_settings
+from app.modules.agent.domain.runtime_provider_patch import (
+    normalize_headers,
+    normalize_profile_name,
+)
 from app.modules.agent.services.runtime_system_profiles import (
     agent_host_model_catalog,
 )
-
-
-def normalize_profile_name(name: str) -> str:
-    normalized = name.strip()
-    if not normalized:
-        raise RuntimeProfileValidationError("Profile name cannot be empty")
-    return normalized
 
 
 def normalize_model_settings(
@@ -78,17 +75,6 @@ def normalize_model_settings(
     # Refused here, not at the first run: a value no run can use used to be
     # saved and then fail every run on the profile.
     return validated_stored_settings(model_settings)
-
-
-def normalize_headers(headers: dict[str, str] | None) -> dict[str, str]:
-    refuse_redacted_values(headers, field="headers")
-    normalized: dict[str, str] = {}
-    for key, value in (headers or {}).items():
-        header_name = key.strip()
-        header_value = value.strip()
-        if header_name and header_value:
-            normalized[header_name] = header_value
-    return normalized
 
 
 async def _create_profile(

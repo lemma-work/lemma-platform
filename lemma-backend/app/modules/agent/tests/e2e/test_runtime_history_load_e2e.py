@@ -23,7 +23,7 @@ from app.modules.agent.infrastructure.models import (
     MessageModel,
 )
 from app.modules.agent.infrastructure.db.history_reads import HistoryReads
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
     runtime_full_run_ids,

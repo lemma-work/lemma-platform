@@ -23,7 +23,7 @@ from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.infrastructure.harnesses.run_failure_classification import (
+from app.modules.agent.infrastructure.harness.lemma.run_failure_classification import (
     classify_run_failure,
     is_usage_limit_error as is_usage_limit_error,
     run_failure_reason as run_failure_reason,

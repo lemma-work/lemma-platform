@@ -91,7 +91,7 @@ def test_continuous_usage_stats_never_reaches_the_request(openai_env):
     usage does so unprompted, and the field cannot switch that off. So this
     asserts the pair -- the setting is on the profile, and the request carries
     only what OpenAI defines."""
-    from app.modules.agent.services.runtime_model_factory import (
+    from app.modules.agent.infrastructure.providers.model_factory import (
         require_pydantic_ai_model_from_runtime_profile,
     )
 

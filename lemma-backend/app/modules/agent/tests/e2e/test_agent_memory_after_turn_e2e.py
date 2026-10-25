@@ -41,9 +41,9 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.events.turn_payloads import MemoryPassWork
-from app.modules.agent.infrastructure.harnesses.mock_model import build_mock_model
+from app.modules.agent.infrastructure.harness.lemma.mock_model import build_mock_model
 from app.modules.agent.infrastructure.repositories import AgentRepository
-from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
+from app.modules.agent.services.context_brief.memory import AgentMemoryBriefBuilder
 from app.modules.agent.application.background.memory_pass import (
     MemoryPass,
     MemoryPassOutcome,

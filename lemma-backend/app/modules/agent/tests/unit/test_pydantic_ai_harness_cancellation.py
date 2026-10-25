@@ -25,11 +25,11 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import AgentEventType
-from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_retry import (
+from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
+from app.modules.agent.infrastructure.harness.lemma.retry import (
     HarnessDriverCancelled,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
+from app.modules.agent.infrastructure.harness.lemma.harness import (
     PydanticAIHarness,
 )
 
@@ -210,7 +210,9 @@ async def test_the_cancellation_record_says_whether_the_consumer_was_cancelled_t
     scope inside the graph produce identical records. An incident spent chasing
     exactly this ended in inference. These counters separate the two.
     """
-    from app.modules.agent.infrastructure.harnesses import pydantic_ai_retry
+    from app.modules.agent.infrastructure.harness.lemma import (
+        retry as pydantic_ai_retry,
+    )
 
     records: list[tuple[str, dict]] = []
 

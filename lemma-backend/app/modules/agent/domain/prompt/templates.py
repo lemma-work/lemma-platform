@@ -18,14 +18,14 @@ from typing import TYPE_CHECKING
 
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
-from app.modules.agent.domain.prompt_directories import _directory_sections
+from app.modules.agent.domain.prompt.directories import _directory_sections
 from app.modules.agent.domain.value_objects import AgentToolset
 
 if TYPE_CHECKING:
     from app.modules.agent.domain.context import AgentContext
     from app.modules.agent.domain.entities import Agent, Conversation
 
-_PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
+_PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts"
 _THE_POD_PROMPT_PATH = _PROMPT_DIR / "the_pod.md"
 _TEAMMATE_PROMPT_PATH = _PROMPT_DIR / "teammate.md"
 _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
@@ -424,7 +424,7 @@ def _remote_fragments(enabled: set[AgentToolset], *, ctx: AgentContext) -> list[
     # does not carry the platform tables a surface run needs.
     surface_platform = getattr(ctx, "surface_platform", None)
     if surface_platform:
-        from app.modules.agent.domain.surface_prompts import (
+        from app.modules.agent.domain.prompt.surface import (
             is_group_conversation,
             surface_platform_guidance,
         )

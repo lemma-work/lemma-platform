@@ -15,8 +15,8 @@ import pytest
 
 from app.modules.agent.domain.outsiders import Audience, AudienceKind
 from app.modules.agent.domain.conversations import client_tags, with_client_tags
-from app.modules.agent.domain.surface_prompts import surface_platform_guidance
-from app.modules.agent.services.outsider_brief import render_contact_brief
+from app.modules.agent.domain.prompt.surface import surface_platform_guidance
+from app.modules.agent.services.context_brief.outsider import render_contact_brief
 
 pytestmark = pytest.mark.unit
 

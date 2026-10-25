@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import AsyncIterator, Protocol, Sequence
+from typing import TYPE_CHECKING, AsyncIterator, Protocol, Sequence
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -13,13 +13,15 @@ from app.modules.agent.domain.entities import (
     Conversation,
     Message,
 )
-from app.modules.agent.domain.background import BackgroundAnswer, BackgroundCall
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     HarnessKind,
 )
+
+if TYPE_CHECKING:
+    from app.modules.agent.domain.background import BackgroundAnswer, BackgroundCall
 
 
 class Harness(Protocol):

@@ -25,16 +25,16 @@ from app.modules.agent.domain.entities import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.services.runtime_history import ELISION_BLOCK_RUNS
-from app.modules.agent.services.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
-from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
-from app.modules.agent.services.runtime_history import bound_runtime_history
-from app.modules.agent.services.runtime_history import cap_history_runs
-from app.modules.agent.services.runtime_history import first_sequence_of_run
-from app.modules.agent.services.runtime_history import oldest_carried_sequence
-from app.modules.agent.services.runtime_history import runtime_full_run_ids
-from app.modules.agent.services.runtime_history import select_runtime_history
-from app.modules.agent.services.runtime_history import unattached_message_window
+from app.modules.agent.domain.runtime_history import ELISION_BLOCK_RUNS
+from app.modules.agent.domain.runtime_history import FULL_HISTORY_AGENT_RUN_COUNT
+from app.modules.agent.domain.runtime_history import MAX_HISTORY_AGENT_RUNS
+from app.modules.agent.domain.runtime_history import bound_runtime_history
+from app.modules.agent.domain.runtime_history import cap_history_runs
+from app.modules.agent.domain.runtime_history import first_sequence_of_run
+from app.modules.agent.domain.runtime_history import oldest_carried_sequence
+from app.modules.agent.domain.runtime_history import runtime_full_run_ids
+from app.modules.agent.domain.runtime_history import select_runtime_history
+from app.modules.agent.domain.runtime_history import unattached_message_window
 
 _BASE = datetime.now(timezone.utc) - timedelta(hours=1)
 

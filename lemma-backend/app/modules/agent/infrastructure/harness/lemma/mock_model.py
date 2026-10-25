@@ -53,7 +53,7 @@ from pydantic_ai.models.function import (
 
 from app.core.config import settings
 from app.core.log.log import get_logger
-from app.modules.agent.domain.run_context_prompt import RUN_CONTEXT_OPEN
+from app.modules.agent.domain.prompt.run_context import RUN_CONTEXT_OPEN
 
 _SENT_NOTE = re.compile(r"^<notes>Sent [^<]*</notes>\s*")
 

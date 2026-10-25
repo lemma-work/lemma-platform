@@ -8,7 +8,7 @@ and never exercised real toolset resolution.
 
 This module instead scripts the LLM's *token source* only, via the same
 mechanism the general (non-surface) agent e2e suite already uses:
-``app.modules.agent.infrastructure.harnesses.mock_model.build_mock_model``
+``app.modules.agent.infrastructure.harness.lemma.mock_model.build_mock_model``
 reads a flat list of turns off ``conversation.metadata["mock_llm_script"]`` and
 returns a deterministic pydantic-ai ``FunctionModel``. The REST of the pipeline
 — toolset resolution, real tool execution (including ``ask_user``/
@@ -38,10 +38,10 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.test_support.e2e.agent_work import run_approval_work
-from app.modules.agent.infrastructure.harnesses.mock_model import (
+from app.modules.agent.infrastructure.harness.lemma.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.infrastructure.db.conversations import Conversations
@@ -124,7 +124,7 @@ def record_model_requests(monkeypatch) -> list[dict]:
     import pydantic_core
     from pydantic_ai.models.function import FunctionModel
 
-    from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness
+    from app.modules.agent.infrastructure.harness.lemma import harness
 
     seen: list[dict] = []
     original = harness.build_mock_model

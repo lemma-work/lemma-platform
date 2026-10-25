@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from app.modules.agent.capabilities.assembler import _instructions_for
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.prompts import (
+from app.modules.agent.domain.prompt.templates import (
     build_agent_instructions,
     load_agent_host_runtime_prompt,
     load_subagents_prompt,

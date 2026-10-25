@@ -24,7 +24,7 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.events.run_followup_work import start_queued_followup_for
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
 from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions

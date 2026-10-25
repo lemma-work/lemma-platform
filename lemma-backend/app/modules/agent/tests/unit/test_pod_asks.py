@@ -37,7 +37,7 @@ from app.modules.agent.domain.pod_ask_rules import (
     plan_ask,
 )
 from app.modules.agent.infrastructure.pod_ask_queries import Teammate
-from app.modules.agent.services.askable_pods_brief import narrowed
+from app.modules.agent.services.context_brief.askable_pods import narrowed
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.conversations import client_tags, with_client_tags
 from app.modules.agent.domain.value_objects import (
