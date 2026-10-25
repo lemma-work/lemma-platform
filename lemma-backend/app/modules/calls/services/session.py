@@ -366,8 +366,11 @@ class CallSession:
         )
 
     async def _replay_canvas(self) -> None:
-        """A caller reconnecting gets the canvas as it stands."""
+        """A caller reconnecting gets the canvas as it stands, and the voice is
+        told what that screen now shows -- the newest item, with the rest a
+        page back -- so it never speaks of a screen the person is not seeing."""
         items = await self._agents.canvas()
+        described: list[tuple[str, str]] = []
         for item in items:
             shown = Shown(
                 conversation_id=item.conversation_id,
@@ -376,10 +379,14 @@ class CallSession:
                 args=item.args,
                 result=item.result,
             )
-            self._titles[item.tool_call_id] = _describe(shown)[0]
+            title, caption = _describe(shown)
+            self._titles[item.tool_call_id] = title
+            described.append((title, caption))
             await self.send(
                 {"type": "canvas.item", "item": shown.as_frame(), "replay": True}
             )
+        if described:
+            await self._engine.inject(_on_screen(described), Inject.CONTEXT)
 
     # -- the floor -----------------------------------------------------------
 
@@ -411,3 +418,15 @@ def _describe(shown: Shown) -> tuple[str, str]:
     )
     caption = args.get("fallback") or data.get("caption") or ""
     return str(title or "an item"), str(caption)
+
+
+def _on_screen(described: Sequence[tuple[str, str]]) -> str:
+    """The note that tells a resumed voice what the person's screen shows."""
+    title, caption = described[-1]
+    note = f"{CANVAS_NOTE} Back on the call, the person's screen shows: {title}"
+    if caption:
+        note += f" -- {caption}"
+    earlier = [each for each, _ in described[:-1]]
+    if earlier:
+        note += ". They can page back to: " + "; ".join(earlier[-10:])
+    return note + "."

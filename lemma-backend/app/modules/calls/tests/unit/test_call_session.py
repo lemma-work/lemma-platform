@@ -404,3 +404,49 @@ async def test_a_turn_the_agents_never_got_leaves_the_brief_for_the_next() -> No
     caller.inbox.put_nowait(None)
     await running
     assert "Goa venues for 12" in agents.turns[1]
+
+
+async def test_a_resumed_call_tells_the_voice_what_the_screen_shows() -> None:
+    # On dev the voice said the match scores were on the screen after a
+    # reconnect that showed nothing. The replayed screen and what the voice
+    # believes it shows have to be the same thing.
+    from datetime import datetime
+
+    def shown(call_id: str, name: str, fallback: str) -> CanvasItem:
+        return CanvasItem(
+            conversation_id=uuid4(),
+            tool_call_id=call_id,
+            tool_name="display_resource",
+            args={"type": "WIDGET", "name": name, "fallback": fallback},
+            result={"success": True},
+            shown_at=datetime.now(),
+        )
+
+    caller, voice = Caller(), Voice()
+    agents = Agents(
+        canvas=[
+            shown("a", "Fixtures", "This week's fixtures"),
+            shown("b", "Scores", "India 2-0 up in NZ"),
+        ]
+    )
+    running = asyncio.create_task(_session(caller, voice, agents, _gate({})).run())
+    await _until(lambda: voice.injected)
+    caller.inbox.put_nowait(None)
+    await running
+    replayed = [f for f in caller.frames if f.get("type") == "canvas.item"]
+    assert [f["item"]["tool_call_id"] for f in replayed] == ["a", "b"]
+    [(note, mode)] = voice.injected
+    assert mode is Inject.CONTEXT
+    assert "screen shows: Scores -- India 2-0 up in NZ" in note
+    assert "page back to: Fixtures" in note
+
+
+def test_a_resumed_voice_is_told_what_was_said_most_recent_kept() -> None:
+    from app.modules.calls.domain.voice_brief import voice_brief
+
+    earlier = "Caller: hello\n" + "x" * 10_000 + "\nVoice: India won by 4 wickets"
+    brief = voice_brief(teammate="Ria", pod="Personal", earlier=earlier)
+    assert "This call is being resumed" in brief
+    assert "India won by 4 wickets" in brief
+    assert "Caller: hello" not in brief  # the oldest is what is cut
+    assert "being resumed" not in voice_brief(teammate="Ria", pod="Personal")

@@ -33,9 +33,11 @@ from app.core.live.topics import live_registry
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 from app.modules.agent.contracts.calls import (
+    CALL_TRANSCRIPT_KEY,
     CanvasItem,
     call_canvas,
     call_conversations,
+    call_transcripts,
 )
 from app.modules.agent.contracts.conversations_for_surfaces import (
     append_delivery_notice,
@@ -146,6 +148,11 @@ class CallAgents:
                 message_metadata={"source": "call"},
             )
 
+    async def earlier(self) -> list[str]:
+        """Transcripts of this call's earlier connections, oldest first."""
+        async with as_caller(self._party) as scope:
+            return await call_transcripts(scope.uow, self.call_id)
+
     async def canvas(self) -> list[CanvasItem]:
         async with as_caller(self._party) as scope:
             return await call_canvas(scope.uow, self.call_id)
@@ -157,7 +164,7 @@ class CallAgents:
                 scope.uow,
                 conversation_id=self.call_id,
                 message=transcript,
-                metadata={"call_transcript": str(uuid4())},
+                metadata={CALL_TRANSCRIPT_KEY: str(uuid4())},
             )
 
     async def signals(self) -> AsyncIterator[AgentSignal]:

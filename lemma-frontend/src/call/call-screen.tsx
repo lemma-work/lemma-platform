@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MicIcon, MicOffIcon, EndCallIcon, MinimizeIcon, ChevronLeftIcon, ChevronRightIcon } from "@/ui/icons";
 import { ResourceCard } from "@/thread/resource-card";
 import { CallMark } from "./call-mark";
@@ -82,16 +82,37 @@ export function CallScreen({
     const active = Math.min(showing, newest);
     const onScreen = resources[active];
 
-    /* Paging back is the person pointing at something; the voice should know
-       what they are looking at. The newest item arriving is not -- the voice
-       was told about that when it was drawn. */
+    /* Every page the person turns is them pointing at something, back to the
+       newest included: the voice must know which slide is up, or it talks
+       about one while another is on screen. The newest item arriving is not a
+       turn of theirs -- the voice was told about that when it was drawn. */
+    const pagedRef = useRef(false);
+    const page = useCallback((to: number) => {
+        if (to < 0 || to > newest) return;
+        pagedRef.current = true;
+        setShowing(to);
+    }, [newest]);
     const shownRef = useRef<string | null>(null);
     useEffect(() => {
         if (!onScreen || shownRef.current === onScreen.id) return;
-        const paged = shownRef.current !== null && active !== newest;
         shownRef.current = onScreen.id;
-        if (paged) onLooking?.(onScreen);
-    }, [onScreen, active, newest, onLooking]);
+        if (pagedRef.current) onLooking?.(onScreen);
+        pagedRef.current = false;
+    }, [onScreen, onLooking]);
+
+    /* The arrow keys page, as in any slide viewer -- unless the person is
+       typing, or a widget inside the slide has the focus and the keys. */
+    useEffect(() => {
+        if (resources.length < 2) return;
+        const onKey = (event: KeyboardEvent) => {
+            const target = event.target as HTMLElement | null;
+            if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+            if (event.key === "ArrowLeft") page(active - 1);
+            else if (event.key === "ArrowRight") page(active + 1);
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [resources.length, active, page]);
 
     /* A widget that cannot draw says so to its parent frame (the widget kit's
        `lemma.fail`, and any error it did not catch). Which item
@@ -186,7 +207,7 @@ export function CallScreen({
                             <div className="call-deck__nav">
                                 <button
                                     className="call-deck__step"
-                                    onClick={() => setShowing(active - 1)}
+                                    onClick={() => page(active - 1)}
                                     disabled={active === 0}
                                     aria-label="Previous"
                                 ><ChevronLeftIcon size={18} /></button>
@@ -196,7 +217,7 @@ export function CallScreen({
                                 </span>
                                 <button
                                     className="call-deck__step"
-                                    onClick={() => setShowing(active + 1)}
+                                    onClick={() => page(active + 1)}
                                     disabled={active === newest}
                                     aria-label="Next"
                                 ><ChevronRightIcon size={18} /></button>

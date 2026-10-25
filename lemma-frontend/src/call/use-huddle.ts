@@ -68,6 +68,22 @@ export function useHuddle({ pod, teammate, conversationId }: {
 
     const { start: startCall, end: endCall } = call;
 
+    /* Calling from a call's own conversation picks that call up again: the
+       same conversation, its agents still holding what they did, and its
+       canvas replayed as it was left. Anywhere else, a new call. */
+    const callToJoin = useCallback(async (): Promise<string> => {
+        const client = lemma(pod.id);
+        if (conversationId && conversationId !== NEW_CONVERSATION) {
+            const open = await client.conversations.get(conversationId, { pod_id: pod.id }).catch(() => null);
+            if (open && isCallConversation(open)) return conversationId;
+        }
+        const opened = await client.calls.open({
+            display_name: teammate || "your teammate",
+            title: `Call with ${teammate || "your teammate"}`,
+        });
+        return opened.call_id;
+    }, [pod.id, conversationId, teammate]);
+
     const start = useCallback(async () => {
         if (busy.current || call.active) { setExpanded(true); return; }
         busy.current = true;
@@ -76,15 +92,12 @@ export function useHuddle({ pod, teammate, conversationId }: {
         setSetupError(null);
         setExpanded(true);
         try {
-            const opened = await lemma(pod.id).calls.open({
-                display_name: teammate || "your teammate",
-                title: `Call with ${teammate || "your teammate"}`,
-            });
+            const callId = await callToJoin();
             if (attempt !== setupAttempt.current) return;
-            setCallId(opened.call_id);
+            setCallId(callId);
             const brief = await context();
             if (attempt !== setupAttempt.current) return;
-            await startCall(opened.call_id, { teammate, pod: pod.name, context: brief });
+            await startCall(callId, { teammate, pod: pod.name, context: brief });
         } catch (problem) {
             if (attempt !== setupAttempt.current) return;
             setCallId(null);
@@ -93,7 +106,7 @@ export function useHuddle({ pod, teammate, conversationId }: {
         } finally {
             if (attempt === setupAttempt.current) { busy.current = false; setStarting(false); }
         }
-    }, [pod.id, pod.name, teammate, context, startCall, call.active]);
+    }, [pod.name, teammate, context, startCall, call.active, callToJoin]);
 
     /* The call's id goes with it: the shell adopts the call's conversation
        while one is set, and an ended call must not pull the person back to it

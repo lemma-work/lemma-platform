@@ -84,10 +84,12 @@ async def _hold_call(
         )
         return
     background = str(start.get("context") or "") or None
+    agents = CallAgents(call_id=call_id, party=party)
     instructions = voice_brief(
         teammate=str(start.get("teammate") or "your teammate")[:120],
         pod=str(start.get("pod") or "this pod")[:120],
         context=background,
+        earlier=await _earlier(agents),
     )
     talk_party = CallParty(
         user_id=party.user_id,
@@ -112,7 +114,6 @@ async def _hold_call(
         await engine.close()
         await websocket.close(code=CLOSE_UNAVAILABLE, reason=_reason(exc))
         return
-    agents = CallAgents(call_id=call_id, party=party)
     caller = Caller(
         user_id=party.user_id,
         organization_id=organization_id,
@@ -172,6 +173,18 @@ def _reason(exc: EngineUnavailable | DomainError) -> str:
     # Cut by bytes, dropping a character split at the edge: a longer reason
     # makes the close itself fail, and the caller sees a dropped call.
     return text.encode()[:_MAX_REASON_BYTES].decode(errors="ignore")
+
+
+async def _earlier(agents: CallAgents) -> str | None:
+    """What was said on this call before, when it is being resumed."""
+    try:
+        earlier = await agents.earlier()
+    except DomainError, SQLAlchemyError, OSError:
+        # A resumed call that cannot read its past is still a call; the voice
+        # just starts without it.
+        logger.warning("calls.socket.earlier.failed", exc_info=True)
+        return None
+    return "\n\n".join(earlier) or None
 
 
 async def _retire_if_empty(party: Party, call_id: UUID) -> None:
