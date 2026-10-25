@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { lemma } from "@/session/client";
+import { hasApiUrl, lemma } from "@/session/client";
 
 /** Whether this pod's server can place a voice call.
  *
@@ -19,12 +19,14 @@ export async function voiceConfigured(
     }
 }
 
-/** `undefined` while the probe is out. */
+/** `undefined` while the probe is out. Never asked with no API to ask: the
+ *  client then points at a placeholder origin the page's CSP refuses, and
+ *  every signed-out page logged the refusal. */
 export function useVoiceConfigured(podId: string | null): boolean | undefined {
     return useQuery({
         queryKey: ["voice-configured", podId],
         queryFn: () => voiceConfigured(podId as string),
-        enabled: Boolean(podId),
+        enabled: Boolean(podId) && hasApiUrl(),
         staleTime: 5 * 60_000,
         retry: 0,
     }).data;

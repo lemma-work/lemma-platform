@@ -83,6 +83,19 @@ test("each unfinished state says the thing that can actually be done", () => {
     assert.equal(at("CONNECTED", "PENDING_APPROVAL"), "Waiting on an organization owner");
 });
 
+test("a GitHub account with no installation says its triggers are dead", () => {
+    // 0063 unbinds an installation several organizations claimed; its accounts
+    // still read as connected, and every webhook for them is dropped.
+    const github = readAccount({
+        id: "g", connector_id: "github", status: "CONNECTED", install_state: "INSTALL_REQUIRED",
+    }) as ConnectorAccount;
+
+    assert.equal(
+        accountTrouble(github),
+        "GitHub needs reconnecting: its triggers and actions reach nothing until it is installed",
+    );
+});
+
 test("a taken credential is a signal, not a failure to report", () => {
     // A connected account is claimable once per organization. The catalog
     // publishes only the system claim, so this 409 is the first and only
