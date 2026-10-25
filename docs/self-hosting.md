@@ -202,9 +202,12 @@ curl -k https://<domain>:8443/health/ready   # names whatever is failing
 | Agent runs fail straight away | Check the model key, then `docker compose logs sandbox-images` |
 | `api` is stuck on "Waiting for application startup" | Without a model key it downloads a 210 MB embedding model first. Add a model key, or set `HF_TOKEN` if the download stalls |
 | `migrate` fails on first start | An old database volume from another Postgres version. On an empty install only, `docker compose down -v` starts clean |
+| Every table query, agent SQL call and querying workflow answers `DATASTORE_QUERY_UNAVAILABLE` | The datastore's database role cannot create roles. `/health/ready` shows `"datastore_roles": "missing_createrole"`. Grant it: `ALTER ROLE <role> CREATEROLE` |
 
 ## Limits
 
 This is a single-machine setup: no high availability, no automatic upgrades,
 and no built-in monitoring. To use a managed Postgres, point `DATABASE_URL` at
-it. For metrics and traces, see [observability](observability.md).
+it. The role in `DATASTORE_DATABASE_URL` (or `DATABASE_URL`, when that is unset)
+needs `CREATEROLE`: each pod's queries run as a role of its own, made when the
+pod's schema is. For metrics and traces, see [observability](observability.md).

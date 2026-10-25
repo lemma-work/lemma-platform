@@ -288,9 +288,13 @@ class GitHubWebhookSource:
             # Bound to no Lemma organization, so no schedule anywhere is its
             # schedule (audit H4). Acknowledged rather than refused: a non-2xx
             # answer has GitHub retry and then disable the hook for everyone.
+            # Named, so a count of what is being dropped -- and for which
+            # installation, whose accounts show "Install" in the app until a
+            # GitHub admin of it claims it -- is one log query.
             logger.warning(
                 "schedule.webhook_sources.github.unbound_installation_dropped.denied",
                 github_event=event,
+                installation_id=str(installation_id),
             )
             return None
 

@@ -277,6 +277,40 @@ async def test_a_retried_turn_is_kept_from_what_the_failed_run_was_asked(scenari
 
 
 @pytest.mark.asyncio
+async def test_a_configured_pass_model_runs_the_pass_without_the_runs_settings(
+    scenario,
+):
+    """`AGENT_MEMORY_PASS_MODEL` moves the pass off the run's own model. The
+    run's generation settings are for the run's model, so the configured one
+    is sent none; the run's model is not asked at all."""
+    seeded = await seeded_conversation(scenario, toolsets=["MEMORY", "POD"])
+    run = await running_run(seeded)
+    await append(seeded, run, MessageDraft.of_text(ASKED, role=MessageRole.USER))
+    await finish(run, status=AgentRunStatus.COMPLETED)
+
+    settings_sent: list[object] = []
+
+    def configured(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        settings_sent.append(info.model_settings)
+        return ModelResponse(parts=[TextPart("nothing")])
+
+    def run_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        raise AssertionError("the run's own model was asked")
+
+    async def choose(fallback, _organization_id, _user_id):
+        assert fallback is run_side
+        return FunctionModel(configured)
+
+    run_side = FunctionModel(run_model)
+    outcome = await MemoryPass(
+        _uow_factory(), model_for=lambda _resolved: run_side, pass_model=choose
+    ).keep(conversation_id=seeded.conversation_id, run_id=run, user_id=seeded.user_id)
+
+    assert outcome is MemoryPassOutcome.NOTHING
+    assert settings_sent == [None]
+
+
+@pytest.mark.asyncio
 async def test_an_answer_to_the_agents_question_is_kept_by_the_run_it_resumed(
     scenario,
 ):
