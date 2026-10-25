@@ -28,7 +28,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.events import (
 from app.modules.agent.infrastructure.harnesses.agent_host.harness_events import (
     RunEventApplier,
 )
-from app.modules.agent.infrastructure.models import AgentRunModel
+from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 from app.modules.agent.tests.e2e.agent_host_helpers import (
@@ -75,7 +75,12 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     )
     # Deliberately the legacy root: a conversation recorded before the move
     # keeps the cwd it was stamped with, and rebinding must not re-home it.
-    await Conversations(uow).record_cwd(conversation_id, "/workspace/c/test/sandbox")
+    # Unconditionally, as a row written before the move carries it: `record_cwd`
+    # only fills a null, and the conversation already has its default.
+    stamped = await db_session.get(ConversationModel, conversation_id)
+    assert stamped is not None
+    stamped.cwd = "/workspace/c/test/sandbox"
+    await db_session.flush()
     previous = await db_session.get(AgentRunModel, old_run_id)
     assert previous is not None
     previous.status = "FAILED"
