@@ -22,6 +22,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import MessageDraft
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     parse_tool_call_args,
+    tool_call_identity,
 )
 from app.modules.agent.infrastructure.harnesses.streaming import CharStreamBuffer
 
@@ -173,5 +174,5 @@ class StreamingParts:
             tool_name=part.tool_name,
             tool_call_id=part.tool_call_id,
             tool_args=tool_args,
-            metadata={"tool_name": part.tool_name},
+            metadata={"tool_name": part.tool_name, **tool_call_identity(part)},
         )
