@@ -131,10 +131,12 @@ def test_a_vertex_project_offers_gemini_live_without_a_key(
 
 
 def test_vertex_names_the_regional_endpoint_and_the_full_model_path() -> None:
-    assert vertex_endpoint("us-central1").startswith(
-        "wss://us-central1-aiplatform.googleapis.com/ws/"
+    live = "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    assert (
+        vertex_endpoint("us-central1")
+        == "wss://us-central1-aiplatform.googleapis.com" + live
     )
-    assert vertex_endpoint("global").startswith("wss://aiplatform.googleapis.com/")
+    assert vertex_endpoint("global") == "wss://aiplatform.googleapis.com" + live
     assert (
         vertex_model("p", "us-central1", "models/gemini-live")
         == "projects/p/locations/us-central1/publishers/google/models/gemini-live"
