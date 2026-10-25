@@ -11,13 +11,14 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.dialects import postgresql
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.conversation_titles import (
     CONVERSATION_TITLE_MAX_LENGTH,
     normalize_conversation_title,
 )
 from app.modules.agent.domain.errors import ConversationValidationError
 from app.modules.agent.domain.value_objects import ConversationAgentSelection
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 import app.modules.agent.services.conversation_queries as queries
 
 
@@ -61,9 +62,9 @@ class _Uow:
 @pytest.mark.parametrize("archived", [False, True])
 async def test_list_filters_on_the_archive_flag(archived: bool) -> None:
     uow = _Uow()
-    repository = ConversationRepository(uow)
+    conversations = Conversations(uow)
 
-    await repository.list_conversations(
+    await conversations.list_conversations(
         user_id=uuid4(),
         pod_id=uuid4(),
         agent_selection=ConversationAgentSelection.all(),
@@ -83,7 +84,7 @@ async def test_list_filters_on_the_archive_flag(archived: bool) -> None:
 async def test_the_default_list_hides_the_archive(monkeypatch) -> None:
     """A caller that says nothing about archiving gets the unarchived list."""
     repository = _CapturingRepository()
-    service = queries.ConversationQueries(None, repository, None)
+    service = wire_repositories(queries.ConversationQueries(None, None), repository)
 
     async def _resolve(_repo, *, pod_id, agent_name):
         return None
@@ -104,7 +105,7 @@ async def test_the_default_list_hides_the_archive(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_the_archive_is_asked_for_explicitly(monkeypatch) -> None:
     repository = _CapturingRepository()
-    service = queries.ConversationQueries(None, repository, None)
+    service = wire_repositories(queries.ConversationQueries(None, None), repository)
 
     async def _resolve(_repo, *, pod_id, agent_name):
         return None

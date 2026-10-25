@@ -32,7 +32,8 @@ from app.modules.agent.domain.wait import (
     AgentWaitType,
     AgentWaitWakeReason,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -90,14 +91,15 @@ async def _a_wait(
     now = datetime.now(timezone.utc)
     tool_call_id = f"call-{uuid4().hex[:12]}"
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        run = await repo.create_agent_run(
+        messages = Messages(uow)
+        runs = Runs(uow)
+        run = await runs.create_agent_run(
             conversation_id=waiting_conversation["conversation_id"],
             agent_id=None,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
             metadata={"source": "e2e_wait_resolution"},
         )
-        await repo.append_message(
+        await messages.append_message(
             conversation_id=waiting_conversation["conversation_id"],
             agent_run_id=run.id,
             draft=MessageDraft.of_tool_call(

@@ -1,11 +1,10 @@
 """Messages sent while a run was working, and who has delivered them.
 
-The predicate every party agrees on, and the three writes the Agent Host's
-steering added: marking a message as on its way to a host, recording what the
-host said, and withdrawing one nobody is carrying yet. Counting and claiming
-stay on ``ConversationRepository``, which the turn coordinator reaches through
-its port; these have their own repository, because only the harness and the
-withdraw route ask for them. All of it is about the metadata keys in
+One place for the queue: the predicate every party agrees on, counting what is
+still owed an answer, claiming messages into a run, marking them as waiting on
+a question, and the three writes the Agent Host's steering added -- marking a
+message as on its way to a host, recording what the host said, and withdrawing
+one nobody is carrying yet. All of it is about the metadata keys in
 ``domain/queued_messages.py``.
 
 Every write here is one ``UPDATE ... RETURNING`` (or ``DELETE ... RETURNING``)
@@ -22,16 +21,17 @@ from uuid import UUID
 
 from sqlalchemy import delete, func, or_, select, update
 
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Message as MessageEntity
 from app.modules.agent.domain.queued_messages import (
     DURING_ACTIVE_RUN,
+    WAITING_ON_ANSWER,
     STEER_DISPATCHED_AT,
     STEER_UNDELIVERED,
     STEERED_INTO_RUN,
 )
 from app.modules.agent.domain.value_objects import AgentRunStatus, MessageRole
 from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.infrastructure.db.base import UnitOfWorkRepository
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
 
 
@@ -116,11 +116,139 @@ def _is_note():
     )
 
 
-class QueuedMessageRepository:
-    """Steering's writes on queued messages."""
+class QueuedMessages(UnitOfWorkRepository):
+    """The queue behind a run: counting, claiming, steering, withdrawing."""
 
-    def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
-        self.session = uow.session
+    async def count_queued_user_messages(
+        self,
+        agent_run_id: UUID,
+        *,
+        notes: bool | None = None,
+        after_sequence: int | None = None,
+    ) -> int:
+        """How many of this run's queued messages are still unanswered.
+
+        Counted over ``ix_agent_message_run_sequence`` rather than loading the
+        run's messages, and asked once when a run ends -- so the answer is
+        normally zero and costs one indexed aggregate.
+
+        A message handed to the host as a steer that never landed still counts:
+        ``steer_dispatched_at`` is not a claim, so the follow-up turn is what
+        answers it.
+        """
+        return int(
+            await self.session.scalar(
+                select(func.count()).where(
+                    *unclaimed_queued_messages(
+                        agent_run_id, notes=notes, after_sequence=after_sequence
+                    )
+                )
+            )
+            or 0
+        )
+
+    async def earliest_queued_is_note(
+        self, agent_run_id: UUID, *, after_sequence: int | None = None
+    ) -> bool | None:
+        """Whether the oldest unanswered message queued behind this run is a
+        private note; None when nothing is queued. A follow-up turn answers one
+        kind, and the oldest message decides which goes first."""
+        flag = await self.session.scalar(
+            select(
+                func.coalesce(
+                    MessageModel.message_metadata[PRIVATE_NOTE_KEY].astext == "true",
+                    False,
+                )
+            )
+            .where(
+                *unclaimed_queued_messages(agent_run_id, after_sequence=after_sequence)
+            )
+            .order_by(MessageModel.sequence)
+            .limit(1)
+        )
+        return None if flag is None else bool(flag)
+
+    async def claim_queued_user_messages(
+        self,
+        agent_run_id: UUID,
+        *,
+        into_run_id: UUID | None = None,
+        message_ids: list[UUID] | None = None,
+        notes: bool | None = None,
+        as_run: bool = False,
+        after_sequence: int | None = None,
+    ) -> list[MessageEntity]:
+        """Take the messages that arrived mid-run, and mark them taken.
+
+        Claimed and read in one statement so a message can be delivered into the
+        model exactly once. Whoever claims them owes the person an answer: if
+        the run then dies without replying, the row stays claimed and the
+        completion sweep will not pick it up either -- but the run is FAILED, so
+        the person is told, which is the recovery that was already there.
+
+        ``into_run_id`` is the run that will deliver them, when that is not the
+        run they were queued behind: the follow-up turn claims its predecessor's
+        queue, and the Agent Host harness reads that claim to know which
+        messages its prompt has to carry.
+
+        ``message_ids`` narrows the claim to messages the caller has in hand --
+        an Agent Host dispatch claims the ones its prompt already carries, and
+        must not claim one that arrived a moment later and is not in it.
+
+        Returns them in the order they were appended, which the caller relies on
+        to keep several bubbles of one message in sequence.
+        """
+        rows = (
+            await self.session.execute(
+                update(MessageModel)
+                .where(
+                    *unclaimed_queued_messages(
+                        agent_run_id,
+                        notes=notes,
+                        as_run=as_run,
+                        after_sequence=after_sequence,
+                    ),
+                    *(
+                        (MessageModel.id.in_(message_ids),)
+                        if message_ids is not None
+                        else ()
+                    ),
+                )
+                .values(
+                    message_metadata=stamp(
+                        **{STEERED_INTO_RUN: str(into_run_id or agent_run_id)}
+                    )
+                )
+                .returning(MessageModel)
+                .execution_options(synchronize_session=False)
+            )
+        ).scalars()
+        return in_order(rows)
+
+    async def mark_queued_waiting_on_answer(
+        self, agent_run_id: UUID
+    ) -> list[MessageEntity]:
+        """Mark what is queued behind a run that ended on a question.
+
+        Nothing answers those until the person answers the question, and
+        without a mark they were drawn as plain sent messages with no reply
+        coming. Returned so the caller can redraw them.
+        """
+        rows = (
+            await self.session.execute(
+                update(MessageModel)
+                .where(
+                    *unclaimed_queued_messages(agent_run_id),
+                    MessageModel.message_metadata[WAITING_ON_ANSWER].astext.is_(None),
+                )
+                .values(
+                    message_metadata=stamp(**{WAITING_ON_ANSWER: str(agent_run_id)})
+                )
+                .returning(MessageModel)
+                .execution_options(synchronize_session=False)
+            )
+        ).scalars()
+        return in_order(rows)
 
     async def take_queued_messages_to_steer(
         self, agent_run_id: UUID

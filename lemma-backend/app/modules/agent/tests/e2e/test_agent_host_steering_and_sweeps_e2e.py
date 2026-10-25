@@ -42,7 +42,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
     record_steer_result,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostRunLeaseModel,
@@ -85,7 +85,7 @@ async def _dispatched_run(
 
 async def _sent_while_working(conversation_id: UUID, run_id: UUID, text: str) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        message = await ConversationRepository(uow).append_message(
+        message = await Messages(uow).append_message(
             conversation_id=conversation_id,
             agent_run_id=run_id,
             draft=MessageDraft.of_text(

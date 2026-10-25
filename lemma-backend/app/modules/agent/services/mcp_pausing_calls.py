@@ -43,7 +43,7 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     to_json_value,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -83,7 +83,7 @@ async def record_pausing_tool_call(
         return None
     tool_call_id = f"{_ID_PREFIX}-{uuid4().hex}"
     async with uow_factory() as uow:
-        saved = await ConversationRepository(uow).append_message(
+        saved = await Messages(uow).append_message(
             conversation_id=conversation_id,
             agent_run_id=agent_run_id,
             draft=MessageDraft.of_tool_call(
@@ -149,7 +149,7 @@ async def close_pausing_tool_call(
     ):
         return
     async with uow_factory() as uow:
-        saved = await ConversationRepository(uow).append_message(
+        saved = await Messages(uow).append_message(
             conversation_id=conversation_id,
             agent_run_id=agent_run_id,
             draft=MessageDraft.of_tool_return(

@@ -34,7 +34,8 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.repositories.run_last_words import (
     last_text,
     tool_result_after,
@@ -146,21 +147,22 @@ class RunMessageWriter:
         draft = draft.model_copy(update={"metadata": metadata})
 
         async with self.uow_factory() as uow:
-            repository = ConversationRepository(uow)
+            messages = Messages(uow)
+            pausing_calls = Pauses(uow)
             existing = await self._answered_already(
-                repository,
+                pausing_calls,
                 conversation_id=conversation_id,
                 draft=draft,
             )
             if existing is not None:
                 return existing
             draft = await self._unique_pause_id(
-                repository,
+                pausing_calls,
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
             )
-            return await repository.append_message(
+            return await messages.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
@@ -176,7 +178,7 @@ class RunMessageWriter:
         turn's first message), and later turns read it as context.
         """
         async with self.uow_factory() as uow:
-            return await ConversationRepository(uow).append_message(
+            return await Messages(uow).append_message(
                 conversation_id=conversation_id,
                 agent_run_id=None,
                 draft=MessageDraft.of_notification(text, metadata=metadata),
@@ -184,7 +186,7 @@ class RunMessageWriter:
 
     @staticmethod
     async def _unique_pause_id(
-        repository: ConversationRepository,
+        repository: Pauses,
         *,
         conversation_id: UUID,
         agent_run_id: UUID,
@@ -226,7 +228,7 @@ class RunMessageWriter:
 
     @staticmethod
     async def _answered_already(
-        repository: ConversationRepository,
+        repository: Pauses,
         *,
         conversation_id: UUID,
         draft: MessageDraft,

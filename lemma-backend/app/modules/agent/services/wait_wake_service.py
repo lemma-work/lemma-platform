@@ -41,7 +41,7 @@ from app.modules.agent.domain.wait import (
     AgentWaitWakeReason,
 )
 from app.modules.agent.domain.wait_decision import WakeNow, deadline_of, decide_wait
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -88,7 +88,7 @@ class AgentWaitService:
     def __init__(self, uow: SqlAlchemyUnitOfWork, *, work: WorkWriter | None = None):
         self.uow = uow
         self.waits = AgentConversationWaitRepository(uow)
-        self.conversations = ConversationRepository(uow)
+        self.conversations = Conversations(uow)
         self.work = work or WorkWriter.of(uow)
 
     async def fire(self, wait_id: UUID) -> bool:
@@ -334,7 +334,6 @@ class AgentWaitService:
 
         return ConversationService(
             uow=self.uow,
-            conversation_repository=self.conversations,
             agent_repository=AgentRepository(self.uow),
             usage_service=build_usage_service(self.uow),
         )

@@ -68,9 +68,9 @@ from app.modules.agent.services.pod_link_guards import (
     refuse_past_link_cap,
     still_stewards,
 )
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.poll_backoff import poll_delay
@@ -205,7 +205,6 @@ class PodAskService:
     def _conversation_service(uow: SqlAlchemyUnitOfWork) -> ConversationService:
         return ConversationService(
             uow=uow,
-            conversation_repository=ConversationRepository(uow),
             agent_repository=AgentRepository(uow),
             usage_service=build_usage_service(uow),
         )
@@ -226,9 +225,7 @@ class PodAskService:
         agent is never offered a pod, or a way, the ask would then refuse.
         """
         async with self.uow_factory() as uow:
-            asking = await ConversationRepository(uow).get_conversation(
-                deps.conversation_id
-            )
+            asking = await Conversations(uow).get_conversation(deps.conversation_id)
             source = await PodAskQueries(uow).latest_turn_source(
                 conversation_id=deps.conversation_id
             )
@@ -246,9 +243,7 @@ class PodAskService:
     async def unreachable_reason(self, deps: BaseAgentContext) -> str | None:
         """Why this run can ask no pod at all, or ``None`` when it could."""
         async with self.uow_factory() as uow:
-            asking = await ConversationRepository(uow).get_conversation(
-                deps.conversation_id
-            )
+            asking = await Conversations(uow).get_conversation(deps.conversation_id)
             source = await PodAskQueries(uow).latest_turn_source(
                 conversation_id=deps.conversation_id
             )
@@ -265,9 +260,7 @@ class PodAskService:
         not cost the person an approval first.
         """
         async with self.uow_factory() as uow:
-            asking = await ConversationRepository(uow).get_conversation(
-                deps.conversation_id
-            )
+            asking = await Conversations(uow).get_conversation(deps.conversation_id)
             source = await PodAskQueries(uow).latest_turn_source(
                 conversation_id=deps.conversation_id
             )
@@ -285,7 +278,7 @@ class PodAskService:
         if not request.strip():
             raise AskRefused("Say what you need from it: the request is empty.")
         async with self.uow_factory() as uow:
-            conversations = ConversationRepository(uow)
+            conversations = Conversations(uow)
             asking = await conversations.get_conversation(deps.conversation_id)
             if asking is None:
                 raise AskRefused("This conversation no longer exists.")
@@ -426,7 +419,7 @@ class PodAskService:
         instructions: str | None,
     ) -> UUID:
         """The conversation in the other pod this ask continues, or a new one."""
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
         thread_id = await PodAskQueries(uow).find_thread(
             to_pod_id=teammate.pod_id,
             from_conversation_id=ask.from_conversation_id,
@@ -501,7 +494,7 @@ class PodAskService:
     ) -> AskOutcome | None:
         """The ask's outcome if it has one yet, taking delivery of the answer."""
         async with self.uow_factory() as uow:
-            conversations = ConversationRepository(uow)
+            conversations = Conversations(uow)
             thread = await conversations.get_conversation(
                 conversation_id, include_runs=True
             )

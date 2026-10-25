@@ -24,7 +24,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.brief_lines import run_is_unattended, run_source_of
 
 logger = get_logger(__name__)
@@ -77,9 +77,7 @@ def make_stop_checker(
     async def _stop_requested() -> bool:
         try:
             async with uow_factory() as uow:
-                agent_run = await ConversationRepository(uow).get_agent_run(
-                    agent_run_id
-                )
+                agent_run = await Runs(uow).get_agent_run(agent_run_id)
         except (SQLAlchemyError, OSError) as exc:
             if not is_database_unavailable(exc):
                 raise

@@ -50,9 +50,11 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision, JsonObject
 from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE
+from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.approval_reconciliation import (
     ApprovalExecution,
@@ -88,10 +90,8 @@ class _Decided:
 
 
 def _service(uow: SqlAlchemyUnitOfWork) -> ConversationService:
-    conversations = ConversationRepository(uow)
     return ConversationService(
         uow=uow,
-        conversation_repository=conversations,
         agent_repository=AgentRepository(uow),
         usage_service=build_usage_service(uow),
     )
@@ -106,11 +106,10 @@ async def _read(
     call never persisted -- and neither is worth retrying.
     """
     service = _service(uow)
-    repository = service.conversation_repository
-    conversation = await repository.get_conversation(payload.conversation_id)
+    conversation = await Conversations(uow).get_conversation(payload.conversation_id)
     if conversation is None:
         return None
-    recorded = await repository.get_approval_decision(
+    recorded = await ApprovalDecisions(uow).get_approval_decision(
         conversation_id=payload.conversation_id, approval_id=payload.approval_id
     )
     paused = await service.approvals.paused_call(
@@ -119,7 +118,7 @@ async def _read(
     if recorded is None or paused is None:
         return None
     decision, response = recorded
-    existing = await repository.get_tool_return(
+    existing = await Pauses(uow).get_tool_return(
         conversation_id=payload.conversation_id, tool_call_id=payload.approval_id
     )
     return _Decided(conversation, paused, decision, response, existing is not None)
@@ -180,9 +179,7 @@ async def _execute(
             decision=decided.decision,
             has_tool_return=decided.has_return,
         )
-        took_claim = executes and await ConversationRepository(
-            uow
-        ).claim_approval_execution(
+        took_claim = executes and await ApprovalDecisions(uow).claim_approval_execution(
             conversation_id=payload.conversation_id, approval_id=payload.approval_id
         )
         # Committed by the checkpoint before the tool runs: the claim is the
@@ -238,7 +235,7 @@ async def _finish(
     State is re-read here, under the transaction that commits: a Stop, a
     supersession or a racing item may have moved it since the checkpoint.
     """
-    await ConversationRepository(uow).lock_conversation(payload.conversation_id)
+    await Conversations(uow).lock_conversation(payload.conversation_id)
     decided = await _read(uow, payload)
     if decided is None:
         return
@@ -301,11 +298,11 @@ async def on_approval_dead(ctx: DeadContext) -> None:
     except ValueError:
         return
     uow = RuntimeOwnedUnitOfWork(ctx.uow)
-    await ConversationRepository(uow).lock_conversation(payload.conversation_id)
+    await Conversations(uow).lock_conversation(payload.conversation_id)
     decided = await _read(uow, payload)
     if decided is None or decided.has_return:
         return
-    claimed = await ConversationRepository(uow).approval_execution_claimed(
+    claimed = await ApprovalDecisions(uow).approval_execution_claimed(
         conversation_id=payload.conversation_id, approval_id=payload.approval_id
     )
     auth_ctx = await _owner_context(uow, decided.conversation)

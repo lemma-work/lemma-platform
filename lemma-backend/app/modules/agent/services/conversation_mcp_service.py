@@ -49,10 +49,12 @@ from app.core.domain.errors import DomainError
 from app.modules.agent.infrastructure.agent_host.repository import (
     AgentHostRepository,
 )
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     AgentRuntimeProfileRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.conversation_mcp_authorization import (
     RelayingHost,
@@ -134,7 +136,7 @@ class ConversationMCPService:
     async def run_has_ended(self, *, agent_run_id: UUID) -> bool:
         """Whether the run is terminal (or gone): nothing will resume it."""
         async with self.uow_factory() as uow:
-            run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+            run = await Runs(uow).get_agent_run(agent_run_id)
         return run is None or run.status in TERMINAL_AGENT_RUN_STATUSES
 
     async def parked_tool_return(
@@ -157,7 +159,7 @@ class ConversationMCPService:
         return been written yet".
         """
         async with self.uow_factory() as uow:
-            message = await ConversationRepository(uow).get_tool_return(
+            message = await Pauses(uow).get_tool_return(
                 conversation_id=conversation_id,
                 tool_call_id=tool_call_id,
             )
@@ -315,9 +317,10 @@ class ConversationMCPService:
         agent_run_id: UUID | None,
     ) -> tuple[Agent | None, Conversation, BaseAgentContext, AgentGrantSummary | None]:
         async with self.uow_factory() as uow:
-            conversation_repo = ConversationRepository(uow)
+            conversations = Conversations(uow)
+            runs = Runs(uow)
             agent_repo = AgentRepository(uow)
-            conversation = await conversation_repo.get_conversation(
+            conversation = await conversations.get_conversation(
                 conversation_id,
                 include_runs=True,
             )
@@ -325,7 +328,7 @@ class ConversationMCPService:
                 raise ValueError(f"Conversation {conversation_id} not found")
             run = None
             if agent_run_id is not None:
-                run = await conversation_repo.get_agent_run(agent_run_id)
+                run = await runs.get_agent_run(agent_run_id)
                 if run is not None and str(run.conversation_id) != str(conversation_id):
                     # `authorize` refuses this first; kept so no caller can
                     # build a context from another conversation's run.
@@ -333,7 +336,7 @@ class ConversationMCPService:
                         f"Run {agent_run_id} is not in conversation {conversation_id}"
                     )
             if run is None:
-                run = await conversation_repo.get_active_agent_run(conversation_id)
+                run = await runs.get_active_agent_run(conversation_id)
             agent_id = conversation.agent_id or (run.agent_id if run else None)
             agent = await agent_repo.get(agent_id) if agent_id is not None else None
             if agent_id is not None and agent is None:
@@ -344,7 +347,7 @@ class ConversationMCPService:
             # Records the cwd when nothing had recorded it, so metadata is
             # the source of truth in fact and not only by intention.
             workspace_location = await ensure_recorded_location(
-                conversation, record=conversation_repo.set_conversation_metadata_key
+                conversation, record=conversations.set_conversation_metadata_key
             )
             lease = (
                 await uow.session.get(AgentHostRunLeaseModel, run.id)

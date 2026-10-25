@@ -55,7 +55,8 @@ from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.channel_answer_lines import (
     COULD_NOT_ANSWER,
     STOPPED_BEFORE_ANSWERING,
@@ -270,9 +271,10 @@ async def _answering_another_thread(
     """
     if channel.kind is not ChannelKind.GROUP:
         return False
-    conversations = ConversationRepository(uow)
+    conversations = Conversations(uow)
+    runs = Runs(uow)
     await conversations.lock_conversation(conversation_id)
-    running = await conversations.get_active_agent_run_for_update(conversation_id)
+    running = await runs.get_active_agent_run_for_update(conversation_id)
     if running is None:
         return False
     answering = [

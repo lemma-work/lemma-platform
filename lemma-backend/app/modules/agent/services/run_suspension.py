@@ -34,7 +34,7 @@ from app.modules.agent.domain.wait import AgentConversationWaitEntity
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -88,7 +88,7 @@ async def run_suspended_while_parked(
     this is what says the run is in fact waiting. ``None`` once a Stop has been
     requested on top: Stop means stop, and wins.
     """
-    run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+    run = await Runs(uow).get_agent_run(agent_run_id)
     if run is None or run.status != AgentRunStatus.RUNNING:
         return None
     return parked_suspension_of(run.metadata)

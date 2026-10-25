@@ -58,9 +58,10 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.finished_turn_queries import (
     FinishedTurnQueries,
 )
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
 from app.modules.agent.services.conversation_access import resolve_agent
@@ -215,10 +216,11 @@ class MemoryPass:
         self, *, conversation_id: UUID, run_id: UUID, user_id: UUID
     ) -> _FinishedTurn | None:
         async with self.uow_factory() as uow:
-            repo = ConversationRepository(uow)
+            conversations = Conversations(uow)
+            runs = Runs(uow)
             turns = FinishedTurnQueries(uow.session)
-            conversation = await repo.get_conversation(conversation_id)
-            run = await repo.get_agent_run(run_id)
+            conversation = await conversations.get_conversation(conversation_id)
+            run = await runs.get_agent_run(run_id)
             # Checked again rather than trusted from when the item was written:
             # a conversation can be handed to a contact in between, and a
             # stranger's words are never kept with a member's authority.
@@ -230,7 +232,7 @@ class MemoryPass:
                 or Audience.of(conversation).answers_outsiders
             ):
                 return None
-            carried, began_on = await _carried_in(repo, turns, run)
+            carried, began_on = await _carried_in(runs, turns, run)
             messages = [*carried, *await turns.list_turn_messages(run_id)]
             if not said_by_the_person(messages):
                 return None
@@ -340,7 +342,7 @@ class MemoryPass:
 
 
 async def _carried_in(
-    repo: ConversationRepository, turns: FinishedTurnQueries, run: AgentRun
+    runs: Runs, turns: FinishedTurnQueries, run: AgentRun
 ) -> tuple[list[TurnMessage], UUID]:
     """What this turn answers that is stored on other runs, and the run it began on.
 
@@ -354,7 +356,7 @@ async def _carried_in(
     began = run
     for _ in range(_RETRIES_FOLLOWED):
         failed_id = _uuid((began.metadata or {}).get(_RETRIED_RUN_KEY))
-        failed = await repo.get_agent_run(failed_id) if failed_id else None
+        failed = await runs.get_agent_run(failed_id) if failed_id else None
         if failed is None or failed.conversation_id != run.conversation_id:
             break
         carried = [

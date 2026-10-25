@@ -38,7 +38,8 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
 )
 from app.modules.agent.domain.wait import AgentConversationWaitEntity, AgentWaitType
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -83,15 +84,16 @@ async def _pause(conversation_id: UUID, pod_id: UUID, user_id: UUID) -> None:
     """A run paused on ``wait_for``, its wait and its item, not yet due."""
     far = datetime.now(timezone.utc) + timedelta(days=1)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = ConversationRepository(uow)
-        run = await repository.create_agent_run(
+        messages = Messages(uow)
+        runs = Runs(uow)
+        run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=None,
             agent_runtime=_RUNTIME,
             metadata={"source": "e2e_wait_load"},
         )
         call = f"call-{uuid4().hex[:12]}"
-        await repository.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_tool_call(
@@ -100,7 +102,7 @@ async def _pause(conversation_id: UUID, pod_id: UUID, user_id: UUID) -> None:
                 tool_args={"reason": "load", "seconds": 60},
             ),
         )
-        await repository.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.WAITING,

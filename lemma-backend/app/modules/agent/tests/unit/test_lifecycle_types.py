@@ -87,7 +87,7 @@ async def test_the_oldest_unresolved_pause_is_a_typed_pending_pause() -> None:
         ]
 
     coordinator = ApprovalCoordinator.__new__(ApprovalCoordinator)
-    coordinator.conversation_repository = SimpleNamespace(
+    coordinator.pausing_calls = SimpleNamespace(
         pausing_calls_awaiting_a_decision=_awaiting
     )
 

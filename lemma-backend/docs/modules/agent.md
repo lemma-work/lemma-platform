@@ -50,6 +50,26 @@ to continue; nothing is replayed
 | `agent_conversation_waits` | What a paused turn is waiting on — wait type, external reference, wake deadline, and the fire lease a timer tick takes; a partial unique index allows one `ACTIVE` row per conversation, mirroring `workflow_run_waits` |
 | `agent_approval_decisions`, `agent_feedback` | Durable interaction/audit records |
 
+### Repositories
+
+Conversations, runs, messages and pauses are read and written through
+`infrastructure/db`, one concrete repository per aggregate, each built from the
+unit of work it shares a transaction with:
+
+| Repository | Owns |
+| --- | --- |
+| `conversations.Conversations` | The conversation row, its status and row lock, the history list, titling's opening texts, the sub-agent tree, and (for now) the metadata key/value writes |
+| `runs.Runs` | Starting a run, ending it exactly once (`finish_agent_run`), and the reads about one run |
+| `messages.Messages` | Appending a message and reading the transcript |
+| `queued_messages.QueuedMessages` | Messages sent while a run was working: counting, claiming, steering, withdrawing |
+| `history_reads.HistoryReads` | The runs and run-less messages a prompt is built from |
+| `pauses.Pauses` | Pausing tool calls and what answers them, including the pending-interactions inbox |
+| `approvals.ApprovalDecisions` | The durable decision record and its one-shot execution claim |
+
+There is no port in front of them: each has one implementation, and their
+tests run against Postgres. Every turn transaction takes the conversation's row
+lock before its run's, the order `Runs.finish_agent_run` documents.
+
 ## API groups
 
 | Routes | What they do |

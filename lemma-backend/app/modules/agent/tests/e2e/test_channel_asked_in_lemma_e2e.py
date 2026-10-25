@@ -49,7 +49,7 @@ from app.modules.agent.events.channel_question_work import (
 )
 from app.modules.agent.events.run_followup_work import register_run_followup_work
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.services.surface_context import surface_context_for_run
 from app.modules.agent.tests.e2e.lifecycle_helpers import conversation, runs
@@ -127,7 +127,7 @@ async def _end(run_id: UUID, *, pod_id: UUID, user_id: UUID, answer: str) -> Non
             select(AgentRunModel.conversation_id).where(AgentRunModel.id == run_id)
         )
         assert conversation_id is not None
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,

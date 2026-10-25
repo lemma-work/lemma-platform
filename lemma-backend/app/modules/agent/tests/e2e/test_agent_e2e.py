@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import status
 
+from sqlalchemy import select
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.session import async_session_maker
@@ -33,7 +34,10 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
@@ -129,14 +133,15 @@ async def _seed_paused_interaction(
     approval_id = f"functions.{tool_name}:e2e"
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        paused_run = await repo.create_agent_run(
+        messages = Messages(uow)
+        runs = Runs(uow)
+        paused_run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=UUID(agent["id"]),
             agent_runtime=AgentRuntimeConfig(**resolved_agent_runtime),
             metadata={"source": "approval_e2e"},
         )
-        await repo.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=paused_run.id,
             draft=MessageDraft.of_tool_call(
@@ -148,7 +153,7 @@ async def _seed_paused_interaction(
             ),
         )
         # The pause shape: COMPLETED run, WAITING conversation.
-        await repo.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=paused_run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.WAITING,
@@ -162,9 +167,16 @@ async def _resume_run_and_tool_return(
 ):
     """Return (resume_run, tool_return_message) created by resolving the pause."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        runs = await repo.list_agent_runs_with_messages(conversation_id)
-        messages, _ = await repo.list_messages(
+        messages_repo = Messages(uow)
+        runs = [
+            row.to_entity()
+            for row in await uow.session.scalars(
+                select(AgentRunModel)
+                .where(AgentRunModel.conversation_id == conversation_id)
+                .order_by(AgentRunModel.created_at, AgentRunModel.id)
+            )
+        ]
+        messages, _ = await messages_repo.list_messages(
             conversation_id=conversation_id, limit=500
         )
     resume_runs = [run for run in runs if run.id != paused_run_id]
@@ -207,8 +219,9 @@ async def _seed_paused_interactions(
 
     approval_ids: list[str] = []
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        paused_run = await repo.create_agent_run(
+        messages = Messages(uow)
+        runs = Runs(uow)
+        paused_run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=UUID(agent["id"]),
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
@@ -217,7 +230,7 @@ async def _seed_paused_interactions(
         for idx, (tool_name, tool_args) in enumerate(interactions):
             approval_id = f"functions.{tool_name}:e2e-{idx}"
             approval_ids.append(approval_id)
-            await repo.append_message(
+            await messages.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=paused_run.id,
                 draft=MessageDraft.of_tool_call(
@@ -228,7 +241,7 @@ async def _seed_paused_interactions(
                     metadata={"tool_name": tool_name},
                 ),
             )
-        await repo.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=paused_run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.WAITING,
@@ -398,7 +411,7 @@ async def _create_active_run(
     agent_id: UUID | None,
 ) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        run = await ConversationRepository(uow).create_agent_run(
+        run = await Runs(uow).create_agent_run(
             conversation_id=conversation_id,
             agent_id=agent_id,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
@@ -416,14 +429,15 @@ async def _start_real_agent_run(
     content: str,
 ) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        run = await repo.create_agent_run(
+        messages = Messages(uow)
+        runs = Runs(uow)
+        run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=agent_id,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
             metadata={"source": "e2e_stop_running"},
         )
-        await repo.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text(content, role=MessageRole.USER),
@@ -443,7 +457,7 @@ async def _start_real_agent_run(
 
 async def _finish_agent_run(run_id: UUID, status: AgentRunStatus) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=status,
         )
@@ -455,9 +469,9 @@ async def _append_messages(
     messages: list[tuple[str, str]],
 ) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
+        messages_repo = Messages(uow)
         for role, content in messages:
-            await repo.append_message(
+            await messages_repo.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=None,
                 draft=MessageDraft.of_text(content, role=MessageRole(role)),
@@ -800,7 +814,7 @@ class TestPodAgentLifecycle:
         conversation_id = UUID(create_conversation.json()["id"])
 
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            run = await ConversationRepository(uow).create_agent_run(
+            run = await Runs(uow).create_agent_run(
                 conversation_id=conversation_id,
                 agent_id=UUID(agent["id"]),
                 agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
@@ -1157,7 +1171,7 @@ class TestPodAgentLifecycle:
 
         # Simulate the wedge: decision committed, resume never finished.
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            recorded = await ConversationRepository(uow).record_approval_decision(
+            recorded = await ApprovalDecisions(uow).record_approval_decision(
                 conversation_id=conversation_id,
                 approval_id=approval_id,
                 agent_run_id=paused_run.id,
@@ -1672,9 +1686,7 @@ class TestPodAgentLifecycle:
         )
 
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            conversation = await ConversationRepository(uow).get_conversation(
-                conversation_id
-            )
+            conversation = await Conversations(uow).get_conversation(conversation_id)
             service = _build_conversation_service(uow)
             live_deps = await service.resume_returns._build_resume_context(
                 conversation=conversation,
@@ -3188,8 +3200,8 @@ class TestFinalAnswerToolset:
 
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            repo = ConversationRepository(uow)
-            run = await repo.create_agent_run(
+            runs = Runs(uow)
+            run = await runs.create_agent_run(
                 conversation_id=conversation_id,
                 agent_id=agent_id,
                 agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),

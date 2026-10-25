@@ -63,7 +63,7 @@ class _Repository:
 @pytest.fixture
 def repository(monkeypatch: pytest.MonkeyPatch) -> _Repository:
     instance = _Repository()
-    monkeypatch.setattr(memory, "ConversationRepository", lambda _uow: instance)
+    monkeypatch.setattr(memory, "Conversations", lambda _uow: instance)
     return instance
 
 

@@ -1,8 +1,8 @@
-"""Minimal database projections the conversation repository returns.
+"""Minimal database projections the conversation repositories return.
 
-Here rather than beside the queries that build them so `domain/ports.py` can
-name them: a port that cannot say what a method returns cannot declare it,
-and an undeclared method is how this repository's port drifted (#518).
+Here rather than beside the queries that build them so a service can name what
+it reads without importing the repository (``conversation_title_service``'s
+``ConversationOpeningReader``).
 """
 
 from dataclasses import dataclass

@@ -26,7 +26,7 @@ from app.modules.agent.domain.agent_host_permissions import (
 )
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
 from app.modules.agent.infrastructure.models import MessageModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.runtime_models import AgentHostCommandModel
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
@@ -66,7 +66,7 @@ async def _parked_permission(db_session, scenario) -> tuple[UUID, UUID]:
         )
         if event.type is AgentEventType.MESSAGE
     )
-    await ConversationRepository(SqlAlchemyUnitOfWork(db_session)).append_message(
+    await Messages(SqlAlchemyUnitOfWork(db_session)).append_message(
         conversation_id=conversation_id, agent_run_id=run_id, draft=call.data
     )
     await db_session.commit()

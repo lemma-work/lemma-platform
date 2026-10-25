@@ -22,7 +22,7 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.history_reads import HistoryReads
 from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
     assemble_runtime_history,
@@ -76,8 +76,8 @@ async def _seed(
     return run_ids
 
 
-def _repo(db_session) -> ConversationRepository:
-    return ConversationRepository(SqlAlchemyUnitOfWork(db_session))
+def _repo(db_session) -> HistoryReads:
+    return HistoryReads(SqlAlchemyUnitOfWork(db_session))
 
 
 async def _window(db_session, agent_run_id, *, limit=MAX_HISTORY_AGENT_RUNS):
@@ -441,7 +441,7 @@ async def test_the_run_less_read_stops_at_its_bounds(db_session, scenario):
     included, on every run of a long-lived conversation."""
     from sqlalchemy import text, union_all
 
-    from app.modules.agent.infrastructure.runtime_history_queries import (
+    from app.modules.agent.infrastructure.db.history_reads import (
         _newest_unattached_ids,
     )
 

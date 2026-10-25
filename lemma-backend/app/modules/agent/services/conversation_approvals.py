@@ -50,7 +50,11 @@ from app.modules.agent.domain.pausing_tools import (
     PendingPause,
     parked_suspension_of,
 )
-from app.modules.agent.domain.ports import ConversationRepository
+from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
@@ -91,12 +95,15 @@ class ApprovalCoordinator:
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: ConversationRepository,
         resume_returns: ResumeToolReturnBuilder,
         pauses: PauseResume,
     ) -> None:
         self.uow = uow
-        self.conversation_repository = conversation_repository
+        self.conversations = Conversations(uow)
+        self.runs = Runs(uow)
+        self.messages = Messages(uow)
+        self.pausing_calls = Pauses(uow)
+        self.approval_decisions = ApprovalDecisions(uow)
         self.resume_returns = resume_returns
         self.pauses = pauses
 
@@ -135,7 +142,7 @@ class ApprovalCoordinator:
         """
         # The approvals list's `id` is the message's; accept it for the call.
         approval_id = await self._canonical_approval_id(conversation.id, approval_id)
-        decision_row = await self.conversation_repository.get_approval_decision(
+        decision_row = await self.approval_decisions.get_approval_decision(
             conversation_id=conversation.id,
             approval_id=approval_id,
         )
@@ -172,7 +179,7 @@ class ApprovalCoordinator:
                 if kind == "ask_user"
                 else str(tool_args.get("tool_name") or "request_approval")
             )
-            recorded = await self.conversation_repository.record_approval_decision(
+            recorded = await self.approval_decisions.record_approval_decision(
                 conversation_id=conversation.id,
                 approval_id=approval_id,
                 agent_run_id=paused_run_id,
@@ -190,7 +197,7 @@ class ApprovalCoordinator:
             else:
                 # A concurrent resolve won the race; adopt its stored decision and
                 # reconcile (idempotent) rather than raising "already resolved".
-                stored = await self.conversation_repository.get_approval_decision(
+                stored = await self.approval_decisions.get_approval_decision(
                     conversation_id=conversation.id,
                     approval_id=approval_id,
                 )
@@ -205,7 +212,7 @@ class ApprovalCoordinator:
             effective_decision, effective_response = decision_row
             status = ApprovalResolutionStatus.RECONCILED
 
-        existing_return = await self.conversation_repository.get_tool_return(
+        existing_return = await self.pausing_calls.get_tool_return(
             conversation_id=conversation.id,
             tool_call_id=approval_id,
         )
@@ -278,8 +285,8 @@ class ApprovalCoordinator:
         """
         # Two resolvers adopting one decision (a tap and a click) both get here;
         # the conversation lock makes the second see the first one's return.
-        await self.conversation_repository.lock_conversation(conversation.id)
-        existing_return = await self.conversation_repository.get_tool_return(
+        await self.conversations.lock_conversation(conversation.id)
+        existing_return = await self.pausing_calls.get_tool_return(
             conversation_id=conversation.id,
             tool_call_id=approval_id,
         )
@@ -349,7 +356,7 @@ class ApprovalCoordinator:
         )
 
     async def _turn_ended_while_parked(self, paused_run_id: UUID) -> bool:
-        run = await self.conversation_repository.get_agent_run(paused_run_id)
+        run = await self.runs.get_agent_run(paused_run_id)
         return run is not None and parked_suspension_of(run.metadata) is not None
 
     async def record_unconfirmed_execution(
@@ -423,7 +430,9 @@ class ApprovalCoordinator:
         """
         cancelled = await self._cancel_superseded_wait(conversation)
         superseded = await supersede_stale_pending_interactions(
-            repository=self.conversation_repository,
+            pausing_calls=self.pausing_calls,
+            approval_decisions=self.approval_decisions,
+            messages=self.messages,
             resume_returns=self.resume_returns,
             conversation=conversation,
             user_id=user_id,
@@ -453,19 +462,19 @@ class ApprovalCoordinator:
         if active is None:
             return []
         # Conversation, then wait: the order every wait ending takes.
-        await self.conversation_repository.lock_conversation(conversation.id)
+        await self.conversations.lock_conversation(conversation.id)
         wait = await waits.claim(active.id)
         if wait is None or not wait.cancel():
             return []
         await waits.update(wait)
         await disarm_wait(WorkWriter.of(self.uow), wait)
-        existing = await self.conversation_repository.get_tool_return(
+        existing = await self.pausing_calls.get_tool_return(
             conversation_id=conversation.id, tool_call_id=wait.tool_call_id
         )
         if existing is not None:
             return []
         spec = wait.wait_spec
-        saved = await self.conversation_repository.append_message(
+        saved = await self.messages.append_message(
             conversation_id=conversation.id,
             agent_run_id=wait.agent_run_id,
             draft=MessageDraft.of_tool_return(
@@ -490,7 +499,7 @@ class ApprovalCoordinator:
             message_id = UUID(approval_id)
         except ValueError:
             return approval_id
-        found = await self.conversation_repository.tool_call_id_of_message(
+        found = await self.pausing_calls.tool_call_id_of_message(
             conversation_id=conversation_id, message_id=message_id
         )
         return found or approval_id
@@ -507,7 +516,7 @@ class ApprovalCoordinator:
         long conversation can't hide the original call during resume
         reconciliation.
         """
-        message = await self.conversation_repository.get_tool_call(
+        message = await self.pausing_calls.get_tool_call(
             conversation_id=conversation_id,
             tool_call_id=approval_id,
         )
@@ -537,7 +546,7 @@ class ApprovalCoordinator:
         window the conversation reported itself as waiting on nothing, so the
         approval card vanished and a reply had nowhere to go.
         """
-        pending = await self.conversation_repository.pausing_calls_awaiting_a_decision(
+        pending = await self.pausing_calls.pausing_calls_awaiting_a_decision(
             conversation_id=conversation_id,
             pausing_tool_names=tool_names,
             limit=1,

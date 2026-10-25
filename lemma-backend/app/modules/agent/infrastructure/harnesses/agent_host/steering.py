@@ -33,9 +33,7 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
 from app.modules.agent.infrastructure.harnesses.remote_payload import steer_prompt
-from app.modules.agent.infrastructure.queued_message_queries import (
-    QueuedMessageRepository,
-)
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.services.realtime import (
     message_payload,
     publish_conversation_event,
@@ -89,7 +87,7 @@ async def forward_queued_messages(
     """
     try:
         async with uow_factory() as uow:
-            messages = await QueuedMessageRepository(uow).take_queued_messages_to_steer(
+            messages = await QueuedMessages(uow).take_queued_messages_to_steer(
                 agent_run_id
             )
             if not messages:
@@ -158,7 +156,7 @@ async def record_steer_result(
     reason = detail if isinstance(detail, str) else None
     try:
         async with uow_factory() as uow:
-            message = await QueuedMessageRepository(uow).settle_steer(
+            message = await QueuedMessages(uow).settle_steer(
                 agent_run_id=agent_run_id,
                 message_id=parsed_id,
                 delivered=delivered,

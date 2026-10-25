@@ -25,7 +25,7 @@ from app.modules.agent.domain.value_objects import ConversationStatus, MessageKi
 from app.modules.agent.infrastructure.harnesses.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.pod_link_helpers import (
     add_rows,
@@ -110,7 +110,7 @@ async def _start_scripted(conversation_id: UUID, script: list[dict[str, object]]
     have written.
     """
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
         await conversations.set_conversation_metadata_key(
             conversation_id, MOCK_SCRIPT_METADATA_KEY, script
         )

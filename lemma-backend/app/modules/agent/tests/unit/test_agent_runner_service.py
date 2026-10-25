@@ -100,9 +100,7 @@ async def test_finish_agent_run_uses_committed_terminal_state_and_collects_event
         conversation_status=ConversationStatus.STOPPED,
     )
     repository = SimpleNamespace(finish_agent_run=AsyncMock(return_value=finish_result))
-    monkeypatch.setattr(
-        finalizer_module, "ConversationRepository", lambda _uow: repository
-    )
+    monkeypatch.setattr(finalizer_module, "Runs", lambda _uow: repository)
     publish = AsyncMock()
     monkeypatch.setattr(finalizer_module, "publish_conversation_event", publish)
 

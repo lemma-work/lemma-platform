@@ -60,7 +60,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories.agent_repository import (
     AgentRepository,
 )
@@ -393,7 +393,7 @@ async def test_a_turn_layers_its_selections_and_dispatch_keeps_what_is_offered(
     conversation_id = UUID(created.json()["id"])
 
     uow = SqlAlchemyUnitOfWork(db_session)
-    conversation = await ConversationRepository(uow).get_conversation(conversation_id)
+    conversation = await Conversations(uow).get_conversation(conversation_id)
     agent = await AgentRepository(uow).get_by_pod_and_name(
         pod_id=UUID(scenario.pod_id), name=agent_name
     )

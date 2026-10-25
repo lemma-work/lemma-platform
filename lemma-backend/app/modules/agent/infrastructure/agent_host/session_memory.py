@@ -28,7 +28,7 @@ from app.modules.agent.domain.agent_host import (
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 
 
@@ -88,19 +88,19 @@ async def remember_provider_session(
     if binding is None:
         return False
     conversation_id, harness_id, created_at, host_id = binding
-    repository = ConversationRepository(uow)
+    conversations = Conversations(uow)
     opened = _OpenedSession(
         session_id=session_id,
         harness_id=str(harness_id),
         host_id=str(host_id),
         created_at=created_at,
     )
-    unlocked = await repository.get_conversation_metadata_key(
+    unlocked = await conversations.get_conversation_metadata_key(
         conversation_id, AGENT_HOST_SESSION_METADATA_KEY
     )
     if _rebound(unlocked, checkpoint, opened) is None:
         return False
-    stored = await repository.get_conversation_metadata_key(
+    stored = await conversations.get_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
         for_update=True,
@@ -108,7 +108,7 @@ async def remember_provider_session(
     binding_value = _rebound(stored, checkpoint, opened)
     if binding_value is None:
         return False
-    await repository.set_conversation_metadata_key(
+    await conversations.set_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
         binding_value,
@@ -271,8 +271,8 @@ async def record_pending_instructions(
     A promise, not a record: :func:`remember_provider_session` turns it into one
     when the host reports that it actually prompted.
     """
-    repository = ConversationRepository(uow)
-    stored = await repository.get_conversation_metadata_key(
+    conversations = Conversations(uow)
+    stored = await conversations.get_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
         for_update=True,
@@ -284,7 +284,7 @@ async def record_pending_instructions(
             "run_id": str(run_id),
             "seen_through": seen_through,
         }
-    await repository.set_conversation_metadata_key(
+    await conversations.set_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
         binding,
@@ -305,7 +305,7 @@ async def instructions_already_delivered(
     an agent quietly running without its instructions, so every ambiguous case
     resolves toward sending them again.
     """
-    stored = await ConversationRepository(uow).get_conversation_metadata_key(
+    stored = await Conversations(uow).get_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
     )
@@ -345,7 +345,7 @@ async def resumed_session(
     """
     if not AgentHostHarnessCapabilities.model_validate(capabilities).load_session:
         return None
-    stored = await ConversationRepository(uow).get_conversation_metadata_key(
+    stored = await Conversations(uow).get_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
     )

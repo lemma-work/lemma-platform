@@ -26,6 +26,7 @@ from uuid import uuid4, uuid7
 
 import pytest
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Agent, Message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -163,11 +164,13 @@ def _coordinator(monkeypatch: pytest.MonkeyPatch):
         "app.modules.agent.services.pause_resume.publish_conversation_event",
         _noop,
     )
-    coordinator = ApprovalCoordinator(
-        uow,
+    coordinator = wire_repositories(
+        ApprovalCoordinator(
+            uow,
+            ResumeToolReturnBuilder(uow, None),
+            PauseResume(uow, _AgentRepository(_POD_ID)),
+        ),
         repository,
-        ResumeToolReturnBuilder(uow, None),
-        PauseResume(uow, repository, _AgentRepository(_POD_ID)),
     )
     return coordinator, repository
 

@@ -10,7 +10,7 @@ from app.modules.agent.domain.calls import (
     call_mark,
     worker_canvas_note,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 
 if TYPE_CHECKING:
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -23,7 +23,7 @@ async def call_of_parent(
 
     So a sub-agent spawned from a live call draws on that call's canvas.
     """
-    raw = await ConversationRepository(uow).get_conversation_metadata_key(
+    raw = await Conversations(uow).get_conversation_metadata_key(
         conversation_id, CALL_METADATA_KEY
     )
     mark = call_mark({CALL_METADATA_KEY: raw})

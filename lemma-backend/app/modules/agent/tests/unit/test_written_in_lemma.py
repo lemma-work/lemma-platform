@@ -19,6 +19,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
@@ -144,7 +145,6 @@ def _coordinator(conversation: Conversation):
     )
     coordinator = turns.TurnCoordinator(
         uow,
-        repository,
         agents,
         SimpleNamespace(
             supersede_stale_pending_interactions=AsyncMock(return_value=[])
@@ -153,7 +153,7 @@ def _coordinator(conversation: Conversation):
         None,
         runtime_check=_runtime_is_available,
     )
-    return coordinator, repository
+    return wire_repositories(coordinator, repository), repository
 
 
 async def _runtime_is_available(*_args: object, **_kwargs: object) -> None:

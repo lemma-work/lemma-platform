@@ -301,7 +301,7 @@ def dead_error(reason: str, last_error: str | None) -> str:
 async def on_turn_dead(ctx: DeadContext) -> None:
     """The turn gave up: its run FAILED, and everything waiting on it hears."""
     from app.modules.agent.domain.value_objects import AgentRunStatus
-    from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent.infrastructure.db.runs import Runs
     from app.modules.agent.services.realtime import (
         completed_payload,
         error_payload,
@@ -314,7 +314,7 @@ async def on_turn_dead(ctx: DeadContext) -> None:
     except ValueError:
         return
     error = dead_error(ctx.reason, ctx.last_error)
-    finish = await ConversationRepository(ctx.uow).finish_agent_run(
+    finish = await Runs(ctx.uow).finish_agent_run(
         agent_run_id=payload.run_id, status=AgentRunStatus.FAILED, error=error
     )
     if finish is None or not finish.updated:

@@ -31,9 +31,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.approvals import EXPIRED_UNANSWERED
 from app.modules.agent.domain.errors import UnknownApprovalError
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
-from app.modules.agent.infrastructure.repositories.conversation_repository import (
-    ConversationRepository,
-)
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.service_factories import build_conversation_service
 
 logger = get_logger(__name__)
@@ -49,7 +47,7 @@ async def expire_pause(
     """Resolve the pause on ``tool_call_id`` in the conversation as nobody
     answering it. False when there is nothing to resolve."""
     async with uow_factory() as uow:
-        conversation = await ConversationRepository(uow).get_conversation(
+        conversation = await Conversations(uow).get_conversation(
             conversation_id, include_runs=False
         )
         if conversation is None or conversation.pod_id != pod_id:

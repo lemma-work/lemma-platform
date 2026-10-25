@@ -1,6 +1,6 @@
 """One page of the history list, most recently active first.
 
-Split from `ConversationRepository` the way `conversation_opening_texts` was:
+Split from `conversations.Conversations` to keep it under the size ratchet:
 one read, one caller (`list_conversations`), and a keyset rule worth reading on
 its own. The filters live here too, beside the order they have to agree with.
 """

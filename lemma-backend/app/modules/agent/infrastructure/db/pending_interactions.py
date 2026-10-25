@@ -7,7 +7,7 @@ then asking each for its approvals -- a request per conversation, and blind to
 an Agent Host permission request, whose conversation stays RUNNING.
 
 A pause is waiting while nobody has decided it and no return has landed for
-it: the same two facts `ConversationApprovalQueriesMixin` asks about one
+it: the same two facts `pauses.Pauses` asks about one
 conversation, asked here across many.
 """
 
@@ -45,7 +45,7 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.repositories.parked_pause_queries import (
+from app.modules.agent.infrastructure.db.parked_pauses import (
     is_host_permission_call as _is_host_permission,
     in_a_run_suspended_while_parked,
 )

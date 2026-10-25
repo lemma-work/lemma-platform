@@ -61,7 +61,7 @@ async def _already_transcribed(deps: BaseAgentContext, path: str) -> str | None:
 
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-    from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent.infrastructure.db.messages import Messages
 
     # A transcript belongs to a conversation, so without one there is nothing to
     # look in. Every real run has one; this keeps the tool callable from the
@@ -72,7 +72,7 @@ async def _already_transcribed(deps: BaseAgentContext, path: str) -> str | None:
         return None
     try:
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-            return await ConversationRepository(uow).find_existing_voice_transcript(
+            return await Messages(uow).find_existing_voice_transcript(
                 conversation_id, _both_spellings_of(deps, path)
             )
     except SQLAlchemyError:

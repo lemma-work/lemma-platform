@@ -40,10 +40,9 @@ from app.modules.agent.domain.entities import (
 from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
 )
-from app.modules.agent.domain.ports import (
-    AgentRepository,
-    ConversationRepository,
-)
+from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRuntimeConfig,
@@ -68,38 +67,29 @@ class ConversationService(ConversationPauses):
         self,
         *,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: ConversationRepository,
         agent_repository: AgentRepository,
         usage_service: UsageService | None = None,
         turn_runtime_check: TurnRuntimeCheck = ensure_turn_runtime_available,
     ):
         self.uow = uow
-        self.conversation_repository = conversation_repository
+        self.conversations = Conversations(uow)
+        self.runs = Runs(uow)
         self.agent_repository = agent_repository
         self.usage_service = usage_service
         self.send_window = SendWindow(getattr(uow, "session", None))
         self.resume_returns = ResumeToolReturnBuilder(uow, agent_repository)
-        self.pauses = PauseResume(
-            uow, conversation_repository, agent_repository, usage_service
-        )
-        self.approvals = ApprovalCoordinator(
-            uow, conversation_repository, self.resume_returns, self.pauses
-        )
-        self.queries = ConversationQueries(
-            uow, conversation_repository, agent_repository
-        )
+        self.pauses = PauseResume(uow, agent_repository, usage_service)
+        self.approvals = ApprovalCoordinator(uow, self.resume_returns, self.pauses)
+        self.queries = ConversationQueries(uow, agent_repository)
         self.turns = TurnCoordinator(
             uow,
-            conversation_repository,
             agent_repository,
             self.approvals,
             self.pauses,
             usage_service,
             runtime_check=turn_runtime_check,
         )
-        self.retries = RetryCoordinator(
-            uow, conversation_repository, agent_repository, self.turns
-        )
+        self.retries = RetryCoordinator(uow, agent_repository, self.turns)
 
     async def create_conversation(
         self,
@@ -130,7 +120,7 @@ class ConversationService(ConversationPauses):
         # workspace and file the child where its owner cannot see it.
         parent = (
             validate_conversation_access(
-                await self.conversation_repository.get_conversation(parent_id),
+                await self.conversations.get_conversation(parent_id),
                 user_id=user_id,
                 pod_id=pod_id,
             )
@@ -177,7 +167,7 @@ class ConversationService(ConversationPauses):
             metadata=dict(metadata) if metadata else {},
         )
         await self._apply_inherited_cwd(conversation, parent=parent)
-        return await self.conversation_repository.create_conversation(conversation)
+        return await self.conversations.create_conversation(conversation)
 
     async def authorize_opening(
         self, *, pod_id: UUID, agent_name: str | None, user_id: UUID
@@ -235,7 +225,7 @@ class ConversationService(ConversationPauses):
         async def _parent() -> Conversation | None:
             if parent is not None or parent_id is None:
                 return parent
-            return await self.conversation_repository.get_conversation(parent_id)
+            return await self.conversations.get_conversation(parent_id)
 
         await apply_location_metadata(conversation, fetch_parent=_parent)
 
@@ -258,9 +248,7 @@ class ConversationService(ConversationPauses):
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        conversation = await self.conversation_repository.get_conversation(
-            conversation_id
-        )
+        conversation = await self.conversations.get_conversation(conversation_id)
         validate_conversation_access(
             conversation,
             user_id=user_id,
@@ -292,7 +280,7 @@ class ConversationService(ConversationPauses):
         if not isinstance(is_archived, UnsetType):
             conversation.is_archived = is_archived
 
-        return await self.conversation_repository.update_conversation(conversation)
+        return await self.conversations.update_conversation(conversation)
 
     async def add_user_message_and_start_run(
         self,

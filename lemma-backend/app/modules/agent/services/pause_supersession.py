@@ -16,9 +16,9 @@ from uuid import UUID
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
-from app.modules.agent.domain.conversation_ports import PauseSupersession
-
-
+from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
@@ -36,7 +36,9 @@ SUPERSEDED_KEY = "superseded_by_new_message"
 
 async def supersede_stale_pending_interactions(
     *,
-    repository: PauseSupersession,
+    pausing_calls: Pauses,
+    approval_decisions: ApprovalDecisions,
+    messages: Messages,
     resume_returns: ResumeToolReturnBuilder,
     conversation: Conversation,
     user_id: UUID,
@@ -56,14 +58,16 @@ async def supersede_stale_pending_interactions(
     could not take back on a rollback, which is why an Agent Host permission
     is not delivered from here.
     """
-    stale = await repository.pausing_calls_awaiting_a_decision(
+    stale = await pausing_calls.pausing_calls_awaiting_a_decision(
         conversation_id=conversation.id,
         pausing_tool_names=PAUSING_TOOL_NAMES,
     )
     synthesized_returns: list[Message] = []
     for message in stale:
         saved_return = await _deny_stale_pending_interaction(
-            repository=repository,
+            pausing_calls=pausing_calls,
+            approval_decisions=approval_decisions,
+            messages=messages,
             resume_returns=resume_returns,
             conversation=conversation,
             message=message,
@@ -76,7 +80,9 @@ async def supersede_stale_pending_interactions(
 
 async def _deny_stale_pending_interaction(
     *,
-    repository: PauseSupersession,
+    pausing_calls: Pauses,
+    approval_decisions: ApprovalDecisions,
+    messages: Messages,
     resume_returns: ResumeToolReturnBuilder,
     conversation: Conversation,
     message: Message,
@@ -109,7 +115,7 @@ async def _deny_stale_pending_interaction(
         else str(tool_args.get("tool_name") or "request_approval")
     )
     response: JsonObject = {SUPERSEDED_KEY: True}
-    recorded = await repository.record_approval_decision(
+    recorded = await approval_decisions.record_approval_decision(
         conversation_id=conversation.id,
         approval_id=tool_call_id,
         agent_run_id=agent_run_id,
@@ -122,7 +128,7 @@ async def _deny_stale_pending_interaction(
         # A concurrent resolve already recorded a real decision for this call;
         # that resolve (or its own reconcile) owns synthesizing the return.
         return None
-    existing_return = await repository.get_tool_return(
+    existing_return = await pausing_calls.get_tool_return(
         conversation_id=conversation.id,
         tool_call_id=tool_call_id,
     )
@@ -138,7 +144,7 @@ async def _deny_stale_pending_interaction(
         paused_agent_run_id=agent_run_id,
         deliver_to_host=False,
     )
-    return await repository.append_message(
+    return await messages.append_message(
         conversation_id=conversation.id,
         agent_run_id=agent_run_id,
         draft=MessageDraft.of_tool_return(

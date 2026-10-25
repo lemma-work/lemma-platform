@@ -24,7 +24,7 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
 )
 from app.modules.agent.events.work_kinds import AGENT_TURN_KINDS, turn_key
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.realtime import (
     completed_payload,
     publish_conversation_event,
@@ -51,7 +51,7 @@ async def turn_is_running(
 
 async def stop_run(
     uow: SqlAlchemyUnitOfWork,
-    repository: ConversationRepository,
+    repository: Runs,
     *,
     pod_id: UUID,
     conversation_id: UUID,

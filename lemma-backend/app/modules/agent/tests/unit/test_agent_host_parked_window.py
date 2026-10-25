@@ -25,7 +25,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.parked_window import 
     ParkedWindow,
     parked_too_long,
 )
-from app.modules.agent.infrastructure.repositories.parked_pause_queries import (
+from app.modules.agent.infrastructure.db.parked_pauses import (
     ParkedPause,
 )
 from app.modules.agent.services.approval_reconciliation import (

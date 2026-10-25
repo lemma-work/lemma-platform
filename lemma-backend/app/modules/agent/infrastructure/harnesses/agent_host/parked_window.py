@@ -30,7 +30,7 @@ from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.repositories.parked_pause_queries import (
+from app.modules.agent.infrastructure.db.parked_pauses import (
     ParkedPause,
     mark_suspended_while_parked,
     oldest_parked_pause,

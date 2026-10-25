@@ -52,7 +52,7 @@ async def load_conversation_outcome(
 
     The same projection as :func:`load_conversation_outcomes`, deliberately.
     `app/composition/schedule_target_outcomes.py` answered this question a
-    second way -- `ConversationRepository.get_conversation`, which loads the
+    second way -- `Conversations.get_conversation`, which loads the
     whole entity and its latest run to read a status and a timestamp -- so the
     ledger had two readers of one fact that did not agree. The entity's status
     falls back to the latest *run*'s status when the conversation's own column

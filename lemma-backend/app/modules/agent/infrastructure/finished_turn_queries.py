@@ -1,6 +1,6 @@
 """The reads a memory pass makes of the turn it keeps.
 
-A collaborator over a session, like ``RuntimeHistoryQueries``, with one caller
+A collaborator over a session, with one caller
 (``services/memory_pass``) and a projection nothing else uses.
 
 Every body is cut in SQL. A run's tool results can be whole files and web

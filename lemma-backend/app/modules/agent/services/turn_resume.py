@@ -52,7 +52,7 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     to_json_value,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.realtime import (
     message_payload,
     publish_conversation_event,
@@ -172,7 +172,7 @@ class TurnResume:
     async def committed_answer(self, run_id: UUID) -> MessageDraft | None:
         """The answer this run already committed as its last step, if it did."""
         async with self.uow_factory() as uow:
-            last = await ConversationRepository(uow).last_run_message(run_id)
+            last = await Runs(uow).last_run_message(run_id)
         if last is None or (last.metadata or {}).get("is_final_answer") is not True:
             return None
         logger.warning("agent.turn.resumed_answered", agent_run_id=str(run_id))
@@ -214,7 +214,7 @@ class TurnResume:
         ctx: Any,
     ) -> ReplayReport:
         async with self.uow_factory() as uow:
-            calls = await ConversationRepository(uow).list_unpaired_tool_calls(run_id)
+            calls = await Runs(uow).list_unpaired_tool_calls(run_id)
         report = ReplayReport()
         for call in calls:
             if not is_replayable_call(call.tool_name) or not call.tool_call_id:

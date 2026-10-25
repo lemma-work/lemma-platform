@@ -30,7 +30,7 @@ from app.modules.agent.domain.calls import (
 )
 from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.service_factories import build_conversation_service
 
 
@@ -82,7 +82,7 @@ async def open_call(
         agent_runtime=runtime,
     )
     mark = CallMark(call_id=conversation.id, role=CallRole.COORDINATOR)
-    await ConversationRepository(uow).set_conversation_metadata_key(
+    await Conversations(uow).set_conversation_metadata_key(
         conversation.id, CALL_METADATA_KEY, mark.as_metadata()
     )
     return OpenedCall(conversation_id=conversation.id, title=conversation.title)

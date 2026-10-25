@@ -30,7 +30,9 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageRole,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.turn_resume import (
     INTERRUPTED_NOTICE,
     OUTCOME_UNKNOWN,
@@ -84,10 +86,12 @@ async def _interrupted_run(
 ) -> UUID:
     """A run that committed ``calls`` and died before any of them returned."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = ConversationRepository(uow)
-        conversation = await repository.get_conversation(conversation_id)
+        conversations = Conversations(uow)
+        messages = Messages(uow)
+        runs = Runs(uow)
+        conversation = await conversations.get_conversation(conversation_id)
         assert conversation is not None
-        run = await repository.create_agent_run(
+        run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=conversation.agent_id,
             agent_runtime=AgentRuntimeConfig(
@@ -95,13 +99,13 @@ async def _interrupted_run(
             ),
             metadata={},
         )
-        await repository.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text("do the things", role=MessageRole.USER),
         )
         for tool_name, call_id, args in calls:
-            await repository.append_message(
+            await messages.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=run.id,
                 draft=MessageDraft.of_tool_call(
@@ -183,9 +187,9 @@ async def test_a_resumed_turn_settles_each_open_call_by_its_class(
     await datastore.create_record(table, {"id": keyed_id(record_key), "title": "once"})
     child_id = UUID(await pod.conversation([]))
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = ConversationRepository(uow)
+        conversations = Conversations(uow)
         await scalar_update_parent(uow, child_id, conversation)
-        await repository.set_spawn_call(child_id, f"{run_id}:keyed-spawn-1")
+        await conversations.set_spawn_call(child_id, f"{run_id}:keyed-spawn-1")
 
     await drain(turn_registry())
 

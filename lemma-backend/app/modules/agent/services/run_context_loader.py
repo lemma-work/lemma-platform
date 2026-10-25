@@ -12,9 +12,10 @@ from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Mes
 from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.private_notes import run_is_private
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.history_reads import HistoryReads
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.channel_background import with_channel_background
 from app.modules.agent.services.conversation_access import (
@@ -39,8 +40,9 @@ async def load_run_context(
 ) -> tuple[Conversation, Agent, AgentRun, list[Message]]:
     with run_phase("load_context") as span:
         async with uow_factory() as uow:
-            repo = ConversationRepository(uow)
-            window = await repo.load_runtime_history_digests_by_run_id(
+            conversations = Conversations(uow)
+            history_reads = HistoryReads(uow)
+            window = await history_reads.load_runtime_history_digests_by_run_id(
                 agent_run_id, limit=MAX_HISTORY_AGENT_RUNS
             )
             runs = window.runs
@@ -49,7 +51,7 @@ async def load_run_context(
             if agent_run is None:
                 raise ConversationNotFoundError()
             conversation = validate_conversation_access(
-                await repo.get_conversation(agent_run.conversation_id),
+                await conversations.get_conversation(agent_run.conversation_id),
                 user_id=user_id,
                 pod_id=pod_id,
             )
@@ -60,7 +62,7 @@ async def load_run_context(
                 agent_name=agent_name,
             )
             messages = await assemble_runtime_history(
-                repo,
+                history_reads,
                 window,
                 conversation_id=agent_run.conversation_id,
                 run_id=agent_run.id,

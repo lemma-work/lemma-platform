@@ -17,9 +17,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.value_objects import JsonValue
-from app.modules.agent.infrastructure.repositories.conversation_repository import (
-    ConversationRepository,
-)
+from app.modules.agent.infrastructure.db.conversations import Conversations
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +40,7 @@ async def conversation_metadata_record(
     ``for_update`` locks the conversation row until ``uow`` ends, so a
     read-modify-write of the record cannot interleave with another.
     """
-    return await ConversationRepository(uow).get_conversation_metadata_key(
+    return await Conversations(uow).get_conversation_metadata_key(
         conversation_id, key, for_update=for_update
     )
 
@@ -59,7 +57,7 @@ async def forget_conversation_metadata_record(
     So a writer finishing with one record cannot remove a newer one that
     replaced it under the same key.
     """
-    await ConversationRepository(uow).remove_conversation_metadata_key(
+    await Conversations(uow).remove_conversation_metadata_key(
         conversation_id, key, matching=dict(matching)
     )
 
@@ -73,7 +71,7 @@ async def due_conversation_metadata_records(
     limit: int,
 ) -> list[MetadataRecord]:
     """At most ``limit`` records under ``key`` whose ``due_field`` is past."""
-    rows = await ConversationRepository(uow).list_metadata_due(
+    rows = await Conversations(uow).list_metadata_due(
         key=key, due_field=due_field, due_before=due_before, limit=limit
     )
     return [MetadataRecord(conversation_id=cid, value=value) for cid, value in rows]

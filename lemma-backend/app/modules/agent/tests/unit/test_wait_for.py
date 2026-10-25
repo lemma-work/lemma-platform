@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.services.pause_resume import PauseResume
 
 import app.modules.agent.services.conversation_stop as stops
@@ -416,8 +417,9 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
     monkeypatch.setattr(stops.WorkWriter, "of", staticmethod(lambda uow: None))
 
     conversations = _Conversations()
-    service = stops.StopCoordinator(
-        None, conversations, None, None, PauseResume(None, conversations, None)
+    service = wire_repositories(
+        stops.StopCoordinator(None, None, None, PauseResume(None, None)),
+        conversations,
     )
 
     async def _append(**kwargs):

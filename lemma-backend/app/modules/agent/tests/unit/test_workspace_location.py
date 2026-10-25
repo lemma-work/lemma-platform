@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.domain.workspace_location import (
@@ -147,7 +148,7 @@ def test_python_runtime_identity_tracks_conversation_working_directory():
     assert first.default_python_session_id != second.default_python_session_id
 
 
-class _StubConversationRepository:
+class _StubConversations:
     def __init__(self, conversations: dict) -> None:
         self._conversations = conversations
 
@@ -156,12 +157,12 @@ class _StubConversationRepository:
 
 
 def _service(conversations: dict):
-    return ConversationService(
-        uow=None,  # type: ignore[arg-type]
-        conversation_repository=_StubConversationRepository(  # type: ignore[arg-type]
-            conversations
+    return wire_repositories(
+        ConversationService(
+            uow=None,  # type: ignore[arg-type]
+            agent_repository=None,  # type: ignore[arg-type]
         ),
-        agent_repository=None,  # type: ignore[arg-type]
+        _StubConversations(conversations),
     )
 
 

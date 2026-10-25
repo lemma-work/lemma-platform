@@ -39,10 +39,9 @@ from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host.repository import (
-    AgentHostRepository,
-)
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.agent_host import run_resume, session_memory
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostRepositoryError,
@@ -246,7 +245,7 @@ async def enqueue_run[DepsT: AgentContext](
         # Set only on a run started to answer a pausing tool call. Read from
         # the run rather than passed in, because the run row is where the
         # resume recorded it and a second copy could only ever disagree.
-        run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+        run = await Runs(uow).get_agent_run(agent_run_id)
         # Messages that joined this run before it was dispatched are carried in
         # the prompt below, so they are this run's to answer and must not also
         # be sent as steers. Only noted here: they are claimed in the one
@@ -377,7 +376,7 @@ async def claim_exactly(
     """
     if not carried:
         return
-    claimed = await ConversationRepository(uow).claim_queued_user_messages(
+    claimed = await QueuedMessages(uow).claim_queued_user_messages(
         agent_run_id, message_ids=sorted(carried)
     )
     lost = carried - frozenset(message.id for message in claimed)

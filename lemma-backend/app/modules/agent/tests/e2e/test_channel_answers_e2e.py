@@ -41,7 +41,8 @@ from app.modules.agent.events.channel_question_work import (
 )
 from app.modules.agent.events.pause_expiry_work import register_pause_expiry_work
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.channel_answers import answer_line, turn_client_id
 from app.modules.agent.services.pause_questions import (
     sync_pause_questions,
@@ -128,7 +129,7 @@ async def _answering_conversation(line_id: UUID) -> UUID:
 
 async def _finish_with(run_id: UUID, answer: str) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,
@@ -505,7 +506,7 @@ async def test_an_approval_nobody_decided_in_time_is_not_approved_anywhere(scena
     assert late.decision is AgentRunApprovalDecision.DENY
     async with create_uow_from_session_maker(async_session_maker) as uow:
         assert (
-            await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
+            await Pauses(uow).pausing_calls_awaiting_a_decision(
                 conversation_id=seeded.conversation_id,
                 pausing_tool_names=USER_PAUSING_TOOL_NAMES,
             )

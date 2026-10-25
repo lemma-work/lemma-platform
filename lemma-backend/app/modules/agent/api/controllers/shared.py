@@ -24,7 +24,6 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.realtime import (
@@ -59,7 +58,6 @@ STREAM_KEEPALIVE_SECONDS = 15.0
 def _build_conversation_service(uow) -> ConversationService:
     return ConversationService(
         uow=uow,
-        conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
         usage_service=build_usage_service(uow),
     )

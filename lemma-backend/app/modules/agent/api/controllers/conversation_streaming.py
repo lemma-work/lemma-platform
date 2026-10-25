@@ -160,7 +160,7 @@ async def load_authorized_agent_run(
         user_id=user_id,
         pod_id=pod_id,
     )
-    agent_run = await service.conversation_repository.get_agent_run(agent_run_id)
+    agent_run = await service.runs.get_agent_run(agent_run_id)
     if agent_run is None or agent_run.conversation_id != conversation.id:
         raise ConversationNotFoundError("Agent run not found")
     return agent_run

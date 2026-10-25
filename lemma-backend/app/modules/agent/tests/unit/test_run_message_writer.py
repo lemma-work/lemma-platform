@@ -33,10 +33,11 @@ def _writer(monkeypatch, repository: _Repository) -> RunMessageWriter:
     async def uow_factory():
         yield object()
 
-    monkeypatch.setattr(
-        "app.modules.agent.services.run_message_writer.ConversationRepository",
-        lambda _uow: repository,
-    )
+    for name in ("Messages", "Pauses"):
+        monkeypatch.setattr(
+            f"app.modules.agent.services.run_message_writer.{name}",
+            lambda _uow: repository,
+        )
     return RunMessageWriter(uow_factory)
 
 

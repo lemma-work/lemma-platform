@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
 
@@ -45,8 +46,8 @@ def _coordinator(message):
     repository.record_approval_decision.return_value = True
     resume_returns = AsyncMock()
     resume_returns.build.return_value = ("ask_user", {"denied": True})
-    coordinator = ApprovalCoordinator(
-        AsyncMock(), repository, resume_returns, AsyncMock()
+    coordinator = wire_repositories(
+        ApprovalCoordinator(AsyncMock(), resume_returns, AsyncMock()), repository
     )
     # No wait_for to cancel here; that half is SQL (the e2e covers it).
     coordinator._cancel_superseded_wait = AsyncMock(return_value=[])  # type: ignore[method-assign]

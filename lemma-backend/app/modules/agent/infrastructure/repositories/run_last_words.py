@@ -7,8 +7,8 @@ Agent Host announces a call its adapter opened but never settled only when the
 turn ends, after the agent's closing words, and words followed by a call are
 sealed as narration -- so the answer is on the record as a step on the way.
 
-Plain functions over a session, like ``conversation_run_lifecycle``: the
-repository they would otherwise join is at the size ratchet.
+Plain functions over a session, with two callers (``run_finalizer`` and
+``run_message_writer``) and no repository of their own.
 """
 
 from __future__ import annotations

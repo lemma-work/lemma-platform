@@ -33,7 +33,7 @@ from fastapi import status
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     SYSTEM_LEMMA_SKIP_REASON,
     system_lemma_available,
@@ -345,7 +345,7 @@ async def _create_running_child(
     agent_id = UUID(payload["agent_id"]) if payload.get("agent_id") else None
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).create_agent_run(
+        await Runs(uow).create_agent_run(
             conversation_id=conversation_id,
             agent_id=agent_id,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),

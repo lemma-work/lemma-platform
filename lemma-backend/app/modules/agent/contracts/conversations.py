@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.agent.infrastructure.models import ConversationModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +38,7 @@ class ConversationScope:
 
 async def conversation_scope(uow, conversation_id: UUID) -> ConversationScope | None:
     """This conversation's placement, or ``None`` if it has since been deleted."""
-    conversation = await ConversationRepository(uow).get_conversation(conversation_id)
+    conversation = await Conversations(uow).get_conversation(conversation_id)
     if conversation is None:
         return None
     return ConversationScope(

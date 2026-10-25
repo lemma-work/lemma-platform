@@ -26,7 +26,8 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.domain.wait import AgentWaitWakeReason
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -61,7 +62,8 @@ class MessageReplyService:
 
     def __init__(self, uow: SqlAlchemyUnitOfWork):
         self.uow = uow
-        self.conversations = ConversationRepository(uow)
+        self.conversations = Conversations(uow)
+        self.messages = Messages(uow)
         self.waits = AgentConversationWaitRepository(uow)
 
     async def deliver(
@@ -81,7 +83,7 @@ class MessageReplyService:
             return False
         client_id = replies_client_id(batch_id)
         if client_id is not None and (
-            await self.conversations.find_user_message_by_client_id(
+            await self.messages.find_user_message_by_client_id(
                 conversation_id=conversation_id, client_message_id=client_id
             )
         ):
@@ -141,7 +143,6 @@ class MessageReplyService:
 
         return ConversationService(
             uow=self.uow,
-            conversation_repository=self.conversations,
             agent_repository=AgentRepository(self.uow),
             usage_service=build_usage_service(self.uow),
         )

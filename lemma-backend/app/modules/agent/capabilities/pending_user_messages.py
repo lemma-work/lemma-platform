@@ -122,9 +122,7 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         """Its own short unit of work: the run holds no session between nodes."""
         from app.core.infrastructure.db.session import async_session_maker
         from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-        from app.modules.agent.infrastructure.repositories import (
-            ConversationRepository,
-        )
+        from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
         from app.modules.agent.services.channel_background import (
             with_channel_background,
         )
@@ -132,7 +130,7 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
             # Only the run's own kind: a private note never steers an answer
             # that goes to the platform, nor the other way round.
-            claimed = await ConversationRepository(uow).claim_queued_user_messages(
+            claimed = await QueuedMessages(uow).claim_queued_user_messages(
                 self._agent_run_id, as_run=True
             )
             if not claimed:

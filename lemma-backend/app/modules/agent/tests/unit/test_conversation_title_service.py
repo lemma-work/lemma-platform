@@ -36,7 +36,7 @@ from app.core.log.log import setup_logging
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.value_objects import MessageKind
-from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
+from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
 )
 from app.modules.agent.services import conversation_title_service as cts
@@ -133,7 +133,7 @@ class _FakeUow:
 
 
 class _FakeRepo:
-    """A `ConversationRepository`: the row, and the two-string opening query."""
+    """A `Conversations` repository: the row, and the two-string opening query."""
 
     def __init__(self, uow: _FakeUow) -> None:
         self.uow = uow

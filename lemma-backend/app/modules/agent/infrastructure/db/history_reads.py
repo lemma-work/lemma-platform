@@ -1,8 +1,30 @@
-"""Runtime-history reads, split from the run queries to keep both under the size ratchet.
+"""The history a run's prompt is built from: a read model over runs and messages.
 
-What a prompt is built from: the newest runs of a conversation with their sizes,
-the messages attached to whichever of them survive the cap, and the run-less
-messages that ride along. Delegated to by ``ConversationRepository``.
+The newest runs of a conversation with their sizes, the messages attached to
+whichever of them survive the cap, and the run-less messages that ride along.
+
+The slice of runs a prompt can possibly carry
+----------------------------------------------
+
+``runtime_history`` caps every conversation at ``MAX_HISTORY_AGENT_RUNS`` runs.
+The cap was applied with ``runs[-60:]`` -- after every run of the conversation had been
+read, and after a ``GROUP BY`` over every message in all of them had produced a
+digest for each. A four-hundred-turn conversation paid for four hundred runs on
+every single turn to send sixty.
+
+Asking for the newest sixty instead is nearly the same query, with two things
+that have to come back alongside it.
+
+The **total** is one. The notice telling the model that older exchanges exist is
+built from how many runs were removed, and a windowed list cannot know what it
+was cut from; without the count the notice silently stops being accurate the
+moment the window does any work.
+
+The **run being resumed** is the other, and it is the one that can fail rather
+than mislead. The runner finds it in the list it loaded and raises
+``ConversationNotFoundError`` when it is absent -- so windowing alone turns a
+resumed older run in a long conversation from a missing notice into a failed
+run. It is fetched by id, in or out of the window.
 """
 
 from __future__ import annotations
@@ -10,7 +32,6 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import Select, and_, func, or_, select, union_all
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.domain.entities import (
     AgentRun as AgentRunEntity,
@@ -22,21 +43,11 @@ from app.modules.agent.domain.entities import (
 from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY
 from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
-from app.modules.agent.infrastructure.runtime_history_window import (
-    newest_runs,
-    run_count,
-)
+from app.modules.agent.infrastructure.db.base import UnitOfWorkRepository
 
 
-class RuntimeHistoryQueries:
-    """Reads that assemble the history a run's prompt carries.
-
-    A collaborator over the repository's session: the repository delegates to it
-    so callers still hold one object.
-    """
-
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+class HistoryReads(UnitOfWorkRepository):
+    """Reads that assemble the history a run's prompt carries."""
 
     async def load_runtime_history_digests_by_run_id(
         self,
@@ -51,7 +62,7 @@ class RuntimeHistoryQueries:
         caller gets the shape first, decides, and asks for messages second.
 
         ``limit`` is the caller's own ceiling, applied here rather than to the
-        result. See `runtime_history_window` for why the total and the resumed
+        result. See the module docstring for why the total and the resumed
         run come back with it.
         """
         conversation_id = (
@@ -307,3 +318,27 @@ def _newest_unattached_ids(
     if before_sequence is not None:
         query = query.where(MessageModel.sequence < before_sequence)
     return query.order_by(MessageModel.sequence.desc()).limit(limit)
+
+
+def newest_runs(conversation_id: UUID, limit: int) -> Select:
+    """The newest ``limit`` runs of a conversation.
+
+    Ordered descending so the limit takes the newest, and reversed by the caller
+    -- the trims downstream read a list as chronological and the elision notice
+    is attached to its first element.
+    """
+    return (
+        select(AgentRunModel)
+        .where(AgentRunModel.conversation_id == conversation_id)
+        .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+        .limit(limit)
+    )
+
+
+def run_count(conversation_id: UUID) -> Select:
+    """How many runs the conversation has, without reading any of them."""
+    return (
+        select(func.count())
+        .select_from(AgentRunModel)
+        .where(AgentRunModel.conversation_id == conversation_id)
+    )

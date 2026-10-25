@@ -38,8 +38,8 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.infrastructure.repositories.conversation_opening_texts import (
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
 )
 from app.modules.agent.services.realtime import (
@@ -358,7 +358,7 @@ class ConversationTitleService:
     def conversation_repository(
         self,
     ) -> Callable[[SqlAlchemyUnitOfWork], ConversationOpeningReader]:
-        return self._conversation_repository or ConversationRepository
+        return self._conversation_repository or Conversations
 
     @property
     def publish_event(self) -> Callable[[UUID, dict[str, object]], Awaitable[None]]:

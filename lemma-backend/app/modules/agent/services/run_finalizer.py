@@ -40,9 +40,7 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.infrastructure.repositories import (
-    ConversationRepository,
-)
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories.run_last_words import (
     mark_final_answer,
 )
@@ -236,7 +234,7 @@ class RunFinalizer:
             event_data: JsonObject = {}
             answered: Message | None = None
             async with self.terminal_units() as uow:
-                finish_result = await ConversationRepository(uow).finish_agent_run(
+                finish_result = await Runs(uow).finish_agent_run(
                     agent_run_id=run.agent_run_id,
                     status=status,
                     conversation_status=conversation_status,

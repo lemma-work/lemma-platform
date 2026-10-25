@@ -52,7 +52,7 @@ from app.modules.agent.domain.wait import (
     AgentWaitStatus,
     AgentWaitType,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -157,9 +157,7 @@ async def test_an_open_question_is_not_answered_by_the_news(scenario):
 
     assert [run.id for run in await runs(seeded.conversation_id)] == [asking]
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        open_questions = await ConversationRepository(
-            uow
-        ).pausing_calls_awaiting_a_decision(
+        open_questions = await Pauses(uow).pausing_calls_awaiting_a_decision(
             conversation_id=seeded.conversation_id,
             pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         )

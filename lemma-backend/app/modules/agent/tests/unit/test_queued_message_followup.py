@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
@@ -85,7 +86,6 @@ def _coordinator(
     )
     coordinator = TurnCoordinator(
         uow=uow,
-        conversation_repository=repository,
         agent_repository=SimpleNamespace(),
         approvals=SimpleNamespace(
             supersede_stale_pending_interactions=AsyncMock(return_value=[])
@@ -93,6 +93,7 @@ def _coordinator(
         pauses=SimpleNamespace(resume_if_already_answered=AsyncMock(return_value=None)),
         usage_service=None,
     )
+    wire_repositories(coordinator, repository)
     return coordinator, conversation, repository, uow, finished, created
 
 

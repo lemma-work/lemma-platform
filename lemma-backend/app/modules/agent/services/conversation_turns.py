@@ -27,10 +27,7 @@ from app.modules.agent.domain.private_notes import (
     run_metadata_for,
 )
 from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
-from app.modules.agent.domain.ports import (
-    AgentRepository,
-    ConversationRepository,
-)
+from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRunStatus,
@@ -46,9 +43,11 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.errors import ConversationStateError
-from app.modules.agent.infrastructure.queued_message_queries import (
-    QueuedMessageRepository,
-)
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
 from app.modules.agent.services.conversation_stop import StopCoordinator
 from app.modules.agent.services.pause_resume import PauseResume
@@ -120,7 +119,6 @@ class TurnCoordinator:
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: ConversationRepository,
         agent_repository: AgentRepository,
         approvals: ApprovalCoordinator,
         pauses: PauseResume,
@@ -128,15 +126,17 @@ class TurnCoordinator:
         runtime_check: TurnRuntimeCheck = ensure_turn_runtime_available,
     ) -> None:
         self.uow = uow
-        self.conversation_repository = conversation_repository
+        self.conversations = Conversations(uow)
+        self.runs = Runs(uow)
+        self.messages = Messages(uow)
+        self.queued_messages = QueuedMessages(uow)
+        self.pausing_calls = Pauses(uow)
         self.agent_repository = agent_repository
         self.approvals = approvals
         self.pauses = pauses
         self.usage_service = usage_service
         self.runtime_check = runtime_check
-        self.stops = StopCoordinator(
-            uow, conversation_repository, agent_repository, approvals, pauses
-        )
+        self.stops = StopCoordinator(uow, agent_repository, approvals, pauses)
 
     async def start(
         self,
@@ -174,13 +174,11 @@ class TurnCoordinator:
             agent_repository=self.agent_repository,
         )
 
-        await self.conversation_repository.lock_conversation(conversation.id)
+        await self.conversations.lock_conversation(conversation.id)
         if client_message_id is not None:
             # Under the lock, so two copies of one send cannot both miss it.
-            original = (
-                await self.conversation_repository.find_user_message_by_client_id(
-                    conversation_id=conversation.id, client_message_id=client_message_id
-                )
+            original = await self.messages.find_user_message_by_client_id(
+                conversation_id=conversation.id, client_message_id=client_message_id
             )
             if original is not None and original.agent_run_id is not None:
                 await self.uow.commit()
@@ -190,9 +188,7 @@ class TurnCoordinator:
                     started_new_run=False,
                     deduplicated=True,
                 )
-        active_run = await self.conversation_repository.get_active_agent_run_for_update(
-            conversation.id
-        )
+        active_run = await self.runs.get_active_agent_run_for_update(conversation.id)
         superseded_returns: list[Message] = []
         held: HeldTurn | None = None
         if active_run is None:
@@ -211,7 +207,7 @@ class TurnCoordinator:
                     )
                 )
             held = await pause_holding_the_turn(
-                self.conversation_repository,
+                self.pausing_calls,
                 conversation.id,
                 include_undecided=not supersede_pauses,
             )
@@ -223,10 +219,10 @@ class TurnCoordinator:
         answering_run_id = active_run.id if active_run is not None else None
         if held is not None:
             answering_run_id = held.agent_run_id
-            await hold_behind(self.conversation_repository, conversation)
+            await hold_behind(self.conversations, conversation)
         assert answering_run_id is not None
 
-        saved_user_message = await self.conversation_repository.append_message(
+        saved_user_message = await self.messages.append_message(
             conversation_id=conversation.id,
             agent_run_id=answering_run_id,
             draft=MessageDraft.of_text(
@@ -299,7 +295,7 @@ class TurnCoordinator:
         await self.assert_usage_preflight_allowed(
             conversation, user_id=user_id, agent_runtime=selected_agent_runtime
         )
-        return await self.conversation_repository.create_agent_run(
+        return await self.runs.create_agent_run(
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=selected_agent_runtime,
@@ -357,25 +353,21 @@ class TurnCoordinator:
             return await self.pauses.resume_if_already_answered(
                 conversation=conversation, paused_run_id=completed_run_id
             )
-        completed_run = await self.conversation_repository.get_agent_run(
-            completed_run_id
-        )
+        completed_run = await self.runs.get_agent_run(completed_run_id)
         owed = _owed_an_answer(completed_run, completed_run_id)
         if owed is None:
             # Stop means stop: nothing said before it starts the next turn.
             return None
         sources, stopped_after = owed
         queue = await next_queue(
-            self.conversation_repository, sources, after_sequence=stopped_after
+            self.queued_messages, sources, after_sequence=stopped_after
         )
         if queue is None:
             return None
         answering, notes = queue
 
-        await self.conversation_repository.lock_conversation(conversation.id)
-        if await self.conversation_repository.get_active_agent_run_for_update(
-            conversation.id
-        ):
+        await self.conversations.lock_conversation(conversation.id)
+        if await self.runs.get_active_agent_run_for_update(conversation.id):
             # Someone typed between that run finishing and this check. Their
             # message started a turn whose history already covers the queue.
             return None
@@ -389,7 +381,7 @@ class TurnCoordinator:
             user_id=conversation.user_id,
         )
         leftovers = await still_waiting(
-            self.conversation_repository,
+            self.queued_messages,
             sources,
             answering=answering,
             notes=notes,
@@ -404,7 +396,7 @@ class TurnCoordinator:
         await self.assert_usage_preflight_allowed(
             conversation, user_id=conversation.user_id, agent_runtime=agent_runtime
         )
-        followup_run = await self.conversation_repository.create_agent_run(
+        followup_run = await self.runs.create_agent_run(
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=agent_runtime,
@@ -420,7 +412,7 @@ class TurnCoordinator:
         # that creates it. That is what tells an Agent Host dispatch which
         # messages its prompt has to carry -- all of them, not only the newest
         # -- and what tells the person's client they are no longer waiting.
-        claimed = await self.conversation_repository.claim_queued_user_messages(
+        claimed = await self.queued_messages.claim_queued_user_messages(
             answering,
             into_run_id=followup_run.id,
             notes=notes,
@@ -470,7 +462,7 @@ class TurnCoordinator:
         the client drew it as queued a moment ago and should redraw it.
         """
         conversation = validate_conversation_access(
-            await self.conversation_repository.get_conversation(conversation_id),
+            await self.conversations.get_conversation(conversation_id),
             user_id=user_id,
             pod_id=pod_id,
         )
@@ -480,9 +472,7 @@ class TurnCoordinator:
             agent_id=conversation.agent_id,
             action=Permissions.AGENT_EXECUTE,
         )
-        withdrawn = await QueuedMessageRepository(
-            self.uow
-        ).withdraw_queued_user_message(
+        withdrawn = await self.queued_messages.withdraw_queued_user_message(
             conversation_id=conversation.id, message_id=message_id
         )
         if not withdrawn:

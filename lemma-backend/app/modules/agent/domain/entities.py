@@ -319,7 +319,7 @@ class RuntimeHistoryWindow:
     window: the runner needs it either way, and refusing it would turn a missing
     notice into a failed run.
 
-    See ``infrastructure/runtime_history_window`` for the statements.
+    See ``infrastructure/db/history_reads`` for the statements.
     """
 
     #: The newest runs, oldest-first -- the order every trim downstream assumes.

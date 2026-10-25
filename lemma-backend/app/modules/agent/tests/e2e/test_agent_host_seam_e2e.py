@@ -62,7 +62,8 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentRuntimeProfileModel,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -720,7 +721,7 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
 
     # The run has to be over before the timer fires, or the wake sees a live run
     # and quietly declines to start a second one.
-    await ConversationRepository(SqlAlchemyUnitOfWork(db_session)).finish_agent_run(
+    await Runs(SqlAlchemyUnitOfWork(db_session)).finish_agent_run(
         agent_run_id=run_id, status=AgentRunStatus.COMPLETED
     )
     await db_session.commit()
@@ -752,7 +753,7 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
     assert runs[-1].run_metadata["resumed_tool_call_id"] == tool_call_id
     assert _resumed_tool_call_id(runs[-1].to_entity()) == tool_call_id
 
-    messages, _ = await ConversationRepository(uow).list_messages(
+    messages, _ = await Messages(uow).list_messages(
         conversation_id=conversation_id, limit=50
     )
     returned = [
@@ -835,7 +836,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         tool_name=WAIT_TOOL_NAME,
         result=slept,
     )
-    await ConversationRepository(uow_factory()).finish_agent_run(
+    await Runs(uow_factory()).finish_agent_run(
         agent_run_id=run_id, status=AgentRunStatus.COMPLETED
     )
     await db_session.commit()
@@ -863,7 +864,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
     # under the sleeping call has to be the wake, not the acknowledgement the
     # model already read. `append_pause_tool_return` is idempotent, so a return
     # written early is the wake never being written at all.
-    messages, _ = await ConversationRepository(uow).list_messages(
+    messages, _ = await Messages(uow).list_messages(
         conversation_id=conversation_id, limit=50
     )
     returns = {

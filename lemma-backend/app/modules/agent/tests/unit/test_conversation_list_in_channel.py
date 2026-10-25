@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import app.modules.pod.infrastructure.models  # noqa: F401  (mappers resolve "Pod")
 from app.modules.agent.domain.value_objects import ConversationAgentSelection
-from app.modules.agent.infrastructure.repositories.conversation_list_page import (
+from app.modules.agent.infrastructure.db.conversation_list_page import (
     list_statement,
 )
 

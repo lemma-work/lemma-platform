@@ -24,7 +24,8 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_message_writer import RunMessageWriter
@@ -90,8 +91,8 @@ async def test_a_reused_provider_id_is_a_new_pause_with_its_own_answer(scenario)
     first = await running_run(seeded)
     # An earlier run's question, under the provider's id, answered.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = ConversationRepository(uow)
-        await repository.append_message(
+        messages_repo = Messages(uow)
+        await messages_repo.append_message(
             conversation_id=seeded.conversation_id,
             agent_run_id=first,
             draft=MessageDraft.of_tool_call(
@@ -135,7 +136,7 @@ async def test_a_reused_provider_id_is_a_new_pause_with_its_own_answer(scenario)
     # this question rather than the old one.
     assert [w["tool_call_id"] for w in surface.waiting] == [renamed]
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        open_now = await ConversationRepository(uow).pausing_calls_awaiting_a_return(
+        open_now = await Pauses(uow).pausing_calls_awaiting_a_return(
             conversation_id=seeded.conversation_id,
             pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         )

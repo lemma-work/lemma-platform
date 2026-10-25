@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 
 from app.modules.usage.contracts import UsageLimitExceededError
@@ -94,7 +95,6 @@ def _service(
     )
     service = ConversationService(
         uow=uow,
-        conversation_repository=repository,
         agent_repository=SimpleNamespace(
             get=AsyncMock(
                 return_value=SimpleNamespace(name="lem", kind=None, agent_runtime=None)
@@ -103,7 +103,7 @@ def _service(
         usage_service=usage_service,
         turn_runtime_check=runtime_check or _RuntimeCheck(),
     )
-    return service, repository, uow
+    return wire_repositories(service, repository), repository, uow
 
 
 def _authorize(

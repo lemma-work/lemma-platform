@@ -42,7 +42,6 @@ from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.pod_ask_queries import PodAskQueries
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.infrastructure.pod_link_queries import (
@@ -171,7 +170,6 @@ class PodLinkService:
         )
         conversations = ConversationService(
             uow=self.uow,
-            conversation_repository=ConversationRepository(self.uow),
             agent_repository=AgentRepository(self.uow),
             usage_service=build_usage_service(self.uow),
         )

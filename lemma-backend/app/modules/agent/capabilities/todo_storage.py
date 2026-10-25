@@ -12,7 +12,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 
 _TODOS_KEY = "todos"
 
@@ -28,7 +28,7 @@ class ConversationTodoStore:
 
     async def read(self) -> list[JsonObject]:
         async with self._uow_factory() as uow:
-            raw = await ConversationRepository(uow).get_conversation_metadata_key(
+            raw = await Conversations(uow).get_conversation_metadata_key(
                 self._conversation_id, _TODOS_KEY
             )
         return (
@@ -39,7 +39,7 @@ class ConversationTodoStore:
 
     async def write(self, todos: list[JsonObject]) -> None:
         async with self._uow_factory() as uow:
-            await ConversationRepository(uow).set_conversation_metadata_key(
+            await Conversations(uow).set_conversation_metadata_key(
                 self._conversation_id, _TODOS_KEY, todos
             )
             await uow.commit()

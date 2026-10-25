@@ -22,6 +22,7 @@ from app.modules.agent.domain.agent_host_permissions import (
     permission_approval_tool_call_id,
 )
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -428,15 +429,19 @@ def _patch_agent_host(
         async def get_agent_run(self, agent_run_id):
             return SimpleNamespace(id=agent_run_id, metadata={})
 
-    repositories = types.ModuleType("app.modules.agent.infrastructure.repositories")
-    repositories.ConversationRepository = _Runs
+    repositories = types.ModuleType("app.modules.agent.infrastructure.db.runs")
+    repositories.Runs = _Runs
     monkeypatch.setitem(sys.modules, channels.__name__, channels)
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
     monkeypatch.setitem(sys.modules, repositories.__name__, repositories)
 
 
-class _ConversationRepository:
-    """Just enough repository for one approval resolution."""
+class _Repositories:
+    """Just enough of every repository for one approval resolution.
+
+    One object standing in for each of them (``wire_repositories``), so a test can read
+    what was decided and appended in one place.
+    """
 
     def __init__(self, call: Message) -> None:
         self.call = call
@@ -494,9 +499,6 @@ class _ConversationRepository:
         self.created_runs += 1
         return SimpleNamespace(id=uuid7())
 
-    async def list_resolved_approval_ids(self, **_kwargs):
-        return set()
-
     async def list_messages(self, **_kwargs):
         return [], None
 
@@ -518,7 +520,7 @@ class TestResolutionRouting:
             tool_call_id=permission_approval_tool_call_id("call-9"),
             tool_args=args,
         )
-        repository = _ConversationRepository(call)
+        repository = _Repositories(call)
         # The host's wake-up is queued on the unit of work, so the fake has to
         # accept it. What reaches the host -- the command, written in the
         # caller's transaction -- is recorded by the stub below; that the
@@ -527,11 +529,13 @@ class TestResolutionRouting:
         # The real coordinator, not a stand-in and not a half-built service:
         # what these tests check is its routing, so anything less would certify
         # the test's own wiring instead.
-        service = ApprovalCoordinator(
-            uow,
+        service = wire_repositories(
+            ApprovalCoordinator(
+                uow,
+                ResumeToolReturnBuilder(uow, None),
+                wire_repositories(PauseResume(uow, None), repository),
+            ),
             repository,
-            ResumeToolReturnBuilder(uow, None),
-            PauseResume(uow, repository, None),
         )
 
         async def _enqueue(uow, *, request, agent_run_id, decision):

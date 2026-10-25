@@ -21,7 +21,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.value_objects import AgentRunStatus, ConversationStatus
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e]
@@ -72,12 +72,12 @@ async def test_a_sweep_racing_the_worker_does_not_end_the_run_a_second_time(
         create_uow_from_session_maker(async_session_maker) as sweep,
     ):
         sweep_pid = int(await sweep.session.scalar(text("SELECT pg_backend_pid()")))
-        finished = await ConversationRepository(worker).finish_agent_run(
+        finished = await Runs(worker).finish_agent_run(
             agent_run_id=run_id, status=AgentRunStatus.COMPLETED
         )
         # The worker holds the row, uncommitted; the sweep gets as far as it can.
         racing = asyncio.ensure_future(
-            ConversationRepository(sweep).finish_agent_run(
+            Runs(sweep).finish_agent_run(
                 agent_run_id=run_id,
                 status=AgentRunStatus.FAILED,
                 error="Agent run was interrupted",

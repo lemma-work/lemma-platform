@@ -30,9 +30,11 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageRole,
 )
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.infrastructure.conversation_idempotency_store import (
     create_conversation_for_id,
@@ -69,7 +71,9 @@ class AgentControlAdapter(AgentPort):
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
         self.uow = uow
         self.agent_repo = AgentRepository(uow)
-        self.conversation_repo = ConversationRepository(uow)
+        self.conversations = Conversations(uow)
+        self.messages = Messages(uow)
+        self.runs = Runs(uow)
         self.wait_repo = AgentConversationWaitRepository(uow)
 
     async def run_agent(
@@ -174,20 +178,20 @@ class AgentControlAdapter(AgentPort):
             if not created:
                 return conversation.id
         else:
-            conversation = await self.conversation_repo.create_conversation(entity)
+            conversation = await self.conversations.create_conversation(entity)
 
         runtime = (
             runtime_override
             or agent_runtime
             or await self._default_agent_runtime_for_pod(pod_id=pod_id)
         )
-        run = await self.conversation_repo.create_agent_run(
+        run = await self.runs.create_agent_run(
             conversation_id=conversation.id,
             agent_id=agent_id,
             agent_runtime=runtime,
             metadata=metadata,
         )
-        await self.conversation_repo.append_message(
+        await self.messages.append_message(
             conversation_id=conversation.id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text(
@@ -245,7 +249,7 @@ class AgentControlAdapter(AgentPort):
     async def get_conversation_status(self, conversation_id: UUID) -> dict[str, object]:
         # With its latest run: `last_run_error` below is derived from it, and
         # without it a failed step only ever said that the agent failed.
-        conversation = await self.conversation_repo.get_conversation(
+        conversation = await self.conversations.get_conversation(
             conversation_id, include_runs=True
         )
         if conversation is None or conversation.status is None:
@@ -296,22 +300,20 @@ class AgentControlAdapter(AgentPort):
         user reaching in. Nothing to stop is success, not an error: the agent
         may have finished between the cancel and this call.
         """
-        active_run = await self.conversation_repo.get_active_agent_run_for_update(
-            conversation_id
-        )
+        active_run = await self.runs.get_active_agent_run_for_update(conversation_id)
         if active_run is None:
             return
         del user_id  # the engine already authorized the cancel
         await stop_run(
             self.uow,
-            self.conversation_repo,
+            self.runs,
             pod_id=await self._conversation_pod(conversation_id),
             conversation_id=conversation_id,
             run_id=active_run.id,
         )
 
     async def _conversation_pod(self, conversation_id: UUID) -> UUID:
-        conversation = await self.conversation_repo.get_conversation(conversation_id)
+        conversation = await self.conversations.get_conversation(conversation_id)
         if conversation is None:
             raise AgentNotFoundError("Workflow agent conversation was not found")
         return conversation.pod_id

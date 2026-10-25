@@ -51,7 +51,7 @@ from app.modules.agent.events.work_kinds import (
     pod_ask_key,
     subagent_result_key,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 
 logger = get_logger(__name__)
 
@@ -118,7 +118,7 @@ async def stage_run_followups(
     """
     if not finish.updated:
         return None
-    conversation = await ConversationRepository(uow).get_conversation(conversation_id)
+    conversation = await Conversations(uow).get_conversation(conversation_id)
     if conversation is None:
         return None
     _registered()

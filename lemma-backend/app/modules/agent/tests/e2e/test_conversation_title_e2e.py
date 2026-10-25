@@ -29,7 +29,7 @@ from app.core.infrastructure.db.uow_factory import (
     create_uow_from_session_maker,
 )
 from app.modules.agent.domain.value_objects import MessageDraft, MessageRole
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.services import conversation_title_service as cts
 from app.modules.agent.services.conversation_title_service import (
     ConversationTitleService,
@@ -117,8 +117,8 @@ async def _create_pod(authenticated_client, fixed_test_org) -> str:
 
 async def _seed_opening_exchange(conversation_id: UUID) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        await repo.append_message(
+        messages = Messages(uow)
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=None,
             draft=MessageDraft.of_text(
@@ -126,7 +126,7 @@ async def _seed_opening_exchange(conversation_id: UUID) -> None:
                 role=MessageRole.USER,
             ),
         )
-        await repo.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=None,
             draft=MessageDraft.of_text(
@@ -199,7 +199,7 @@ class TestConversationTitleServiceAgainstRealDb:
 
         # Only an assistant message -> no user intent to title from.
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            await ConversationRepository(uow).append_message(
+            await Messages(uow).append_message(
                 conversation_id=conversation_id,
                 agent_run_id=None,
                 draft=MessageDraft.of_text("Hello!", role=MessageRole.ASSISTANT),

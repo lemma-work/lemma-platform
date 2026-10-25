@@ -498,7 +498,7 @@ async def test_conversation_mcp_refuses_a_run_of_another_conversation(
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
     from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-    from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent.infrastructure.db.runs import Runs
 
     pod_id = await _create_pod(authenticated_client, fixed_test_org)
     agent = await _create_agent(authenticated_client, pod_id)
@@ -507,7 +507,7 @@ async def test_conversation_mcp_refuses_a_run_of_another_conversation(
     runs: dict[str, UUID] = {}
     async with create_uow_from_session_maker(async_session_maker) as uow:
         for conversation_id in (mine, other):
-            run = await ConversationRepository(uow).create_agent_run(
+            run = await Runs(uow).create_agent_run(
                 conversation_id=UUID(conversation_id),
                 agent_id=UUID(agent["id"]),
                 agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),

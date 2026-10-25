@@ -20,10 +20,14 @@ from app.modules.agent.domain.pausing_tools import (
     USER_PAUSING_TOOL_NAMES,
     WAIT_TOOL_NAME,
 )
-from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
+from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
 from app.modules.agent.domain.value_objects import ConversationStatus
 from app.modules.agent.domain.wait import AgentWaitWakeReason
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -53,13 +57,15 @@ class StopCoordinator:
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: ConversationRepository,
         agent_repository: AgentRepository,
         approvals: ApprovalCoordinator,
         pauses: PauseResume,
     ) -> None:
         self.uow = uow
-        self.conversation_repository = conversation_repository
+        self.conversations = Conversations(uow)
+        self.runs = Runs(uow)
+        self.messages = Messages(uow)
+        self.pausing_calls = Pauses(uow)
         self.agent_repository = agent_repository
         self.approvals = approvals
         self.pauses = pauses
@@ -78,7 +84,7 @@ class StopCoordinator:
             agent_name=agent_name,
         )
         conversation = validate_conversation_access(
-            await self.conversation_repository.get_conversation(conversation_id),
+            await self.conversations.get_conversation(conversation_id),
             user_id=user_id,
             pod_id=pod_id,
             agent_id=expected_agent_id,
@@ -89,22 +95,18 @@ class StopCoordinator:
             agent_id=conversation.agent_id,
             action=Permissions.AGENT_EXECUTE,
         )
-        active_run = await self.conversation_repository.get_active_agent_run_for_update(
-            conversation.id
-        )
+        active_run = await self.runs.get_active_agent_run_for_update(conversation.id)
         if active_run is not None:
             # What is said from here on is owed an answer once the run has
             # stopped; what was said before it is not (`start_queued_followup`).
-            said_before_stop = (
-                await self.conversation_repository.latest_message_sequence(
-                    conversation.id
-                )
+            said_before_stop = await self.messages.latest_message_sequence(
+                conversation.id
             )
             # A turn still queued is dropped and the run ends STOPPED here; one a
             # worker holds is asked to stop and ends at its next check.
             finish_result = await stop_run(
                 self.uow,
-                self.conversation_repository,  # type: ignore[arg-type]
+                self.runs,
                 pod_id=conversation.pod_id,
                 conversation_id=conversation.id,
                 run_id=active_run.id,
@@ -154,7 +156,7 @@ class StopCoordinator:
         # ending: a timer firing now either took them first (and woke it --
         # this finds it ended) or waits for this commit and finds it
         # CANCELLED. Exactly one of the two happens.
-        await self.conversation_repository.lock_conversation(conversation.id)
+        await self.conversations.lock_conversation(conversation.id)
         wait = await self.wait_repository.claim(active.id)
         if wait is None:
             return
@@ -164,7 +166,7 @@ class StopCoordinator:
         # Its queued timer goes with it, in this transaction. A poll already
         # running re-reads the wait under the lock and does not re-arm.
         await disarm_wait(WorkWriter.of(self.uow), wait)
-        await self.conversation_repository.set_conversation_status(
+        await self.conversations.set_conversation_status(
             conversation_id=conversation.id,
             status=ConversationStatus.STOPPED,
         )
@@ -204,7 +206,7 @@ class StopCoordinator:
         if not superseded:
             return
 
-        await self.conversation_repository.set_conversation_status(
+        await self.conversations.set_conversation_status(
             conversation_id=conversation.id,
             status=ConversationStatus.STOPPED,
         )
@@ -235,15 +237,13 @@ class StopCoordinator:
         it finishes it would start the resume run, and the agent would carry on
         after Stop. STOPPED is what `start_resume_run_if_ready` refuses on.
         """
-        in_flight = (
-            await self.conversation_repository.pausing_calls_decided_awaiting_a_return(
-                conversation_id=conversation.id,
-                pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-            )
+        in_flight = await self.pausing_calls.pausing_calls_decided_awaiting_a_return(
+            conversation_id=conversation.id,
+            pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         )
         if not in_flight or conversation.status == ConversationStatus.STOPPED:
             return
-        await self.conversation_repository.set_conversation_status(
+        await self.conversations.set_conversation_status(
             conversation_id=conversation.id,
             status=ConversationStatus.STOPPED,
         )

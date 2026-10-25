@@ -90,9 +90,9 @@ async def start_queued_followup_for(
     one indexed count). Raises ``DomainError`` when the turn may not start --
     the account over its limit, say.
     """
+    from app.modules.agent.infrastructure.db.conversations import Conversations
     from app.modules.agent.infrastructure.repositories import (
         AgentRepository,
-        ConversationRepository,
     )
     from app.modules.agent.services.conversation_service import ConversationService
     from app.modules.agent.services.realtime import (
@@ -103,7 +103,7 @@ async def start_queued_followup_for(
     from app.modules.usage.contracts.execution import build_usage_service
 
     async with (uow_factory or _uow_factory())() as uow:
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
         conversation = await conversations.get_conversation(conversation_id)
         if conversation is None:
             return None
@@ -114,7 +114,6 @@ async def start_queued_followup_for(
         async with context_scope(auth_ctx):
             started = await ConversationService(
                 uow=uow,
-                conversation_repository=conversations,
                 agent_repository=AgentRepository(uow),
                 usage_service=build_usage_service(uow),
             ).turns.start_queued_followup(

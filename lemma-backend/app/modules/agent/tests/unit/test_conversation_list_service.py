@@ -15,12 +15,13 @@ from app.modules.agent.domain.value_objects import (
     ConversationAgentSelection,
     ConversationListCursor,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 import app.modules.agent.services.conversation_queries as queries
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.test_support.authz import allow_all_context
 
 
-class _ConversationRepository:
+class _Conversations:
     def __init__(self) -> None:
         self.kwargs = None
 
@@ -55,11 +56,11 @@ async def test_list_conversations_resolves_agent_selection(
     resolve_count,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository = _ConversationRepository()
+    repository = _Conversations()
     resolved_agent_id = uuid4()
     # The real query object: `list_conversations` lives there now, and a
     # half-built service would only prove the test's own wiring.
-    service = queries.ConversationQueries(None, repository, None)
+    service = wire_repositories(queries.ConversationQueries(None, None), repository)
     resolve_expected = AsyncMock(
         side_effect=lambda _repo, *, pod_id, agent_name: (
             resolved_agent_id if agent_name is not None else None
@@ -120,10 +121,10 @@ async def test_repository_applies_agent_selection_to_roots_and_children(
     parent_id,
 ) -> None:
     uow = _Uow()
-    repository = ConversationRepository(uow)
+    conversations = Conversations(uow)
     pod_id = uuid4()
 
-    await repository.list_conversations(
+    await conversations.list_conversations(
         user_id=uuid4(),
         pod_id=pod_id,
         agent_selection=selection,
@@ -157,9 +158,9 @@ async def test_repository_applies_agent_selection_to_roots_and_children(
 @pytest.mark.asyncio
 async def test_repository_pages_by_last_activity_then_id() -> None:
     uow = _Uow()
-    repository = ConversationRepository(uow)
+    conversations = Conversations(uow)
 
-    await repository.list_conversations(
+    await conversations.list_conversations(
         user_id=uuid4(),
         pod_id=uuid4(),
         agent_selection=ConversationAgentSelection.all(),
@@ -185,9 +186,9 @@ async def test_repository_pages_by_last_activity_then_id() -> None:
 @pytest.mark.asyncio
 async def test_search_is_a_literal_case_insensitive_title_filter() -> None:
     uow = _Uow()
-    repository = ConversationRepository(uow)
+    conversations = Conversations(uow)
 
-    await repository.list_conversations(
+    await conversations.list_conversations(
         user_id=uuid4(),
         pod_id=uuid4(),
         agent_selection=ConversationAgentSelection.all(),
@@ -200,7 +201,7 @@ async def test_search_is_a_literal_case_insensitive_title_filter() -> None:
     assert "%50!%!_off!!%" in compiled.params.values()
 
 
-class _LegacyCursorRepository(_ConversationRepository):
+class _LegacyCursorRepository(_Conversations):
     def __init__(self, found: ConversationListCursor | None) -> None:
         super().__init__()
         self.found = found
@@ -225,7 +226,7 @@ def allowed():
 
 def _legacy_service(repository):
     # Across the whole pod: no agent name, so nothing to resolve.
-    return queries.ConversationQueries(None, repository, None)
+    return wire_repositories(queries.ConversationQueries(None, None), repository)
 
 
 @pytest.mark.asyncio

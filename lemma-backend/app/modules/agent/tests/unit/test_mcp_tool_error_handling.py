@@ -131,7 +131,7 @@ async def test_approval_executor_returns_error_on_tool_failure(monkeypatch):
             return SimpleNamespace(agent_id=None, metadata={})
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.approval.executor.ConversationRepository",
+        "app.modules.agent.tools.approval.executor.Conversations",
         _FakeConvRepo,
     )
 

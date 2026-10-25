@@ -27,14 +27,13 @@ from app.modules.agent.services.conversation_access import (
     authorized_conversation,
     resolve_agent,
 )
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.runtime_availability import turn_runtime
 
 if TYPE_CHECKING:
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent.domain.ports import (
-        AgentRepository,
-        ConversationRepository,
-    )
+    from app.modules.agent.domain.ports import AgentRepository
     from app.modules.agent.services.conversation_turns import TurnCoordinator
 
 
@@ -44,12 +43,12 @@ class RetryCoordinator:
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: ConversationRepository,
         agent_repository: AgentRepository,
         turns: TurnCoordinator,
     ) -> None:
         self.uow = uow
-        self.conversation_repository = conversation_repository
+        self.conversations = Conversations(uow)
+        self.runs = Runs(uow)
         self.agent_repository = agent_repository
         self.turns = turns
 
@@ -62,7 +61,7 @@ class RetryCoordinator:
         agent_name: str | None = None,
     ) -> AgentRunStartResult:
         conversation = await authorized_conversation(
-            self.conversation_repository,
+            self.conversations,
             self.agent_repository,
             conversation_id=conversation_id,
             user_id=user_id,
@@ -70,10 +69,8 @@ class RetryCoordinator:
             agent_name=agent_name,
             action=Permissions.AGENT_EXECUTE,
         )
-        await self.conversation_repository.lock_conversation(conversation.id)
-        active_run = await self.conversation_repository.get_active_agent_run_for_update(
-            conversation.id
-        )
+        await self.conversations.lock_conversation(conversation.id)
+        active_run = await self.runs.get_active_agent_run_for_update(conversation.id)
         if active_run is not None:
             if source_of(active_run.metadata) == MANUAL_RETRY_SOURCE:
                 return AgentRunStartResult(
@@ -83,17 +80,15 @@ class RetryCoordinator:
                 )
             raise ConversationStateError("Conversation already has an active run")
 
-        failed_run = (
-            await self.conversation_repository.get_latest_agent_run_for_conversation(
-                conversation.id
-            )
+        failed_run = await self.runs.get_latest_agent_run_for_conversation(
+            conversation.id
         )
         if failed_run is None or failed_run.status != AgentRunStatus.FAILED:
             raise ConversationStateError("The latest conversation run did not fail")
         # Asks about this one run rather than loading every run of the
         # conversation with every message attached to find it again -- the run
         # is already in hand, and only its message roles were ever in question.
-        if not await self.conversation_repository.run_is_replay_safe(failed_run.id):
+        if not await self.runs.run_is_replay_safe(failed_run.id):
             raise ConversationStateError("The failed run cannot be retried safely")
 
         # The runtime the conversation is set to now, not the failed run's: a
@@ -115,7 +110,7 @@ class RetryCoordinator:
         await self.turns.assert_usage_preflight_allowed(
             conversation, user_id=user_id, agent_runtime=runtime
         )
-        retry_run = await self.conversation_repository.create_agent_run(
+        retry_run = await self.runs.create_agent_run(
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=runtime,

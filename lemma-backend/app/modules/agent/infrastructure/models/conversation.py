@@ -172,7 +172,7 @@ class ConversationModel(UUIDAuditBase):
     )
     #: When something outside the agent last happened here -- a person wrote,
     #: a notification landed, a run started or finished; the history list's
-    #: order. The rule is `repositories/conversation_activity`. Not
+    #: order. The rule is `db/conversation_activity`. Not
     #: `updated_at`, which a rename or a status repair also moves.
     last_activity_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

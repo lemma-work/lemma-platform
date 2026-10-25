@@ -502,13 +502,11 @@ async def hold_outside_turn(
     shows it. Both are marked held (``held_turns``): in no run, the mark is
     what carries them to the agent once it answers them again.
     """
-    from app.modules.agent.infrastructure.repositories.conversation_repository import (
-        ConversationRepository,
-    )
+    from app.modules.agent.infrastructure.db.messages import Messages
 
-    conversations = ConversationRepository(uow)
+    messages = Messages(uow)
     for draft in held_messages(text, metadata, reply=reply):
-        await conversations.append_message(
+        await messages.append_message(
             conversation_id=conversation_id, agent_run_id=None, draft=draft
         )
     await uow.session.flush()
@@ -533,9 +531,7 @@ async def append_follow_up(
     per line: a retried send brings its ``delivered`` up to date rather than
     adding a second.
     """
-    from app.modules.agent.infrastructure.repositories.conversation_repository import (
-        ConversationRepository,
-    )
+    from app.modules.agent.infrastructure.db.messages import Messages
 
     earlier = await notification_keyed(
         uow, conversation_id, key=FOLLOW_UP_LINE_KEY, value=str(line_id)
@@ -555,7 +551,7 @@ async def append_follow_up(
     }
     if delivered is not None:
         metadata["delivered"] = delivered
-    await ConversationRepository(uow).append_message(
+    await Messages(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,
         draft=MessageDraft.of_notification("", metadata=metadata),

@@ -74,6 +74,7 @@ from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
 )
 from app.modules.agent.domain.entities import AgentRun
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.realtime import (
     conversation_channel,
     run_ending_payload,
@@ -170,7 +171,7 @@ async def _authorize(
                         user_id=user_id,
                         pod_id=pod_id,
                     )
-                run = await service.conversation_repository.get_agent_run(run_id)
+                run = await service.runs.get_agent_run(run_id)
                 if run is None or run.conversation_id != conversation_id:
                     raise LiveAccessDenied(LiveErrorCode.NOT_FOUND, "Run not found")
                 return run
@@ -189,9 +190,7 @@ async def _authorize(
 
 async def _run_now(run_id: UUID) -> AgentRun | None:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        return await build_conversation_service(
-            uow
-        ).conversation_repository.get_agent_run(run_id)
+        return await Runs(uow).get_agent_run(run_id)
 
 
 def _heard(sub: _ConversationSub, event: JsonObject) -> None:

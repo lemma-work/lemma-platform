@@ -58,9 +58,12 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
 )
 from app.modules.agent.infrastructure.models import AgentModel
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.usage.contracts.execution import build_usage_service
@@ -174,7 +177,7 @@ async def surface_conversation(
     left open on a phone, and a conversation deleted underneath it is an
     ordinary outcome that the surface answers in words.
     """
-    entity = await ConversationRepository(uow).get_conversation(conversation_id)
+    entity = await Conversations(uow).get_conversation(conversation_id)
     return None if entity is None else _conversation(entity)
 
 
@@ -190,9 +193,7 @@ async def lemma_message_run_started_at(
     pointing at the last stranger to speak. The time lets the caller tell such a
     run from one that somebody in the chat has since written into.
     """
-    run = await ConversationRepository(uow).get_latest_agent_run_for_conversation(
-        conversation_id
-    )
+    run = await Runs(uow).get_latest_agent_run_for_conversation(conversation_id)
     if run is None or not answers_lemma_message(run.metadata):
         return None
     return run.started_at
@@ -302,7 +303,7 @@ async def append_notification_message(
         uow, conversation_id, key="notification_id", value=str(notification_id)
     ):
         return
-    await ConversationRepository(uow).append_message(
+    await Messages(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,
         draft=MessageDraft.of_notification(
@@ -323,7 +324,7 @@ async def append_delivery_notice(
     For what the person reading the conversation in Lemma should know about
     a message sent on their behalf elsewhere -- that it may not have arrived.
     """
-    await ConversationRepository(uow).append_message(
+    await Messages(uow).append_message(
         conversation_id=conversation_id,
         agent_run_id=None,
         draft=MessageDraft.of_notification(message, metadata=dict(metadata)),
@@ -355,7 +356,7 @@ async def undecided_pauses(
     Exactly what starting a new turn denies on the person's behalf, so a
     surface that reads it first knows which of its cards the turn cancels.
     """
-    calls = await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
+    calls = await Pauses(uow).pausing_calls_awaiting_a_decision(
         conversation_id=conversation_id,
         pausing_tool_names=USER_PAUSING_TOOL_NAMES,
     )
@@ -439,7 +440,7 @@ async def resolve_pending_interaction(
     the pause it is answering -- a finished sign-in, say -- should not have to
     carry a pod id around to be allowed to say "they did it".
     """
-    entity = await ConversationRepository(uow).get_conversation(conversation_id)
+    entity = await Conversations(uow).get_conversation(conversation_id)
     if entity is None:
         return None
     return await _service(uow).resolve_user_approval_internal(
@@ -479,7 +480,6 @@ async def retry_failed_run(
     try:
         await ConversationService(
             uow=uow,
-            conversation_repository=ConversationRepository(uow),
             agent_repository=AgentRepository(uow),
             usage_service=build_usage_service(uow),
         ).retry_failed_run(
@@ -532,7 +532,7 @@ async def conversation_metadata_value(
     ``None`` for anything that is not a string, so a caller comparing an id
     cannot be fooled by a value of another shape written under the same key.
     """
-    stored = await ConversationRepository(uow).get_conversation_metadata_key(
+    stored = await Conversations(uow).get_conversation_metadata_key(
         conversation_id, key
     )
     return stored if isinstance(stored, str) else None
@@ -554,7 +554,7 @@ async def set_conversation_metadata_value(
     A model is stored as its JSON object, so its fields can be queried
     (`conversation_metadata_records`).
     """
-    await ConversationRepository(uow).set_conversation_metadata_key(
+    await Conversations(uow).set_conversation_metadata_key(
         conversation_id,
         key,
         value.model_dump(mode="json") if isinstance(value, BaseModel) else value,

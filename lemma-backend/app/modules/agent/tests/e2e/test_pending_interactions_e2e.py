@@ -30,7 +30,9 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
 )
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.identity.infrastructure.models.user_models import User
 
 pytestmark = [pytest.mark.e2e]
@@ -106,13 +108,14 @@ async def _pause(
     """A run that called ``tool_name`` and left the conversation at ``status``."""
     tool_call_id = f"call-{uuid4().hex[:12]}"
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        run = await repo.create_agent_run(
+        messages = Messages(uow)
+        runs = Runs(uow)
+        run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=None,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
         )
-        message = await repo.append_message(
+        message = await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_tool_call(
@@ -137,7 +140,7 @@ async def _pause(
 
 async def _decide(conversation_id: UUID, tool_call_id: str, user_id: str) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).record_approval_decision(
+        await ApprovalDecisions(uow).record_approval_decision(
             conversation_id=conversation_id,
             approval_id=tool_call_id,
             agent_run_id=None,
@@ -210,7 +213,7 @@ async def test_only_pauses_still_waiting_on_this_person_are_listed(
         status=ConversationStatus.WAITING,
     )
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).append_message(
+        await Messages(uow).append_message(
             conversation_id=answered,
             agent_run_id=None,
             draft=MessageDraft.of_tool_return(

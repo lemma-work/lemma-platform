@@ -37,7 +37,10 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.models import MessageModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 
 pytestmark = [pytest.mark.e2e]
 
@@ -82,14 +85,15 @@ async def _pause_then_bury_it(conversation_id: UUID, *, tool_name: str) -> str:
     """Record a pausing tool call, then write enough messages to bury it."""
     tool_call_id = f"call-{uuid4().hex[:12]}"
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        run = await repo.create_agent_run(
+        messages_repo = Messages(uow)
+        runs = Runs(uow)
+        run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=None,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
             metadata={"source": "e2e_approval_window"},
         )
-        await repo.append_message(
+        await messages_repo.append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_tool_call(
@@ -139,7 +143,7 @@ async def test_an_approval_buried_by_a_long_run_is_still_listed(
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        pending = await ConversationRepository(uow).pausing_calls_awaiting_a_return(
+        pending = await Pauses(uow).pausing_calls_awaiting_a_return(
             conversation_id=conversation_for_query,
             pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         )
@@ -156,7 +160,7 @@ async def test_a_buried_approval_is_still_the_pause_a_reply_routes_to(
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        pending = await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
+        pending = await Pauses(uow).pausing_calls_awaiting_a_decision(
             conversation_id=conversation_for_query,
             pausing_tool_names=PAUSING_TOOL_NAMES,
             limit=1,
@@ -176,8 +180,8 @@ async def test_a_decided_approval_stays_listed_until_its_return_lands(
         conversation_for_query, tool_name="request_approval"
     )
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        await repo.record_approval_decision(
+        approval_decisions = ApprovalDecisions(uow)
+        await approval_decisions.record_approval_decision(
             conversation_id=conversation_for_query,
             approval_id=tool_call_id,
             agent_run_id=None,
@@ -189,12 +193,12 @@ async def test_a_decided_approval_stays_listed_until_its_return_lands(
         await uow.commit()
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        listed = await repo.pausing_calls_awaiting_a_return(
+        pausing_calls = Pauses(uow)
+        listed = await pausing_calls.pausing_calls_awaiting_a_return(
             conversation_id=conversation_for_query,
             pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         )
-        decided = await repo.pausing_calls_awaiting_a_decision(
+        decided = await pausing_calls.pausing_calls_awaiting_a_decision(
             conversation_id=conversation_for_query,
             pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         )
@@ -212,8 +216,8 @@ async def test_a_returned_pause_is_not_pending_on_either_question(
         conversation_for_query, tool_name="ask_user"
     )
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        await repo.append_message(
+        messages = Messages(uow)
+        await messages.append_message(
             conversation_id=conversation_for_query,
             agent_run_id=None,
             draft=MessageDraft.of_tool_return(
@@ -225,9 +229,9 @@ async def test_a_returned_pause_is_not_pending_on_either_question(
         await uow.commit()
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
+        pausing_calls = Pauses(uow)
         assert (
-            await repo.pausing_calls_awaiting_a_return(
+            await pausing_calls.pausing_calls_awaiting_a_return(
                 conversation_id=conversation_for_query,
                 pausing_tool_names=USER_PAUSING_TOOL_NAMES,
             )
@@ -244,12 +248,12 @@ async def test_a_wait_is_never_a_user_approval(conversation_for_query) -> None:
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        user_pauses = await repo.pausing_calls_awaiting_a_return(
+        pausing_calls = Pauses(uow)
+        user_pauses = await pausing_calls.pausing_calls_awaiting_a_return(
             conversation_id=conversation_for_query,
             pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         )
-        all_pauses = await repo.pausing_calls_awaiting_a_decision(
+        all_pauses = await pausing_calls.pausing_calls_awaiting_a_decision(
             conversation_id=conversation_for_query,
             pausing_tool_names=PAUSING_TOOL_NAMES,
         )

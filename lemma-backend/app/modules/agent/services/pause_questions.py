@@ -44,9 +44,8 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent.infrastructure.models.approval import AgentApprovalDecisionModel
 from app.modules.agent.infrastructure.models.conversation import MessageModel
-from app.modules.agent.infrastructure.repositories.conversation_repository import (
-    ConversationRepository,
-)
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.approval_action import approval_action
 from app.modules.agent.services.pause_supersession import SUPERSEDED_KEY
 from app.modules.agent.services.service_factories import build_conversation_service
@@ -178,7 +177,7 @@ def effective_answer(kind: str, decided: PauseDecision) -> dict[str, object]:
 async def undecided_pauses(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> list[Pause]:
-    calls = await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
+    calls = await Pauses(uow).pausing_calls_awaiting_a_decision(
         conversation_id=conversation_id,
         pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         limit=MAX_PAUSES,
@@ -231,7 +230,7 @@ async def sync_pause_questions(
 ) -> None:
     """Ask each question the conversation newly waits on, and close the ones no
     longer waiting: with the decision taken elsewhere, or cancelled."""
-    conversation = await ConversationRepository(uow).get_conversation(
+    conversation = await Conversations(uow).get_conversation(
         conversation_id, include_runs=False
     )
     if conversation is None or Audience.of(conversation).contact_id is not None:
@@ -394,7 +393,7 @@ async def tell_where_asked(
     A note for members: it is the timeline's record, never pushed or carried
     to a platform -- a conversation on one is told there by ``agent_surfaces``
     already, and a push would tell the member twice."""
-    conversation = await ConversationRepository(uow).get_conversation(
+    conversation = await Conversations(uow).get_conversation(
         conversation_id, include_runs=False
     )
     if conversation is None or Audience.of(conversation).contact_id is not None:

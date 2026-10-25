@@ -25,9 +25,7 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.models.conversation import MessageModel
-from app.modules.agent.infrastructure.repositories.conversation_repository import (
-    ConversationRepository,
-)
+from app.modules.agent.infrastructure.db.messages import Messages
 
 
 async def fold_history(
@@ -54,9 +52,9 @@ async def fold_history(
         if _was_seen(message, run_metadata)
         and FOLDED_FROM_KEY not in (message.message_metadata or {})
     ]
-    conversations = ConversationRepository(uow)
+    messages = Messages(uow)
     for message in seen:
-        await conversations.append_message(
+        await messages.append_message(
             conversation_id=into,
             agent_run_id=None,
             draft=MessageDraft(

@@ -299,9 +299,9 @@ async def _turn_ended_while_parked(
 ) -> bool:
     """Whether Lemma ended this run's turn because the request sat unanswered."""
     # Lazy for the same reason as the dispatch repository above.
-    from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent.infrastructure.db.runs import Runs
 
-    run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+    run = await Runs(uow).get_agent_run(agent_run_id)
     return run is not None and parked_suspension_of(run.metadata) is not None
 
 

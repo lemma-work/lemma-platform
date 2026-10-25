@@ -47,7 +47,9 @@ from app.modules.pod.contracts.lifecycle import PodDeleted
 from app.core.infrastructure.work import WorkClass, facts
 from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.test_support.e2e.function_helpers import create_folder
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.pod_ask_delivery import PodAskDelivery
 from app.modules.agent.services.pod_ask_service import PodAskService
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
@@ -276,7 +278,9 @@ async def test_with_nobody_present_a_pod_asks_over_its_link_and_hears_back(
         )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
+        messages_repo = Messages(uow)
+        runs = Runs(uow)
         thread = await conversations.get_conversation(
             outcome.conversation_id, include_runs=True
         )
@@ -288,18 +292,18 @@ async def test_with_nobody_present_a_pod_asks_over_its_link_and_hears_back(
         assert audience.asking_pod_id == UUID(support)
         # Nobody in Billing typed the request, and the message says whose it is.
         [request] = (
-            await conversations.list_messages(conversation_id=thread.id, limit=10)
+            await messages_repo.list_messages(conversation_id=thread.id, limit=10)
         )[0]
         assert request.metadata["ask_from_pod_id"] == support
         assert request.metadata["ask_mode"] == AskMode.LINK.value
         assert request.metadata["ask_from_pod_name"]
         run = thread.agent_runs[-1]
-        await conversations.append_message(
+        await messages_repo.append_message(
             conversation_id=thread.id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text("Two are overdue.", role=MessageRole.ASSISTANT),
         )
-        await conversations.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,
@@ -314,7 +318,7 @@ async def test_with_nobody_present_a_pod_asks_over_its_link_and_hears_back(
             == 1
         )
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        messages, _ = await ConversationRepository(uow).list_messages(
+        messages, _ = await Messages(uow).list_messages(
             conversation_id=asking, limit=50
         )
     delivered = [
@@ -608,9 +612,7 @@ async def test_a_link_stops_working_once_its_steward_could_no_longer_make_it(
     opened = await ask()
     assert opened.mode is AskMode.LINK
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        thread = await ConversationRepository(uow).get_conversation(
-            opened.conversation_id
-        )
+        thread = await Conversations(uow).get_conversation(opened.conversation_id)
     assert thread is not None and thread.user_id != UUID(fixed_test_user["id"])
 
     billing_member = _member_id(memberships[billing])
@@ -672,23 +674,24 @@ async def test_a_link_starts_at_most_its_hourly_cap_of_runs(
     # Runs the link already started this hour, all but one of the cap: the
     # thread the first ask opened carries them, as a busy schedule's would.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
+        runs = Runs(uow)
         thread = await conversations.get_conversation(
             first.conversation_id, include_runs=True
         )
         assert thread is not None
         model_run = thread.agent_runs[-1]
-        await conversations.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=model_run.id, status=AgentRunStatus.COMPLETED
         )
         # One run at a time per conversation, so each is finished as it goes.
         for _ in range(LINK_RUNS_PER_WINDOW - 2):
-            run = await conversations.create_agent_run(
+            run = await runs.create_agent_run(
                 conversation_id=thread.id,
                 agent_id=model_run.agent_id,
                 agent_runtime=model_run.agent_runtime,
             )
-            await conversations.finish_agent_run(
+            await runs.finish_agent_run(
                 agent_run_id=run.id, status=AgentRunStatus.COMPLETED
             )
         await uow.commit()

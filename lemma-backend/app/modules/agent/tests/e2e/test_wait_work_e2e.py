@@ -37,7 +37,7 @@ from app.modules.agent.domain.wait import (
     AgentWaitWakeReason,
 )
 from app.modules.agent.events import wait_work
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -439,7 +439,7 @@ async def test_the_cutover_fails_a_conversation_whose_decided_approval_never_ran
     )
     await finish(run_id, conversation_status=ConversationStatus.WAITING)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).record_approval_decision(
+        await ApprovalDecisions(uow).record_approval_decision(
             conversation_id=seeded.conversation_id,
             approval_id=approval_id,
             agent_run_id=run_id,

@@ -29,7 +29,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.harness_events import
     RunEventApplier,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
@@ -75,7 +75,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     )
     # Deliberately the legacy root: a conversation recorded before the move
     # keeps the cwd it was stamped with, and rebinding must not re-home it.
-    await ConversationRepository(uow).set_conversation_metadata_key(
+    await Conversations(uow).set_conversation_metadata_key(
         conversation_id, "cwd", "/workspace/c/test/sandbox"
     )
     previous = await db_session.get(AgentRunModel, old_run_id)
@@ -112,7 +112,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
         run_id=new_run.id,
         digest="new-instructions",
     )
-    conversation = await ConversationRepository(uow).get_conversation(conversation_id)
+    conversation = await Conversations(uow).get_conversation(conversation_id)
     assert conversation is not None
     applier = RunEventApplier(lambda: SqlAlchemyUnitOfWork(db_session), None)
     await applier.events_for(
@@ -147,7 +147,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
         == "renewed-session"
     )
     assert not await remember_provider_session(uow, old)
-    stored = await ConversationRepository(uow).get_conversation_metadata_key(
+    stored = await Conversations(uow).get_conversation_metadata_key(
         conversation_id, AGENT_HOST_SESSION_METADATA_KEY
     )
     assert isinstance(stored, dict)
@@ -158,9 +158,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     assert "instructions_digest" not in stored
     assert stored["pending_instructions"]["digest"] == "new-instructions"
     assert (
-        await ConversationRepository(uow).get_conversation_metadata_key(
-            conversation_id, "cwd"
-        )
+        await Conversations(uow).get_conversation_metadata_key(conversation_id, "cwd")
         == "/workspace/c/test/sandbox"
     )
     assert (
@@ -175,7 +173,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
         )
         is True
     )
-    stored = await ConversationRepository(uow).get_conversation_metadata_key(
+    stored = await Conversations(uow).get_conversation_metadata_key(
         conversation_id, AGENT_HOST_SESSION_METADATA_KEY
     )
     assert stored["host_cwd"] == host_cwd
@@ -214,7 +212,7 @@ async def test_another_host_or_stale_epoch_cannot_write_a_session_binding(
             lease_seconds=60,
         )
         assert (
-            await ConversationRepository(uow).get_conversation_metadata_key(
+            await Conversations(uow).get_conversation_metadata_key(
                 conversation_id, AGENT_HOST_SESSION_METADATA_KEY
             )
             is None

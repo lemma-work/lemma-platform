@@ -30,7 +30,7 @@ from app.modules.agent.domain.run_origin import run_origin
 from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.private_notes import (
     keeper_started,
@@ -96,7 +96,7 @@ async def build_run_context(
     # so this only opens a unit of work for a row that predates that.
     if not has_recorded_cwd(conversation):
         async with uow_factory() as uow:
-            await ConversationRepository(uow).set_conversation_metadata_key(
+            await Conversations(uow).set_conversation_metadata_key(
                 conversation.id, "cwd", workspace_location.cwd
             )
             await uow.commit()

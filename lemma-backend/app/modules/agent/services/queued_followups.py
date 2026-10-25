@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from uuid import UUID
 
-from app.modules.agent.domain.conversation_ports import QueuedMessages
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 
 #: On a follow-up run: the finished runs still holding messages of the kind it
 #: did not answer, for the follow-up after it to find.

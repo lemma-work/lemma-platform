@@ -17,6 +17,7 @@ import pytest
 
 import app.modules.agent.services.conversation_stop as stops
 from app.core.authorization.permissions import Permissions
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import (
     ConversationStatus,
@@ -93,12 +94,9 @@ def _coordinator(
 
     monkeypatch.setattr(stops, "publish_conversation_event", _publish)
 
-    coordinator = stops.StopCoordinator(
-        uow,
+    coordinator = wire_repositories(
+        stops.StopCoordinator(uow, SimpleNamespace(), approvals, SimpleNamespace()),
         conversations,
-        SimpleNamespace(),
-        approvals,
-        SimpleNamespace(),
     )
     return coordinator, uow, statuses
 
@@ -172,15 +170,14 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
     async def _hold_decided(*, conversation):
         closed.append("decided")
 
-    coordinator = stops.StopCoordinator(
-        SimpleNamespace(),
+    coordinator = wire_repositories(
+        stops.StopCoordinator(
+            SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace()
+        ),
         SimpleNamespace(
             get_conversation=AsyncMock(return_value=conversation),
             get_active_agent_run_for_update=AsyncMock(return_value=None),
         ),
-        SimpleNamespace(),
-        SimpleNamespace(),
-        SimpleNamespace(),
     )
     monkeypatch.setattr(
         stops, "validate_conversation_access", lambda loaded, **_kwargs: loaded

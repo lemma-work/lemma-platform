@@ -38,9 +38,9 @@ from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     ConversationStatus,
 )
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.infrastructure.run_execution_record import (
     claim_run_metadata_key,
@@ -80,9 +80,7 @@ class SubagentResultDelivery:
         may have children whose results it left uncollected.
         """
         async with self.uow_factory() as uow:
-            conversation = await ConversationRepository(uow).get_conversation(
-                conversation_id
-            )
+            conversation = await Conversations(uow).get_conversation(conversation_id)
         if conversation is None:
             return 0
         delivered = 0
@@ -97,7 +95,7 @@ class SubagentResultDelivery:
     async def deliver_owed(self, *, parent_id: UUID) -> int:
         """Deliver every finished child result this parent has not collected."""
         async with self.uow_factory() as uow:
-            conversations = ConversationRepository(uow)
+            conversations = Conversations(uow)
             parent = await conversations.get_conversation(parent_id, include_runs=True)
             if parent is None or parent.status is ConversationStatus.STOPPED:
                 return 0
@@ -116,7 +114,6 @@ class SubagentResultDelivery:
             try:
                 turns = ConversationService(
                     uow=uow,
-                    conversation_repository=conversations,
                     agent_repository=AgentRepository(uow),
                     usage_service=build_usage_service(uow),
                 ).turns
@@ -151,7 +148,7 @@ class SubagentResultDelivery:
             and parent_latest.status in ACTIVE_AGENT_RUN_STATUSES
             else None
         )
-        children = await ConversationRepository(uow).list_children(
+        children = await Conversations(uow).list_child_conversations(
             parent_id=parent.id, user_id=parent.user_id, limit=CHILDREN_WINDOW
         )
         agents = await AgentRepository(uow).get_many(

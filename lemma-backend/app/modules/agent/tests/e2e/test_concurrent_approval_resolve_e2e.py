@@ -32,7 +32,7 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.models.approval import (
     AgentApprovalDecisionModel,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     RECORD_DELETE_REFUSALS,
     Seeded,
@@ -202,7 +202,7 @@ async def test_requests_that_lose_the_race_adopt_the_winning_decision(
     """
     seeded, paused, approval_id = await _paused_on_a_delete(scenario)
     async with create_uow_from_session_maker(async_session_maker) as tap:
-        recorded = await ConversationRepository(tap).record_approval_decision(
+        recorded = await ApprovalDecisions(tap).record_approval_decision(
             conversation_id=seeded.conversation_id,
             approval_id=approval_id,
             agent_run_id=paused,

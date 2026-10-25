@@ -35,9 +35,11 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.tools.approval_denials import show_card
@@ -76,7 +78,6 @@ def conversation_service(
 ) -> ConversationService:
     return ConversationService(
         uow=uow,
-        conversation_repository=ConversationRepository(uow),
         agent_repository=AgentRepository(uow),
         usage_service=usage_service,
     )
@@ -129,7 +130,7 @@ async def seeded_conversation(
 
 async def running_run(seeded: Seeded, *, metadata: JsonObject | None = None) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        run = await ConversationRepository(uow).create_agent_run(
+        run = await Runs(uow).create_agent_run(
             conversation_id=seeded.conversation_id,
             agent_id=seeded.agent_id,
             agent_runtime=SYSTEM_RUNTIME,
@@ -141,7 +142,7 @@ async def running_run(seeded: Seeded, *, metadata: JsonObject | None = None) -> 
 
 async def append(seeded: Seeded, run_id: UUID | None, draft: MessageDraft) -> Message:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        saved = await ConversationRepository(uow).append_message(
+        saved = await Messages(uow).append_message(
             conversation_id=seeded.conversation_id, agent_run_id=run_id, draft=draft
         )
         await uow.commit()
@@ -201,7 +202,7 @@ async def finish(
     conversation_status: ConversationStatus | None = None,
 ) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=status,
             conversation_status=conversation_status,
@@ -221,7 +222,7 @@ async def runs(conversation_id: UUID) -> list[AgentRunModel]:
 
 async def messages(conversation_id: UUID) -> list[Message]:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        found, _ = await ConversationRepository(uow).list_messages(
+        found, _ = await Messages(uow).list_messages(
             conversation_id=conversation_id, limit=500
         )
     return found
@@ -229,7 +230,7 @@ async def messages(conversation_id: UUID) -> list[Message]:
 
 async def conversation(conversation_id: UUID) -> Conversation:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        loaded = await ConversationRepository(uow).get_conversation(
+        loaded = await Conversations(uow).get_conversation(
             conversation_id, include_runs=False
         )
     assert loaded is not None

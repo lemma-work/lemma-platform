@@ -27,7 +27,8 @@ from app.modules.agent.events.run_followup_work import start_queued_followup_for
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.services.approval_reconciliation import (
     stage_approval_execution,
 )
@@ -152,7 +153,7 @@ async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
     # Approved: the decision is committed and the tool handed to a worker,
     # which has not written its result yet.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).record_approval_decision(
+        await ApprovalDecisions(uow).record_approval_decision(
             conversation_id=seeded.conversation_id,
             approval_id=approval_id,
             agent_run_id=paused,
@@ -268,7 +269,7 @@ async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
     assert joined.agent_run_id == working and joined.started_new_run is False
     # The run being stopped does not take it in: nothing there would answer.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        steered = await ConversationRepository(uow).claim_queued_user_messages(
+        steered = await QueuedMessages(uow).claim_queued_user_messages(
             working, as_run=True
         )
         await uow.rollback()
@@ -343,7 +344,7 @@ async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
     )
     await finish(paused, conversation_status=ConversationStatus.WAITING)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).record_approval_decision(
+        await ApprovalDecisions(uow).record_approval_decision(
             conversation_id=seeded.conversation_id,
             approval_id=question,
             agent_run_id=paused,

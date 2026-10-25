@@ -28,9 +28,9 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.context import ApprovedExecution
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
@@ -140,7 +140,7 @@ def _delete(row_id: str) -> dict[str, object]:
 async def _as_the_agent(ctx: ConversationContext, args: dict[str, object]) -> dict:
     """Call ``pod_write_record`` the way a run does: with the agent's own authority."""
     async with _uow_factory()() as uow:
-        conversation = await ConversationRepository(uow).get_conversation(
+        conversation = await Conversations(uow).get_conversation(
             ctx.conversation_id, include_runs=False
         )
         assert conversation is not None and conversation.agent_id is not None

@@ -8,8 +8,8 @@ marker in its arguments). These are the two reads and the one write the
 parked window needs: how long the oldest such pause has gone unanswered, and
 the mark that says its turn was ended for it.
 
-Plain functions over a session, like ``conversation_run_lifecycle``: the
-repositories they would otherwise join are at the size ratchet.
+Plain functions over a session: the Agent Host's parked window reads them
+without a repository of its own.
 """
 
 from __future__ import annotations

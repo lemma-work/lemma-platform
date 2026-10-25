@@ -35,9 +35,11 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.approval_reconciliation import (
@@ -107,17 +109,19 @@ async def _teammate(deps: BaseAgentContext, pod_id: str):
 async def _finish_with(conversation_id: UUID, *, words: str) -> UUID:
     """End the conversation's latest run having said ``words``, as a run would."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
+        messages = Messages(uow)
+        runs = Runs(uow)
         conversation = await conversations.get_conversation(
             conversation_id, include_runs=True
         )
         run = conversation.agent_runs[-1]
-        await conversations.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text(words, role=MessageRole.ASSISTANT),
         )
-        await conversations.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,
@@ -128,7 +132,7 @@ async def _finish_with(conversation_id: UUID, *, words: str) -> UUID:
 
 async def _messages(conversation_id: UUID):
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        messages, _ = await ConversationRepository(uow).list_messages(
+        messages, _ = await Messages(uow).list_messages(
             conversation_id=conversation_id, limit=50
         )
     return messages
@@ -136,7 +140,7 @@ async def _messages(conversation_id: UUID):
 
 async def _set_status(conversation_id: UUID, value: ConversationStatus) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).set_conversation_status(
+        await Conversations(uow).set_conversation_status(
             conversation_id=conversation_id, status=value
         )
         await uow.commit()

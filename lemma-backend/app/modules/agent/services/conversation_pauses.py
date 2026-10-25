@@ -16,8 +16,9 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pausing_tools import PausingKind, PendingPause
-from app.modules.agent.domain.ports import AgentRepository, ConversationRepository
+from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.conversation_access import authorized_conversation
 from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
 from app.modules.agent.services.pause_resume import PAUSING_TOOL_NAMES
@@ -39,7 +40,7 @@ class ConversationPauses:
     """Reads and answers a conversation's pauses; mixed into ConversationService."""
 
     uow: SqlAlchemyUnitOfWork
-    conversation_repository: ConversationRepository
+    conversations: Conversations
     agent_repository: AgentRepository
     approvals: ApprovalCoordinator
 
@@ -68,7 +69,7 @@ class ConversationPauses:
         internal method directly with the loaded conversation.
         """
         conversation = await authorized_conversation(
-            self.conversation_repository,
+            self.conversations,
             self.agent_repository,
             conversation_id=conversation_id,
             user_id=user_id,

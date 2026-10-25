@@ -21,10 +21,11 @@ from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.domain.ports import (
-    AgentRepository,
-    ConversationRepository,
-)
+from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationAgentSelection,
@@ -50,11 +51,13 @@ class ConversationQueries:
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: ConversationRepository,
         agent_repository: AgentRepository,
     ) -> None:
         self.uow = uow
-        self.conversation_repository = conversation_repository
+        self.conversations = Conversations(uow)
+        self.runs = Runs(uow)
+        self.messages = Messages(uow)
+        self.pausing_calls = Pauses(uow)
         self.agent_repository = agent_repository
 
     async def list_conversations(
@@ -88,7 +91,7 @@ class ConversationQueries:
             action=Permissions.AGENT_READ,
         )
         if isinstance(cursor, UUID):
-            cursor = await self.conversation_repository.cursor_after(
+            cursor = await self.conversations.cursor_after(
                 conversation_id=cursor, user_id=user_id, pod_id=pod_id
             )
             if cursor is None:
@@ -96,7 +99,7 @@ class ConversationQueries:
         (
             conversations,
             next_cursor,
-        ) = await self.conversation_repository.list_conversations(
+        ) = await self.conversations.list_conversations(
             user_id=user_id,
             pod_id=pod_id,
             agent_selection=resolved_selection,
@@ -114,7 +117,7 @@ class ConversationQueries:
         # the status: a WAITING conversation may be waiting on a timer, and an
         # Agent Host permission request waits inside a RUNNING one.
         waiting = (
-            await self.conversation_repository.conversations_with_pending_interaction(
+            await self.pausing_calls.conversations_with_pending_interaction(
                 [conversation.id for conversation in conversations]
             )
             if conversations
@@ -144,7 +147,7 @@ class ConversationQueries:
             agent_id=None,
             action=Permissions.AGENT_READ,
         )
-        return await self.conversation_repository.list_pending_interactions(
+        return await self.pausing_calls.list_pending_interactions(
             user_id=user_id, pod_id=pod_id, cursor=cursor, limit=limit
         )
 
@@ -161,7 +164,7 @@ class ConversationQueries:
         # require_read_grant is False only for self-spawn (an agent operating on
         # its own conversation tree).
         conversation = await authorized_conversation(
-            self.conversation_repository,
+            self.conversations,
             self.agent_repository,
             conversation_id=conversation_id,
             user_id=user_id,
@@ -175,7 +178,7 @@ class ConversationQueries:
             conversation
         )
         conversation.has_pending_interaction = conversation.id in (
-            await self.conversation_repository.conversations_with_pending_interaction(
+            await self.pausing_calls.conversations_with_pending_interaction(
                 [conversation.id]
             )
         )
@@ -194,7 +197,7 @@ class ConversationQueries:
         agent_name: str | None,
     ) -> Conversation:
         return await authorized_conversation(
-            self.conversation_repository,
+            self.conversations,
             self.agent_repository,
             conversation_id=conversation_id,
             user_id=user_id,
@@ -215,7 +218,7 @@ class ConversationQueries:
         latest = conversation.agent_runs[-1] if conversation.agent_runs else None
         if latest is None or latest.status != AgentRunStatus.FAILED:
             return False
-        return await self.conversation_repository.run_is_replay_safe(latest.id)
+        return await self.runs.run_is_replay_safe(latest.id)
 
     async def list_messages(
         self,
@@ -234,7 +237,7 @@ class ConversationQueries:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        return await self.conversation_repository.list_messages(
+        return await self.messages.list_messages(
             conversation_id=conversation_id,
             before_sequence=before_sequence,
             after_sequence=after_sequence,
@@ -255,7 +258,7 @@ class ConversationQueries:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        return await self.conversation_repository.get_active_agent_run(conversation_id)
+        return await self.runs.get_active_agent_run(conversation_id)
 
     async def list_user_approvals(
         self,
@@ -277,7 +280,7 @@ class ConversationQueries:
         # rather than by scanning the newest 500 messages: a long agent run
         # writes hundreds of tool messages, and past that window the pending
         # approval simply disappeared from this list.
-        return await self.conversation_repository.pausing_calls_awaiting_a_return(
+        return await self.pausing_calls.pausing_calls_awaiting_a_return(
             conversation_id=conversation.id,
             pausing_tool_names=USER_PAUSING_TOOL_NAMES,
         )

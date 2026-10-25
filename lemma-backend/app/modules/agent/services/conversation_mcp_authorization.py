@@ -55,9 +55,10 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import TERMINAL_AGENT_RUN_STATUSES
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 
@@ -104,7 +105,7 @@ async def authorize_run_token(
         _denied("host_user_mismatch", conversation_id, agent_run_id)
         return False
     async with uow_factory() as uow:
-        conversation = await ConversationRepository(uow).get_conversation(
+        conversation = await Conversations(uow).get_conversation(
             conversation_id, include_runs=False
         )
         if conversation is None or conversation.user_id != run_token.user_id:
@@ -199,7 +200,7 @@ async def _refusal(
             return reason
     if agent_run_id is None:
         return None
-    run = await ConversationRepository(uow).get_agent_run(agent_run_id)
+    run = await Runs(uow).get_agent_run(agent_run_id)
     if run is None or run.conversation_id != conversation.id:
         return "run_not_in_conversation"
     if not allow_ended_run and run.status in TERMINAL_AGENT_RUN_STATUSES:

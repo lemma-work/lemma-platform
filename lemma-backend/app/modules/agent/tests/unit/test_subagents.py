@@ -69,7 +69,8 @@ def _patch_repo(monkeypatch, *, conversation, messages=None):
             del conversation_id, after_sequence, limit
             return list(messages or []), None
 
-    monkeypatch.setattr(subagent_module, "ConversationRepository", _FakeRepo)
+    monkeypatch.setattr(subagent_module, "Conversations", _FakeRepo)
+    monkeypatch.setattr(subagent_module, "Messages", _FakeRepo)
 
 
 async def test_get_messages_rejects_conversation_not_spawned_by_agent(monkeypatch):
@@ -292,6 +293,7 @@ async def test_a_self_spawned_child_runs_on_the_parents_runtime():
     """The model the person picked for the conversation, not the pod default."""
     runtime = await inherited_runtime(
         runs=_Runs(run_runtime=_PARENT_RUNTIME),
+        conversations=_Runs(run_runtime=_PARENT_RUNTIME),
         agents=_Agents(),
         deps=_deps(uuid4()),
         is_self=True,
@@ -307,6 +309,7 @@ async def test_without_a_run_the_parents_conversation_decides():
 
     runtime = await inherited_runtime(
         runs=_Runs(conversation_runtime=_PARENT_RUNTIME),
+        conversations=_Runs(conversation_runtime=_PARENT_RUNTIME),
         agents=_Agents(),
         deps=deps,
         is_self=True,
@@ -319,6 +322,7 @@ async def test_without_a_run_the_parents_conversation_decides():
 async def test_a_named_agent_without_a_runtime_inherits_the_parents():
     runtime = await inherited_runtime(
         runs=_Runs(run_runtime=_PARENT_RUNTIME),
+        conversations=_Runs(run_runtime=_PARENT_RUNTIME),
         agents=_Agents(runtime=None),
         deps=_default_deps(uuid4()),
         is_self=False,
@@ -335,6 +339,7 @@ async def test_a_named_agent_with_its_own_runtime_keeps_it():
 
     runtime = await inherited_runtime(
         runs=_Runs(run_runtime=_PARENT_RUNTIME),
+        conversations=_Runs(run_runtime=_PARENT_RUNTIME),
         agents=_Agents(runtime=own),
         deps=_deps(uuid4()),
         is_self=False,
@@ -376,7 +381,7 @@ async def test_list_children_returns_owned_children_with_status(monkeypatch):
         def __init__(self, uow):
             del uow
 
-        async def list_children(self, *, parent_id, user_id, limit=50):
+        async def list_child_conversations(self, *, parent_id, user_id, limit=50):
             captured_args.update(parent_id=parent_id, user_id=user_id, limit=limit)
             return [running, done]
 
@@ -388,7 +393,7 @@ async def test_list_children_returns_owned_children_with_status(monkeypatch):
             del agent_ids
             return {}
 
-    monkeypatch.setattr(subagent_module, "ConversationRepository", _Repo)
+    monkeypatch.setattr(subagent_module, "Conversations", _Repo)
     monkeypatch.setattr(subagent_module, "AgentRepository", _AgentRepo)
 
     service = SubAgentService(_FakeUowFactory())

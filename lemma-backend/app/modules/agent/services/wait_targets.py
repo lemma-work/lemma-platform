@@ -144,7 +144,8 @@ async def read_subagent_in(
     question. Reported as finished, the parent built on a result that did not
     exist yet and the question was never answered.
     """
-    from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent.infrastructure.db.conversations import Conversations
+    from app.modules.agent.infrastructure.db.runs import Runs
     from app.modules.agent.services.subagent_result_delivery import mark_collected
 
     try:
@@ -152,10 +153,11 @@ async def read_subagent_in(
     except ValueError:
         return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE)
 
-    repository = ConversationRepository(uow)
-    run = await repository.get_agent_run(parsed)
+    conversations = Conversations(uow)
+    runs = Runs(uow)
+    run = await runs.get_agent_run(parsed)
     child = (
-        await repository.get_conversation(run.conversation_id, include_runs=False)
+        await conversations.get_conversation(run.conversation_id, include_runs=False)
         if run is not None
         else None
     )

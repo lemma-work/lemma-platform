@@ -44,7 +44,7 @@ from app.modules.agent.infrastructure.harnesses.mock_model import (
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.domain.ingress_context import (
@@ -95,13 +95,13 @@ async def set_mock_llm_script(
 ) -> None:
     """Merge ``mock_llm_script`` onto a conversation's metadata.
 
-    Uses ``jsonb_set`` (via ``ConversationRepository.set_conversation_metadata_key``)
+    Uses ``jsonb_set`` (via ``Conversations.set_conversation_metadata_key``)
     so sibling keys (``surface_platform``, ``surface_id``, etc.) are untouched.
     Must be called after the conversation exists (i.e. after
     ``prepare_ingress``/``execute_chat``) and before the run is driven.
     """
     uow = SqlAlchemyUnitOfWork(db_session)
-    await ConversationRepository(uow).set_conversation_metadata_key(
+    await Conversations(uow).set_conversation_metadata_key(
         conversation_id, MOCK_SCRIPT_METADATA_KEY, script
     )
     await db_session.commit()

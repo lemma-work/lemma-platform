@@ -28,7 +28,9 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.pod_ask_queries import PodAskQueries
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.pod_link_helpers import (
     ask_service,
@@ -101,16 +103,18 @@ async def _the_thread_once_opened(asking: UUID) -> UUID:
 async def _finish(thread_id: UUID, words: str, *, disconnect: tuple[str, str] | None):
     """Finish the thread's run -- and, in the same commit, take the link away."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
+        messages = Messages(uow)
+        runs = Runs(uow)
         found = await conversations.get_conversation(thread_id, include_runs=True)
         assert found is not None
         run = found.agent_runs[-1]
-        await conversations.append_message(
+        await messages.append_message(
             conversation_id=thread_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text(words, role=MessageRole.ASSISTANT),
         )
-        await conversations.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,
@@ -245,7 +249,7 @@ async def test_disconnecting_stops_a_link_thread_still_running(
     )
     asked = await _ask(deps, billing)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        running = await ConversationRepository(uow).get_conversation(
+        running = await Conversations(uow).get_conversation(
             asked.conversation_id, include_runs=True
         )
     assert running is not None and running.status is ConversationStatus.RUNNING
@@ -254,7 +258,7 @@ async def test_disconnecting_stops_a_link_thread_still_running(
     assert gone.status_code == status.HTTP_204_NO_CONTENT, gone.text
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        stopped = await ConversationRepository(uow).get_conversation(
+        stopped = await Conversations(uow).get_conversation(
             asked.conversation_id, include_runs=True
         )
     assert stopped is not None

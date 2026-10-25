@@ -32,9 +32,9 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.context import ApprovedExecution
 from app.modules.agent.domain.outsiders import Audience, OutsiderRunRefused
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.core.domain.errors import DomainError
 from app.modules.agent.tools.approval.grant_outcome import confer_offered_grant
@@ -83,7 +83,7 @@ class ApprovalExecutor:
             raise OutsiderRunRefused(_NOTHING_RUNS_AS_THE_MEMBER)
 
         async with self.uow_factory() as uow:
-            conversation = await ConversationRepository(uow).get_conversation(
+            conversation = await Conversations(uow).get_conversation(
                 deps.conversation_id,
                 include_runs=False,
             )

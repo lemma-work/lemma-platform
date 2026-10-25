@@ -393,9 +393,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {"is_sub_agent": True}  # a sibling metadata key
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
-    )
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
 
     capability = _visible_capability(
         build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
@@ -533,9 +531,7 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {}
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
-    )
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
     capability = _visible_capability(
         build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
     )
@@ -594,9 +590,7 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {}
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
-    )
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
     capability = _visible_capability(
         build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
     )
@@ -687,9 +681,7 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
     from app.modules.agent.tools.context import BaseAgentContext
 
     store: dict = {}
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
-    )
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
     capability = _visible_capability(
         build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
     )
@@ -897,9 +889,7 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     from app.modules.agent.tools.context import BaseAgentContext
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
     deps = BaseAgentContext(
         user_id=uuid4(),
@@ -981,9 +971,7 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
     from app.modules.agent.tools.context import BaseAgentContext
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
     deps = BaseAgentContext(
         user_id=uuid4(),
@@ -1101,9 +1089,7 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     from app.modules.agent.tools.context import BaseAgentContext
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
     deps = BaseAgentContext(
         user_id=uuid4(),
@@ -1187,9 +1173,7 @@ async def test_pod_is_visible_and_names_itself_the_default_for_pod_data(monkeypa
     from app.modules.agent.tools.context import BaseAgentContext
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
     deps = BaseAgentContext(
         user_id=uuid4(),
@@ -1301,9 +1285,7 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     from app.modules.agent.tools.context import BaseAgentContext
     from app.modules.agent.tools.registry import resolve_agent_toolsets
 
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
     deps = BaseAgentContext(
         user_id=uuid4(),

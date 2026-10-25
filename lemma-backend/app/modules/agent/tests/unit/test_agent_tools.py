@@ -8,6 +8,7 @@ import pytest
 
 import app.modules.agent.tools.user_interaction.pydantic_adapter as user_interaction_adapter
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.prompts import build_agent_instructions
@@ -1699,10 +1700,9 @@ async def test_project_child_conversation_keeps_subagents_toolset():
 def _conversation_service_with_repo(repo):
     from app.modules.agent.services.conversation_service import ConversationService
 
-    return ConversationService(
-        uow=None,
-        conversation_repository=repo,
-        agent_repository=None,
+    return wire_repositories(
+        ConversationService(uow=None, agent_repository=None),  # type: ignore[arg-type]
+        repo,
     )
 
 

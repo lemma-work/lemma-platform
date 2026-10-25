@@ -40,7 +40,8 @@ from app.modules.agent.events.channel_answer_work import register_channel_answer
 from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.channel_answers import answer_line
 from app.modules.agent.services.channel_background import with_channel_background
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
@@ -137,14 +138,14 @@ async def test_a_line_said_while_the_agent_works_is_answered_where_the_first_was
     assert joined.agent_run_id == run.id, "the second line joined the run"
     async with create_uow_from_session_maker(async_session_maker) as uow:
         # The run reads it mid-flight, as the steering capability claims it.
-        steered = await ConversationRepository(uow).claim_queued_user_messages(
+        steered = await QueuedMessages(uow).claim_queued_user_messages(
             run.id, as_run=True
         )
         await uow.commit()
     assert [message.text for message in steered] == ["And the weather?"]
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,

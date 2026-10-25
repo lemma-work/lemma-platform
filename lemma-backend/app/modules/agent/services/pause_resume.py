@@ -7,9 +7,8 @@ way, and resumes by having its return synthesized and replayed by a fresh run.
 ``wait_for`` is the second caller — it resolves on a timer, a process or a child
 run instead of on a person.
 
-A collaborator rather than a mixin: it needs a unit of work, a conversation
-repository and an agent repository, and nothing else ``ConversationService``
-holds. Stated as constructor arguments, that is checkable; mixed in, it was a
+A collaborator rather than a mixin: it needs a unit of work and an agent
+repository, and nothing else ``ConversationService`` holds. Stated as constructor arguments, that is checkable; mixed in, it was a
 set of attribute names the mixin hoped its host had -- which is how it came to
 call a private helper the host later stopped having.
 """
@@ -32,15 +31,17 @@ from app.modules.agent.domain.pausing_tools import (
     PAUSING_TOOL_NAMES as _PAUSING_TOOL_NAMES_DOMAIN,
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.ports import (
-    AgentRepository,
-    ConversationRepository,
-)
+from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
     MessageDraft,
 )
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.queued_followups import LEFTOVERS_KEY
 from app.modules.agent.services.realtime import (
     error_payload,
@@ -70,12 +71,15 @@ class PauseResume:
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        conversation_repository: ConversationRepository,
         agent_repository: AgentRepository,
         usage_service: UsageService | None = None,
     ) -> None:
         self.uow = uow
-        self.conversation_repository = conversation_repository
+        self.conversations = Conversations(uow)
+        self.runs = Runs(uow)
+        self.messages = Messages(uow)
+        self.queued_messages = QueuedMessages(uow)
+        self.pausing_calls = Pauses(uow)
         self.agent_repository = agent_repository
         self.usage_service = usage_service
 
@@ -96,13 +100,13 @@ class PauseResume:
         reconstructed per conversation and ``_build_tool_batch`` pairs a return
         with its call regardless of which run each lives in.
         """
-        existing = await self.conversation_repository.get_tool_return(
+        existing = await self.pausing_calls.get_tool_return(
             conversation_id=conversation.id,
             tool_call_id=tool_call_id,
         )
         if existing is not None:
             return False
-        saved_return = await self.conversation_repository.append_message(
+        saved_return = await self.messages.append_message(
             conversation_id=conversation.id,
             agent_run_id=paused_run_id,
             draft=MessageDraft.of_tool_return(
@@ -159,12 +163,12 @@ class PauseResume:
         and nothing was polling for that answer, so skipping the resume left
         the conversation waiting on a question already answered.
         """
-        call = await self.conversation_repository.get_tool_call(
+        call = await self.pausing_calls.get_tool_call(
             conversation_id=conversation_id, tool_call_id=tool_call_id
         )
         if call is None or not (call.metadata or {}).get(PARKED_IN_RUN_KEY):
             return False
-        run = await self.conversation_repository.get_agent_run(paused_run_id)
+        run = await self.runs.get_agent_run(paused_run_id)
         return run is not None and run.status == AgentRunStatus.RUNNING
 
     async def start_resume_run_if_ready(
@@ -191,8 +195,8 @@ class PauseResume:
         its tool -- it cannot be taken back -- but the agent does not wake to
         carry on: Stop leaves the conversation STOPPED, and that is read here.
         """
-        await self.conversation_repository.lock_conversation(conversation.id)
-        remaining = await self.conversation_repository.unresolved_pausing_call_ids(
+        await self.conversations.lock_conversation(conversation.id)
+        remaining = await self.pausing_calls.unresolved_pausing_call_ids(
             conversation_id=conversation.id,
             agent_run_id=paused_run_id,
             pausing_tool_names=PAUSING_TOOL_NAMES,
@@ -201,18 +205,14 @@ class PauseResume:
             # Still paused on something else; that resolution will start the run.
             await self.uow.commit()
             return
-        active_run = await self.conversation_repository.get_active_agent_run_for_update(
-            conversation.id
-        )
+        active_run = await self.runs.get_active_agent_run_for_update(conversation.id)
         if active_run is not None:
             # Another resolution already started the resume run, or the paused
             # run has not finished being written yet -- in which case its own
             # finalization resumes it (`resume_if_already_answered`).
             await self.uow.commit()
             return
-        status = await self.conversation_repository.get_conversation_status(
-            conversation.id
-        )
+        status = await self.conversations.get_conversation_status(conversation.id)
         if status == ConversationStatus.STOPPED:
             await self.uow.commit()
             return
@@ -248,27 +248,26 @@ class PauseResume:
         has replied to them. Returns the resume run's id (None when there is
         none) and the messages whose frames are owed, or None for nothing to do.
         """
-        repository = self.conversation_repository
-        await repository.lock_conversation(conversation.id)
-        latest = await repository.get_latest_agent_run_for_conversation(conversation.id)
+        await self.conversations.lock_conversation(conversation.id)
+        latest = await self.runs.get_latest_agent_run_for_conversation(conversation.id)
         if (
             latest is None
             or latest.id != paused_run_id
-            or await repository.get_conversation_status(conversation.id)
+            or await self.conversations.get_conversation_status(conversation.id)
             != ConversationStatus.WAITING
         ):
             # A newer run, or a resolution that already moved it on: either way
             # this run's pause is no longer the conversation's.
             await self.uow.commit()
             return None
-        asked = await repository.pausing_call_ids_of_run(
+        asked = await self.pausing_calls.pausing_call_ids_of_run(
             conversation_id=conversation.id,
             agent_run_id=paused_run_id,
             pausing_tool_names=PAUSING_TOOL_NAMES,
         )
         awaiting = {
             message.tool_call_id
-            for message in await repository.pausing_calls_awaiting_a_return(
+            for message in await self.pausing_calls.pausing_calls_awaiting_a_return(
                 conversation_id=conversation.id,
                 pausing_tool_names=PAUSING_TOOL_NAMES,
             )
@@ -284,7 +283,7 @@ class PauseResume:
                 agent_name=None,
                 source="approval_resume",
             )
-        held = await repository.mark_queued_waiting_on_answer(paused_run_id)
+        held = await self.queued_messages.mark_queued_waiting_on_answer(paused_run_id)
         await self.uow.commit()
         return (None, held) if held else None
 
@@ -333,16 +332,15 @@ class PauseResume:
             )
             await self.uow.commit()
             return None
-        repository = self.conversation_repository
-        paused_run = await repository.get_agent_run(paused_run_id)
+        paused_run = await self.runs.get_agent_run(paused_run_id)
         paused_metadata = paused_run.metadata if paused_run else None
         notes = run_is_private(paused_metadata)
         # A resume answers one kind, like a follow-up turn: the other kind
         # waits for the turn after it, which has to know where to look.
-        leftovers = await repository.count_queued_user_messages(
+        leftovers = await self.queued_messages.count_queued_user_messages(
             paused_run_id, notes=not notes
         )
-        resume_run = await repository.create_agent_run(
+        resume_run = await self.runs.create_agent_run(
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=selected_agent_runtime,
@@ -357,7 +355,7 @@ class PauseResume:
         # What the person said while the pause was open is this run's to
         # answer: claimed into it, so a host carries it in the prompt and the
         # follow-up after this run does not answer it a second time.
-        claimed = await repository.claim_queued_user_messages(
+        claimed = await self.queued_messages.claim_queued_user_messages(
             paused_run_id, into_run_id=resume_run.id, notes=notes
         )
         await stage_agent_turn(

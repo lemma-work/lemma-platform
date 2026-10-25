@@ -1,9 +1,11 @@
-"""The durable record of an approval, and the tool call it resolves.
+"""Pausing tool calls, and what answers them.
 
-Split from `ConversationRepository` the way `ConversationRunQueriesMixin`
-already was: these five reads and writes are about one question — what did the
-person decide, and which call was it about — and they are the half of the
-repository that the approval reconciliation path uses on its own.
+A pause today is derived state: a pausing tool call (``ask_user``,
+``request_approval``, a wait) with no tool return, and -- for the ones a person
+decides -- no row in ``agent_approval_decisions``. These are the reads over
+that pairing for one conversation, and the inbox's reads across many
+(``pending_interactions``). The decision rows themselves are written by
+``approvals.ApprovalDecisions``.
 """
 
 from __future__ import annotations
@@ -11,140 +13,24 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import Select, func, select, update
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Select, select
 
-from app.modules.agent.domain.entities import (
-    Message as MessageEntity,
-)
-from app.modules.agent.domain.value_objects import (
-    AgentRunApprovalDecision,
-    JsonObject,
-    MessageKind,
-)
+from app.modules.agent.domain.entities import Message as MessageEntity
 from app.modules.agent.domain.pending_interactions import (
     PendingInteraction,
     PendingInteractionCursor,
 )
+from app.modules.agent.domain.value_objects import MessageKind
+from app.modules.agent.infrastructure.db import pending_interactions
+from app.modules.agent.infrastructure.db.base import UnitOfWorkRepository
 from app.modules.agent.infrastructure.models import (
     AgentApprovalDecisionModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.repositories import pending_interaction_queries
 
 
-class ConversationApprovalQueriesMixin:
-    """Approval decisions and the tool calls they answer."""
-
-    async def record_approval_decision(
-        self,
-        *,
-        conversation_id: UUID,
-        approval_id: str,
-        agent_run_id: UUID | None,
-        tool_name: str | None,
-        decision: AgentRunApprovalDecision,
-        response: JsonObject | None,
-        resolved_by_user_id: UUID,
-    ) -> bool:
-        """Persist a decision once. Returns False if already recorded.
-
-        The insert decides, not a preceding read. Two genuinely overlapping
-        resolves both miss a SELECT, and the loser's flush then raises
-        `IntegrityError` against `uq_agent_approval_decision` -- which nothing
-        on this path catches, so it surfaced as a 500, its `_reconcile_resume`
-        never ran, and the session was left poisoned. Worse, the caller's
-        "somebody else won, adopt their decision" branch was unreachable for
-        exactly the race it was written for: it only saw `False` when the SELECT
-        found a row, i.e. on a *sequential* retry.
-
-        `ON CONFLICT DO NOTHING` moves the decision into the one place the
-        database can arbitrate it, and `rowcount` reports which caller won.
-        """
-        result = await self.session.execute(
-            insert(AgentApprovalDecisionModel)
-            .values(
-                conversation_id=conversation_id,
-                approval_id=approval_id,
-                agent_run_id=agent_run_id,
-                tool_name=tool_name,
-                decision=decision.value,
-                response=response or {},
-                resolved_by_user_id=resolved_by_user_id,
-            )
-            .on_conflict_do_nothing(
-                index_elements=["conversation_id", "approval_id"],
-            )
-        )
-        await self.session.flush()
-        return result.rowcount > 0
-
-    async def claim_approval_execution(
-        self,
-        *,
-        conversation_id: UUID,
-        approval_id: str,
-    ) -> bool:
-        """Win the right to run this approval's tool. True for exactly one caller.
-
-        Approving a `request_approval` executes the wrapped tool with the user's
-        authority, so it must happen at most once. The guard used to be a read
-        of the tool return -- which is written *after* the tool runs, leaving a
-        window one whole execution wide. A retried reconcile job (streaq
-        requeues one cancelled inside the shutdown grace, and `xautoclaim`
-        reclaims one whose worker died) walked straight through it and ran the
-        command again.
-
-        This is a conditional UPDATE, so Postgres arbitrates. The caller must
-        commit before running the tool: an uncommitted claim is not a claim.
-        """
-        result = await self.session.execute(
-            update(AgentApprovalDecisionModel)
-            .where(
-                AgentApprovalDecisionModel.conversation_id == conversation_id,
-                AgentApprovalDecisionModel.approval_id == approval_id,
-                AgentApprovalDecisionModel.execution_claimed_at.is_(None),
-            )
-            # The database's clock, not this process's. A claim compared
-            # against a server whose clock has drifted is not a claim.
-            .values(execution_claimed_at=func.now())
-            .returning(AgentApprovalDecisionModel.id)
-        )
-        return result.scalar_one_or_none() is not None
-
-    async def approval_execution_claimed(
-        self,
-        *,
-        conversation_id: UUID,
-        approval_id: str,
-    ) -> bool:
-        """Whether an executor ever took this approval's one-shot claim."""
-        result = await self.session.execute(
-            select(AgentApprovalDecisionModel.id).where(
-                AgentApprovalDecisionModel.conversation_id == conversation_id,
-                AgentApprovalDecisionModel.approval_id == approval_id,
-                AgentApprovalDecisionModel.execution_claimed_at.is_not(None),
-            )
-        )
-        return result.scalar_one_or_none() is not None
-
-    async def get_approval_decision(
-        self,
-        *,
-        conversation_id: UUID,
-        approval_id: str,
-    ) -> tuple[AgentRunApprovalDecision, JsonObject] | None:
-        result = await self.session.execute(
-            select(AgentApprovalDecisionModel).where(
-                AgentApprovalDecisionModel.conversation_id == conversation_id,
-                AgentApprovalDecisionModel.approval_id == approval_id,
-            )
-        )
-        row = result.scalar_one_or_none()
-        if row is None:
-            return None
-        response = row.response if isinstance(row.response, dict) else {}
-        return AgentRunApprovalDecision(row.decision), response
+class Pauses(UnitOfWorkRepository):
+    """Which pausing calls are waiting, and on what."""
 
     async def tool_call_id_of_message(
         self, *, conversation_id: UUID, message_id: UUID
@@ -399,7 +285,7 @@ class ConversationApprovalQueriesMixin:
         limit: int = 50,
     ) -> tuple[list[PendingInteraction], PendingInteractionCursor | None]:
         """Every pause waiting on this person in this pod; see the module."""
-        return await pending_interaction_queries.list_pending_interactions(
+        return await pending_interactions.list_pending_interactions(
             self.session, user_id=user_id, pod_id=pod_id, cursor=cursor, limit=limit
         )
 
@@ -407,18 +293,6 @@ class ConversationApprovalQueriesMixin:
         self, conversation_ids: Sequence[UUID]
     ) -> set[UUID]:
         """Which of these conversations hold a pause waiting on a person."""
-        return await pending_interaction_queries.conversations_with_pending_interaction(
+        return await pending_interactions.conversations_with_pending_interaction(
             self.session, conversation_ids
         )
-
-    async def list_resolved_approval_ids(
-        self,
-        *,
-        conversation_id: UUID,
-    ) -> set[str]:
-        result = await self.session.execute(
-            select(AgentApprovalDecisionModel.approval_id).where(
-                AgentApprovalDecisionModel.conversation_id == conversation_id
-            )
-        )
-        return set(result.scalars())

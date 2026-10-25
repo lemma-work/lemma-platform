@@ -96,9 +96,7 @@ class _StreamConversationService:
 
     def __init__(self, agent_run: AgentRun | None) -> None:
         self.agent_run = agent_run
-        self.conversation_repository = SimpleNamespace(
-            get_agent_run=AsyncMock(return_value=agent_run)
-        )
+        self.runs = SimpleNamespace(get_agent_run=AsyncMock(return_value=agent_run))
         self.queries = _StreamConversationQueries(agent_run)
 
 

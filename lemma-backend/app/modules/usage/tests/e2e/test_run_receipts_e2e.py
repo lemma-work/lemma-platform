@@ -185,9 +185,7 @@ async def test_finalizer_retry_labels_receipts_with_committed_status_after_failu
 async def test_failed_run_persists_structured_reason_without_overwriting_terminal_state(
     db_manager: DatabaseManager,
 ) -> None:
-    from app.modules.agent.infrastructure.repositories.conversation_repository import (
-        ConversationRepository,
-    )
+    from app.modules.agent.infrastructure.db.runs import Runs
 
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     user_id, org_id, pod_id, conversation_id, run_id = (uuid4() for _ in range(5))
@@ -223,15 +221,15 @@ async def test_failed_run_persists_structured_reason_without_overwriting_termina
             )
         )
     async with factory() as uow:
-        repository = ConversationRepository(uow)
-        await repository.finish_agent_run(
+        runs = Runs(uow)
+        await runs.finish_agent_run(
             agent_run_id=run_id,
             status=AgentRunStatus.FAILED,
             error="Allowance exhausted",
             error_code="USAGE_LIMIT_EXCEEDED",
             error_reason="exhausted",
         )
-        await repository.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=run_id, status=AgentRunStatus.COMPLETED
         )
     async with factory() as uow:
