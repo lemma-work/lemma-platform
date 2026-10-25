@@ -71,6 +71,16 @@ class AgentSettings(BaseSettings):
             "that is. 0 disables the check."
         ),
     )
+    agent_run_budget_repeated_calls: int = Field(
+        default=10,
+        description=(
+            "The same tool call, with the same arguments and the same result, "
+            "this many times in a row before pausing to ask; the run is told at "
+            "the warning fraction first. Above the few repeats of polling work "
+            "that is still going, far below the request ceiling a loop otherwise "
+            "runs to. 0 disables the check."
+        ),
+    )
     agent_run_budget_unattended_wall_clock_seconds: float = Field(
         default=7200.0,
         description=(

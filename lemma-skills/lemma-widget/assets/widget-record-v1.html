@@ -50,12 +50,6 @@
       stateEl.hidden = false; stateEl.dataset.kind = "error";
       stateEl.textContent = message || "Unable to load this record."; cardEl.hidden = true;
     }
-    // Not an error: a cross-site iframe whose cookie the browser withheld. The
-    // person is usually signed in, so this does not tell them to sign in.
-    function notice(message) {
-      stateEl.hidden = false; delete stateEl.dataset.kind;
-      stateEl.textContent = message; cardEl.hidden = true;
-    }
     function esc(value) { var n = document.createElement("span"); n.textContent = value == null ? "—" : value; return n.innerHTML; }
     // A record may arrive flat or wrapped in `data`; both are normal.
     function field(row, key) {

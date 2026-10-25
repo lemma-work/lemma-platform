@@ -62,7 +62,7 @@ dependencies = [
     # sessionless `2026-07-28` revision and the older handshake revisions at the
     # same time -- and the server apps here rely on that. A 3.x install would
     # satisfy the old floor and speak only the handshake era.
-    "fastmcp>=4.0.1",
+    "fastmcp>=4.1.2",
     # Arrives through fastmcp and pydantic-ai; floored here past
     # CVE-2026-59951, which neither of them pins away from.
     "mcp>=2.2.0",
