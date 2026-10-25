@@ -70,6 +70,42 @@ There is no port in front of them: each has one implementation, and their
 tests run against Postgres. Every turn transaction takes the conversation's row
 lock before its run's, the order `Runs.finish_agent_run` documents.
 
+### Use cases
+
+What a person, a work item or another module does to a conversation is a use
+case under `application/`: one class per verb, with one public async method,
+constructed with exactly the repositories, helpers and other use cases it
+calls, and built from a unit of work by its own `build(uow)`. Controllers get
+the request-scoped ones from `api/dependencies.py`; work handlers, contracts and
+other use cases build the one they need. None is reached through another
+object, and none inherits from another.
+
+| Use case | Does |
+| --- | --- |
+| `conversations/start.StartConversation` | Open a conversation: its agent and the right to run it (`authorize_opening` checks that alone), its kind, where it works, the server-only facts |
+| `conversations/update.UpdateConversation` | Change title, instructions, runtime, client tags, archived |
+| `conversations/read.ConversationReads` | The query side: list, get, messages, runs, the pending-interactions inbox, and the oldest open pause of each kind |
+| `turns/send_message.SendMessage` | Find or open the conversation, authorize the sender, then admit the message (`typed_in_lemma` only from Lemma's composer) |
+| `turns/admit.AdmitMessage` | Under the conversation lock: join the live run, wait behind a pause, or start a run with its turn |
+| `turns/follow_up.StartQueuedFollowUp` | The turn owed for what was said while a run ran, or the resume of a pause answered before its run finished pausing |
+| `turns/stop.StopConversation` | Stop the run in flight, or close the pause it left, without resuming |
+| `turns/withdraw.WithdrawQueuedMessage` | Take back a message no run has read |
+| `turns/retry.RetryFailedRun` | A fresh run in place of a failed one |
+| `pauses/decide.DecidePause` | A person deciding in Lemma: authorize, resolve, retire the platform's cards |
+| `pauses/resolve.ResolvePause` | Record a decision once, queue an approved tool's execution, or reconcile |
+| `pauses/reconcile.ReconcileDecision` | Write a decided pause's return exactly once, then resume |
+| `pauses/resume.ResumeRun` | Write a pause's return and start the run that replays it, at most once |
+| `pauses/supersede.SupersedeStalePauses` | Deny what the person moved past and cancel a wait typed past, in the caller's transaction |
+
+Each commits where the step it absorbed always did; `StartConversation`,
+`UpdateConversation` and `SupersedeStalePauses` ride the caller's transaction.
+The steps several share and that do not stand alone -- finding a paused call,
+appending its return, starting a resume run (`services/pause_resume`), building
+the return (`services/conversation_resume_return`), stopping one run
+(`services/run_stop`), the access checks (`services/conversation_access`) -- are
+in `services/`; what a message carries and the typed-reply vocabulary are pure
+and in `domain/` (`turn_admission`, `interaction_reply`).
+
 ## API groups
 
 | Routes | What they do |
