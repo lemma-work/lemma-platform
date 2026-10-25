@@ -118,8 +118,10 @@ from after the turn being answered, nor, once older runs are cut from the
 history, from before what remains of it
 (`runtime_history.unattached_message_window`). The copies sit where the merge
 put them, after what the kept conversation held then, so each stretch of them
-is opened and closed by a notice saying it is another chat's, and a copied
-message is read with no sending time, since its own is the merge's. They have
+is opened by a notice saying it is another chat's, and closed by one when
+anything follows it (a closing notice after everything else would read as the
+turn to answer). A copied message is read with no sending time, since its own
+is the merge's. They have
 their own bound, the newest `MAX_FOLDED_MESSAGES`, apart from the newest
 `MAX_UNATTACHED_MESSAGES` of the other two, and the opening notice says when
 it left some out (`domain/folded_turns`).
