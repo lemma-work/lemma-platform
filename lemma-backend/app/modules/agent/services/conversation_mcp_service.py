@@ -17,18 +17,10 @@ from uuid import UUID
 
 from mcp.types import CallToolResult, Tool
 
-from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.services.surface_context import surface_context_for_run
-from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
-from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.private_notes import run_delivers_to_surface
-from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
-from app.modules.agent.services.vision_service import vision_delegate_available
+from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.services.mcp_content import (
     tool_call_error,
     tool_call_result,
@@ -42,20 +34,9 @@ from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
     normalize_local_mcp_tool_name,
 )
-from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.crypto import get_secret_cipher
-from app.core.domain.errors import DomainError
-from app.modules.agent.infrastructure.agent_host.repository import (
-    AgentHostRepository,
-)
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.infrastructure.db.conversations import Conversations
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-    AgentRuntimeProfileRepository,
-)
 from app.modules.agent.services.conversation_mcp_authorization import (
     RelayingHost,
     authorize_run_token,
@@ -65,29 +46,16 @@ from app.modules.agent.services.mcp_pausing_calls import (
     is_pausing_tool,
     record_pausing_tool_call,
 )
-from app.modules.agent.domain.workspace_location import (
-    WorkspaceLocation,
-    ensure_recorded_location,
-    pod_cwd_from_workspace_cwd,
-)
-from app.modules.agent.services.runtime_profile_service import (
-    AgentRuntimeProfileService,
-)
 from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
-from app.modules.agent.tools.tool_assembler import load_agent_grant_summary
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
-from app.modules.agent.services.mcp_tool_inputs import (
-    NO_AGENT_GENERATION,
-    CachedGrantSummary,
-    McpToolInputs,
-    McpToolInputsCache,
-    mcp_tool_inputs_cache,
-    without_provider_config,
+from app.modules.agent.services.run_session_relay import (
+    RunInputsCache,
+    load_relayed_session,
+    recorded_native_commands_for,
+    run_inputs_cache,
 )
-from app.core.authorization.grant_generation import agent_grant_generation
-from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 from app.modules.agent.tools.tool_errors import (
     is_control_flow_exception,
 )
@@ -95,21 +63,17 @@ from app.modules.agent.tools.tool_errors import (
 logger = get_logger(__name__)
 
 
-class AgentRemoved(ValueError):
-    """The run's agent was deleted; its tools must not run as anybody else."""
-
-
 class ConversationMCPService:
-    def __init__(self, inputs_cache: McpToolInputsCache | None = None) -> None:
+    def __init__(self, inputs_cache: RunInputsCache | None = None) -> None:
         self.uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         self.dispatcher = AgentToolDispatcher(self.uow_factory)
         self._explicit_inputs_cache = inputs_cache
 
     @property
-    def _inputs_cache(self) -> McpToolInputsCache:
+    def _inputs_cache(self) -> RunInputsCache:
         # Resolved on use, not at construction: the module-level instance
         # below is built at import, before a test or a process has its settings.
-        return self._explicit_inputs_cache or mcp_tool_inputs_cache()
+        return self._explicit_inputs_cache or run_inputs_cache()
 
     async def authorize(
         self,
@@ -316,259 +280,18 @@ class ConversationMCPService:
         conversation_id: UUID,
         agent_run_id: UUID | None,
     ) -> tuple[Agent | None, Conversation, BaseAgentContext, AgentGrantSummary | None]:
-        async with self.uow_factory() as uow:
-            conversations = Conversations(uow)
-            runs = Runs(uow)
-            agent_repo = AgentRepository(uow)
-            conversation = await conversations.get_conversation(
-                conversation_id,
-                include_runs=True,
-            )
-            if conversation is None:
-                raise ValueError(f"Conversation {conversation_id} not found")
-            run = None
-            if agent_run_id is not None:
-                run = await runs.get_agent_run(agent_run_id)
-                if run is not None and str(run.conversation_id) != str(conversation_id):
-                    # `authorize` refuses this first; kept so no caller can
-                    # build a context from another conversation's run.
-                    raise ValueError(
-                        f"Run {agent_run_id} is not in conversation {conversation_id}"
-                    )
-            if run is None:
-                run = await runs.get_active_agent_run(conversation_id)
-            agent_id = conversation.agent_id or (run.agent_id if run else None)
-            agent = await agent_repo.get(agent_id) if agent_id is not None else None
-            if agent_id is not None and agent is None:
-                # Gone between the call's authorization and now. Falling
-                # through would read the run as the pod's own assistant, which
-                # acts with the person's full standing.
-                raise AgentRemoved(f"Agent {agent_id} no longer exists")
-            # Records the cwd when nothing had recorded it, so the row is
-            # the source of truth in fact and not only by intention.
-            workspace_location = await ensure_recorded_location(
-                conversation, record=conversations.record_cwd
-            )
-            lease = (
-                await uow.session.get(AgentHostRunLeaseModel, run.id)
-                if run is not None
-                else None
-            )
-        # Outside the unit of work: these open their own, or reach Redis, and
-        # holding this one across them would pin a pooled connection for
-        # nothing.
-        inputs = await self._tool_inputs(
-            run=run,
-            lease_epoch=lease.lease_epoch if lease is not None else 0,
-            agent=agent,
-            conversation=conversation,
-        )
-        ctx = _tool_context(
-            conversation=conversation,
-            agent=agent,
-            run=run,
+        """The run's session for this call, and the context its tools see."""
+        session = await load_relayed_session(
+            self.uow_factory,
+            conversation_id=conversation_id,
             agent_run_id=agent_run_id,
-            runtime_profile=inputs.runtime_profile if inputs else None,
-            workspace_location=workspace_location,
+            inputs_cache=self._inputs_cache,
         )
-        ctx.host_runs_native_commands = await _native_commands(conversation, run)
-        return agent, conversation, ctx, inputs.grants.summary() if inputs else None
-
-    async def _tool_inputs(
-        self,
-        *,
-        run: AgentRun | None,
-        lease_epoch: int,
-        agent: Agent | None,
-        conversation: Conversation,
-    ) -> McpToolInputs | None:
-        """The run's resolved runtime and its agent's grants, kept for the lease.
-
-        ``None`` with no run: nothing to resolve, and the assembler reads the
-        grants itself. A grant token that could not be read is neither trusted
-        nor stored: the inputs are derived afresh.
-        """
-        if run is None:
-            return None
-        generation = (
-            await agent_grant_generation(agent.id)
-            if agent is not None and agent.id is not None
-            else NO_AGENT_GENERATION
+        ctx = session.relayed_context(agent_run_id=agent_run_id)
+        ctx.host_runs_native_commands = await recorded_native_commands_for(
+            session.conversation, session.run
         )
-        cache = self._inputs_cache
-        if generation is not None:
-            kept = await cache.get(
-                run_id=run.id, lease_epoch=lease_epoch, grant_generation=generation
-            )
-            if kept is not None:
-                return kept
-        async with self.uow_factory() as uow:
-            runtime_profile = await self._resolved_runtime_profile(
-                run=run,
-                uow=uow,
-                organization_id=conversation.organization_id,
-                user_id=conversation.user_id,
-            )
-        grants = (
-            await load_agent_grant_summary(self.uow_factory, agent=agent)
-            if agent is not None
-            else AgentGrantSummary()
-        )
-        derived = McpToolInputs(
-            grant_generation=generation or "",
-            runtime_profile=without_provider_config(runtime_profile),
-            grants=CachedGrantSummary.of(grants),
-        )
-        if generation is not None:
-            await cache.put(run_id=run.id, lease_epoch=lease_epoch, inputs=derived)
-        return derived
-
-    async def _resolved_runtime_profile(
-        self,
-        *,
-        run: AgentRun | None,
-        uow: SqlAlchemyUnitOfWork,
-        organization_id: UUID | None,
-        user_id: UUID,
-    ) -> JsonObject | None:
-        """The run's runtime, resolved, so its capabilities are actually present.
-
-        `run.agent_runtime` is an `AgentRuntimeConfig` -- a profile id and a
-        model name, and nothing else. It has no `model_capabilities`, so
-        deriving the vision mode from it answered "this model cannot see" for
-        every remote harness, whatever it was: a Claude Code or Codex host that
-        reads images natively was told to delegate to a VISION_MODEL, and when
-        none was configured, that PDF pages could not be viewed at all.
-
-        Resolving is what produces capabilities, and `runtime_snapshot()` carries
-        them precisely so the MCP bridges can rebuild a context. It costs one
-        indexed lookup inside a unit of work this method already holds open, and
-        no network call -- the model catalog lives on the profile.
-
-        Falls back to the unresolved config on failure. A tool call must not
-        fail because a profile was archived between the run starting and the
-        model reaching for a file; the old behaviour was to delegate or refuse
-        images, which is exactly what this returns to.
-        """
-        if run is None:
-            return None
-        stored = run.agent_runtime.model_dump(mode="json")
-        try:
-            service = AgentRuntimeProfileService(
-                AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
-                # Passed so a harness that has since reported it reads images is
-                # believed, rather than the catalog copied from it before its
-                # probe landed. Without this the resolve below is accurate about
-                # a stale answer.
-                AgentHostRepository(uow),
-            )
-            resolved = await service.resolve(
-                runtime=run.agent_runtime,
-                organization_id=organization_id,
-                user_id=user_id,
-            )
-        except (DomainError, RuntimeError, SQLAlchemyError) as exc:
-            raise_if_database_unavailable(exc)
-            # Named rather than bare: these are what resolution actually fails
-            # with -- an archived or deleted profile, a missing repository, a
-            # database that will not answer. Anything else is a bug and should
-            # surface as one rather than be absorbed into a silent fallback.
-            logger.warning(
-                "agent.conversation_mcp.runtime_resolve_failed.degraded",
-                exc_info=True,
-            )
-            return stored
-        return resolved.runtime_snapshot().as_payload()
-
-
-async def _native_commands(conversation: Conversation, run: AgentRun | None) -> bool:
-    """What the run decided when its context was first built, read back.
-
-    Recomputing it here let a host-execution toggle mid-run change the toolset
-    under a prompt that said otherwise (``host_native_commands``). Only a run
-    with no record -- one dispatched before runs kept it -- is asked afresh.
-    Imported here to keep selection out of the startup import graph.
-    """
-    from app.modules.agent.services.host_native_commands import (
-        recorded_native_commands,
-    )
-
-    if run is None:
-        # No run, no way to tell who started it: keep Lemma's tools, which
-        # never wait on a person.
-        return False
-    recorded = await recorded_native_commands(run.id)
-    if recorded is not None:
-        return recorded
-    from app.modules.agent.services.host_execution_selection import (
-        host_runs_native_commands,
-    )
-
-    return await host_runs_native_commands(conversation, run)
-
-
-def _tool_context(
-    *,
-    conversation: Conversation,
-    agent: Agent | None,
-    run: AgentRun | None,
-    agent_run_id: UUID | None,
-    runtime_profile: JsonObject | None,
-    workspace_location: WorkspaceLocation,
-) -> BaseAgentContext:
-    """The context one relayed tool call runs against."""
-    return BaseAgentContext(
-        user_id=conversation.user_id,
-        org_id=conversation.organization_id,
-        pod_id=conversation.pod_id,
-        conversation_id=conversation.id,
-        agent_name=agent.name if agent is not None else None,
-        # All three, exactly as `services/run_context_builder` sets
-        # them for the in-process harness. `workload_id` is the principal
-        # `pod_data_access` builds its delegated context from, and left
-        # unset it means "the pod default assistant" -- which runs with
-        # the invoking *user's* pod permissions rather than this agent's
-        # grants, so every Agent Host tool call authorized wider than the
-        # agent it belonged to. `is_pod_default_agent` is the separate
-        # question of whether this *is* the assistant, which is now
-        # answered by the row's kind rather than by a sentinel id.
-        workload_type="agent",
-        workload_id=agent.id if agent is not None else None,
-        is_pod_default_agent=(agent is None or agent.kind is AgentKind.POD_DEFAULT),
-        agent_run_id=agent_run_id or (run.id if run is not None else None),
-        runtime_profile=runtime_profile,
-        # The same answer the runner gives: a remote harness answering
-        # somebody outside the pod authorizes as nobody too.
-        audience=Audience.of(conversation),
-        # And a run a private note or a line in Lemma started delivers
-        # nothing to the platform from here either -- `display_resource`
-        # included.
-        delivers_to_surface=run_delivers_to_surface(
-            run.state if run is not None else None
-        ),
-        # The runner computes these for the in-process harness, and this
-        # bridge has to as well -- it is the tool path for *every*
-        # remote harness, so anything left at its default is a default
-        # the whole of Agent Host runs on.
-        #
-        # `vision_mode`: or a harness that reads images natively is
-        # treated as text-only and delegates work it could do itself.
-        vision_mode=vision_mode_from_runtime_profile(
-            runtime_profile, delegate_model_configured=vision_delegate_available()
-        ),
-        # The location fields: without them `get_workspace_cwd()` falls
-        # back to `/workspace/conversations/<uuid>`, so tools ran in a
-        # directory the agent's own prompt does not name -- the prompt
-        # says `/workspace/c/<date>/<slug>`, which is where the resolver
-        # actually put the conversation, and which is where a previous
-        # turn's files are. `pod_cwd` has the same effect on the pod
-        # filesystem, scattering writes under `/me/conversations/<uuid>`.
-        workspace_id=workspace_location.workspace_id,
-        workspace_cwd=workspace_location.cwd,
-        workspace_repo=workspace_location.repo,
-        pod_cwd=pod_cwd_from_workspace_cwd(workspace_location.cwd),
-        **surface_context_for_run(conversation, run.state if run is not None else None),
-    )
+        return session.agent, session.conversation, ctx, session.grants
 
 
 conversation_mcp_service = ConversationMCPService()

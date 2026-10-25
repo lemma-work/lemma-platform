@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID
 
+from app.modules.agent.services.run_session import RunSession
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
@@ -163,7 +164,7 @@ def _runner(
     )
 
     async def loaded(*_: object, **__: object):
-        return conversation, SimpleNamespace(name="a"), agent_run, []
+        return RunSession.of(conversation, SimpleNamespace(name="a"), agent_run)
 
     # Loading reads four tables through real repositories; what is under test
     # starts after it.

@@ -16,13 +16,13 @@ from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.services import conversation_mcp_service as mcp_module
+from app.modules.agent.services import run_session_relay as mcp_module
 from app.modules.agent.services.conversation_mcp_service import (
     ConversationMCPService,
 )
-from app.modules.agent.services.mcp_tool_inputs import (
+from app.modules.agent.services.run_session_relay import (
     MCP_INPUTS_TTL_SECONDS,
-    McpToolInputsCache,
+    RunInputsCache,
 )
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
@@ -42,25 +42,25 @@ class _Counted:
 @pytest.fixture
 def counted(monkeypatch: pytest.MonkeyPatch) -> _Counted:
     counts = _Counted()
-    resolve = ConversationMCPService._resolved_runtime_profile
+    resolve = mcp_module.resolved_runtime_profile
     read_grants = mcp_module.load_agent_grant_summary
 
-    async def _resolve(self, **kwargs):
+    async def _resolve(**kwargs):
         counts.runtime_resolves += 1
-        return await resolve(self, **kwargs)
+        return await resolve(**kwargs)
 
     async def _read_grants(uow_factory, *, agent):
         counts.grant_reads += 1
         return await read_grants(uow_factory, agent=agent)
 
-    monkeypatch.setattr(ConversationMCPService, "_resolved_runtime_profile", _resolve)
+    monkeypatch.setattr(mcp_module, "resolved_runtime_profile", _resolve)
     monkeypatch.setattr(mcp_module, "load_agent_grant_summary", _read_grants)
     return counts
 
 
 def _service() -> ConversationMCPService:
     return ConversationMCPService(
-        inputs_cache=McpToolInputsCache(
+        inputs_cache=RunInputsCache(
             RedisJsonCache(
                 redis_url=settings.redis_url,
                 key_prefix="agent:mcp-inputs",

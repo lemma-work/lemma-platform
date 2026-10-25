@@ -153,7 +153,7 @@ class TurnResume:
         ctx: Any,
         messages: list[Message],
         in_process: bool,
-        reload: Callable[[], Awaitable[tuple[Any, Any, Any, list[Message]]]],
+        reload: Callable[[], Awaitable[list[Message]]],
     ) -> tuple[list[Message], list[str]]:
         """Settle the open calls, and the history the turn should run on.
 
@@ -166,7 +166,7 @@ class TurnResume:
             run_id=run_id, conversation=conversation, agent=agent, ctx=ctx
         )
         if report.wrote:
-            *_, messages = await reload()
+            messages = await reload()
         return messages, report.notices()
 
     async def committed_answer(self, run_id: UUID) -> MessageDraft | None:

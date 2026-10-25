@@ -53,7 +53,6 @@ from app.modules.agent.services.pod_mcp_tool_policy import (
     scope_for_call,
     without_approval_envelope,
 )
-from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
     normalize_local_mcp_tool_name,
@@ -72,8 +71,6 @@ from app.modules.mcp_access.contracts import (
 )
 
 logger = get_logger(__name__)
-
-_NIL_CONVERSATION_ID = UUID(int=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,38 +382,12 @@ def _pod_context_for(
     )
 
 
-def _pod_context(
-    *,
-    user_id: UUID,
-    pod_id: UUID,
-    workload_type: str | None = None,
-    workload_id: UUID | None = None,
-    agent_name: str | None = None,
-    is_pod_default_agent: bool = True,
-    delegation_scope: frozenset[str] = frozenset(),
-) -> BaseAgentContext:
-    return BaseAgentContext(
-        user_id=user_id,
-        pod_id=pod_id,
-        conversation_id=_NIL_CONVERSATION_ID,
-        workload_type=workload_type,
-        workload_id=workload_id,
-        agent_name=agent_name,
-        is_pod_default_agent=is_pod_default_agent,
-        delegation_scope=delegation_scope,
-        # There is no run here, and so no runtime profile to ask -- this
-        # bridge serves an MCP client holding a pod token, not a Lemma agent
-        # run. DIRECT rather than the UNAVAILABLE default, because MCP has a
-        # first-class image content type and `_mcp_result` already attaches
-        # images: the client decides what to do with them, and one that
-        # cannot read them still gets the same JSON answer beside them.
-        #
-        # Left as the default, every image tool told every MCP client that
-        # its model could not read images -- including the ones that can --
-        # and `_mcp_result`'s image handling could never fire, because no
-        # image was ever produced to attach.
-        vision_mode=AgentVisionMode.DIRECT,
-    )
+def _pod_context(**fields: Any) -> BaseAgentContext:
+    """The run session's pod-scoped variant; imported on first use, so the run
+    session's graph stays out of the API's startup imports."""
+    from app.modules.agent.services.run_session import pod_tool_context
+
+    return pod_tool_context(**fields)
 
 
 pod_mcp_service = PodMCPService()

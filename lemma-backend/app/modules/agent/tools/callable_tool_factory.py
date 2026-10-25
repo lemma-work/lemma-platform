@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import suppress
 import asyncio
 import json
+from collections.abc import Sequence
 from typing import Any, cast
 from uuid import UUID
 
@@ -257,27 +258,7 @@ class AgentCallableToolFactory:
             ResourcePermissionGrantModel.grantee_id == agent_id,
         )
         rows = list((await uow.session.execute(stmt)).all())
-        callable_rows = [
-            (resource_type, resource_id)
-            for resource_type, resource_id, permission_id in rows
-            if permission_id
-            in (Permissions.FUNCTION_EXECUTE, Permissions.AGENT_EXECUTE)
-        ]
-        function_ids = tuple(
-            resource_id
-            for resource_type, resource_id in callable_rows
-            if resource_type == "function"
-        )
-        agent_ids = tuple(
-            resource_id
-            for resource_type, resource_id in callable_rows
-            if resource_type == "agent" and resource_id != agent_id
-        )
-        return AgentGrantSummary.from_grants(
-            [(resource_type, resource_id) for resource_type, resource_id, _ in rows],
-            function_ids=function_ids,
-            agent_ids=agent_ids,
-        )
+        return grant_summary_of(rows, agent_id=agent_id)
 
     def _build_function_tool(
         self, function: FunctionEntity, *, parent_agent: Agent
@@ -532,3 +513,29 @@ def distinct_tool_names(tools: list[Tool]) -> list[Tool]:
         tool.name = name
         seen.add(name)
     return tools
+
+
+def grant_summary_of(
+    rows: Sequence[tuple[str, UUID, str]], *, agent_id: UUID
+) -> AgentGrantSummary:
+    """What ``(resource_type, resource_id, permission_id)`` grant rows decide."""
+    callable_rows = [
+        (resource_type, resource_id)
+        for resource_type, resource_id, permission_id in rows
+        if permission_id in (Permissions.FUNCTION_EXECUTE, Permissions.AGENT_EXECUTE)
+    ]
+    function_ids = tuple(
+        resource_id
+        for resource_type, resource_id in callable_rows
+        if resource_type == "function"
+    )
+    agent_ids = tuple(
+        resource_id
+        for resource_type, resource_id in callable_rows
+        if resource_type == "agent" and resource_id != agent_id
+    )
+    return AgentGrantSummary.from_grants(
+        [(resource_type, resource_id) for resource_type, resource_id, _ in rows],
+        function_ids=function_ids,
+        agent_ids=agent_ids,
+    )

@@ -237,6 +237,7 @@ class AgentContextBriefBuilder:
         toolsets: Collection[AgentToolset] = (),
         run_trigger: RunTrigger | None = None,
         platform: str | None = None,
+        grant_rows: list[tuple[str, UUID, str]] | None = None,
     ) -> ContextBrief:
         # The pod default assistant runs with the user's permissions and sees the
         # whole pod; named agents see only what they're granted. This is the one
@@ -253,6 +254,7 @@ class AgentContextBriefBuilder:
                     is_default=is_default,
                     user_id=user_id,
                     pod_id=pod_id,
+                    grant_rows=grant_rows,
                 )
             # Outside the cache, and for the same reason memory is: this varies
             # per conversation, and the cache is deliberately not keyed by one.
@@ -313,6 +315,7 @@ class AgentContextBriefBuilder:
         is_default: bool,
         user_id: UUID,
         pod_id: UUID,
+        grant_rows: list[tuple[str, UUID, str]] | None = None,
     ) -> _Inventory:
         # uow 1: plain identity reads (no authorization context needed).
         async with self.uow_factory() as uow:
@@ -354,7 +357,9 @@ class AgentContextBriefBuilder:
                     self.uow_factory,
                     repository=self._repo_factory(),
                     authorization=self._authz_factory(),
-                ).lines(agent=agent, pod_id=pod_id, user_id=user_id)
+                ).lines(
+                    agent=agent, pod_id=pod_id, user_id=user_id, grant_rows=grant_rows
+                )
             )
 
         inventory = _Inventory(stable="\n".join(lines), files="\n".join(files))

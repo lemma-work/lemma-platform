@@ -23,18 +23,14 @@ unit of work and an agent repository, and nothing else.
 from __future__ import annotations
 
 from functools import partial
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.services.runtime_availability import turn_runtime
-from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
-from app.modules.agent.domain.vision import resolve_vision_mode
-from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.agent.domain.agent_host_permissions import (
     agent_host_permission_request,
 )
-from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.approvals import expired_unanswered
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.ports import AgentRepository
@@ -45,8 +41,9 @@ from app.modules.agent.services.approval_reconciliation import (
     execute_approved_tool_as_user,
     record_session_approvals,
 )
-from app.modules.agent.services.conversation_access import resolve_agent
-from app.modules.agent.domain.workspace_location import resolve_workspace_location
+
+if TYPE_CHECKING:
+    from app.modules.agent.tools.context import ConversationContext
 
 logger = get_logger(__name__)
 
@@ -365,73 +362,34 @@ class ResumeToolReturnBuilder:
         conversation: Conversation,
         user_id: UUID,
         agent_run_id: UUID,
-    ):
-        """Rebuild the agent run context so an approved tool runs like in-run.
+    ) -> ConversationContext:
+        """Rebuild the run's context so an approved tool runs like in-run.
 
-        Mirrors ``AgentRunnerService.execute``'s context build (runtime profile,
-        workspace location, configured accounts). Surface delivery context is
-        omitted — approval-gated action tools don't deliver to surfaces.
+        The paused run's session (``RunSession.for_resume``): its runtime,
+        workspace location and configured accounts, as a run gets them.
         """
         from app.core.infrastructure.db.session import async_session_maker
         from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-        from app.modules.agent.services.runtime_profile_service import (
-            runtime_profile_service_for,
-        )
+        from app.modules.agent.services.run_session import RunSession
         from app.modules.agent.tools.callable_tool_factory import (
             AgentCallableToolFactory,
         )
-        from app.modules.agent.tools.context import ConversationContext
-        from app.modules.agent.services.host_execution_selection import (
-            recorded_host_workspace,
-        )
-        from app.modules.agent.domain.workspace_location import resolve_pod_cwd
 
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
-        agent = await resolve_agent(
-            conversation,
+        session = await RunSession.for_resume(
+            self.uow,
+            conversation=conversation,
             user_id=user_id,
             agent_repository=self.agent_repository,
+            uow_factory=uow_factory,
         )
-        selected_runtime = await turn_runtime(self.uow, conversation, agent)
-        async with uow_factory() as uow:
-            resolved = await runtime_profile_service_for(uow).resolve(
-                runtime=selected_runtime,
-                organization_id=conversation.organization_id,
-                user_id=user_id,
-            )
-        configured_accounts = await AgentCallableToolFactory(
-            uow_factory
-        ).resolve_configured_accounts(agent=agent, user_id=user_id)
-        workspace_location = resolve_workspace_location(conversation)
-        # Resolved exactly as a normal run resolves it. Left unset this defaults
-        # to UNAVAILABLE, so an *approved* `view_image` took the delegate branch
-        # and told the user "this agent's model cannot read images directly" --
-        # on a model that can. Same for `pod_view_document_pages`.
-        supports_vision = RuntimeModelCapability.VISION in resolved.capabilities
-        return ConversationContext(
-            vision_mode=resolve_vision_mode(
-                model_supports_vision=supports_vision,
-                delegate_model_configured=vision_delegate_available(),
-            ),
+        return await session.resume_context(
+            uow_factory,
             user_id=user_id,
-            org_id=conversation.organization_id,
-            pod_id=conversation.pod_id,
-            conversation_id=conversation.id,
-            agent_name=agent.name,
             agent_run_id=agent_run_id,
-            workload_type="agent",
-            workload_id=agent.id,
-            is_pod_default_agent=(agent.kind is AgentKind.POD_DEFAULT),
-            configured_accounts=configured_accounts,
-            runtime_profile=resolved.runtime_snapshot().as_payload(),
-            workspace_id=workspace_location.workspace_id,
-            workspace_cwd=workspace_location.cwd,
-            workspace_repo=workspace_location.repo,
-            pod_cwd=resolve_pod_cwd(conversation),
-            # The paused run's own recorded choice, never a new one: an
-            # approved command must land where the run was executing
-            # (desktop-host-execution.md §2), not silently in the VM.
-            host_workspace=await recorded_host_workspace(agent_run_id),
+            configured_accounts=AgentCallableToolFactory(
+                uow_factory
+            ).resolve_configured_accounts,
         )
 
 

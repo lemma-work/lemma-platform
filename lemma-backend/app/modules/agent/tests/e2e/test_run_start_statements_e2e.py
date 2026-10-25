@@ -12,6 +12,7 @@ here on purpose, and a change that adds one should have to say so.
 
 from __future__ import annotations
 
+from functools import partial
 from uuid import UUID
 
 import pytest
@@ -21,15 +22,16 @@ from app.modules.agent.services.harness_wiring import (
     build_harness_registry,
     worker_uow_factory,
 )
-from app.modules.agent.services.run_context_builder import build_run_context
-from app.modules.agent.services.run_context_loader import load_run_context
+from app.modules.agent.services.run_session import RunSession
 from app.modules.agent.tests.e2e.turn_work_support import TurnPod, scalar, turn_pod
 from app.modules.test_support.query_counting import counted_queries, format_statements
 
 pytestmark = [pytest.mark.e2e]
 
-#: Statements one run start issues on a fresh pod with the POD toolset.
-RUN_START_STATEMENTS = 16
+#: Statements one run start issues on a fresh pod with the POD toolset. It was
+#: 16 when four places assembled a run's context; the session reads the agent's
+#: grants once, for its toolsets and its brief, where they were read twice.
+RUN_START_STATEMENTS = 15
 
 
 @pytest.fixture
@@ -38,33 +40,38 @@ async def pod(authenticated_client, fixed_test_org) -> TurnPod:
 
 
 async def _start_run(run_id: UUID, *, user_id: UUID, pod_id: UUID, agent_name: str):
+    """What ``AgentRunnerService.execute`` does before the harness is called."""
     uow_factory = worker_uow_factory()
     runner = AgentRunnerService(
         uow_factory=uow_factory, harness_registry=build_harness_registry()
     )
-    conversation, agent, agent_run, _messages = await load_run_context(
+    session = await RunSession.load(
         uow_factory,
         agent_run_id=run_id,
         user_id=user_id,
         pod_id=pod_id,
         agent_name=agent_name,
     )
-    resolved = await runner._runtime_for(conversation, agent_run, user_id=user_id)
-    ctx = await build_run_context(
-        uow_factory=uow_factory,
-        conversation=conversation,
-        agent=agent,
-        agent_run=agent_run,
+    resolved = await session.resolve_turn_runtime(
         user_id=user_id,
-        resolved_runtime=resolved,
-        runtime_profile_snapshot=resolved.runtime_snapshot().as_payload(),
-        resolve_configured_accounts=runner._resolve_configured_accounts,
+        uow_factory=uow_factory,
+        resolve=partial(
+            runner._resolve_agent_runtime,
+            user_id=user_id,
+            organization_id=session.conversation.organization_id,
+        ),
     )
+    ctx = await session.turn_context(
+        uow_factory,
+        user_id=user_id,
+        configured_accounts=runner._resolve_configured_accounts,
+    )
+    assert session.agent is not None
     return await runner.tool_assembler.assemble(
-        agent=agent,
-        conversation=conversation,
+        agent=session.agent,
+        conversation=session.conversation,
         vision_mode=ctx.vision_mode,
-        grants=ctx.grant_summary,
+        grants=session.grants,
         host_execution=ctx.host_execution_mode,
         harness_kind=resolved.harness_kind,
         surface_platform=ctx.surface_platform,

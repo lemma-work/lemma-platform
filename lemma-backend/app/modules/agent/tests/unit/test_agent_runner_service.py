@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+from app.modules.agent.services.run_session import RunSession
 import pytest
 
 from app.modules.agent.domain.entities import Message
@@ -222,7 +223,7 @@ async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
     )
 
     async def fake_load(*args, **kwargs):
-        return conversation, agent, agent_run, []
+        return RunSession.of(conversation, agent, agent_run)
 
     monkeypatch.setattr(service, "_load_run_context", fake_load)
     # A fresh run: nothing answered yet.

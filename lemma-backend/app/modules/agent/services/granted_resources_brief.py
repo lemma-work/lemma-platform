@@ -65,11 +65,23 @@ class GrantedResourcesBrief:
         self._authorization = authorization
         self._tables = tables
 
-    async def lines(self, *, agent: Agent, pod_id: UUID, user_id: UUID) -> list[str]:
+    async def lines(
+        self,
+        *,
+        agent: Agent,
+        pod_id: UUID,
+        user_id: UUID,
+        grant_rows: list[tuple[str, UUID, str]] | None = None,
+    ) -> list[str]:
+        """The section; ``grant_rows`` when the run already read the grants."""
         # uow 1: grants + name resolution (plain queries).
         async with self.uow_factory() as uow:
             repo = self._repository(uow)
-            rows = await repo.get_agent_grants(pod_id=pod_id, agent_id=agent.id)
+            rows = (
+                grant_rows
+                if grant_rows is not None
+                else await repo.get_agent_grants(pod_id=pod_id, agent_id=agent.id)
+            )
             if not rows:
                 return [
                     "\n## Granted Resources",

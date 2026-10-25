@@ -28,7 +28,7 @@ from app.modules.agent.config import agent_settings
 from app.modules.agent.services.context_budget import (
     context_budget_for,
 )
-from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
+from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.run_origin import run_origin
 from app.modules.agent.domain.harness_options import HarnessOptions
@@ -47,21 +47,13 @@ from app.modules.agent.services.runtime_profile_service import (
     runtime_profile_service_for,
 )
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
-from app.modules.agent.domain.runtime_choice import RuntimePurpose
-from app.modules.agent.services.runtime_resolution import (
-    RuntimeRequest,
-    resolve_runtime,
-)
 from app.modules.agent.services.run_limits import (
     budget_for_run,
     harness_usage_limits,
     make_stop_checker,
 )
 from app.modules.agent.services.run_message_writer import RunMessageWriter
-from app.modules.agent.services.run_context_loader import (
-    RunContextLoader,
-    load_run_context,
-)
+from app.modules.agent.services.run_session import RunSession, SessionLoader
 from app.modules.agent.services.run_metrics import (
     AgentRunMetrics,
     RunOutcomeLabel,
@@ -72,7 +64,6 @@ from app.modules.agent.services.run_metrics import (
 from app.modules.agent.services.run_phase_spans import (
     run_phase,
 )
-from app.modules.agent.services.run_context_builder import build_run_context
 from app.modules.agent.services.run_event_pump import (
     RunEventPump,
     RunOutcome,
@@ -148,7 +139,7 @@ class AgentRunnerService:
         tool_units: UnitOfWorkFactory | None = None,
         lease_alive: Callable[[], bool] | None = None,
         run_metrics: AgentRunMetrics | None = None,
-        load_context: RunContextLoader = load_run_context,
+        load_context: SessionLoader = RunSession.load,
     ) -> None:
         self.load_context = load_context
         self.uow_factory = uow_factory
@@ -184,12 +175,19 @@ class AgentRunnerService:
     ) -> None:
         """Run ``agent_run_id`` to its end -- or, once ``yield_requested``
         (the worker going away), to the next step boundary: ``TurnYielded``."""
-        conversation, agent, agent_run, messages = await self._load_run_context(
+        session = await self._load_run_context(
             agent_run_id=agent_run_id,
             user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
         )
+        conversation, agent, messages = (
+            session.conversation,
+            session.agent,
+            session.history,
+        )
+        agent_run = session.run
+        assert agent is not None and agent_run is not None
         run = RunIdentity.of_turn(
             conversation,
             agent_run,
@@ -224,8 +222,14 @@ class AgentRunnerService:
         self.run_metrics.run_started(kind=run_kind)
         ended: RunOutcomeLabel = "failed"
         try:
-            resolved_runtime = await self._runtime_for(
-                conversation, agent_run, user_id=user_id
+            resolved_runtime = await session.resolve_turn_runtime(
+                user_id=user_id,
+                uow_factory=self.uow_factory,
+                resolve=partial(
+                    self._resolve_agent_runtime,
+                    user_id=user_id,
+                    organization_id=conversation.organization_id,
+                ),
             )
             harness = self.harness_registry.get(resolved_runtime.harness_kind)
             run_model = resolved_runtime.model_name_for_harness
@@ -233,15 +237,10 @@ class AgentRunnerService:
             snapshot = resolved_runtime.runtime_snapshot()
             runtime_profile_snapshot = snapshot.as_payload()
             runtime_credentials = resolved_runtime.credentials or {}
-            ctx = await build_run_context(
-                uow_factory=self.uow_factory,
-                conversation=conversation,
-                agent=agent,
-                agent_run=agent_run,
+            ctx = await session.turn_context(
+                self.uow_factory,
                 user_id=user_id,
-                resolved_runtime=resolved_runtime,
-                runtime_profile_snapshot=runtime_profile_snapshot,
-                resolve_configured_accounts=self._resolve_configured_accounts,
+                configured_accounts=self._resolve_configured_accounts,
             )
             run = run.with_memory_after_turn(ctx.memory_after_turn)
             full_toolsets = await self.tool_assembler.assemble(
@@ -249,7 +248,7 @@ class AgentRunnerService:
                 conversation=conversation,
                 vision_mode=ctx.vision_mode,
                 # Already read while building the context, not loaded twice.
-                grants=getattr(ctx, "grant_summary", None),
+                grants=session.grants,
                 host_execution=ctx.host_execution_mode,
                 harness_kind=resolved_runtime.harness_kind,
                 surface_platform=ctx.surface_platform,
@@ -297,7 +296,7 @@ class AgentRunnerService:
                 messages=messages,
                 in_process=resolved_runtime.harness_kind == HarnessKind.LEMMA,
                 reload=partial(
-                    self._load_run_context,
+                    self._reload_history,
                     agent_run_id=agent_run_id,
                     user_id=user_id,
                     pod_id=pod_id,
@@ -507,33 +506,6 @@ class AgentRunnerService:
                 seconds=time.monotonic() - run_started,
             )
 
-    async def _runtime_for(
-        self, conversation: Conversation, agent_run: AgentRun, *, user_id: UUID
-    ) -> ResolvedAgentRuntime:
-        """The run's runtime -- one that runs in this process, for a stranger's turn.
-
-        A stranger's turn never reaches a coding agent's shell, which would hold
-        a token minted for the member who answers for the group; see
-        ``runtime_resolution``.
-        """
-        resolved = await resolve_runtime(
-            RuntimeRequest(
-                organization_id=conversation.organization_id,
-                user_id=user_id,
-                configured=agent_run.agent_runtime,
-                answers_outsiders=Audience.of(conversation).answers_outsiders,
-            ),
-            purpose=RuntimePurpose.TURN,
-            resolve=partial(
-                self._resolve_agent_runtime,
-                user_id=user_id,
-                organization_id=conversation.organization_id,
-            ),
-            uow_factory=self.uow_factory,
-        )
-        assert resolved is not None  # a turn always resolves or raises
-        return resolved
-
     async def _resolve_agent_runtime(
         self,
         agent_runtime: AgentRuntimeConfig,
@@ -556,7 +528,7 @@ class AgentRunnerService:
         user_id: UUID,
         pod_id: UUID,
         agent_name: str | None,
-    ) -> tuple[Conversation, Agent, AgentRun, list[Message]]:
+    ) -> RunSession:
         return await self.load_context(
             self.uow_factory,
             agent_run_id=agent_run_id,
@@ -564,6 +536,22 @@ class AgentRunnerService:
             pod_id=pod_id,
             agent_name=agent_name,
         )
+
+    async def _reload_history(
+        self,
+        *,
+        agent_run_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+        agent_name: str | None,
+    ) -> list[Message]:
+        session = await self._load_run_context(
+            agent_run_id=agent_run_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
+        )
+        return session.history
 
     def _resolve_output_type(
         self, agent: Agent, conversation: Conversation

@@ -7,10 +7,10 @@ from uuid import uuid4
 import pytest
 from redis.exceptions import RedisError
 
-from app.modules.agent.services.mcp_tool_inputs import (
+from app.modules.agent.services.run_session_relay import (
     CachedGrantSummary,
-    McpToolInputs,
-    McpToolInputsCache,
+    RunInputs,
+    RunInputsCache,
     without_provider_config,
 )
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
@@ -36,8 +36,8 @@ class _Store:
         self.values[suffix] = value
 
 
-def _inputs(generation: str) -> McpToolInputs:
-    return McpToolInputs(
+def _inputs(generation: str) -> RunInputs:
+    return RunInputs(
         grant_generation=generation,
         runtime_profile={"profile_id": "p", "model_capabilities": ["VISION"]},
         grants=CachedGrantSummary.of(
@@ -48,7 +48,7 @@ def _inputs(generation: str) -> McpToolInputs:
 
 async def test_inputs_kept_for_a_lease_come_back_under_the_same_grants() -> None:
     store = _Store()
-    cache = McpToolInputsCache(store)
+    cache = RunInputsCache(store)
     run_id = uuid4()
 
     await cache.put(run_id=run_id, lease_epoch=3, inputs=_inputs("g1"))
@@ -62,7 +62,7 @@ async def test_inputs_kept_for_a_lease_come_back_under_the_same_grants() -> None
 
 
 async def test_a_grant_change_or_a_new_lease_is_a_miss() -> None:
-    cache = McpToolInputsCache(_Store())
+    cache = RunInputsCache(_Store())
     run_id = uuid4()
     await cache.put(run_id=run_id, lease_epoch=3, inputs=_inputs("g1"))
 
@@ -71,7 +71,7 @@ async def test_a_grant_change_or_a_new_lease_is_a_miss() -> None:
 
 
 async def test_redis_down_is_a_miss_that_says_so(caplog) -> None:
-    cache = McpToolInputsCache(_Store(fail=True))
+    cache = RunInputsCache(_Store(fail=True))
 
     with caplog.at_level("WARNING"):
         await cache.put(run_id=uuid4(), lease_epoch=1, inputs=_inputs("g1"))
