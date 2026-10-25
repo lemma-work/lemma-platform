@@ -33,7 +33,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHar
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.conversation_title_service import (
+from app.modules.agent.application.background.title import (
     ConversationTitleGenerator,
 )
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue

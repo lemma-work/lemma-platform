@@ -31,10 +31,6 @@ from typing import Protocol
 from uuid import UUID
 
 from opentelemetry import metrics
-from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
-from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
-from pydantic_ai.models import Model
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -67,23 +63,23 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.services.generation_settings import unreasoned_model_settings
-from app.modules.agent.services.runtime_model_factory import (
-    provider_model_settings,
-    require_pydantic_ai_model_from_runtime_profile,
-    usage_limits_for,
+from app.modules.agent.domain.background import (
+    BackgroundCall,
+    BackgroundLimits,
+    ToolReturnRecord,
 )
-from app.modules.agent.services.runtime_profile_service import (
-    ResolvedAgentRuntime,
-    runtime_profile_service_for,
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
+from app.modules.agent.services.background_model import BackgroundModel
+from app.modules.agent.services.runtime_resolution import (
+    RuntimeRequest,
+    resolve_runtime,
 )
-from app.modules.agent.services.summarization_model import resolve_system_model
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.memory_pass_tools import (
     MemoryScope,
     memory_pass_toolset,
 )
 from app.modules.usage.contracts.execution import UsageExecutionContext
-from app.modules.usage.contracts.metering import metering_execution
 
 logger = get_logger(__name__)
 
@@ -97,7 +93,7 @@ MEMORY_PASS_SOURCE = "agent_memory"
 
 #: A runaway guard, not a budget. Keeping a fact takes at most a read of the
 #: topic file it belongs in, the writes, and the closing line.
-_PASS_USAGE_LIMITS = UsageLimits(
+_PASS_USAGE_LIMITS = BackgroundLimits(
     request_limit=6,
     input_tokens_limit=150_000,
     output_tokens_limit=8_000,
@@ -138,19 +134,21 @@ class _FinishedTurn:
 
 
 #: ``(run model, organization, person) -> the model the pass runs on``.
-type PassModel = Callable[[Model, UUID | None, UUID], Awaitable[Model]]
+type PassModel = Callable[[object, UUID | None, UUID], Awaitable[object]]
 
 
 async def configured_pass_model(
-    run_model: Model, organization_id: UUID | None, user_id: UUID
-) -> Model:
+    run_model: object, organization_id: UUID | None, user_id: UUID
+) -> object:
     """``agent_memory_pass_model`` when the deployment names one, else the run's."""
-    return await resolve_system_model(
-        agent_settings.agent_memory_pass_model,
-        organization_id=organization_id,
-        user_id=user_id,
+    return await BackgroundModel().model_or(
+        RuntimePurpose.MEMORY,
+        RuntimeRequest(
+            organization_id=organization_id,
+            user_id=user_id,
+            model_name=agent_settings.agent_memory_pass_model,
+        ),
         fallback=run_model,
-        purpose=RuntimePurpose.MEMORY,
     )
 
 
@@ -170,11 +168,13 @@ class MemoryPass:
         self,
         uow_factory: UnitOfWorkFactory,
         *,
-        model_for: Callable[[ResolvedAgentRuntime], Model] | None = None,
+        model_for: Callable[[ResolvedAgentRuntime], object] | None = None,
         pass_model: PassModel | None = None,
         counter: OutcomeCounter = memory_pass_counter,
+        background: BackgroundModel | None = None,
     ) -> None:
         self.uow_factory = uow_factory
+        self._background = background or BackgroundModel()
         self._model_for = model_for
         self._pass_model = pass_model or configured_pass_model
         self.counter = counter
@@ -251,12 +251,16 @@ class MemoryPass:
         self, turn: _FinishedTurn, *, user_id: UUID
     ) -> ResolvedAgentRuntime | None:
         """The runtime the run itself ran on, or None when Lemma does not run it."""
-        async with self.uow_factory() as uow:
-            resolved = await runtime_profile_service_for(uow).resolve(
-                runtime=turn.run.agent_runtime,
+        resolved = await resolve_runtime(
+            RuntimeRequest(
                 organization_id=turn.conversation.organization_id,
                 user_id=user_id,
-            )
+                configured=turn.run.agent_runtime,
+            ),
+            purpose=RuntimePurpose.TURN,
+            uow_factory=self.uow_factory,
+        )
+        assert resolved is not None  # a turn's runtime resolves or raises
         # A run is only told to leave memory to the pass when it runs here;
         # one whose runtime has since moved to Agent Host has no model for it.
         return resolved if resolved.harness_kind == HarnessKind.LEMMA else None
@@ -268,20 +272,13 @@ class MemoryPass:
         memory = await AgentMemoryBriefBuilder(self.uow_factory).build(
             agent=agent, pod_id=conversation.pod_id, user_id=user_id
         )
-        run_model = (self._model_for or _run_model)(resolved)
+        run_model = (self._model_for or self._run_model)(resolved)
         model = await self._pass_model(run_model, conversation.organization_id, user_id)
-        keeper = PydanticAIAgent(
-            model,
-            instructions=f"{load_memory_pass_prompt()}\n{memory}",
-            deps_type=BaseAgentContext,
-            toolsets=[memory_pass_toolset(MemoryScope(agent_memory_paths(agent)))],
-        )
         transcript = render_turn(
             turn.messages,
             reply_before=turn.reply_before,
             today=datetime.now(UTC).date(),
         )
-        request = f"{transcript}\n\n{_QUESTION}"
         deps = BaseAgentContext(
             user_id=user_id,
             org_id=conversation.organization_id,
@@ -293,48 +290,47 @@ class MemoryPass:
             is_pod_default_agent=agent.kind is AgentKind.POD_DEFAULT,
             memory_enabled=True,
         )
-        limits = usage_limits_for(model, _PASS_USAGE_LIMITS)
         # The run's settings are for the run's model; a configured one gets
-        # none, as a configured summarization model does.
-        asked = unreasoned_model_settings(resolved) if model is run_model else None
-        plain = (
-            unreasoned_model_settings(resolved, ask_no_reasoning=False)
-            if model is run_model
-            else None
+        # none, as a configured summarization model does. A strict endpoint
+        # that refuses the reasoning field is asked once more without it --
+        # nothing was written yet: the refusal is the first request's.
+        own_model = model is run_model
+        call = BackgroundCall(
+            prompt=f"{transcript}\n\n{_QUESTION}",
+            limits=_PASS_USAGE_LIMITS,
+            instructions=f"{load_memory_pass_prompt()}\n{memory}",
+            model_settings=unreasoned_model_settings(resolved) if own_model else None,
+            plain_model_settings=(
+                unreasoned_model_settings(resolved, ask_no_reasoning=False)
+                if own_model
+                else None
+            ),
+            toolsets=[memory_pass_toolset(MemoryScope(agent_memory_paths(agent)))],
+            deps=deps,
+            deps_type=BaseAgentContext,
         )
-        usage = UsageExecutionContext(
-            user_id=user_id,
-            organization_id=conversation.organization_id,
-            pod_id=conversation.pod_id,
-            agent_id=agent.id,
-            conversation_id=conversation.id,
-            source_type=MEMORY_PASS_SOURCE,
-            source_id=str(turn.run.id),
+        answer = await self._background.ask(
+            RuntimePurpose.MEMORY,
+            model,
+            call,
+            usage=UsageExecutionContext(
+                user_id=user_id,
+                organization_id=conversation.organization_id,
+                pod_id=conversation.pod_id,
+                agent_id=agent.id,
+                conversation_id=conversation.id,
+                source_type=MEMORY_PASS_SOURCE,
+                source_id=str(turn.run.id),
+            ),
         )
-        async with metering_execution(usage):
-            try:
-                result = await keeper.run(
-                    request,
-                    deps=deps,
-                    usage_limits=limits,
-                    model_settings=provider_model_settings(asked),
-                )
-            except ModelHTTPError as error:
-                # As for titles: a strict endpoint refuses a request field it
-                # does not know, so it is asked once more without the
-                # reasoning field -- only when that field was sent. Nothing
-                # was written yet: the refusal is the first request's.
-                if asked == plain or error.status_code not in (400, 422):
-                    raise
-                result = await keeper.run(
-                    request,
-                    deps=deps,
-                    usage_limits=limits,
-                    model_settings=provider_model_settings(plain),
-                )
-        if _wrote_memory(result.all_messages()):
+        if _wrote_memory(answer.tool_returns):
             return MemoryPassOutcome.KEPT
         return MemoryPassOutcome.NOTHING
+
+    def _run_model(self, resolved: ResolvedAgentRuntime) -> object:
+        return self._background.build(
+            resolved, fallback_model_name=resolved.model_name_for_harness
+        )
 
 
 async def _carried_in(
@@ -369,24 +365,13 @@ async def _carried_in(
     return carried, began.id
 
 
-def _run_model(resolved: ResolvedAgentRuntime) -> Model:
-    return require_pydantic_ai_model_from_runtime_profile(
-        runtime_profile=resolved.runtime_snapshot().as_payload(),
-        runtime_credentials=resolved.credentials or {},
-        fallback_model_name=resolved.model_name_for_harness,
-    )
-
-
-def _wrote_memory(messages: list[ModelMessage]) -> bool:
+def _wrote_memory(returns: list[ToolReturnRecord]) -> bool:
     """Whether any write the pass made succeeded."""
     return any(
-        isinstance(part, ToolReturnPart)
-        and part.tool_name == _WRITE_TOOL
-        and isinstance(part.content, dict)
-        and part.content.get("success") is True
-        for message in messages
-        if isinstance(message, ModelRequest)
-        for part in message.parts
+        returned.tool_name == _WRITE_TOOL
+        and isinstance(returned.content, dict)
+        and returned.content.get("success") is True
+        for returned in returns
     )
 
 

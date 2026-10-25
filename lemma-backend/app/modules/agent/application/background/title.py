@@ -26,9 +26,6 @@ from typing import Protocol
 from uuid import UUID
 
 from opentelemetry import metrics
-from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
-from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.models import Model
 
 from app.modules.agent.config import agent_settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -44,25 +41,20 @@ from app.modules.agent.services.realtime import (
     title_updated_payload,
 )
 from app.modules.agent.services.generation_settings import unreasoned_model_settings
-from app.modules.agent.services.runtime_model_factory import (
-    provider_model_settings,
-    require_pydantic_ai_model_from_runtime_profile,
-    usage_limits_for,
-)
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
 from app.modules.agent.domain.runtime_choice import RuntimePurpose
+from app.modules.agent.domain.background import BackgroundCall, BackgroundLimits
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
+from app.modules.agent.services.background_model import BackgroundModel
 from app.modules.agent.services.runtime_resolution import (
     RuntimeRequest,
     WorkspaceRuntimeResolver,
-    resolve_runtime,
 )
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.services.run_usage_recorder import outside_source_for
 from app.modules.usage.contracts.execution import UsageExecutionContext
-from app.modules.usage.contracts.metering import metering_execution
 
 logger = get_logger(__name__)
 
@@ -81,7 +73,7 @@ _MAX_TITLE_LEN = 80
 #: finished title can exceed throws the title away: a model that reasons anyway
 #: (it ignored ``none``, or was asked without it) spends hundreds of tokens
 #: before the few words, and 256 discarded every one of those titles.
-_TITLE_USAGE_LIMITS = UsageLimits(
+_TITLE_USAGE_LIMITS = BackgroundLimits(
     request_limit=1,
     input_tokens_limit=12_000,
     output_tokens_limit=4_096,
@@ -153,7 +145,7 @@ class OutcomeCounter(Protocol):
 
 
 class ConversationTitleGenerator:
-    """The LLM half: resolve the system runtime, ask for a title, meter it.
+    """The LLM half: resolve the title runtime, ask for a title, meter it.
 
     Split out of `ConversationTitleService` because the two halves are tested
     against completely different things. The service's job is a decision —
@@ -161,30 +153,23 @@ class ConversationTitleGenerator:
     count — and a test of it should not have to stand up a model. This half's
     job is the call itself, and its interesting properties (the reasoning-effort
     setting, sanitisation, that a failed call is still metered before it
-    propagates) are only checkable with the model faked. Fused into one class,
-    every test of either had to replace the other's names inside the module.
+    propagates) are only checkable with the model faked -- through the
+    ``background`` provider port, or the two resolution seams.
     """
 
     def __init__(
         self,
         *,
         runtime_profiles: Callable[[], AgentRuntimeProfileService] | None = None,
-        model_for_profile: Callable[..., Model] | None = None,
-        llm_agent: Callable[..., PydanticAIAgent[None, str]] | None = None,
         workspace_runtime: WorkspaceRuntimeResolver | None = None,
+        background: BackgroundModel | None = None,
     ) -> None:
-        # `None` rather than the real callable as a default, deliberately. A
-        # default argument is evaluated once, when this module is imported, so
-        # `= PydanticAIAgent` would capture the class *object* and a later
-        # `monkeypatch.setattr(module, "PydanticAIAgent", ...)` would rebind the
-        # module attribute while this default kept pointing at the original.
-        # `test_conversation_title_e2e.py` replaces all five of these names on
-        # the module, and with import-bound defaults it silently drove the real
-        # model instead — a title of "[mock] User's first message:".
+        # `None` rather than the real collaborator as a default, deliberately: a
+        # default argument is evaluated once, at import, and a later
+        # `monkeypatch.setattr(module, ...)` would not reach it.
         self._runtime_profiles = runtime_profiles
-        self._model_for_profile = model_for_profile
-        self._llm_agent = llm_agent
         self._workspace_runtime = workspace_runtime
+        self._background = background
 
     async def generate(
         self,
@@ -200,83 +185,52 @@ class ConversationTitleGenerator:
 
         A title for a conversation answering somebody outside the pod costs
         what their run costs: the contacts cap, never the allowance of the
-        member who owns the conversation.
+        member who owns the conversation. The configured title model on the
+        system profile, its default when the catalog lacks it, and with no
+        system model at all the model this pod already runs on.
         """
-        resolved = await self._resolve_runtime(
-            organization_id=organization_id, user_id=user_id, pod_id=pod_id
-        )
-        runtime_profile = resolved.runtime_snapshot().as_payload()
-        model = (
-            self._model_for_profile or require_pydantic_ai_model_from_runtime_profile
-        )(
-            runtime_profile=runtime_profile,
-            runtime_credentials=resolved.credentials or {},
-            fallback_model_name=resolved.model_name_for_harness,
-        )
-        usage_context = UsageExecutionContext(
-            user_id=user_id,
-            organization_id=organization_id,
-            pod_id=pod_id,
-            source_type="conversation_title",
-            outside_audience=outside_source_for(audience),
-        )
-        agent = (self._llm_agent or PydanticAIAgent)(
-            model, system_prompt=_TITLE_SYSTEM_PROMPT
-        )
         prompt = _build_user_prompt(user_text, reply_text)
-        limits = usage_limits_for(model, _TITLE_USAGE_LIMITS)
-        # No reasoning for a few words, asked of every model.
-        asked = unreasoned_model_settings(resolved)
-        plain = unreasoned_model_settings(resolved, ask_no_reasoning=False)
-        async with metering_execution(usage_context):
-            try:
-                result = await agent.run(
-                    prompt,
-                    usage_limits=limits,
-                    model_settings=provider_model_settings(asked),
-                )
-            except ModelHTTPError as error:
-                # A strict endpoint refuses a request field it does not know
-                # (400/422): asked once more without the reasoning field --
-                # only when it was sent. A refusal of anything else, or an
-                # auth or rate-limit answer, is the caller's fallback.
-                if asked == plain or error.status_code not in (400, 422):
-                    raise
-                logger.info(
-                    "agent.conversation_title.reasoning_field_refused",
-                    status_code=error.status_code,
-                )
-                result = await agent.run(
-                    prompt,
-                    usage_limits=limits,
-                    model_settings=provider_model_settings(plain),
-                )
-
-        return _sanitize_title(str(result.output))
-
-    async def _resolve_runtime(
-        self,
-        *,
-        organization_id: UUID | None,
-        user_id: UUID,
-        pod_id: UUID,
-    ) -> ResolvedAgentRuntime:
-        # The configured title model on the system profile, its default when
-        # the catalog lacks it, and with no system model at all the model this
-        # pod already runs on.
-        resolved = await resolve_runtime(
+        answer = await (self._background or BackgroundModel()).run(
+            RuntimePurpose.TITLE,
             RuntimeRequest(
                 organization_id=organization_id,
                 user_id=user_id,
                 pod_id=pod_id,
                 model_name=agent_settings.conversation_title_model,
             ),
-            purpose=RuntimePurpose.TITLE,
+            lambda resolved: _title_call(prompt, resolved),
+            usage=UsageExecutionContext(
+                user_id=user_id,
+                organization_id=organization_id,
+                pod_id=pod_id,
+                source_type="conversation_title",
+                outside_audience=outside_source_for(audience),
+            ),
             profiles=self._runtime_profiles or AgentRuntimeProfileService,
             workspace_runtime=self._workspace_runtime,
         )
-        assert resolved is not None  # a title resolves or raises
-        return resolved
+        return _sanitize_title(answer.output)
+
+
+def _title_call(prompt: str, resolved: ResolvedAgentRuntime) -> BackgroundCall:
+    """No reasoning for a few words, asked of every model -- and asked once more
+    without the field when a strict endpoint refuses it (400/422)."""
+    return BackgroundCall(
+        prompt=prompt,
+        limits=_TITLE_USAGE_LIMITS,
+        system_prompt=_TITLE_SYSTEM_PROMPT,
+        model_settings=unreasoned_model_settings(resolved),
+        plain_model_settings=unreasoned_model_settings(
+            resolved, ask_no_reasoning=False
+        ),
+        on_plain_retry=_reasoning_field_refused,
+    )
+
+
+def _reasoning_field_refused(status_code: int) -> None:
+    logger.info(
+        "agent.conversation_title.reasoning_field_refused", status_code=status_code
+    )
 
 
 class ConversationTitleService:

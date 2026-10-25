@@ -13,7 +13,9 @@ from app.modules.agent.domain.entities import (
     Conversation,
     Message,
 )
+from app.modules.agent.domain.background import BackgroundAnswer, BackgroundCall
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     HarnessKind,
@@ -39,6 +41,24 @@ class Harness(Protocol):
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
         """Execute one agent run and yield normalized events."""
+        ...
+
+
+class ModelProvider(Protocol):
+    """The vendor boundary for model calls made outside a turn (DES-08).
+
+    A model is opaque on this side: whatever ``build`` returns is handed back
+    to ``run``.
+    """
+
+    def build(
+        self, resolved: ResolvedAgentRuntime, *, fallback_model_name: str | None = None
+    ) -> object | None:
+        """The model ``resolved`` names, or ``None`` when it cannot be built."""
+        ...
+
+    async def run(self, model: object, call: BackgroundCall) -> BackgroundAnswer:
+        """Ask ``model`` one background call."""
         ...
 
 

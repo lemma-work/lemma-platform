@@ -42,7 +42,7 @@ from app.modules.agent.infrastructure.transport_errors import (
 from app.modules.agent.services import runtime_model_factory
 from app.modules.agent.services.generation_settings import run_generation_settings
 from app.modules.agent.services import runtime_provider_discovery as discovery
-from app.modules.agent.services.runtime_profile_service import ResolvedAgentRuntime
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 
 logger = get_logger(__name__)
 

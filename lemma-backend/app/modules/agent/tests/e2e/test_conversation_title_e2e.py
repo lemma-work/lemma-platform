@@ -30,8 +30,12 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.modules.agent.domain.value_objects import MessageDraft, MessageRole
 from app.modules.agent.infrastructure.db.messages import Messages
-from app.modules.agent.services import conversation_title_service as cts
-from app.modules.agent.services.conversation_title_service import (
+from app.modules.agent.infrastructure.providers.background import (
+    PydanticAIModelProvider,
+)
+from app.modules.agent.services import background_model
+from app.modules.agent.application.background import title as cts
+from app.modules.agent.application.background.title import (
     ConversationTitleService,
 )
 
@@ -66,12 +70,14 @@ def _stub_llm(monkeypatch: pytest.MonkeyPatch, *, output: str) -> None:
     """Stub the title service's model/LLM/usage boundary (DB stays real)."""
 
     class _FakeLLMAgent:
-        def __init__(self, model, system_prompt=None):
+        def __init__(self, model, system_prompt=None, **_):
             pass
 
-        async def run(self, prompt, *, usage_limits=None, model_settings=None):
-            del usage_limits, model_settings
-            return SimpleNamespace(output=output)
+        async def run(
+            self, prompt, *, deps=None, usage_limits=None, model_settings=None
+        ):
+            del deps, usage_limits, model_settings
+            return SimpleNamespace(output=output, all_messages=list)
 
     async def _noop_reserve(*, organization_id, user_id, runtime_profile):
         from app.modules.usage.domain.entities import UsageReservation
@@ -94,10 +100,13 @@ def _stub_llm(monkeypatch: pytest.MonkeyPatch, *, output: str) -> None:
     monkeypatch.setattr(
         cts.agent_settings, "conversation_title_model", "deepseek-v4-flash"
     )
-    monkeypatch.setattr(cts, "PydanticAIAgent", _FakeLLMAgent)
     monkeypatch.setattr(cts, "AgentRuntimeProfileService", _FakeProfileService)
     monkeypatch.setattr(
-        cts, "require_pydantic_ai_model_from_runtime_profile", lambda **_: object()
+        background_model,
+        "default_model_provider",
+        lambda: PydanticAIModelProvider(
+            agent_factory=_FakeLLMAgent, model_for=lambda **_: object()
+        ),
     )
 
 

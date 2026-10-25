@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import cast
 from uuid import UUID
 
 from pydantic_ai.models import Model
@@ -113,64 +114,24 @@ async def resolve_summarization_model[T](
     user_id: UUID,
     fallback: T,
 ) -> Model | T:
-    """A pydantic-ai model for compaction, or ``fallback`` (the run's model)."""
-    return await resolve_system_model(
-        configured_summarization_model_name(),
-        organization_id=organization_id,
-        user_id=user_id,
-        fallback=fallback,
-        purpose=RuntimePurpose.COMPACTION,
-    )
+    """A pydantic-ai model for compaction, or ``fallback`` (the run's model).
 
-
-async def resolve_system_model[T](
-    model_name: str | None,
-    *,
-    organization_id: UUID | None,
-    user_id: UUID,
-    fallback: T,
-    purpose: RuntimePurpose,
-) -> Model | T:
-    """``model_name`` on the system provider, or ``fallback`` when it is unset,
-    there is no system provider, or it cannot be resolved or built.
-
-    For the side jobs a deployment may move off the run's own model --
-    compaction, the memory pass -- each named by its own setting.
+    Unset, without a system provider, or unresolvable (logged), compaction
+    stays on the run's own model.
     """
-    if not model_name:
-        return fallback
+    # Imported here: this module is pulled in by the harness, and resolution
+    # reaches the profile service, which reaches back into services that
+    # import the harness.
+    from app.modules.agent.services.background_model import BackgroundModel
+    from app.modules.agent.services.runtime_resolution import RuntimeRequest
 
-    # Imported here: this module is pulled in by the harness, and the profile
-    # service reaches back into services that import the harness.
-    from app.modules.agent.services.runtime_model_factory import (
-        pydantic_ai_model_from_runtime_profile,
-    )
-    from app.modules.agent.services.runtime_resolution import (
-        RuntimeRequest,
-        resolve_runtime,
-    )
-
-    resolved = await resolve_runtime(
+    model = await BackgroundModel().model_or(
+        RuntimePurpose.COMPACTION,
         RuntimeRequest(
-            organization_id=organization_id, user_id=user_id, model_name=model_name
+            organization_id=organization_id,
+            user_id=user_id,
+            model_name=configured_summarization_model_name(),
         ),
-        purpose=purpose,
+        fallback=fallback,
     )
-    if resolved is None:
-        return fallback
-    try:
-        model = pydantic_ai_model_from_runtime_profile(
-            runtime_profile=resolved.runtime_snapshot().as_payload(),
-            runtime_credentials=resolved.credentials,
-        )
-    except Exception:
-        # Warning, not debug: falling back runs the side job on the run's own,
-        # expensive, model.
-        logger.warning(
-            "agent.system_model.resolution_failed.observed",
-            model_name=model_name,
-            purpose=purpose.value,
-            exc_info=True,
-        )
-        return fallback
-    return model or fallback
+    return cast(Model | T, model)

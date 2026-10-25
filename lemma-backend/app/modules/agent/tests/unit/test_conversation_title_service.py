@@ -2,8 +2,9 @@
 
 Nothing here is patched. `ConversationTitleService` takes its repository, its
 title generator, its realtime publisher and its counter as constructor
-arguments; `ConversationTitleGenerator` takes the runtime profile service, the
-model factory, the pydantic-ai agent and the two usage calls as its own. Every
+arguments; `ConversationTitleGenerator` takes the runtime profile service and
+the background model -- whose provider takes the model factory and the
+pydantic-ai agent -- as its own. Every
 test below therefore runs the shipped decision — idempotence, the fallback, the
 script guard, the order of persist/publish/count — rather than a stand-in for
 it.
@@ -42,14 +43,18 @@ from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
 )
-from app.modules.agent.services import conversation_title_service as cts
-from app.modules.agent.services.conversation_title_service import (
+from app.modules.agent.application.background import title as cts
+from app.modules.agent.application.background.title import (
     ConversationTitleGenerator,
     ConversationTitleService,
     _build_user_prompt,
     _sanitize_title,
     title_matches_user_script,
 )
+from app.modules.agent.infrastructure.providers.background import (
+    PydanticAIModelProvider,
+)
+from app.modules.agent.services.background_model import BackgroundModel
 from app.modules.agent.services.realtime import title_updated_payload
 from app.modules.usage.contracts.execution import current_usage_context
 from app.modules.usage.domain.accounting import CONTACT_RUN
@@ -521,6 +526,15 @@ class _FakeProfileService:
         return _FakeResolved(reasons=self.reasons)
 
 
+def _background(agent_factory, *, model: object) -> BackgroundModel:
+    """The real background sequence with only the model boundary faked."""
+    return BackgroundModel(
+        PydanticAIModelProvider(
+            agent_factory=agent_factory, model_for=lambda **_: model
+        )
+    )
+
+
 def _generator(
     *,
     output: str = "A nice title",
@@ -533,11 +547,13 @@ def _generator(
     capture: dict[str, object] = {"run_calls": 0, "usage": [], "settings_seen": []}
 
     class _FakeLLMAgent:
-        def __init__(self, model, system_prompt=None):
+        def __init__(self, model, system_prompt=None, **_):
             capture["model"] = model
             capture["system_prompt"] = system_prompt
 
-        async def run(self, prompt, *, usage_limits=None, model_settings=None):
+        async def run(
+            self, prompt, *, deps=None, usage_limits=None, model_settings=None
+        ):
             capture["run_calls"] = int(capture["run_calls"]) + 1
             capture["prompt"] = prompt
             capture["usage_limits"] = usage_limits
@@ -549,15 +565,14 @@ def _generator(
                 raise ModelHTTPError(400, "a-model", {"error": "unknown field"})
             if answers_status is not None:
                 raise ModelHTTPError(answers_status, "a-model", {"error": "no"})
-            return SimpleNamespace(output=output)
+            return SimpleNamespace(output=output, all_messages=list)
 
     profiles = _FakeProfileService(reasons=reasons)
     capture["profiles"] = profiles
     return (
         ConversationTitleGenerator(
             runtime_profiles=lambda: profiles,
-            model_for_profile=lambda **_: object(),
-            llm_agent=_FakeLLMAgent,
+            background=_background(_FakeLLMAgent, model=object()),
         ),
         capture,
     )
@@ -671,10 +686,11 @@ async def test_a_title_for_a_contacts_conversation_is_the_contacts_spend(
 
     seen: dict[str, object] = {}
     real, _ = _generator()
-    original = real._llm_agent
+    provider = real._background.provider
+    original = provider._agent_factory
 
-    def _watching_agent(model, system_prompt=None):
-        agent = original(model, system_prompt=system_prompt)
+    def _watching_agent(model, system_prompt=None, **kwargs):
+        agent = original(model, system_prompt=system_prompt, **kwargs)
         run = agent.run
 
         async def _run(*args, **kwargs):
@@ -684,7 +700,7 @@ async def test_a_title_for_a_contacts_conversation_is_the_contacts_spend(
         agent.run = _run
         return agent
 
-    real._llm_agent = _watching_agent
+    provider._agent_factory = _watching_agent
     await real.generate(
         user_id=uuid4(),
         organization_id=None,
@@ -743,16 +759,17 @@ async def test_without_a_system_model_titles_run_on_the_pods_model(
     captured: dict[str, object] = {}
 
     class _FakeLLMAgent:
-        def __init__(self, model, system_prompt=None):
+        def __init__(self, model, system_prompt=None, **_):
             captured["model"] = model
 
-        async def run(self, prompt, *, usage_limits=None, model_settings=None):
-            return SimpleNamespace(output="Workspace Title")
+        async def run(
+            self, prompt, *, deps=None, usage_limits=None, model_settings=None
+        ):
+            return SimpleNamespace(output="Workspace Title", all_messages=list)
 
     generator = ConversationTitleGenerator(
         runtime_profiles=_NoSystemModel,
-        model_for_profile=lambda **_: "workspace-model",
-        llm_agent=_FakeLLMAgent,
+        background=_background(_FakeLLMAgent, model="workspace-model"),
         workspace_runtime=workspace_runtime,
     )
     pod_id = uuid4()

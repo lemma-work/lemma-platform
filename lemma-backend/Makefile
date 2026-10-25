@@ -375,9 +375,13 @@ AGENT_HARNESS_TYPED_PATHS := \
 	app/modules/agent/infrastructure/harnesses/pydantic_ai_node_loop.py \
 	app/modules/agent/infrastructure/harnesses/remote_payload.py \
 	app/modules/agent/services/agent_runner_service.py \
-	app/modules/agent/services/conversation_title_service.py \
+	app/modules/agent/application/background/title.py \
+	app/modules/agent/application/background/memory_pass.py \
+	app/modules/agent/infrastructure/providers/background.py \
+	app/modules/agent/services/background_model.py \
 	app/modules/agent/services/runtime_model_factory.py \
 	app/modules/agent/services/runtime_profile_service.py \
+	app/modules/agent/services/runtime_resolution.py \
 	app/modules/agent/services/summarization_model.py \
 	app/modules/agent/services/vision_service.py \
 	app/modules/agent/tools/graceful_toolset.py \
@@ -390,7 +394,8 @@ USAGE_ANNOTATED_PATHS := \
 	app/modules/agent/infrastructure/harnesses/pydantic_ai.py \
 	app/modules/agent/infrastructure/harnesses/history.py \
 	app/modules/agent/services/agent_runner_service.py \
-	app/modules/agent/services/conversation_title_service.py \
+	app/modules/agent/application/background/title.py \
+	app/modules/agent/services/background_model.py \
 	app/modules/agent/services/run_usage_recorder.py \
 	app/modules/agent/services/runtime_model_factory.py \
 	app/modules/agent/services/runtime_profile_service.py \

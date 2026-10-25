@@ -349,7 +349,7 @@ async def on_turn_dead(ctx: DeadContext) -> None:
 
 
 async def generate_title(ctx: JobContext, payload: ConversationWork) -> None:
-    from app.modules.agent.services.conversation_title_service import (
+    from app.modules.agent.application.background.title import (
         ConversationTitleService,
     )
     from app.modules.agent.services.harness_wiring import worker_uow_factory

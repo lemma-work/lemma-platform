@@ -44,7 +44,10 @@ from app.modules.agent.events.turn_payloads import MemoryPassWork
 from app.modules.agent.infrastructure.harnesses.mock_model import build_mock_model
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
-from app.modules.agent.services.memory_pass import MemoryPass, MemoryPassOutcome
+from app.modules.agent.application.background.memory_pass import (
+    MemoryPass,
+    MemoryPassOutcome,
+)
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     append,
     finish,

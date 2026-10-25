@@ -5,7 +5,7 @@ calling agent's own history therefore never contains image content, which is
 what makes this safe on a text-only model — the failure it replaces is a
 provider 400 when `BinaryContent` reaches a model that cannot accept it.
 
-Fallback policy is deliberately the opposite of `conversation_title_service`'s:
+Fallback policy is deliberately the opposite of the title's (`application/background/title`):
 titles fall back to the profile default, vision must not. Falling back here
 would resolve to the same text-only model that created the problem, and the
 400 would come back wearing a different hat. If no vision-capable model is
@@ -14,24 +14,23 @@ configured, the tool says so.
 
 from __future__ import annotations
 
-from dataclasses import replace
+import os
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
+from uuid import UUID
+
+from app.modules.agent.domain.background import (
+    BackgroundCall,
+    BackgroundLimits,
+    ImagePart,
+    PromptPart,
+)
+from app.modules.agent.domain.runtime_choice import RuntimePurpose
+from app.modules.agent.services.background_model import BackgroundModel
 from app.modules.usage.contracts.execution import (
     UsageExecutionContext,
     current_usage_context,
 )
-from app.modules.usage.contracts.metering import metering_execution
-
-import asyncio
-import os
-from collections.abc import Sequence
-from dataclasses import dataclass
-from uuid import UUID
-
-from pydantic_ai import Agent as PydanticAIAgent
-from pydantic_ai import BinaryContent
-from pydantic_ai.messages import UserContent
-from pydantic_ai.models import Model
-from pydantic_ai import UsageLimits
 
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
@@ -108,8 +107,8 @@ def vision_delegate_available() -> bool:
 
 async def _resolve_vision_model(
     *, organization_id: UUID | None, user_id: UUID
-) -> Model:
-    """A vision-capable pydantic-ai model, or raise.
+) -> object:
+    """A vision-capable model, or raise.
 
     Resolution (``RuntimePurpose.VISION``) asserts the catalog entry actually
     declares VISION so a misconfigured `VISION_MODEL` fails there -- the
@@ -119,29 +118,20 @@ async def _resolve_vision_model(
     model_name = configured_vision_model_name()
     # Imported here: resolution reaches the profile service, which reaches
     # back into services that import the harness.
-    from app.modules.agent.domain.runtime_choice import RuntimePurpose
-    from app.modules.agent.services.runtime_model_factory import (
-        pydantic_ai_model_from_runtime_profile,
-    )
-    from app.modules.agent.services.runtime_resolution import (
-        RuntimeRequest,
-        resolve_runtime,
-    )
+    from app.modules.agent.services.runtime_resolution import RuntimeRequest
     from app.modules.agent.services.runtime_system_profiles import (
         system_profile_configured,
     )
 
-    resolved = await resolve_runtime(
+    background = BackgroundModel()
+    resolved = await background.resolve(
+        RuntimePurpose.VISION,
         RuntimeRequest(
             organization_id=organization_id, user_id=user_id, model_name=model_name
         ),
-        purpose=RuntimePurpose.VISION,
     )
     assert resolved is not None  # vision resolves or raises
-    model = pydantic_ai_model_from_runtime_profile(
-        runtime_profile=resolved.runtime_snapshot().as_payload(),
-        runtime_credentials=resolved.credentials,
-    )
+    model = background.build(resolved)
     if model is None:
         raise VisionUnavailableError(
             f"VISION_MODEL '{model_name}' could not be built from the runtime profile."
@@ -182,7 +172,7 @@ async def describe_images(
         organization_id=organization_id, user_id=user_id
     )
 
-    prompt: list[UserContent] = [
+    prompt: list[PromptPart] = [
         (instructions or _DEFAULT_INSTRUCTIONS).strip(),
         "",
         "Images, in order:",
@@ -190,34 +180,36 @@ async def describe_images(
     for index, image in enumerate(images, start=1):
         prompt.append(f"{index}. {image.label}")
     for image in images:
-        prompt.append(BinaryContent(data=image.data, media_type=image.media_type))
+        prompt.append(ImagePart(data=image.data, media_type=image.media_type))
 
-    agent = PydanticAIAgent(model, instructions=_SYSTEM_PROMPT)
-    try:
-        current = current_usage_context()
-        # A copy of the run's context keeps its outside audience, so a
-        # contact's image is recorded as the contact's spend, not "vision" on
-        # the allowance of the member looking after the conversation.
-        usage_context = (
-            replace(current, source_type="vision")
-            if current
-            else UsageExecutionContext(
-                user_id=user_id,
-                organization_id=organization_id,
-                pod_id=None,
-                source_type="vision",
-            )
+    current = current_usage_context()
+    # A copy of the run's context keeps its outside audience, so a contact's
+    # image is recorded as the contact's spend, not "vision" on the allowance
+    # of the member looking after the conversation.
+    usage_context = (
+        replace(current, source_type="vision")
+        if current
+        else UsageExecutionContext(
+            user_id=user_id,
+            organization_id=organization_id,
+            pod_id=None,
+            source_type="vision",
         )
-        async with (
-            metering_execution(usage_context),
-            asyncio.timeout(VISION_TIMEOUT_SECONDS),
-        ):
-            result = await agent.run(
-                prompt,
-                usage_limits=UsageLimits(
+    )
+    try:
+        answer = await BackgroundModel().ask(
+            RuntimePurpose.VISION,
+            model,
+            BackgroundCall(
+                prompt=prompt,
+                limits=BackgroundLimits(
                     request_limit=1, output_tokens_limit=VISION_OUTPUT_TOKENS_LIMIT
                 ),
-            )
+                instructions=_SYSTEM_PROMPT,
+            ),
+            usage=usage_context,
+            timeout_seconds=VISION_TIMEOUT_SECONDS,
+        )
     except TimeoutError as exc:
         raise VisionDescriptionError(
             f"The vision model did not respond within {VISION_TIMEOUT_SECONDS}s."
@@ -230,7 +222,7 @@ async def describe_images(
             "The vision model could not describe the image."
         ) from exc
 
-    description = (result.output or "").strip()
+    description = (answer.output or "").strip()
     if not description:
         raise VisionDescriptionError("The vision model returned no description.")
     return description

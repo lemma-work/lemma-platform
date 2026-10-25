@@ -45,7 +45,7 @@ MEMORY_PASS_RETRY = RetryPolicy(
 
 async def keep_memory(ctx: JobContext, payload: MemoryPassWork) -> None:
     from app.modules.agent.services.harness_wiring import worker_uow_factory
-    from app.modules.agent.services.memory_pass import MemoryPass
+    from app.modules.agent.application.background.memory_pass import MemoryPass
 
     ctx.raise_if_stopping()
     try:

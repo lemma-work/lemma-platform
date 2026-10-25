@@ -120,7 +120,9 @@ async def test_the_memory_pass_stays_on_the_runs_model_without_a_system_one(
 ) -> None:
     """Unset, the pass runs on the run's model; set with no system provider to
     find it on, the same -- never a pass with no model."""
-    from app.modules.agent.services.memory_pass import configured_pass_model
+    from app.modules.agent.application.background.memory_pass import (
+        configured_pass_model,
+    )
 
     _no_system_model(monkeypatch, kind="desktop")
     run_model = object()
