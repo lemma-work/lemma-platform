@@ -999,7 +999,7 @@ def _file_reference(client: Any, state: Any, target: str) -> dict:
     return {"pod_path": str(uploaded.get("path") or f"/me/{local.name}")}
 
 
-def _pod_connectors(client: Any, state: Any) -> Any:
+def _pod_connectors(client: Any, state: Any, pod: str | None = None) -> Any:
     """The selected pod's connectors: what operations run through.
 
     A pod connector names one of the organization's installations under a
@@ -1009,7 +1009,10 @@ def _pod_connectors(client: Any, state: Any) -> Any:
     """
     from ..sdk import pod_client
 
-    return pod_client(client, state).connectors
+    return pod_client(client, state, pod).connectors
+
+
+_POD_OPTION = typer.Option(None, "--pod", help="The pod; defaults to the selected one.")
 
 
 def _resolve_account(client: Any, state: Any, account: str | None) -> str | None:
@@ -1721,17 +1724,35 @@ def run_connector_operation(
 
 
 @app.command("pod-list")
-def list_pod_connectors(ctx: typer.Context) -> None:
+def list_pod_connectors(ctx: typer.Context, pod: str | None = _POD_OPTION) -> None:
     """List the selected pod's connectors: slug, mode and status.
 
     The slug is what `run` and `operations execute` take.
     """
     state = state_from_ctx(ctx)
     result = run_with_client(
-        ctx, lambda client, s: _pod_connectors(client, s).pod_connectors()
+        ctx, lambda client, s: _pod_connectors(client, s, pod).pod_connectors()
     )
-    if result is not None:
+    if result is None:
+        return
+    if state.output == "json":
         emit(state, result)
+        return
+    # Its own columns: the generic table picks from names it knows and had
+    # none of slug, mode or installation -- the three this list is for.
+    emit(
+        state,
+        [
+            {
+                "slug": item.get("slug"),
+                "mode": item.get("mode"),
+                "status": item.get("status"),
+                "installation": item.get("installation_name"),
+                "can_use": item.get("can_use"),
+            }
+            for item in list_items(result)
+        ],
+    )
 
 
 def _auth_config_id(client: Any, selector: str) -> str:
@@ -1745,6 +1766,7 @@ def _auth_config_id(client: Any, selector: str) -> str:
 @app.command("pod-add")
 def add_pod_connector(
     ctx: typer.Context,
+    pod: str | None = _POD_OPTION,
     slug: str = typer.Argument(
         ..., help="Pod-local name agents, apps and bundles address it by."
     ),
@@ -1772,7 +1794,7 @@ def add_pod_connector(
     state = state_from_ctx(ctx)
 
     def run(client, s):  # type: ignore[no-untyped-def]
-        return _pod_connectors(client, s).declare_pod_connector(
+        return _pod_connectors(client, s, pod).declare_pod_connector(
             slug,
             _auth_config_id(client, install),
             mode.upper(),
@@ -1789,6 +1811,7 @@ def add_pod_connector(
 @app.command("pod-share")
 def share_account_in_pod(
     ctx: typer.Context,
+    pod: str | None = _POD_OPTION,
     account: str = typer.Argument(..., help="Your connected account's id."),
     visibility: str = typer.Option(
         "POD",
@@ -1804,7 +1827,7 @@ def share_account_in_pod(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: _pod_connectors(client, s).add_pod_account(
+        lambda client, s: _pod_connectors(client, s, pod).add_pod_account(
             account, visibility=visibility.upper()
         ),
     )
@@ -1815,6 +1838,7 @@ def share_account_in_pod(
 @app.command("pod-share-as")
 def share_account_as_pod_connector(
     ctx: typer.Context,
+    pod: str | None = _POD_OPTION,
     pod_account: str = typer.Argument(..., help="Your pod account's id."),
     slug: str = typer.Argument(
         ..., help="The SHARED pod connector to run as it: pointed at it, or declared."
@@ -1833,7 +1857,7 @@ def share_account_as_pod_connector(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: _pod_connectors(client, s).share_pod_account_as(
+        lambda client, s: _pod_connectors(client, s, pod).share_pod_account_as(
             pod_account, slug, purpose=purpose
         ),
     )
@@ -1844,13 +1868,14 @@ def share_account_as_pod_connector(
 @app.command("pod-coverage")
 def pod_connector_coverage(
     ctx: typer.Context,
+    pod: str | None = _POD_OPTION,
     slug: str = typer.Argument(..., help="A required PER_MEMBER pod connector."),
 ) -> None:
     """Who of the members allowed to use SLUG has connected an account, and who
     it is still waiting on. Needs pod.connector.manage."""
     state = state_from_ctx(ctx)
     result = run_with_client(
-        ctx, lambda client, s: _pod_connectors(client, s).connector_coverage(slug)
+        ctx, lambda client, s: _pod_connectors(client, s, pod).connector_coverage(slug)
     )
     if result is not None:
         emit(state, result)
@@ -1859,6 +1884,7 @@ def pod_connector_coverage(
 @app.command("pod-ask")
 def ask_members_to_connect(
     ctx: typer.Context,
+    pod: str | None = _POD_OPTION,
     slug: str = typer.Argument(..., help="A PER_MEMBER pod connector."),
     user: list[str] = typer.Option(
         [], "--user", help="Only this member (user id); repeatable."
@@ -1873,7 +1899,7 @@ def ask_members_to_connect(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: _pod_connectors(client, s).ask_members_to_connect(
+        lambda client, s: _pod_connectors(client, s, pod).ask_members_to_connect(
             slug, user_ids=list(user) or None
         ),
     )
@@ -1884,6 +1910,7 @@ def ask_members_to_connect(
 @app.command("pod-operations")
 def search_pod_connector_operations(
     ctx: typer.Context,
+    pod: str | None = _POD_OPTION,
     connector: str = typer.Argument(..., help="The pod connector's slug."),
     query: str | None = typer.Argument(None, help="What you want to do."),
     limit: int = typer.Option(20, "--limit"),
@@ -1892,7 +1919,7 @@ def search_pod_connector_operations(
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
-        lambda client, s: _pod_connectors(client, s).pod_operations(
+        lambda client, s: _pod_connectors(client, s, pod).pod_operations(
             connector, query, limit=limit
         ),
     )

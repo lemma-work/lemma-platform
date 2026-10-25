@@ -15,6 +15,8 @@ are counted rather than shown.
 
 from __future__ import annotations
 
+import re
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -87,9 +89,36 @@ def said_by_the_person(messages: Sequence[TurnMessage]) -> bool:
     """Whether the person said anything in this turn, or answered the agent.
 
     A turn that only resumed work -- an approval clicked, a wait come due --
-    carries nothing of theirs, and most of what is worth keeping is theirs.
+    carries nothing of theirs, and most of what is worth keeping is theirs. Nor
+    does one whose every message is an acknowledgement ("thanks", "ok") or no
+    words at all: the pass would read the whole turn and the memory brief to
+    conclude "nothing", at a multiple of the turn's own cost. An answer to the
+    agent's own question always counts -- a bare "yes" there can be a fact.
     """
-    return any(_is_the_persons(message) for message in messages)
+    return any(
+        _is_the_persons(message) and not _only_acknowledges(message)
+        for message in messages
+    )
+
+
+#: Words that acknowledge and say nothing about anyone. Matched whole, so a
+#: message counts only when every word in it is one of these.
+_ACKNOWLEDGEMENTS = frozenset(
+    {
+        "hi", "hello", "hey", "thanks", "thank", "you", "thx", "ty", "ok",
+        "okay", "k", "cool", "great", "nice", "good", "perfect", "awesome",
+        "yes", "yeah", "yep", "no", "nope", "sure", "got", "it", "alright",
+        "done", "bye", "cheers", "np", "lol", "haha", "much", "so",
+    }
+)  # fmt: skip
+
+
+def _only_acknowledges(message: TurnMessage) -> bool:
+    if message.kind is MessageKind.TOOL_RETURN:
+        return False
+    # `\w` is Unicode: words in any script are words, and only these count.
+    words = re.findall(r"\w+", (message.body or "").lower())
+    return all(word in _ACKNOWLEDGEMENTS for word in words)
 
 
 def the_persons_words(messages: Sequence[TurnMessage]) -> list[TurnMessage]:

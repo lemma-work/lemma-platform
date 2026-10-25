@@ -11,12 +11,15 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import DBAPIError
 
-from app.core.infrastructure.db.transient_errors import is_database_unavailable
+from app.core.infrastructure.db.transient_errors import (
+    is_database_unavailable,
+    is_schema_skew,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work.context import FastContext
 from app.core.infrastructure.work.db import SessionMaker, WorkDb
@@ -44,6 +47,7 @@ from app.core.infrastructure.work.types import (
     MaxRuntimeExceeded,
     PermanentFailure,
     Unavailable,
+    UnavailableEvidence,
     database_down,
 )
 from app.core.infrastructure.work.writer import LocalWake, WorkWriter
@@ -94,6 +98,18 @@ def _is_timeout(exc: Exception) -> bool:
     )
 
 
+#: How long a missing column or table is taken for a rollout in progress.
+#: A release's code-and-schema window is minutes; this outlasts a slow one.
+SCHEMA_SKEW_WINDOW = timedelta(minutes=20)
+
+
+def _rollout_may_still_be_running(state: AttemptState, now: datetime) -> bool:
+    return (
+        state.first_unavailable_at is None
+        or now - state.first_unavailable_at <= SCHEMA_SKEW_WINDOW
+    )
+
+
 def decide(
     spec: HandlerSpec, state: AttemptState, exc: Exception, now: datetime
 ) -> Decision:
@@ -106,6 +122,18 @@ def decide(
         # uncharged retry, bounded by the kind's unavailable budget -- not an
         # attempt the item is blamed for.
         return after_unavailable(policy, state, database_down(exc), now=now)
+    if is_schema_skew(exc) and _rollout_may_still_be_running(state, now):
+        # A release runs each version of the code against the other version of
+        # the schema for a few minutes; an item that hits that waits it out
+        # uncharged. Past the window it is taken for a real bug and charged; a
+        # charge ends the streak, so a real one is dead after ``max_attempts``
+        # windows.
+        skew = Unavailable(
+            f"schema skew: {type(exc).__name__}",
+            evidence=UnavailableEvidence.SCHEMA_SKEW,
+        )
+        skew.__cause__ = exc
+        return after_unavailable(policy, state, skew, now=now)
     if isinstance(exc, Defer):
         return after_defer(state, exc.delay, now=now)
     if isinstance(exc, MaxRuntimeExceeded):

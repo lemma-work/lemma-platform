@@ -158,6 +158,12 @@ export function accountTrouble(account: ConnectorAccount): string {
     if (account.status.toUpperCase() === "REAUTH_REQUIRED") return "Needs signing in again";
     if (account.status.toUpperCase() === "DISCONNECTED") return "Disconnected";
     const install = account.installState.toUpperCase();
+    /* A GitHub account whose installation lost its owner (migration 0063
+       unbinds one several organizations claimed) still looks connected, and
+       its triggers stopped firing with nothing anywhere saying so. */
+    if (install === "INSTALL_REQUIRED" && account.connectorId.toLowerCase() === "github") {
+        return "GitHub needs reconnecting: its triggers and actions reach nothing until it is installed";
+    }
     if (install === "INSTALL_REQUIRED") return "Needs installing before it can reach anything";
     if (install === "CHOOSE_INSTALL") return "Waiting for you to pick an installation";
     if (install === "PENDING_APPROVAL") return "Waiting on an organization owner";
