@@ -22,6 +22,7 @@ from app.modules.agent.domain.agent_host_permissions import (
     AgentHostPermissionRequest,
     agent_host_permission_request,
 )
+from app.modules.agent.domain.pausing_tools import PausedCall
 from app.modules.agent.domain.run_budget_pause import is_budget_pause
 from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE, approval_key
 from app.modules.agent.domain.value_objects import (
@@ -381,7 +382,7 @@ async def execute_approved_tool_as_user(
     approval_id: str | None = None,
 ) -> dict[str, object]:
     """Run an approved tool outside the database transaction; never raise."""
-    # Lazy to avoid importing the tool registry back through ConversationService.
+    # Lazy to avoid importing the tool registry back through the pause use cases.
     from app.modules.agent.tools.approval.executor import ApprovalExecutor
 
     try:
@@ -422,3 +423,51 @@ async def execute_approved_tool_as_user(
         # `httpx.HTTPStatusError` stringifies with the full URL -- a signed
         # storage link or a connector callback carrying a token in its query.
         return {"ok": False, "error": safe_error_text(exc)}
+
+
+def unconfirmed_execution_return(
+    *,
+    conversation_id: UUID,
+    approval_id: str,
+    paused: PausedCall,
+    decision: AgentRunApprovalDecision,
+    response: JsonObject,
+    claimed: bool,
+) -> tuple[str, object]:
+    """The honest return for an approval whose execution never reported.
+
+    ``claimed``: an executor took the one-shot claim and then lost its lease --
+    killed, out of memory, partitioned -- so the tool may or may not have run,
+    and it is never run again: an approved tool runs with a person's authority,
+    and running it twice is worse than saying so. Unclaimed: it kept failing
+    before it started, so nothing ran.
+    """
+    logger.error(
+        "agent.conversation_approvals.approved_tool_never_confirmed.failed",
+        conversation_id=str(conversation_id),
+        approval_id=approval_id,
+        claimed=claimed,
+    )
+    # Lazy: the tool models import the tool registry, which imports back
+    # through these reconciliation helpers.
+    from app.modules.agent.tools.user_interaction.models import (
+        RequestApprovalResponse,
+    )
+
+    error = (
+        "This was approved, but the worker running it stopped before it "
+        "reported a result, and Lemma cannot re-run an approved action. "
+        "Check whether it took effect before asking again."
+        if claimed
+        else (
+            "This was approved, but Lemma could not start it, so it did not "
+            "run. Ask again if it is still needed."
+        )
+    )
+    return paused.kind.value, RequestApprovalResponse(
+        success=False,
+        error=error,
+        decision=decision,
+        executed=False,
+        response=response,
+    ).model_dump(mode="json")

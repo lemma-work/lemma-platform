@@ -47,8 +47,15 @@ from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.core.log.log import get_logger
+from app.modules.agent.application.pauses.reconcile import ReconcileDecision
+from app.modules.agent.application.pauses.resume import ResumeRun
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.value_objects import AgentRunApprovalDecision, JsonObject
+from app.modules.agent.domain.pausing_tools import PausedCall
+from app.modules.agent.domain.value_objects import (
+    AgentRunApprovalDecision,
+    JsonObject,
+    RunTrigger,
+)
 from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE
 from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
 from app.modules.agent.infrastructure.db.conversations import Conversations
@@ -59,12 +66,14 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.approval_reconciliation import (
     ApprovalExecution,
     runs_in_worker,
+    unconfirmed_execution_return,
 )
-from app.modules.agent.services.conversation_approvals import PausedCall
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.conversation_resume_return import (
+    ResumeToolReturnBuilder,
+)
 from app.modules.agent.services.pause_questions import tell_where_asked
+from app.modules.agent.services.pause_resume import paused_call
 from app.modules.agent.services.runtime_owned_uow import RuntimeOwnedUnitOfWork
-from app.modules.usage.contracts.execution import build_usage_service
 
 logger = get_logger(__name__)
 
@@ -89,11 +98,35 @@ class _Decided:
     has_return: bool
 
 
-def _service(uow: SqlAlchemyUnitOfWork) -> ConversationService:
-    return ConversationService(
-        uow=uow,
-        agent_repository=AgentRepository(uow),
-        usage_service=build_usage_service(uow),
+def _unconfirmed_return(
+    payload: ApprovalExecution, decided: _Decided, *, claimed: bool
+) -> tuple[str, object]:
+    return unconfirmed_execution_return(
+        conversation_id=decided.conversation.id,
+        approval_id=payload.approval_id,
+        paused=decided.paused,
+        decision=decided.decision,
+        response=decided.response,
+        claimed=claimed,
+    )
+
+
+async def _resume(
+    uow: SqlAlchemyUnitOfWork,
+    payload: ApprovalExecution,
+    decided: _Decided,
+    *,
+    tool_return: tuple[str, object] | None,
+) -> None:
+    """Write ``tool_return`` and start the resume run (``ResumeRun``)."""
+    await ResumeRun.build(uow).resume(
+        conversation=decided.conversation,
+        paused_run_id=decided.paused.agent_run_id,
+        tool_call_id=payload.approval_id,
+        user_id=decided.conversation.user_id,
+        trigger=RunTrigger.RESUME,
+        tool_return=tool_return,
+        decided_call_args=decided.paused.tool_args,
     )
 
 
@@ -105,15 +138,16 @@ async def _read(
     Both can legitimately be missing -- the conversation was deleted, or the
     call never persisted -- and neither is worth retrying.
     """
-    service = _service(uow)
     conversation = await Conversations(uow).get_conversation(payload.conversation_id)
     if conversation is None:
         return None
     recorded = await ApprovalDecisions(uow).get_approval_decision(
         conversation_id=payload.conversation_id, approval_id=payload.approval_id
     )
-    paused = await service.approvals.paused_call(
-        conversation_id=payload.conversation_id, approval_id=payload.approval_id
+    paused = await paused_call(
+        Pauses(uow),
+        conversation_id=payload.conversation_id,
+        approval_id=payload.approval_id,
     )
     if recorded is None or paused is None:
         return None
@@ -208,8 +242,7 @@ async def _run_approved_tool(
     records any session approvals after that commit.
     """
     async with uow_factory() as uow:
-        service = _service(uow)
-        built = await service.approvals.resume_returns.build(
+        built = await ResumeToolReturnBuilder(uow, AgentRepository(uow)).build(
             conversation=decided.conversation,
             user_id=decided.conversation.user_id,
             kind=decided.paused.kind.value,
@@ -239,52 +272,31 @@ async def _finish(
     decided = await _read(uow, payload)
     if decided is None:
         return
-    service = _service(uow)
-    approvals = service.approvals
-    if not decided.has_return:
-        if built is not None:
-            tool_name, tool_result = built
-            await approvals.pauses.append_pause_tool_return(
-                conversation=decided.conversation,
-                paused_run_id=decided.paused.agent_run_id,
-                tool_call_id=payload.approval_id,
-                tool_name=tool_name,
-                tool_result=tool_result,
-            )
-        elif lost_claim:
-            await approvals.record_unconfirmed_execution(
-                conversation=decided.conversation,
-                approval_id=payload.approval_id,
-                paused=decided.paused,
-                decision=decided.decision,
-                response=decided.response,
-                claimed=True,
-            )
-        else:
-            # Runs nothing (an answer, a denial, a host permission): the inline
-            # path, for an item written for an adopted one.
-            await approvals.reconcile_resume(
-                conversation=decided.conversation,
-                approval_id=payload.approval_id,
-                paused_run_id=decided.paused.agent_run_id,
-                kind=decided.paused.kind.value,
-                tool_args=decided.paused.tool_args,
-                decision=decided.decision,
-                response=decided.response,
-                user_id=decided.conversation.user_id,
-                pod_id=payload.pod_id,
-                agent_name=None,
-            )
-            return
-    await approvals.resume_after_return(
-        conversation=decided.conversation,
-        approval_id=payload.approval_id,
-        paused_run_id=decided.paused.agent_run_id,
-        tool_args=decided.paused.tool_args,
-        user_id=decided.conversation.user_id,
-        pod_id=payload.pod_id,
-        agent_name=None,
-    )
+    if decided.has_return:
+        await _resume(uow, payload, decided, tool_return=None)
+    elif built is not None:
+        await _resume(uow, payload, decided, tool_return=built)
+    elif lost_claim:
+        await _resume(
+            uow,
+            payload,
+            decided,
+            tool_return=_unconfirmed_return(payload, decided, claimed=True),
+        )
+    else:
+        # Runs nothing (an answer, a denial, a host permission): the inline
+        # path, for an item written for an adopted one.
+        await ReconcileDecision.build(uow).reconcile(
+            conversation=decided.conversation,
+            approval_id=payload.approval_id,
+            paused_run_id=decided.paused.agent_run_id,
+            kind=decided.paused.kind.value,
+            tool_args=decided.paused.tool_args,
+            decision=decided.decision,
+            response=decided.response,
+            user_id=decided.conversation.user_id,
+            agent_name=None,
+        )
 
 
 async def on_approval_dead(ctx: DeadContext) -> None:
@@ -307,23 +319,11 @@ async def on_approval_dead(ctx: DeadContext) -> None:
     )
     auth_ctx = await _owner_context(uow, decided.conversation)
     async with context_scope(auth_ctx):
-        approvals = _service(uow).approvals
-        await approvals.record_unconfirmed_execution(
-            conversation=decided.conversation,
-            approval_id=payload.approval_id,
-            paused=decided.paused,
-            decision=decided.decision,
-            response=decided.response,
-            claimed=claimed,
-        )
-        await approvals.resume_after_return(
-            conversation=decided.conversation,
-            approval_id=payload.approval_id,
-            paused_run_id=decided.paused.agent_run_id,
-            tool_args=decided.paused.tool_args,
-            user_id=decided.conversation.user_id,
-            pod_id=payload.pod_id,
-            agent_name=None,
+        await _resume(
+            uow,
+            payload,
+            decided,
+            tool_return=_unconfirmed_return(payload, decided, claimed=claimed),
         )
 
 

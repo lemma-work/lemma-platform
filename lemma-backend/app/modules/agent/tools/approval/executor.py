@@ -22,7 +22,7 @@ approves, conferred as that person, before the call runs (``grant_outcome``).
 
 Same conversation/pod/cwd as the original run. The approver is the
 conversation's owner -- the person the agent works for. A decision from anyone
-else is refused before it is recorded (``ApprovalCoordinator``), so it never
+else is refused before it is recorded (``ResolvePause``), so it never
 reaches here.
 """
 

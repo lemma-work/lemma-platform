@@ -38,7 +38,9 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     RECORD_DELETE_REFUSALS,
     Seeded,
     conversation,
-    conversation_service,
+    admit_message,
+    resolve_pause,
+    stop_conversation,
     finish,
     messages,
     owner_uow,
@@ -219,7 +221,7 @@ async def test_an_answer_that_lands_before_the_pause_is_written_still_resumes(
     )
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=question,
             user_id=seeded.user_id,
@@ -253,16 +255,15 @@ async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
     before = await queued_message(seeded, working, "Also check the logs.")
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).stop_conversation(
+        await stop_conversation(uow).stop(
             conversation_id=seeded.conversation_id,
             user_id=seeded.user_id,
             pod_id=seeded.pod_id,
         )
     async with owner_uow(seeded) as uow:
-        joined = await conversation_service(uow).turns.start(
+        joined = await admit_message(uow).admit(
             await conversation(seeded.conversation_id),
             user_id=seeded.user_id,
-            pod_id=seeded.pod_id,
             content="Stop that, summarise the README instead.",
             agent_name=None,
             message_metadata=None,
@@ -318,7 +319,7 @@ async def test_a_remote_harness_question_is_answered_inside_its_own_run(
     assert marks == {question: True, waiting: None}
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=question,
             user_id=seeded.user_id,
@@ -357,7 +358,7 @@ async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
         await uow.commit()
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).stop_conversation(
+        await stop_conversation(uow).stop(
             conversation_id=seeded.conversation_id,
             user_id=seeded.user_id,
             pod_id=seeded.pod_id,
@@ -390,9 +391,7 @@ async def test_resuming_a_pause_is_held_to_the_usage_limit(scenario) -> None:
     await finish(paused, conversation_status=ConversationStatus.WAITING)
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(
-            uow, usage_service=_ExhaustedUsage()
-        ).resolve_user_approval_internal(
+        await resolve_pause(uow, usage_service=_ExhaustedUsage()).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=question,
             user_id=seeded.user_id,
@@ -428,7 +427,7 @@ async def test_messages_queued_behind_a_question_say_so_and_ride_its_answer(
     assert held.state.queue_state is QueueState.WAITING_ON_ANSWER
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=question,
             user_id=seeded.user_id,

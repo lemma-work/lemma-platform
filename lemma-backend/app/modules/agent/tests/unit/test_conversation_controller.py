@@ -74,7 +74,9 @@ def test_parse_metadata_filters_returns_none_without_metadata_filters() -> None:
     assert filters is None
 
 
-class _ConversationService:
+class _SendMessage:
+    """Stands in for `SendMessage`, built the way the route builds it."""
+
     def __init__(
         self,
         result: AgentRunStartResult | None = None,
@@ -83,26 +85,27 @@ class _ConversationService:
         self.result = result
         self.exc = exc
         self.called = False
+        self.kwargs: dict | None = None
 
-    async def send_from_lemma(self, **kwargs):
+    def build(self, _uow):
+        return self
+
+    async def send(self, **kwargs):
         self.called = True
+        self.kwargs = kwargs
         if self.exc is not None:
             raise self.exc
         return self.result
 
 
-class _StreamConversationService:
-    """Shaped like the real service: reads go through `.queries`."""
+class _StreamReads:
+    """Stands in for `ConversationReads`, built the way the route builds it."""
 
     def __init__(self, agent_run: AgentRun | None) -> None:
         self.agent_run = agent_run
-        self.runs = SimpleNamespace(get_agent_run=AsyncMock(return_value=agent_run))
-        self.queries = _StreamConversationQueries(agent_run)
 
-
-class _StreamConversationQueries:
-    def __init__(self, agent_run: AgentRun | None) -> None:
-        self.agent_run = agent_run
+    def build(self, _uow):
+        return self
 
     async def get_conversation(self, **kwargs):
         return SimpleNamespace(id=kwargs["conversation_id"])
@@ -110,17 +113,14 @@ class _StreamConversationQueries:
     async def get_active_agent_run(self, **kwargs):
         return self.agent_run
 
-
-class _ConversationListService:
-    def __init__(self) -> None:
-        self.queries = _ConversationListQueries()
-
-    @property
-    def kwargs(self):
-        return self.queries.kwargs
+    async def get_agent_run(self, **kwargs):
+        run = self.agent_run
+        if run is None or run.id != kwargs["agent_run_id"]:
+            return None
+        return run
 
 
-class _ConversationListQueries:
+class _ConversationListReads:
     def __init__(self) -> None:
         self.kwargs = None
 
@@ -160,13 +160,13 @@ async def test_list_conversations_parses_agent_selection(
     expected_scope,
     expected_value,
 ) -> None:
-    service = _ConversationListService()
+    service = _ConversationListReads()
 
     response = await conversation_controller.list_conversations(
         pod_id=uuid4(),
         request=SimpleNamespace(query_params=QueryParams(query)),
         user=SimpleNamespace(id=uuid4()),
-        service=service,
+        reads=service,
         agent_name=agent_name,
         run_status=None,
         conversation_type=None,
@@ -184,7 +184,7 @@ async def test_list_conversations_parses_agent_selection(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("agent_name", ["", "   "])
 async def test_list_conversations_rejects_empty_agent_name(agent_name) -> None:
-    service = _ConversationListService()
+    service = _ConversationListReads()
 
     with pytest.raises(HTTPException) as exc_info:
         await conversation_controller.list_conversations(
@@ -193,7 +193,7 @@ async def test_list_conversations_rejects_empty_agent_name(agent_name) -> None:
                 query_params=QueryParams(f"agent_name={agent_name}")
             ),
             user=SimpleNamespace(id=uuid4()),
-            service=service,
+            reads=service,
             agent_name=agent_name,
             run_status=None,
             conversation_type=None,
@@ -249,12 +249,10 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(
         agent_run_id=uuid4(),
         started_new_run=True,
     )
-    service = _ConversationService(result)
+    service = _SendMessage(result)
     channel_service = _ChannelService(_empty_iterator())
     uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
+    monkeypatch.setattr(conversation_controller, "SendMessage", service)
     monkeypatch.setattr(
         "app.core.authorization.scope.resolve_pod_context",
         AsyncMock(return_value=allow_all_context()),
@@ -272,6 +270,8 @@ async def test_send_message_starts_run_before_stream_body_is_consumed(
 
     assert response.media_type == "text/event-stream"
     assert service.called is True
+    # Lemma's own composer is the one sender that may say so.
+    assert service.kwargs["typed_in_lemma"] is True
 
 
 def _agent_run(*, status: AgentRunStatus, error: str | None = None) -> AgentRun:
@@ -287,12 +287,10 @@ def _agent_run(*, status: AgentRunStatus, error: str | None = None) -> AgentRun:
 @pytest.mark.asyncio
 async def test_stream_conversation_replays_terminal_failed_run(monkeypatch) -> None:
     agent_run = _agent_run(status=AgentRunStatus.FAILED, error="provider failed")
-    service = _StreamConversationService(agent_run)
+    service = _StreamReads(agent_run)
     channel_service = _ChannelService(_empty_iterator())
     uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
+    monkeypatch.setattr(conversation_controller, "ConversationReads", service)
     monkeypatch.setattr(
         "app.core.authorization.scope.resolve_pod_context",
         AsyncMock(return_value=allow_all_context()),
@@ -328,12 +326,10 @@ async def test_stream_conversation_forwards_active_run_events(monkeypatch) -> No
             "data": {"status": "COMPLETED"},
         }
 
-    service = _StreamConversationService(agent_run)
+    service = _StreamReads(agent_run)
     channel_service = _ChannelService(iterator())
     uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
+    monkeypatch.setattr(conversation_controller, "ConversationReads", service)
     monkeypatch.setattr(
         "app.core.authorization.scope.resolve_pod_context",
         AsyncMock(return_value=allow_all_context()),
@@ -370,12 +366,10 @@ async def test_send_message_encodes_a_dead_subscription_as_stream_error(
         agent_run_id=uuid4(),
         started_new_run=True,
     )
-    service = _ConversationService(result)
+    service = _SendMessage(result)
     channel_service = _ChannelService(_failing_iterator())
     uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
+    monkeypatch.setattr(conversation_controller, "SendMessage", service)
     monkeypatch.setattr(
         "app.core.authorization.scope.resolve_pod_context",
         AsyncMock(return_value=allow_all_context()),
@@ -408,13 +402,11 @@ async def test_send_message_raises_usage_limit_before_stream_starts(
     monkeypatch,
 ) -> None:
     channel_service = _ChannelService(_empty_iterator())
-    service = _ConversationService(
+    service = _SendMessage(
         exc=UsageLimitExceededError("LLM usage limit exceeded for this account")
     )
     uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
+    monkeypatch.setattr(conversation_controller, "SendMessage", service)
     monkeypatch.setattr(
         "app.core.authorization.scope.resolve_pod_context",
         AsyncMock(return_value=allow_all_context()),
@@ -441,11 +433,9 @@ async def test_send_message_cancellation_releases_pubsub_subscription(
     monkeypatch,
 ) -> None:
     channel_service = _ChannelService(_empty_iterator())
-    service = _ConversationService(exc=asyncio.CancelledError())
+    service = _SendMessage(exc=asyncio.CancelledError())
     uow_factory, _ = _make_uow_factory()
-    monkeypatch.setattr(
-        conversation_controller, "_build_conversation_service", lambda uow: service
-    )
+    monkeypatch.setattr(conversation_controller, "SendMessage", service)
     monkeypatch.setattr(
         "app.core.authorization.scope.resolve_pod_context",
         AsyncMock(return_value=allow_all_context()),
@@ -468,7 +458,7 @@ async def test_send_message_cancellation_releases_pubsub_subscription(
 class TestTheStreamSaysWhetherTheMessageStartedARun:
     """`PS-AGENT-015` asks the system to record whether a message joined a run
     already working, "so a person can be told which happened rather than
-    watching an apparently unanswered message". `TurnCoordinator.start` decides
+    watching an apparently unanswered message". `AdmitMessage` decides
     it and `AgentRunStartResult` carries it; only the append route reported it,
     and the primary chat path is the streaming one.
     """
@@ -479,11 +469,9 @@ class TestTheStreamSaysWhetherTheMessageStartedARun:
             agent_run_id=uuid4(),
             started_new_run=started_new_run,
         )
-        service = _ConversationService(result)
+        service = _SendMessage(result)
         uow_factory, _ = _make_uow_factory()
-        monkeypatch.setattr(
-            conversation_controller, "_build_conversation_service", lambda uow: service
-        )
+        monkeypatch.setattr(conversation_controller, "SendMessage", service)
         monkeypatch.setattr(
             "app.core.authorization.scope.resolve_pod_context",
             AsyncMock(return_value=allow_all_context()),

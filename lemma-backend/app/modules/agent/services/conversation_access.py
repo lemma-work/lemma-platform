@@ -1,19 +1,19 @@
 """Who may touch a conversation, and which agent answers on it.
 
 Both entry points into a run need these two questions settled the same way: the
-request side (`ConversationService`) before it accepts a message, and the worker
+request side (the turn use cases) before it accepts a message, and the worker
 side (`AgentRunnerService`) before it executes one. They each carried a copy,
 and the copies had already drifted — the runner's checked the agent *name* and
-the service's checked the agent *id*, so the same conversation could be reachable
+the request side's checked the agent *id*, so the same conversation could be reachable
 through one and not the other.
 
 Both checks are supersets now, with the extra condition optional. A caller that
 does not pass it gets exactly what it had.
 
 The permission checks below joined them for the same reason: they were private
-methods on `ConversationService`, and every collaborator split out of that class
-needed them, which is the definition of something that belongs one level down
-rather than inside.
+methods on the conversation service that preceded the use cases, and every use
+case needs them, which is the definition of something that belongs one level
+down rather than inside.
 """
 
 from __future__ import annotations
@@ -24,7 +24,9 @@ from uuid import UUID
 from app.core.authorization.context import ActorType, ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
 from app.core.domain.errors import DomainError
+from app.core.authorization.permissions import Permissions
 from app.core.authorization.delegation import (
+    POD_DEFAULT_AGENT_SELECTOR,
     effective_agent_id,
     is_pod_default_agent,
 )
@@ -238,3 +240,41 @@ async def require_agent_actions(
         pod_id=pod_id,
     )
     await ctx.require_all([(action, resource) for action in actions])
+
+
+def named_agent(agent_name: str | None) -> str | None:
+    """The agent a conversation names, or None for the pod's own assistant.
+
+    Blank means "no agent named", and so does the `POD_DEFAULT` selector the
+    list endpoint already accepts, which is not any agent's name. Treating `""`
+    as a name looked up an agent called nothing and answered 404 -- which every
+    CLI chat without `--agent` sent. (`pod_default`, the assistant's stored
+    name, already resolves to it by name.)
+    """
+    if agent_name is None:
+        return None
+    name = agent_name.strip()
+    if not name or name == POD_DEFAULT_AGENT_SELECTOR:
+        return None
+    return name
+
+
+async def require_execute(*, pod_id: UUID, user_id: UUID, agent: Agent | None) -> None:
+    """Refuse a person who may not run ``agent`` (None: the pod's assistant).
+
+    Dispatching a *named* agent checks agent.execute and agent.read together.
+    agent.execute implies agent.read (IMPLIED_PERMISSIONS), so an execute-only
+    grant satisfies both; checking read here anyway warms the decision cache
+    for the run-load that follows and keeps the error complete for callers
+    missing everything. The default pod agent (agent is None) needs only
+    execute.
+    """
+    actions = [Permissions.AGENT_EXECUTE]
+    if agent is not None:
+        actions.append(Permissions.AGENT_READ)
+    await require_agent_actions(
+        user_id=user_id,
+        pod_id=pod_id,
+        agent_id=agent.id if agent else None,
+        actions=actions,
+    )

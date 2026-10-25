@@ -41,7 +41,19 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.application.conversations.read import ConversationReads
+from app.modules.agent.application.conversations.start import StartConversation
+from app.modules.agent.application.pauses.reconcile import ReconcileDecision
+from app.modules.agent.application.pauses.resolve import ResolvePause
+from app.modules.agent.application.pauses.resume import ResumeRun
+from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
+from app.modules.agent.application.turns.admit import AdmitMessage
+from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.application.turns.stop import StopConversation
+from app.modules.agent.services.conversation_resume_return import (
+    ResumeToolReturnBuilder,
+)
+from app.modules.agent.services.send_window import SendWindow
 from app.modules.agent.tools.approval_denials import show_card
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.usage.contracts.execution import UsageService
@@ -76,14 +88,55 @@ async def owner_uow(seeded: Seeded) -> AsyncIterator[SqlAlchemyUnitOfWork]:
             yield uow
 
 
-def conversation_service(
+# The use cases these tests drive, built as their own ``build`` builds them but
+# with no usage service unless a test hands one in: what these tests check is
+# the lifecycle, not the account's allowance.
+
+
+def resolve_pause(
     uow: SqlAlchemyUnitOfWork, *, usage_service: UsageService | None = None
-) -> ConversationService:
-    return ConversationService(
-        uow=uow,
+) -> ResolvePause:
+    agents = AgentRepository(uow)
+    return ResolvePause(
+        uow,
+        reconcile=ReconcileDecision(
+            uow,
+            resume_returns=ResumeToolReturnBuilder(uow, agents),
+            resume=ResumeRun(uow, agent_repository=agents, usage_service=usage_service),
+        ),
+    )
+
+
+def admit_message(
+    uow: SqlAlchemyUnitOfWork, *, usage_service: UsageService | None = None
+) -> AdmitMessage:
+    return AdmitMessage(
+        uow,
         agent_repository=AgentRepository(uow),
+        supersede=SupersedeStalePauses.build(uow),
         usage_service=usage_service,
     )
+
+
+def send_message(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    usage_service: UsageService | None = None,
+    send_window: SendWindow | None = None,
+) -> SendMessage:
+    agents = AgentRepository(uow)
+    return SendMessage(
+        uow,
+        agent_repository=agents,
+        start_conversation=StartConversation(uow, agent_repository=agents),
+        reads=ConversationReads(uow, agents),
+        admit=admit_message(uow, usage_service=usage_service),
+        send_window=send_window or SendWindow(uow.session),
+    )
+
+
+def stop_conversation(uow: SqlAlchemyUnitOfWork) -> StopConversation:
+    return StopConversation.build(uow)
 
 
 async def seeded_conversation(

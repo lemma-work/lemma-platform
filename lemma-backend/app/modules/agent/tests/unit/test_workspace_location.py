@@ -8,7 +8,7 @@ import pytest
 
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.application.conversations.start import StartConversation
 from app.modules.agent.domain.workspace_location import (
     ProjectRepo,
     generate_cwd_slug,
@@ -163,8 +163,8 @@ class _StubConversations:
 
 def _service(conversations: dict):
     return wire_repositories(
-        ConversationService(
-            uow=None,  # type: ignore[arg-type]
+        StartConversation(
+            None,  # type: ignore[arg-type]
             agent_repository=None,  # type: ignore[arg-type]
         ),
         _StubConversations(conversations),

@@ -7,7 +7,7 @@ take one. Both are ``settle``.
 
 Delivery waits while the asking conversation is paused on a person. A message
 arriving then would deny the approval or question they have not answered yet
-(``TurnCoordinator.start`` supersedes them), and an answer from another pod is
+(``AdmitMessage`` supersedes them), and an answer from another pod is
 not theirs to overrule. Whatever run ends that pause collects the answer.
 """
 
@@ -42,12 +42,8 @@ from app.modules.agent.infrastructure.pod_ask_queries import PodAskQueries
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-)
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.application.turns.admit import AdmitMessage
 from app.modules.pod.contracts.members import pod_name
-from app.modules.usage.contracts.execution import build_usage_service
 
 logger = get_logger(__name__)
 
@@ -155,16 +151,11 @@ class PodAskDelivery:
                 )
             )
             try:
-                turns = ConversationService(
-                    uow=uow,
-                    agent_repository=AgentRepository(uow),
-                    usage_service=build_usage_service(uow),
-                ).turns
+                admit = AdmitMessage.build(uow)
                 for content, metadata in deliveries:
-                    await turns.start(
+                    await admit.admit(
                         asking,
                         user_id=asking.user_id,
-                        pod_id=asking.pod_id,
                         content=content,
                         agent_name=None,
                         message_metadata=metadata,

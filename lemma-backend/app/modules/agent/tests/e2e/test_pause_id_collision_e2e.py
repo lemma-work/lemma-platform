@@ -31,7 +31,7 @@ from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     conversation,
-    conversation_service,
+    resolve_pause,
     finish,
     messages,
     owner_uow,
@@ -102,7 +102,7 @@ async def test_a_reused_provider_id_is_a_new_pause_with_its_own_answer(scenario)
         await uow.commit()
     await finish(first, conversation_status=ConversationStatus.WAITING)
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=_REUSED,
             user_id=seeded.user_id,
@@ -143,7 +143,7 @@ async def test_a_reused_provider_id_is_a_new_pause_with_its_own_answer(scenario)
     assert renamed in [m.tool_call_id for m in open_now], "the new card vanished"
 
     async with owner_uow(seeded) as uow:
-        answered = await conversation_service(uow).resolve_user_approval_internal(
+        answered = await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=renamed,
             user_id=seeded.user_id,

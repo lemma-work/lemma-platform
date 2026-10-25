@@ -49,7 +49,7 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
-from app.modules.agent.services import conversation_turns as turns
+from app.modules.agent.application.turns import admit as turns
 from app.modules.agent.services.outsider_brief import render_outsider_brief
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.messaging.models import AskAPersonRequest
@@ -104,7 +104,7 @@ def _runtime() -> AgentRuntimeConfig:
 
 
 def _coordinator(conversation: Conversation):
-    """A coordinator that records the run it creates and the message it saves."""
+    """A use case that records the run it creates and the message it saves."""
     created = AgentRun(
         conversation_id=conversation.id,
         status=AgentRunStatus.RUNNING,
@@ -144,14 +144,11 @@ def _coordinator(conversation: Conversation):
         # The pod names no default runtime of its own.
         session=RecordingWorkSession(),
     )
-    coordinator = turns.TurnCoordinator(
+    coordinator = turns.AdmitMessage(
         uow,
-        agents,
-        SimpleNamespace(
-            supersede_stale_pending_interactions=AsyncMock(return_value=[])
-        ),
-        SimpleNamespace(),
-        None,
+        agent_repository=agents,
+        supersede=SimpleNamespace(supersede=AsyncMock(return_value=[])),
+        usage_service=None,
         runtime_check=_runtime_is_available,
     )
     return wire_repositories(coordinator, repository), repository
@@ -175,10 +172,9 @@ def _conversation(metadata: dict, *, contacts: bool = False) -> Conversation:
 
 async def _start(conversation, *, metadata, typed_in_lemma):
     coordinator, repository = _coordinator(conversation)
-    await coordinator.start(
+    await coordinator.admit(
         conversation,
         user_id=conversation.user_id,
-        pod_id=conversation.pod_id,
         content="ask him what's up with him",
         agent_name=None,
         message_metadata=metadata,

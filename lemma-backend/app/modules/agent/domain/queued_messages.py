@@ -7,7 +7,7 @@ history before the message existed. Until something delivers it, it is
 capability, the Agent Host harness, the follow-up turn and the client drawing
 the transcript -- agrees on which state it is in:
 
-- ``QUEUED`` is set by ``TurnCoordinator.start`` on append.
+- ``QUEUED`` is set by ``AdmitMessage`` on append.
 - ``STEERED`` is set, with ``steered_into_run_id``, by whoever delivered it
   into a model request. It is the one claim that matters: steered, the message
   has been read; otherwise it is still owed an answer and the follow-up turn

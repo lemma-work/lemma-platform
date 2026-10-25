@@ -33,12 +33,13 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     MessageKind,
     MessageRole,
+    RunTrigger,
 )
-from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
-from app.modules.agent.services.conversation_resume_return import (
-    ResumeToolReturnBuilder,
+from app.modules.agent.application.pauses.resume import ResumeRun
+from app.modules.agent.services.approval_reconciliation import (
+    unconfirmed_execution_return,
 )
-from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.services.pause_resume import paused_call
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.test_support.fakes import EmptyResultSession
 
@@ -157,22 +158,18 @@ class _AgentRepository:
         return self.agent
 
 
-def _coordinator(monkeypatch: pytest.MonkeyPatch):
+def _resume_run(monkeypatch: pytest.MonkeyPatch):
     repository = _Repository()
     uow = _Uow()
     monkeypatch.setattr(
         "app.modules.agent.services.pause_resume.publish_conversation_event",
         _noop,
     )
-    coordinator = wire_repositories(
-        ApprovalCoordinator(
-            uow,
-            ResumeToolReturnBuilder(uow, None),
-            PauseResume(uow, _AgentRepository(_POD_ID)),
-        ),
+    resume = wire_repositories(
+        ResumeRun(uow, agent_repository=_AgentRepository(_POD_ID)),
         repository,
     )
-    return coordinator, repository
+    return resume, repository
 
 
 async def _noop(*_args, **_kwargs) -> None:
@@ -191,14 +188,14 @@ def _conversation(repository: _Repository) -> Conversation:
     )
 
 
-async def _record_and_resume(coordinator, repository, *, claimed: bool) -> None:
-    paused = await coordinator.paused_call(
-        conversation_id=repository.conversation_id, approval_id=_APPROVAL_ID
+async def _record_and_resume(resume, repository, *, claimed: bool) -> None:
+    paused = await paused_call(
+        repository, conversation_id=repository.conversation_id, approval_id=_APPROVAL_ID
     )
     assert paused is not None
     conversation = _conversation(repository)
-    await coordinator.record_unconfirmed_execution(
-        conversation=conversation,
+    tool_return = unconfirmed_execution_return(
+        conversation_id=conversation.id,
         approval_id=_APPROVAL_ID,
         paused=paused,
         decision=AgentRunApprovalDecision.APPROVE_ONCE,
@@ -208,14 +205,14 @@ async def _record_and_resume(coordinator, repository, *, claimed: bool) -> None:
     # The resume run is counted where it is created; staging its turn needs a
     # database this fake does not have.
     with suppress_agent_run_enqueue():
-        await coordinator.resume_after_return(
+        await resume.resume(
             conversation=conversation,
-            approval_id=_APPROVAL_ID,
             paused_run_id=paused.agent_run_id,
-            tool_args=paused.tool_args,
+            tool_call_id=_APPROVAL_ID,
             user_id=uuid4(),
-            pod_id=_POD_ID,
-            agent_name=None,
+            trigger=RunTrigger.RESUME,
+            tool_return=tool_return,
+            decided_call_args=paused.tool_args,
         )
 
 
@@ -236,9 +233,9 @@ async def test_an_abandoned_execution_is_written_down_not_dropped(
     """The claim was taken and its holder lost its lease: the tool may have
     run. The approval gets a terminal return saying so, which is what the
     resumed run replays -- rather than resuming with the request missing."""
-    coordinator, repository = _coordinator(monkeypatch)
+    resume, repository = _resume_run(monkeypatch)
 
-    await _record_and_resume(coordinator, repository, claimed=True)
+    await _record_and_resume(resume, repository, claimed=True)
 
     assert "cannot re-run" in str(_the_return(repository)["error"])
     # And the turn is unblocked rather than left waiting forever.
@@ -250,9 +247,9 @@ async def test_an_execution_that_never_started_says_nothing_ran(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Its item went dead before the claim: nothing ran, and it says so."""
-    coordinator, repository = _coordinator(monkeypatch)
+    resume, repository = _resume_run(monkeypatch)
 
-    await _record_and_resume(coordinator, repository, claimed=False)
+    await _record_and_resume(resume, repository, claimed=False)
 
     assert "did not run" in str(_the_return(repository)["error"])
     assert repository.created_runs == 1

@@ -15,9 +15,9 @@ Three shapes come out of here, and which one depends on what was paused:
   principal switch is the whole point of the approval: the agent was refused,
   the person was not.
 
-Split out of `ConversationService` because it is the part with the most branches
-and the least to do with conversations -- it needs a unit of work and an agent
-repository, and nothing else the service holds.
+A helper rather than a use case: resolving, reconciling and superseding a pause
+all build a return, and an approved tool's worker builds one too. It needs a
+unit of work and an agent repository, and nothing else.
 """
 
 from __future__ import annotations

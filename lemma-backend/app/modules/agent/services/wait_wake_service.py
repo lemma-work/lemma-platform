@@ -279,22 +279,20 @@ class AgentWaitService:
         ctx = await self._context_for(conversation.user_id, claimed.pod_id)
         token = set_current_context(ctx)
         try:
-            service = self._conversation_service()
-            await service.pauses.append_pause_tool_return(
+            # Lazy, as the service it replaced was: the waiting tool imports
+            # this module, and the pause use cases load the tool models.
+            from app.modules.agent.application.pauses.resume import ResumeRun
+
+            await ResumeRun.build(self.uow).resume(
                 conversation=conversation,
                 paused_run_id=claimed.agent_run_id,
                 tool_call_id=claimed.tool_call_id,
-                tool_name=WAIT_TOOL_NAME,
-                tool_result=self._tool_result(claimed, reason, exit_code),
-            )
-            await service.pauses.start_resume_run_if_ready(
-                conversation=conversation,
-                paused_run_id=claimed.agent_run_id,
-                resumed_tool_call_id=claimed.tool_call_id,
                 user_id=conversation.user_id,
-                pod_id=claimed.pod_id,
-                agent_name=None,
                 trigger=RunTrigger.WAKE,
+                tool_return=(
+                    WAIT_TOOL_NAME,
+                    self._tool_result(claimed, reason, exit_code),
+                ),
             )
         finally:
             reset_current_context(token)
@@ -326,17 +324,6 @@ class AgentWaitService:
         return await create_authorization_data_service(self.uow).build_user_context(
             user_id=user_id,
             pod_id=pod_id,
-        )
-
-    def _conversation_service(self):
-        from app.modules.usage.contracts.execution import build_usage_service
-        from app.modules.agent.infrastructure.repositories import AgentRepository
-        from app.modules.agent.services.conversation_service import ConversationService
-
-        return ConversationService(
-            uow=self.uow,
-            agent_repository=AgentRepository(self.uow),
-            usage_service=build_usage_service(self.uow),
         )
 
 

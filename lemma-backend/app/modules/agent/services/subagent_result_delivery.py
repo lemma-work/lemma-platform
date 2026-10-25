@@ -41,8 +41,7 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.usage.contracts.execution import build_usage_service
+from app.modules.agent.application.turns.admit import AdmitMessage
 
 logger = get_logger(__name__)
 
@@ -104,16 +103,11 @@ class SubagentResultDelivery:
                 )
             )
             try:
-                turns = ConversationService(
-                    uow=uow,
-                    agent_repository=AgentRepository(uow),
-                    usage_service=build_usage_service(uow),
-                ).turns
+                admit = AdmitMessage.build(uow)
                 for result in owed:
-                    await turns.start(
+                    await admit.admit(
                         parent,
                         user_id=parent.user_id,
-                        pod_id=parent.pod_id,
                         content=result.content,
                         agent_name=None,
                         message_metadata=result.metadata,

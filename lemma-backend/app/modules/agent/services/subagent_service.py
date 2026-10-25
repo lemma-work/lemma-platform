@@ -46,10 +46,11 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
 from app.modules.agent.services.call_marks import call_of_parent, worker_canvas_note
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.application.conversations.start import StartConversation
+from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.application.turns.stop import StopConversation
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.agent.services.subagent_result_delivery import mark_collected
-from app.modules.usage.contracts.execution import build_usage_service
 
 if TYPE_CHECKING:
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -158,13 +159,6 @@ class SubAgentService:
 
     # -- context helpers ----------------------------------------------------
 
-    def _conversation_service(self, uow) -> ConversationService:
-        return ConversationService(
-            uow=uow,
-            agent_repository=AgentRepository(uow),
-            usage_service=build_usage_service(uow),
-        )
-
     async def _agent_ctx(self, uow, deps):
         """Parent agent's authorization context (honors its agent.execute grant)."""
         return await tool_authorization_context(uow, deps)
@@ -217,9 +211,8 @@ class SubAgentService:
                 )
                 if earlier is not None:
                     return earlier
-                service = self._conversation_service(uow)
                 in_call = await call_of_parent(uow, deps.conversation_id)
-                conversation = await service.create_conversation(
+                conversation = await StartConversation.build(uow).start(
                     pod_id=deps.pod_id,
                     agent_name=target_name,
                     user_id=deps.user_id,
@@ -240,7 +233,7 @@ class SubAgentService:
                 if spawn_call is not None:
                     await Conversations(uow).set_spawn_call(conversation.id, spawn_call)
                 await Conversations(uow).mark_delegations_out(deps.conversation_id)
-                result = await service.add_user_message_and_start_run(
+                result = await SendMessage.build(uow).send(
                     conversation_id=conversation.id,
                     user_id=deps.user_id,
                     content=task,
@@ -407,7 +400,6 @@ class SubAgentService:
             child = await self._owned_child(uow, deps, conversation_id)
             token = set_current_context(await self._agent_ctx(uow, deps))
             try:
-                service = self._conversation_service(uow)
                 agent = (
                     await AgentRepository(uow).get(child.agent_id)
                     if child.agent_id
@@ -418,7 +410,7 @@ class SubAgentService:
                 await Conversations(uow).set_parent_run(
                     conversation_id, deps.agent_run_id
                 )
-                result = await service.add_user_message_and_start_run(
+                result = await SendMessage.build(uow).send(
                     conversation_id=conversation_id,
                     user_id=deps.user_id,
                     content=content,
@@ -444,13 +436,12 @@ class SubAgentService:
             child = await self._owned_child(uow, deps, conversation_id)
             token = set_current_context(await self._agent_ctx(uow, deps))
             try:
-                service = self._conversation_service(uow)
                 agent = (
                     await AgentRepository(uow).get(child.agent_id)
                     if child.agent_id
                     else None
                 )
-                conversation = await service.stop_conversation(
+                conversation = await StopConversation.build(uow).stop(
                     conversation_id=conversation_id,
                     user_id=deps.user_id,
                     pod_id=deps.pod_id,

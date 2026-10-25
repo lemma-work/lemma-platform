@@ -10,7 +10,7 @@ A submodule rather than `contracts/__init__`, like its siblings.
 from __future__ import annotations
 
 from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
-from app.modules.agent.services.interaction_reply import (
+from app.modules.agent.domain.interaction_reply import (
     InteractionReply,
     ask_user_request_dict,
     classify_approval_reply,

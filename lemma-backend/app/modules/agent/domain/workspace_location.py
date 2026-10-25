@@ -6,7 +6,7 @@ location is the conversation's own columns:
 
 - ``cwd`` — explicit working directory; a fresh root conversation gets a default
   of ``/workspace/c/{date}/{slug}``. Stamped at creation
-  (``ConversationService._apply_inherited_cwd``) and read back thereafter.
+  (``StartConversation._apply_inherited_cwd``) and read back thereafter.
 - ``repo`` — a GitHub repository this conversation works in, as
   ``{owner, repo, ref?}``. It *derives* the cwd
   (``/workspace/repos/{owner}/{repo}``), so picking a project is the same act as

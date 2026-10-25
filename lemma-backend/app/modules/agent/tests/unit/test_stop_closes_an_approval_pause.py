@@ -1,6 +1,6 @@
 """Stop must close whatever pause the conversation is sitting on.
 
-``stop_conversation`` handled two states: a run in flight, and a snoozed turn.
+``StopConversation`` handled two states: a run in flight, and a snoozed turn.
 A conversation paused on ``ask_user``/``request_approval`` is neither — the run
 that asked finished when the tool paused it — so Stop returned the conversation
 unchanged, with no error and no state change, on the state where a person most
@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 
-import app.modules.agent.services.conversation_stop as stops
+import app.modules.agent.application.turns.stop as stops
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Conversation, Message
@@ -36,7 +36,7 @@ def _conversation() -> Conversation:
 
 
 def _deny_return(conversation: Conversation) -> Message:
-    """What ``supersede_stale_pending_interactions`` hands back per closed call."""
+    """What ``SupersedeStalePauses`` hands back per closed call."""
     return Message.create(
         conversation_id=conversation.id,
         sequence=7,
@@ -76,7 +76,7 @@ def _coordinator(
     *,
     superseded: list[Message],
     published: list[tuple],
-) -> tuple[stops.StopCoordinator, _Uow, list[object]]:
+) -> tuple[stops.StopConversation, _Uow, list[object]]:
     statuses: list[object] = []
     uow = _Uow()
 
@@ -85,9 +85,7 @@ def _coordinator(
             side_effect=lambda *, conversation_id, status: statuses.append(status)
         ),
     )
-    approvals = SimpleNamespace(
-        supersede_stale_pending_interactions=AsyncMock(return_value=superseded),
-    )
+    supersede = SimpleNamespace(supersede=AsyncMock(return_value=superseded))
 
     async def _publish(conversation_id, frame):
         published.append((conversation_id, frame))
@@ -95,7 +93,9 @@ def _coordinator(
     monkeypatch.setattr(stops, "publish_conversation_event", _publish)
 
     coordinator = wire_repositories(
-        stops.StopCoordinator(uow, SimpleNamespace(), approvals, SimpleNamespace()),
+        stops.StopConversation(
+            uow, agent_repository=SimpleNamespace(), supersede=supersede
+        ),
         conversations,
     )
     return coordinator, uow, statuses
@@ -117,7 +117,7 @@ async def test_stopping_a_waiting_conversation_denies_the_open_request(
         conversation=conversation, user_id=conversation.user_id
     )
 
-    coordinator.approvals.supersede_stale_pending_interactions.assert_awaited_once()
+    coordinator.supersede.supersede.assert_awaited_once()
     assert statuses == [ConversationStatus.STOPPED]
     assert conversation.status is ConversationStatus.STOPPED
     assert uow.commits == 1
@@ -155,7 +155,7 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
 
     The defect was a missing branch, so a test of the helper alone would have
     passed against the broken code. The access seam is patched on the module
-    the coordinator imports it from -- `setattr` refuses a name that is not
+    the use case imports it from -- `setattr` refuses a name that is not
     there, so moving the call site fails this test rather than passing it.
     """
     conversation = _conversation()
@@ -171,8 +171,10 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
         closed.append("decided")
 
     coordinator = wire_repositories(
-        stops.StopCoordinator(
-            SimpleNamespace(), SimpleNamespace(), SimpleNamespace(), SimpleNamespace()
+        stops.StopConversation(
+            SimpleNamespace(),
+            agent_repository=SimpleNamespace(),
+            supersede=SimpleNamespace(),
         ),
         SimpleNamespace(
             get_conversation=AsyncMock(return_value=conversation),
@@ -189,7 +191,7 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
         coordinator, "_keep_a_decided_pause_from_resuming", _hold_decided
     )
 
-    result = await coordinator.stop_conversation(
+    result = await coordinator.stop(
         conversation_id=conversation.id,
         user_id=conversation.user_id,
         pod_id=conversation.pod_id,

@@ -385,7 +385,7 @@ class ConversationType(str, Enum):
     TASK = "TASK"
     # A pinned conversation that acts as a project/group: it owns a workspace cwd
     # and conversations created with parent_id pointing at it inherit that cwd
-    # (see ConversationService.create_conversation). Usually empty (no runs).
+    # (see StartConversation). Usually empty (no runs).
     PROJECT = "PROJECT"
 
 

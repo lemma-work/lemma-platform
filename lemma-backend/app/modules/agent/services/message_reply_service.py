@@ -105,10 +105,13 @@ class MessageReplyService:
             # Never past a question the owner has not answered: this is news,
             # not their answer, and starting a turn would deny the question on
             # their behalf. It waits behind the pause and the resume carries it.
-            result = await self._conversation_service().turns.start(
+            # Lazy, as the service it replaced was: the use case loads the
+            # pause use cases and, through them, the tool models.
+            from app.modules.agent.application.turns.admit import AdmitMessage
+
+            result = await AdmitMessage.build(self.uow).admit(
                 conversation,
                 user_id=conversation.user_id,
-                pod_id=pod_id,
                 content=REPLIES_ARRIVED,
                 agent_name=None,
                 message_metadata={"source": REPLY_SOURCE},
@@ -125,7 +128,7 @@ class MessageReplyService:
         )
         # True either way: joining a live run is delivery too — that run's next
         # history rebuild reads the message, and starting a second run alongside
-        # it is exactly what `turns.start` exists to prevent.
+        # it is exactly what `AdmitMessage` exists to prevent.
         return True
 
     # -- internals ---------------------------------------------------------------
@@ -134,15 +137,4 @@ class MessageReplyService:
         return await create_authorization_data_service(self.uow).build_user_context(
             user_id=user_id,
             pod_id=pod_id,
-        )
-
-    def _conversation_service(self):
-        from app.modules.usage.contracts.execution import build_usage_service
-        from app.modules.agent.infrastructure.repositories import AgentRepository
-        from app.modules.agent.services.conversation_service import ConversationService
-
-        return ConversationService(
-            uow=self.uow,
-            agent_repository=AgentRepository(self.uow),
-            usage_service=build_usage_service(self.uow),
         )

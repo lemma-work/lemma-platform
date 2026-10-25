@@ -133,17 +133,21 @@ class _CommittingUowFactory:
 
 
 class _CaptureConvService:
-    """Captures create_conversation / add_user_message_and_start_run kwargs."""
+    """Captures what the spawn opens (`StartConversation`) and sends
+    (`SendMessage`), standing in for both use cases."""
 
     def __init__(self):
         self.create_kwargs: dict | None = None
         self.run_kwargs: dict | None = None
 
-    async def create_conversation(self, **kwargs):
+    def build(self, _uow):
+        return self
+
+    async def start(self, **kwargs):
         self.create_kwargs = kwargs
         return SimpleNamespace(id=uuid4())
 
-    async def add_user_message_and_start_run(self, **kwargs):
+    async def send(self, **kwargs):
         self.run_kwargs = kwargs
         return SimpleNamespace(conversation_id=uuid4(), agent_run_id=uuid4())
 
@@ -162,9 +166,8 @@ def _patch_spawn(monkeypatch) -> _CaptureConvService:
         return None
 
     monkeypatch.setattr(SubAgentService, "_agent_ctx", _fake_agent_ctx)
-    monkeypatch.setattr(
-        SubAgentService, "_conversation_service", lambda self, uow: captured
-    )
+    monkeypatch.setattr(subagent_module, "StartConversation", captured)
+    monkeypatch.setattr(subagent_module, "SendMessage", captured)
     return captured
 
 

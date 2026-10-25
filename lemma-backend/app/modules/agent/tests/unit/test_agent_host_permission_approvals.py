@@ -33,12 +33,11 @@ from app.modules.agent.services import approval_reconciliation
 from app.modules.agent.services.approval_reconciliation import (
     agent_host_permission_tool_return,
 )
-from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.application.pauses.reconcile import ReconcileDecision
+from app.modules.agent.application.pauses.resolve import ResolvePause
+from app.modules.agent.application.pauses.resume import ResumeRun
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
-)
-from app.modules.agent.services.conversation_approvals import (
-    ApprovalCoordinator,
 )
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.run_state import RunState
@@ -528,14 +527,17 @@ class TestResolutionRouting:
         # caller's transaction -- is recorded by the stub below; that the
         # wake-up waits for the commit is asserted in `TestDispatch`.
         uow = _AfterCommitUow()
-        # The real coordinator, not a stand-in and not a half-built service:
-        # what these tests check is its routing, so anything less would certify
-        # the test's own wiring instead.
+        # The real use cases, not stand-ins and not a half-built service:
+        # what these tests check is their routing, so anything less would
+        # certify the test's own wiring instead.
         service = wire_repositories(
-            ApprovalCoordinator(
+            ResolvePause(
                 uow,
-                ResumeToolReturnBuilder(uow, None),
-                wire_repositories(PauseResume(uow, None), repository),
+                reconcile=ReconcileDecision(
+                    uow,
+                    resume_returns=ResumeToolReturnBuilder(uow, None),
+                    resume=ResumeRun(uow, agent_repository=None),
+                ),
             ),
             repository,
         )
@@ -571,7 +573,7 @@ class TestResolutionRouting:
             user_id=uuid4(),
         )
 
-        resolution = await service.resolve_user_approval_internal(
+        resolution = await service.resolve(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
             user_id=conversation.user_id,
@@ -599,7 +601,7 @@ class TestResolutionRouting:
         )
 
         with pytest.raises(ApprovalNotOwnedError):
-            await service.resolve_user_approval_internal(
+            await service.resolve(
                 conversation=conversation,
                 approval_id=repository.call.tool_call_id,
                 user_id=uuid4(),
@@ -625,7 +627,7 @@ class TestResolutionRouting:
             user_id=uuid4(),
         )
 
-        await service.resolve_user_approval_internal(
+        await service.resolve(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
             user_id=conversation.user_id,
@@ -653,7 +655,7 @@ class TestResolutionRouting:
             user_id=uuid4(),
         )
 
-        resolution = await service.resolve_user_approval_internal(
+        resolution = await service.resolve(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
             user_id=conversation.user_id,
@@ -750,7 +752,7 @@ class TestAParkedInteractionDoesNotResume:
             user_id=uuid4(),
         )
 
-        await service.resolve_user_approval_internal(
+        await service.resolve(
             conversation=conversation,
             approval_id=repository.call.tool_call_id,
             user_id=conversation.user_id,

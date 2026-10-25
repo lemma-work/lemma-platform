@@ -26,8 +26,8 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.config import agent_settings
-from app.modules.agent.infrastructure.adapters.workflow_control import (
-    AgentControlAdapter,
+from app.modules.agent.contracts.workflow_control import (
+    build_agent_control_adapter,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
@@ -226,7 +226,7 @@ async def _run_like_a_workflow_step(
     model_name: str | None = None,
 ) -> UUID:
     with suppress_agent_run_enqueue():
-        conversation_id = await AgentControlAdapter(
+        conversation_id = await build_agent_control_adapter(
             SqlAlchemyUnitOfWork(db_session)
         ).run_agent(
             agent_name=agent_name,

@@ -1,13 +1,12 @@
 """Retrying a conversation's failed run.
 
-A collaborator of ``ConversationService`` like ``TurnCoordinator``, not a
-subclass of it: it needs the repositories and the turn's runtime and usage
-checks, and nothing else the service carries.
+A fresh run in place of the failed latest one, from the conversation's
+persisted history and without a duplicate user message. It passes the same
+runtime and usage checks as any other turn.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
@@ -25,30 +24,45 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.services.runtime_availability import turn_runtime
+from app.modules.agent.services.runtime_availability import (
+    TurnRuntimeCheck,
+    ensure_turn_runtime_available,
+    turn_runtime,
+)
+from app.modules.agent.services.usage_preflight import assert_turn_allowed
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.infrastructure import repositories
+from app.modules.usage.contracts.execution import UsageService, build_usage_service
 
-if TYPE_CHECKING:
-    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent.domain.ports import AgentRepository
-    from app.modules.agent.services.conversation_turns import TurnCoordinator
 
-
-class RetryCoordinator:
+class RetryFailedRun:
     """Starts a fresh run in place of a conversation's failed latest one."""
 
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
+        *,
         agent_repository: AgentRepository,
-        turns: TurnCoordinator,
+        usage_service: UsageService | None,
+        runtime_check: TurnRuntimeCheck = ensure_turn_runtime_available,
     ) -> None:
         self.uow = uow
         self.conversations = Conversations(uow)
         self.runs = Runs(uow)
         self.agent_repository = agent_repository
-        self.turns = turns
+        self.usage_service = usage_service
+        self.runtime_check = runtime_check
 
-    async def retry_failed_run(
+    @classmethod
+    def build(cls, uow: SqlAlchemyUnitOfWork) -> RetryFailedRun:
+        return cls(
+            uow,
+            agent_repository=repositories.AgentRepository(uow),
+            usage_service=build_usage_service(uow),
+        )
+
+    async def retry(
         self,
         *,
         conversation_id: UUID,
@@ -97,14 +111,14 @@ class RetryCoordinator:
                 conversation, user_id=user_id, agent_repository=self.agent_repository
             ),
         )
-        await self.turns.runtime_check(
+        await self.runtime_check(
             self.uow,
             runtime,
             organization_id=conversation.organization_id,
             user_id=user_id,
         )
-        await self.turns.assert_usage_preflight_allowed(
-            conversation, user_id=user_id, agent_runtime=runtime
+        await assert_turn_allowed(
+            self.usage_service, conversation, user_id=user_id, agent_runtime=runtime
         )
         retry_run = await self.runs.create_agent_run(
             conversation_id=conversation.id,

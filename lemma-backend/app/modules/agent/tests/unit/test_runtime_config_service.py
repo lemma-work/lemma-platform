@@ -1757,7 +1757,7 @@ async def test_a_model_provider_reports_no_availability():
 
 
 async def test_availability_degrades_where_the_service_has_no_host_repository():
-    """agent_runner_service and conversation_service both build this service
+    """agent_runner_service and the turn use cases both build this service
     without one. They never render availability, so it must not raise."""
     organization_id = uuid4()
     profile, _repository = _availability_case(organization_id=organization_id)

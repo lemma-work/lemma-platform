@@ -32,7 +32,7 @@ from app.modules.agent.domain.approvals import EXPIRED_UNANSWERED
 from app.modules.agent.domain.errors import UnknownApprovalError
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.infrastructure.db.conversations import Conversations
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.application.pauses.resolve import ResolvePause
 
 logger = get_logger(__name__)
 
@@ -57,7 +57,7 @@ async def expire_pause(
         )
         token = set_current_context(context)
         try:
-            await build_conversation_service(uow).resolve_user_approval_internal(
+            await ResolvePause.build(uow).resolve(
                 conversation=conversation,
                 approval_id=tool_call_id,
                 user_id=conversation.user_id,

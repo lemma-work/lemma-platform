@@ -50,7 +50,8 @@ from app.modules.agent.services.pause_questions import (
     tool_ref,
 )
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.application.pauses.decide import DecidePause
+from app.modules.agent.application.turns.send_message import SendMessage
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     append,
@@ -341,7 +342,7 @@ async def test_a_line_answered_after_the_conversation_decided_shows_that_decisio
     asked = await _question(seeded, call)
     with suppress_agent_run_enqueue():
         async with owner_uow(seeded) as uow:
-            await build_conversation_service(uow).resolve_user_approval(
+            await DecidePause.build(uow).decide(
                 conversation_id=seeded.conversation_id,
                 approval_id=call,
                 user_id=seeded.user_id,
@@ -363,7 +364,7 @@ async def test_a_question_decided_elsewhere_closes_with_that_decision(scenario):
     call = await _paused(seeded, tool_name="ask_user", tool_args=TWO_QUESTIONS)
     with suppress_agent_run_enqueue():
         async with owner_uow(seeded) as uow:
-            await build_conversation_service(uow).resolve_user_approval(
+            await DecidePause.build(uow).decide(
                 conversation_id=seeded.conversation_id,
                 approval_id=call,
                 user_id=seeded.user_id,
@@ -392,7 +393,7 @@ async def test_a_question_written_past_stops_waiting_rather_than_being_denied(
     call = await _paused(seeded, tool_name="ask_user", tool_args=TWO_QUESTIONS)
     with suppress_agent_run_enqueue():
         async with owner_uow(seeded) as uow:
-            await build_conversation_service(uow).add_user_message_and_start_run(
+            await SendMessage.build(uow).send(
                 conversation_id=seeded.conversation_id,
                 user_id=seeded.user_id,
                 content="Never mind, show me the invoices.",
@@ -495,7 +496,7 @@ async def test_an_approval_nobody_decided_in_time_is_not_approved_anywhere(scena
     # the decision on record, and a late tap adopts it.
     with suppress_agent_run_enqueue():
         async with owner_uow(seeded) as uow:
-            late = await build_conversation_service(uow).resolve_user_approval(
+            late = await DecidePause.build(uow).decide(
                 conversation_id=seeded.conversation_id,
                 approval_id=call,
                 user_id=seeded.user_id,

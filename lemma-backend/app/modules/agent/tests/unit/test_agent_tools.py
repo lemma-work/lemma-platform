@@ -1697,11 +1697,11 @@ async def test_project_child_conversation_keeps_subagents_toolset():
     assert subagents_toolset in child_ts
 
 
-def _conversation_service_with_repo(repo):
-    from app.modules.agent.services.conversation_service import ConversationService
+def _start_conversation_with_repo(repo):
+    from app.modules.agent.application.conversations.start import StartConversation
 
     return wire_repositories(
-        ConversationService(uow=None, agent_repository=None),  # type: ignore[arg-type]
+        StartConversation(None, agent_repository=None),  # type: ignore[arg-type]
         repo,
     )
 
@@ -1723,7 +1723,7 @@ async def test_child_conversation_inherits_parent_cwd_and_workspace():
         async def get_conversation(self, conversation_id, *args, **kwargs):
             return parent if conversation_id == parent_id else None
 
-    service = _conversation_service_with_repo(_Repo())
+    service = _start_conversation_with_repo(_Repo())
     child = Conversation(
         pod_id=parent.pod_id, user_id=parent.user_id, parent_id=parent_id
     )
@@ -1739,7 +1739,7 @@ async def test_root_conversation_gets_own_cwd():
         async def get_conversation(self, *args, **kwargs):
             return None
 
-    service = _conversation_service_with_repo(_Repo())
+    service = _start_conversation_with_repo(_Repo())
     convo = Conversation(pod_id=uuid4(), user_id=uuid4())
     await service._apply_inherited_cwd(convo, parent=None)
 
@@ -1758,7 +1758,7 @@ async def test_an_explicit_cwd_is_not_overridden():
         async def get_conversation(self, *args, **kwargs):  # pragma: no cover
             raise AssertionError("the parent is handed over, never re-read")
 
-    service = _conversation_service_with_repo(_Repo())
+    service = _start_conversation_with_repo(_Repo())
     parent = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -2346,7 +2346,7 @@ def test_pausing_tool_call_without_matching_return_is_dropped_from_history():
     """A left-unresolved ask_user/request_approval call must not reach the
     model as a dangling ToolCallPart — pydantic-ai requires every tool call to
     have a matching return in the same request. Without a synthesized return
-    (see ConversationService._supersede_stale_pending_interactions), the
+    (see SupersedeStalePauses), the
     harness intentionally drops the orphaned call rather than sending an
     invalid request; this test locks in that fallback behavior."""
     conversation_id = uuid4()

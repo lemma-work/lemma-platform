@@ -16,7 +16,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationListCursor,
 )
 from app.modules.agent.infrastructure.db.conversations import Conversations
-import app.modules.agent.services.conversation_queries as queries
+import app.modules.agent.application.conversations.read as queries
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.test_support.authz import allow_all_context
 
@@ -60,7 +60,7 @@ async def test_list_conversations_resolves_agent_selection(
     resolved_agent_id = uuid4()
     # The real query object: `list_conversations` lives there now, and a
     # half-built service would only prove the test's own wiring.
-    service = wire_repositories(queries.ConversationQueries(None, None), repository)
+    service = wire_repositories(queries.ConversationReads(None, None), repository)
     resolve_expected = AsyncMock(
         side_effect=lambda _repo, *, pod_id, agent_name: (
             resolved_agent_id if agent_name is not None else None
@@ -226,7 +226,7 @@ def allowed():
 
 def _legacy_service(repository):
     # Across the whole pod: no agent name, so nothing to resolve.
-    return wire_repositories(queries.ConversationQueries(None, None), repository)
+    return wire_repositories(queries.ConversationReads(None, None), repository)
 
 
 @pytest.mark.asyncio

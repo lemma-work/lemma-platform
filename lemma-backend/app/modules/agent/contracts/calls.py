@@ -29,7 +29,7 @@ from app.modules.agent.domain.calls import (
 from app.modules.agent.domain.value_objects import ConversationOrigin, MessageKind
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
 from app.modules.agent.infrastructure.db.conversations import Conversations
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.application.conversations.start import StartConversation
 
 
 #: Sub-agents one call may draw from. A coordinator spawns one per distinct
@@ -70,8 +70,7 @@ async def open_call(
     ``runtime`` pins the coordinator to a model; its sub-agents inherit it.
     The caller sets the authorization context.
     """
-    service = build_conversation_service(uow)
-    conversation = await service.create_conversation(
+    conversation = await StartConversation.build(uow).start(
         pod_id=pod_id,
         agent_name=agent_name,
         user_id=user_id,

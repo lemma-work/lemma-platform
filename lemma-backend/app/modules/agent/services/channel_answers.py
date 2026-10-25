@@ -65,7 +65,12 @@ from app.modules.agent.services.channel_answer_lines import (
     say_refused,
 )
 from app.modules.agent.services.live_conversation import CONVERSATION_STREAM
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.application.conversations.start import (
+    StartConversation,
+    authorize_opening,
+)
+from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.infrastructure import repositories
 from app.modules.channels.contracts import (
     ChannelKind,
     Channel,
@@ -180,12 +185,14 @@ async def _answer_as(
         user_id=user_id, pod_id=pod_id
     )
     token = set_current_context(context)
-    service = build_conversation_service(uow)
     try:
         # Authorized first, since that commits; then locked, looked for again,
         # and opened -- as a surface opens one.
-        await service.authorize_opening(
-            pod_id=pod_id, agent_name=agent_name, user_id=user_id
+        await authorize_opening(
+            repositories.AgentRepository(uow),
+            pod_id=pod_id,
+            agent_name=agent_name,
+            user_id=user_id,
         )
         conversation_id = await _members_conversation(
             uow,
@@ -204,7 +211,7 @@ async def _answer_as(
             conversation_id=conversation_id,
         )
         background = await member_background(uow, line=line, limit=IN_APP_CONTEXT_LINES)
-        started = await service.add_user_message_and_start_run(
+        started = await SendMessage.build(uow).send(
             conversation_id=conversation_id,
             user_id=user_id,
             content=line.text,
@@ -316,7 +323,7 @@ async def _members_conversation(
     )
     if found is not None:
         return found
-    opened = await build_conversation_service(uow).create_conversation(
+    opened = await StartConversation.build(uow).start(
         pod_id=channel.pod_id,
         agent_name=agent_name,
         user_id=user_id,
@@ -443,7 +450,7 @@ async def _lines_read_by(
     answers to what its conversation asked of somebody else.
 
     Not a message that joined it and was never read: the run that delivers it
-    answers it (``conversation_turns.start_queued_followup``).
+    answers it (``StartQueuedFollowUp``).
     """
     metadata = MessageModel.message_metadata
     started_it = (MessageModel.agent_run_id == run_id) & (

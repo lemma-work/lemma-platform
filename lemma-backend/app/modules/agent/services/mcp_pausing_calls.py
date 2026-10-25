@@ -92,7 +92,7 @@ async def record_pausing_tool_call(
                 tool_args=dict(arguments or {}),
                 # A person's answer is delivered into this same run, which is
                 # still going while the host's bridge waits for it; a resume
-                # would put a second run on the turn (`PauseResume`). A wait
+                # would put a second run on the turn (`ResumeRun`). A wait
                 # is not parked: it ends the remote run (`suspend_remote_run`).
                 state=(
                     MessageState(parked_in_run_id=agent_run_id)

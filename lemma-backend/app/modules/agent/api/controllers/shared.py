@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+)
+from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 
 from app.core.api.actor_policy import require_person
-from app.modules.usage.contracts.execution import build_usage_service
+from app.core.authorization.dependencies import assert_pod_membership
+from app.core.authorization.scope import pod_context_scope
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.domain.errors import BadRequestError
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
@@ -22,10 +32,6 @@ from app.modules.agent.domain.value_objects import (
     ConversationAgentSelection,
     JsonObject,
 )
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-)
-from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.realtime import (
     conversation_channel as conversation_channel,
 )
@@ -55,12 +61,21 @@ KEEPALIVE_FRAME = ": keepalive\n\n"
 STREAM_KEEPALIVE_SECONDS = 15.0
 
 
-def _build_conversation_service(uow) -> ConversationService:
-    return ConversationService(
-        uow=uow,
-        agent_repository=AgentRepository(uow),
-        usage_service=build_usage_service(uow),
-    )
+@asynccontextmanager
+async def member_unit_of_work(
+    uow_factory: UnitOfWorkFactory, *, request: Request, user_id: UUID, pod_id: UUID
+) -> AsyncIterator[SqlAlchemyUnitOfWork]:
+    """A SHORT unit of work for a pod member, with their context built in it.
+
+    Not a request-scoped ``PodContextDep``: a StreamingResponse keeps those (and
+    their pooled connection) alive for the whole stream, and a send or a retry
+    should hand its connection back the moment it commits.
+    """
+    async with pod_context_scope(
+        uow_factory, request=request, user_id=user_id, pod_id=pod_id
+    ) as scope:
+        assert_pod_membership(scope.ctx, "use conversations in this pod")
+        yield scope.uow
 
 
 def _parse_metadata_filters(

@@ -76,7 +76,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import paired_machine
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     conversation,
-    conversation_service,
+    resolve_pause,
     messages,
     owner_uow,
     running_run,
@@ -373,7 +373,7 @@ async def test_a_resumed_run_ending_with_calls_it_never_ran_answers_with_its_las
     )
 
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=permission_approval_tool_call_id(_WRITE),
             user_id=seeded.user_id,

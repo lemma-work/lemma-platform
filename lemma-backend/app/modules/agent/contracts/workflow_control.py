@@ -18,12 +18,18 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.infrastructure.adapters.workflow_control import (
     AgentControlAdapter,
 )
+from app.modules.agent.services.pod_runtime_defaults import (
+    default_agent_runtime_for_pod,
+)
+from app.modules.agent.services.run_stop import stop_run
 from app.modules.workflow.contracts import AgentPort
 
 
 def build_agent_control_adapter(uow: SqlAlchemyUnitOfWork) -> AgentPort:
     """An agent driver bound to this transaction."""
-    return AgentControlAdapter(uow)
+    return AgentControlAdapter(
+        uow, stop_run=stop_run, default_runtime=default_agent_runtime_for_pod
+    )
 
 
 __all__ = ["build_agent_control_adapter"]

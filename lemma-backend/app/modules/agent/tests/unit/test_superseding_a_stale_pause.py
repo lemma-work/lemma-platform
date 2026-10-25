@@ -1,6 +1,6 @@
 """A pause left open by a finished run is denied, or else it is reported.
 
-Before a new message starts a run, `supersede_stale_pending_interactions`
+Before a new message starts a run, `SupersedeStalePauses`
 auto-denies any `ask_user`/`request_approval` still unanswered from an earlier
 pause: the person moved on without answering, and a history that still shows an
 open question makes the next run ask it again.
@@ -23,7 +23,7 @@ import pytest
 
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.value_objects import MessageKind
-from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
+from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
 
 pytestmark = pytest.mark.unit
 
@@ -47,7 +47,7 @@ def _coordinator(message):
     resume_returns = AsyncMock()
     resume_returns.build.return_value = ("ask_user", {"denied": True})
     coordinator = wire_repositories(
-        ApprovalCoordinator(AsyncMock(), resume_returns, AsyncMock()), repository
+        SupersedeStalePauses(AsyncMock(), resume_returns=resume_returns), repository
     )
     # No wait_for to cancel here; that half is SQL (the e2e covers it).
     coordinator._cancel_superseded_wait = AsyncMock(return_value=[])  # type: ignore[method-assign]
@@ -62,7 +62,7 @@ async def test_a_pausing_call_with_no_run_is_skipped_and_said_out_loud(
     coordinator, repository = _coordinator(_pausing_call(agent_run_id=None))
 
     with caplog.at_level("WARNING"):
-        synthesized = await coordinator.supersede_stale_pending_interactions(
+        synthesized = await coordinator.supersede(
             conversation=conversation,
             user_id=uuid4(),
         )
@@ -85,7 +85,7 @@ async def test_a_pausing_call_with_a_run_is_denied_rather_than_skipped(
     coordinator, repository = _coordinator(_pausing_call(agent_run_id=uuid4()))
 
     with caplog.at_level("WARNING"):
-        await coordinator.supersede_stale_pending_interactions(
+        await coordinator.supersede(
             conversation=conversation,
             user_id=uuid4(),
         )

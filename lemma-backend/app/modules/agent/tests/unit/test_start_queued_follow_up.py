@@ -21,7 +21,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     ConversationStatus,
 )
-from app.modules.agent.services.conversation_turns import TurnCoordinator
+from app.modules.agent.application.turns.follow_up import StartQueuedFollowUp
 from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import RunTrigger
@@ -48,7 +48,7 @@ def _coordinator(
     finished_state: RunState | None = None,
     queues: dict | None = None,
 ):
-    """A coordinator over a fake queue.
+    """The use case over a fake queue.
 
     ``queued`` messages wait behind the finished run, ``notes`` of them private
     notes, the oldest of them a note when there are any. ``queues`` adds other
@@ -82,17 +82,24 @@ def _coordinator(
         get_agent_run=AsyncMock(return_value=finished),
         create_agent_run=AsyncMock(return_value=created),
         claim_queued_user_messages=AsyncMock(return_value=[]),
+        # A run that ended by asking: its question is still unanswered.
+        get_latest_agent_run_for_conversation=AsyncMock(return_value=finished),
+        get_conversation_status=AsyncMock(return_value=ConversationStatus.WAITING),
+        pausing_call_ids_of_run=AsyncMock(return_value=["call-1"]),
+        pausing_calls_awaiting_a_return=AsyncMock(
+            return_value=[
+                SimpleNamespace(tool_call_id="call-1", agent_run_id=finished.id)
+            ]
+        ),
+        mark_queued_waiting_on_answer=AsyncMock(return_value=[]),
     )
     uow = SimpleNamespace(
         collect_events=MagicMock(), commit=AsyncMock(), session=RecordingWorkSession()
     )
-    coordinator = TurnCoordinator(
-        uow=uow,
+    coordinator = StartQueuedFollowUp(
+        uow,
         agent_repository=SimpleNamespace(),
-        approvals=SimpleNamespace(
-            supersede_stale_pending_interactions=AsyncMock(return_value=[])
-        ),
-        pauses=SimpleNamespace(resume_if_already_answered=AsyncMock(return_value=None)),
+        supersede=SimpleNamespace(supersede=AsyncMock(return_value=[])),
         usage_service=None,
     )
     wire_repositories(coordinator, repository)
@@ -105,7 +112,7 @@ async def test_a_message_queued_behind_a_busy_run_gets_its_own_turn() -> None:
         queued=3
     )
 
-    started = await coordinator.start_queued_followup(
+    started = await coordinator.start(
         conversation=conversation, completed_run_id=finished.id
     )
 
@@ -140,7 +147,7 @@ async def test_the_followup_claims_the_queue_it_answers() -> None:
     claimed = [SimpleNamespace(id=uuid4()), SimpleNamespace(id=uuid4())]
     repository.claim_queued_user_messages.return_value = claimed
 
-    started = await coordinator.start_queued_followup(
+    started = await coordinator.start(
         conversation=conversation, completed_run_id=finished.id
     )
 
@@ -163,9 +170,7 @@ async def test_nothing_queued_starts_nothing() -> None:
     )
 
     assert (
-        await coordinator.start_queued_followup(
-            conversation=conversation, completed_run_id=finished.id
-        )
+        await coordinator.start(conversation=conversation, completed_run_id=finished.id)
         is None
     )
     repository.create_agent_run.assert_not_awaited()
@@ -184,9 +189,7 @@ async def test_the_followup_run_cannot_itself_recur() -> None:
     coordinator, conversation, repository, _uow, finished, created = _coordinator(
         queued=3
     )
-    await coordinator.start_queued_followup(
-        conversation=conversation, completed_run_id=finished.id
-    )
+    await coordinator.start(conversation=conversation, completed_run_id=finished.id)
 
     asked = {
         call.args[0] for call in repository.earliest_queued_is_note.await_args_list
@@ -203,9 +206,7 @@ async def test_a_run_that_ended_by_asking_a_question_is_left_alone() -> None:
     conversation.status = ConversationStatus.WAITING
 
     assert (
-        await coordinator.start_queued_followup(
-            conversation=conversation, completed_run_id=finished.id
-        )
+        await coordinator.start(conversation=conversation, completed_run_id=finished.id)
         is None
     )
     # Starting a turn here would auto-deny the question before the person saw
@@ -221,9 +222,7 @@ async def test_someone_typing_first_takes_the_turn_instead() -> None:
     )
 
     assert (
-        await coordinator.start_queued_followup(
-            conversation=conversation, completed_run_id=finished.id
-        )
+        await coordinator.start(conversation=conversation, completed_run_id=finished.id)
         is None
     )
     repository.create_agent_run.assert_not_awaited()
@@ -242,9 +241,7 @@ async def test_a_stop_that_marked_no_boundary_starts_nothing() -> None:
     finished.status = AgentRunStatus.STOPPED
 
     assert (
-        await coordinator.start_queued_followup(
-            conversation=conversation, completed_run_id=finished.id
-        )
+        await coordinator.start(conversation=conversation, completed_run_id=finished.id)
         is None
     )
     repository.create_agent_run.assert_not_awaited()
@@ -257,9 +254,7 @@ async def test_a_note_queued_behind_a_run_is_answered_where_nobody_else_sees() -
         queued=1, notes=1
     )
 
-    await coordinator.start_queued_followup(
-        conversation=conversation, completed_run_id=finished.id
-    )
+    await coordinator.start(conversation=conversation, completed_run_id=finished.id)
 
     state = repository.create_agent_run.await_args.kwargs["state"]
     assert state.private_note is True
@@ -273,9 +268,7 @@ async def test_the_kind_a_followup_did_not_answer_is_remembered_for_the_next() -
         queued=2, notes=1
     )
 
-    await coordinator.start_queued_followup(
-        conversation=conversation, completed_run_id=finished.id
-    )
+    await coordinator.start(conversation=conversation, completed_run_id=finished.id)
 
     state = repository.create_agent_run.await_args.kwargs["state"]
     # The oldest was a note, so this one answers notes; the other message waits.
@@ -292,7 +285,7 @@ async def test_what_an_earlier_run_left_waiting_is_answered_next() -> None:
         queues={earlier: (1, 0)},
     )
 
-    started = await coordinator.start_queued_followup(
+    started = await coordinator.start(
         conversation=conversation, completed_run_id=finished.id
     )
 

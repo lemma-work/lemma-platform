@@ -51,10 +51,10 @@ def execute_approval_jobs_inline(monkeypatch, request):
     if request.node.get_closest_marker("approval_worker"):
         return
 
-    from app.modules.agent.services import conversation_approvals
+    from app.modules.agent.application.pauses import resolve
     from app.modules.test_support.e2e.agent_work import run_approval_work
 
-    staged = conversation_approvals.stage_approval_execution
+    staged = resolve.stage_approval_execution
 
     async def _stage_then_run_after_commit(uow, **kwargs) -> None:
         await staged(uow, **kwargs)
@@ -65,7 +65,7 @@ def execute_approval_jobs_inline(monkeypatch, request):
         uow.after_commit(_run)
 
     monkeypatch.setattr(
-        conversation_approvals,
+        resolve,
         "stage_approval_execution",
         _stage_then_run_after_commit,
     )

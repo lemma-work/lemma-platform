@@ -23,7 +23,7 @@ from app.modules.agent_surfaces.domain.models import (
 from app.modules.agent.contracts.interaction_replies import (
     classify_approval_reply as _classify_approval_reply,
 )
-from app.modules.agent.services.interaction_reply import (
+from app.modules.agent.domain.interaction_reply import (
     _APPROVE_ONCE_REPLIES,
     _APPROVE_SESSION_REPLIES,
     _DENY_REPLIES,

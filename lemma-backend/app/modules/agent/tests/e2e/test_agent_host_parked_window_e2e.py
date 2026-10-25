@@ -74,7 +74,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import paired_machine
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     conversation,
-    conversation_service,
+    resolve_pause,
     finish,
     messages,
     owner_uow,
@@ -287,7 +287,7 @@ async def _decide(
     seeded: Seeded, approval_id: str, decision: AgentRunApprovalDecision, **response
 ) -> None:
     async with owner_uow(seeded) as uow:
-        await conversation_service(uow).resolve_user_approval_internal(
+        await resolve_pause(uow).resolve(
             conversation=await conversation(seeded.conversation_id),
             approval_id=approval_id,
             user_id=seeded.user_id,

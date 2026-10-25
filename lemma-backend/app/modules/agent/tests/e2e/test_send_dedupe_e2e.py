@@ -24,12 +24,12 @@ from app.modules.agent.domain.value_objects import AgentRunStatus, MessageRole
 from app.modules.agent.services.send_window import WINDOW_SECONDS, SendWindow
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
-    conversation_service,
     finish,
     messages,
     owner_uow,
     runs,
     seeded_conversation,
+    send_message,
 )
 
 pytestmark = [pytest.mark.e2e]
@@ -168,13 +168,14 @@ async def test_a_redis_outage_never_stops_a_send(scenario):
     )
 
     async with owner_uow(seeded) as uow:
-        service = conversation_service(uow)
-        service.send_window = SendWindow(uow.session, unreachable)
-        result = await service.send_from_lemma(
+        result = await send_message(
+            uow, send_window=SendWindow(uow.session, unreachable)
+        ).send(
             conversation_id=seeded.conversation_id,
             user_id=seeded.user_id,
             content="Still works?",
             pod_id=seeded.pod_id,
+            typed_in_lemma=True,
         )
 
     assert result.started_new_run is True

@@ -1,8 +1,9 @@
 """What a new message carries, and what it has to wait behind.
 
-`TurnCoordinator.start` decides whether a message joins a run, starts one, or
+`application/turns/admit` decides whether a message joins a run, starts one, or
 waits. This is the part of that decision that is about the message rather than
-the lock: what it is stored with, and the pause that holds it.
+the lock: what it is stored with, and the pause that holds it. Pure; the reads
+that find the holding pause are the use case's.
 
 A pause holds a message in two cases:
 
@@ -15,7 +16,7 @@ A pause holds a message in two cases:
 - **The sender is not the person who was asked.** Replies arriving for
   `channel_post` are news, not an answer, and starting a turn would deny a
   question the owner has not decided. A message the person types does supersede
-  an open question; that is still `start`'s rule.
+  an open question; that is still `AdmitMessage`'s rule.
 """
 
 from __future__ import annotations
@@ -25,16 +26,12 @@ from uuid import UUID
 
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.message_state import MessageState
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
-from app.modules.agent.infrastructure.db.conversations import Conversations
-from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.domain.private_notes import (
     note_in_member_dm,
     requested_private_note,
     written_in_lemma_into,
 )
 from app.modules.agent.domain.queued_messages import SERVER_OWNED_KEYS
-from app.modules.agent.domain.value_objects import ConversationStatus
 
 
 def admitted_state(
@@ -90,49 +87,3 @@ class HeldTurn:
     #: The run that paused; the message is queued behind it, and the run that
     #: resumes it claims the message.
     agent_run_id: UUID
-
-
-async def pause_holding_the_turn(
-    repository: Pauses,
-    conversation_id: UUID,
-    *,
-    include_undecided: bool,
-) -> HeldTurn | None:
-    """The pause a message must wait behind, if any. Caller holds the lock."""
-    in_flight = await repository.pausing_calls_decided_awaiting_a_return(
-        conversation_id=conversation_id,
-        pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-    )
-    undecided = (
-        await repository.pausing_calls_awaiting_a_decision(
-            conversation_id=conversation_id,
-            pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-        )
-        if include_undecided
-        else []
-    )
-    holding = [call for call in (*in_flight, *undecided) if call.agent_run_id]
-    if not holding:
-        return None
-    newest = max(holding, key=lambda call: call.sequence)
-    assert newest.agent_run_id is not None
-    return HeldTurn(agent_run_id=newest.agent_run_id)
-
-
-async def hold_behind(
-    repository: Conversations,
-    conversation: Conversation,
-) -> None:
-    """Leave the conversation waiting on the pause the message is held behind.
-
-    WAITING even after Stop: Stop keeps an already-decided approval from waking
-    the agent, but a message sent afterwards asks for an answer, and the resume
-    is what will carry it. Nothing has to be re-queued for the decided ones:
-    each decision wrote its ``agent.approval.execute`` item in its own
-    transaction, and that item always ends with a return.
-    """
-    if conversation.status != ConversationStatus.WAITING:
-        await repository.set_conversation_status(
-            conversation_id=conversation.id, status=ConversationStatus.WAITING
-        )
-        conversation.status = ConversationStatus.WAITING

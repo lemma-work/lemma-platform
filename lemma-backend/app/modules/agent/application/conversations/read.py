@@ -7,11 +7,13 @@ authorization is per-agent, not per-pod, so "list the conversations in this pod"
 and "list this agent's conversations" are different questions with different
 answers, and getting that boundary wrong is how one user sees another's thread.
 
-Writes live in `conversation_turns`; this side never starts a run.
+The query side of the conversation use cases: one class, several reads, no
+writes and no commits. It never starts a run.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
@@ -22,6 +24,7 @@ from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
 from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.infrastructure import repositories
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.pauses import Pauses
@@ -33,7 +36,12 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     ConversationType,
 )
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pausing_tools import (
+    PAUSING_TOOL_NAMES,
+    USER_PAUSING_TOOL_NAMES,
+    PausingKind,
+    PendingPause,
+)
 from app.modules.agent.domain.pending_interactions import (
     PendingInteraction,
     PendingInteractionCursor,
@@ -45,8 +53,8 @@ from app.modules.agent.services.conversation_access import (
 )
 
 
-class ConversationQueries:
-    """The read half of the conversation service."""
+class ConversationReads:
+    """What a person may read of a conversation, and what it is waiting on."""
 
     def __init__(
         self,
@@ -59,6 +67,10 @@ class ConversationQueries:
         self.messages = Messages(uow)
         self.pausing_calls = Pauses(uow)
         self.agent_repository = agent_repository
+
+    @classmethod
+    def build(cls, uow: SqlAlchemyUnitOfWork) -> ConversationReads:
+        return cls(uow, repositories.AgentRepository(uow))
 
     async def list_conversations(
         self,
@@ -220,6 +232,26 @@ class ConversationQueries:
             return False
         return await self.runs.run_is_replay_safe(latest.id)
 
+    async def get_agent_run(
+        self,
+        *,
+        conversation_id: UUID,
+        agent_run_id: UUID,
+        user_id: UUID,
+        pod_id: UUID,
+    ) -> AgentRun | None:
+        """One run of a conversation the caller may read, or None when the run
+        is not that conversation's."""
+        conversation = await self.get_conversation(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            pod_id=pod_id,
+        )
+        agent_run = await self.runs.get_agent_run(agent_run_id)
+        if agent_run is None or agent_run.conversation_id != conversation.id:
+            return None
+        return agent_run
+
     async def list_messages(
         self,
         *,
@@ -283,4 +315,93 @@ class ConversationQueries:
         return await self.pausing_calls.pausing_calls_awaiting_a_return(
             conversation_id=conversation.id,
             pausing_tool_names=USER_PAUSING_TOOL_NAMES,
+        )
+
+    async def pending_ask_user(self, *, conversation_id: UUID) -> PendingPause | None:
+        """Oldest unresolved ``ask_user`` pause for a conversation, or ``None``.
+
+        Used by surface ingress to render the questions on the surface (from a
+        WAITING event) and to route a typed reply back into the run as the
+        answer.
+        """
+        return await self._oldest_unresolved_pause(
+            conversation_id=conversation_id,
+            tool_names=(PausingKind.ASK_USER.value,),
+        )
+
+    async def pending_approval(self, *, conversation_id: UUID) -> PendingPause | None:
+        """Oldest unresolved ``request_approval`` pause, or ``None``.
+
+        The approval counterpart of :meth:`pending_ask_user`, and it has to be
+        its own lookup rather than a filter applied to
+        :meth:`pending_user_interaction`. That one answers "what is this
+        conversation waiting on", of *any* pausing kind, which is right for
+        routing a typed reply back — a person answering in words answers
+        whatever is pending. It is wrong for rendering, because a conversation
+        can hold more than one unresolved pause at a time: an `ask_user` nobody
+        ever tapped stays unresolved forever, and being older it is the one
+        returned. The approval card then had nothing to render and the run sat
+        WAITING with nobody told.
+        """
+        return await self._oldest_unresolved_pause(
+            conversation_id=conversation_id,
+            tool_names=(PausingKind.REQUEST_APPROVAL.value,),
+        )
+
+    async def pending_sign_in(self, *, conversation_id: UUID) -> PendingPause | None:
+        """Oldest unresolved ``browser_sign_in`` pause, or ``None``.
+
+        Its own lookup for the same reason :meth:`pending_approval` is: a
+        conversation can hold several unresolved pauses, and the oldest of *any*
+        kind is the wrong one to render a sign-in link for.
+
+        This is what replaced a table. A sign-in used to write a row carrying
+        the origin, the reason and a status -- all three of which are already
+        here: the first two in the paused call's arguments, and the third in
+        whether this returns anything at all.
+        """
+        return await self._oldest_unresolved_pause(
+            conversation_id=conversation_id,
+            tool_names=(PausingKind.BROWSER_SIGN_IN.value,),
+        )
+
+    async def pending_user_interaction(
+        self, *, conversation_id: UUID
+    ) -> PendingPause | None:
+        """Oldest unresolved pausing tool call of any kind, or ``None``.
+
+        Used by surface ingress to route a typed reply back into the paused run.
+        """
+        return await self._oldest_unresolved_pause(
+            conversation_id=conversation_id,
+            tool_names=PAUSING_TOOL_NAMES,
+        )
+
+    async def _oldest_unresolved_pause(
+        self,
+        *,
+        conversation_id: UUID,
+        tool_names: Sequence[str],
+    ) -> PendingPause | None:
+        """The pause a typed reply routes to, or the card renders.
+
+        Asked in SQL rather than by scanning the newest 500 messages: past that
+        window the conversation reported itself as waiting on nothing, so the
+        approval card vanished and a reply had nowhere to go.
+        """
+        pending = await self.pausing_calls.pausing_calls_awaiting_a_decision(
+            conversation_id=conversation_id,
+            pausing_tool_names=tool_names,
+            limit=1,
+        )
+        if not pending:
+            return None
+        message = pending[0]
+        return PendingPause(
+            tool_call_id=message.tool_call_id or "",
+            kind=PausingKind(message.tool_name),
+            tool_args=(
+                message.tool_args if isinstance(message.tool_args, dict) else {}
+            ),
+            agent_run_id=message.agent_run_id,
         )

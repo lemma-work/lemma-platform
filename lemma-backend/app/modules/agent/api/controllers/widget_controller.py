@@ -123,9 +123,9 @@ class WidgetRouteServices:
     widget_content: Callable[[SqlAlchemyUnitOfWork], WidgetContentReader] = (
         WidgetAssetService
     )
-    #: Reads the conversation the widget lives in. A repository, not the whole
-    #: `ConversationService`: that built an agent repository, an authorization
-    #: service and a usage service per request to read one row.
+    #: Reads the conversation the widget lives in. A repository, not a whole
+    #: conversation service: the one this replaced built an agent repository,
+    #: an authorization service and a usage service per request to read a row.
     conversations: Callable[[SqlAlchemyUnitOfWork], ConversationLookup] = Conversations
     #: Builds the caller's permission context, through the sanctioned factory
     #: rather than by reaching into ``uow.session`` here.

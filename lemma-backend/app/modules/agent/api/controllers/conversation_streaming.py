@@ -18,13 +18,14 @@ from app.modules.agent.api.controllers.shared import (
     iter_subscription,
     with_keepalive,
 )
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.application.conversations.read import ConversationReads
 from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
 from app.modules.agent.domain.value_objects import AgentRunStartResult
-from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.realtime import run_ending_payload
 
 logger = get_logger(__name__)
@@ -33,27 +34,27 @@ logger = get_logger(__name__)
 async def start_and_stream_run(
     *,
     channel_service: ChannelServiceDep,
-    conversations: Callable[[], AbstractAsyncContextManager[ConversationService]],
+    unit_of_work: Callable[[], AbstractAsyncContextManager[SqlAlchemyUnitOfWork]],
     conversation_id: UUID,
     user_id: UUID,
     pod_id: UUID,
-    start_run: Callable[[ConversationService], Awaitable[AgentRunStartResult]],
+    start_run: Callable[[SqlAlchemyUnitOfWork], Awaitable[AgentRunStartResult]],
 ) -> StreamingResponse:
     """Send, then stream the run the send started or joined.
 
-    ``conversations`` opens a short-lived service: the auth context is built
-    there, not in a request-scoped dependency, because a StreamingResponse
-    keeps those (and their pooled connection) alive for the whole stream.
+    ``unit_of_work`` opens a short-lived one: the auth context is built there,
+    not in a request-scoped dependency, because a StreamingResponse keeps those
+    (and their pooled connection) alive for the whole stream.
     """
 
     async def send() -> AgentRunStartResult:
-        async with conversations() as service:
-            return await start_run(service)
+        async with unit_of_work() as uow:
+            return await start_run(uow)
 
     async def load_run(agent_run_id: UUID) -> AgentRun:
-        async with conversations() as service:
+        async with unit_of_work() as uow:
             return await load_authorized_agent_run(
-                service,
+                ConversationReads.build(uow),
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 user_id=user_id,
@@ -90,7 +91,7 @@ async def start_and_stream_run(
         # run was already working joins that run, and the only route that told
         # anyone so was `agent.conversation.message.append`. On the chat path a
         # person watched an apparently unanswered message instead
-        # (`PS-AGENT-015`). `TurnCoordinator.start` already decided this; it was
+        # (`PS-AGENT-015`). `AdmitMessage.admit` already decided this; it was
         # only ever thrown away here.
         yield encode_stream_chunk(
             event_type="status",
@@ -148,20 +149,20 @@ async def start_and_stream_run(
 
 
 async def load_authorized_agent_run(
-    service: ConversationService,
+    reads: ConversationReads,
     *,
     conversation_id: UUID,
     agent_run_id: UUID,
     user_id: UUID,
     pod_id: UUID,
 ) -> AgentRun:
-    conversation = await service.queries.get_conversation(
+    agent_run = await reads.get_agent_run(
         conversation_id=conversation_id,
+        agent_run_id=agent_run_id,
         user_id=user_id,
         pod_id=pod_id,
     )
-    agent_run = await service.runs.get_agent_run(agent_run_id)
-    if agent_run is None or agent_run.conversation_id != conversation.id:
+    if agent_run is None:
         raise ConversationNotFoundError("Agent run not found")
     return agent_run
 

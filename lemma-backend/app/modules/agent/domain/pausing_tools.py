@@ -85,8 +85,24 @@ class PendingPause:
     agent_run_id: UUID | None
 
 
+@dataclass(frozen=True, slots=True)
+class PausedCall:
+    """The pausing tool call a decision is about, whatever its decision state.
+
+    A record rather than the `dict[str, object]` this used to be: the lookup
+    already proves the run id is present and the kind is one of the pausing
+    tools, and a dict threw both facts away one line later -- so every field had
+    to be re-derived, `str()`-ed or re-checked at each use.
+    """
+
+    agent_run_id: UUID
+    kind: PausingKind
+    tool_args: dict[str, object]
+
+
 __all__ = [
     "ParkedSuspension",
+    "PausedCall",
     "PausingKind",
     "PendingPause",
     "USER_PAUSING_KINDS",

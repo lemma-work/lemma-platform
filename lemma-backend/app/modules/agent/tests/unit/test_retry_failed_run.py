@@ -25,8 +25,8 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     MessageRole,
 )
-import app.modules.agent.services.conversation_retry_service as retry_service_module
-from app.modules.agent.services.conversation_service import ConversationService
+import app.modules.agent.application.turns.retry as retry_service_module
+from app.modules.agent.application.turns.retry import RetryFailedRun
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import RunTrigger
 
@@ -95,15 +95,15 @@ def _service(
         # The pod names no default runtime of its own.
         session=RecordingWorkSession(),
     )
-    service = ConversationService(
-        uow=uow,
+    service = RetryFailedRun(
+        uow,
         agent_repository=SimpleNamespace(
             get=AsyncMock(
                 return_value=SimpleNamespace(name="lem", kind=None, agent_runtime=None)
             )
         ),
         usage_service=usage_service,
-        turn_runtime_check=runtime_check or _RuntimeCheck(),
+        runtime_check=runtime_check or _RuntimeCheck(),
     )
     return wire_repositories(service, repository), repository, uow
 
@@ -111,7 +111,7 @@ def _service(
 def _authorize(
     monkeypatch: pytest.MonkeyPatch, conversation: Conversation
 ) -> AsyncMock:
-    """Stand in for the access check at the seam the service actually imports.
+    """Stand in for the access check at the seam the use case actually imports.
 
     `monkeypatch.setattr` on the module, deliberately, rather than an attribute
     assigned onto the service: setattr refuses to patch a name that is not
@@ -152,7 +152,7 @@ async def test_retry_runs_on_the_conversation_s_current_runtime_without_a_new_me
     repository.create_agent_run.return_value = retry_run
     authorize = _authorize(monkeypatch, conversation)
 
-    result = await service.retry_failed_run(
+    result = await service.retry(
         conversation_id=conversation.id,
         user_id=conversation.user_id,
         pod_id=conversation.pod_id,
@@ -188,7 +188,7 @@ def _metered_retry_setup(
     monkeypatch: pytest.MonkeyPatch,
     *,
     allowed: bool,
-) -> tuple[ConversationService, SimpleNamespace, AgentRun, Conversation]:
+) -> tuple[RetryFailedRun, SimpleNamespace, AgentRun, Conversation]:
     usage_service = _usage_service(allowed=allowed)
     service, repository, _ = _service(usage_service)
     conversation = Conversation(
@@ -220,7 +220,7 @@ async def test_retry_failed_run_refuses_when_the_usage_limit_is_reached(
     service, repository, _, _ = _metered_retry_setup(monkeypatch, allowed=False)
 
     with pytest.raises(UsageLimitExceededError, match="organization monthly"):
-        await service.retry_failed_run(
+        await service.retry(
             conversation_id=uuid4(),
             user_id=uuid4(),
             pod_id=uuid4(),
@@ -238,7 +238,7 @@ async def test_retry_failed_run_asks_usage_about_the_runtime_it_will_run_on(
     )
     user_id = conversation.user_id
 
-    await service.retry_failed_run(
+    await service.retry(
         conversation_id=conversation.id,
         user_id=user_id,
         pod_id=conversation.pod_id,
@@ -271,7 +271,7 @@ async def test_a_retry_on_a_model_that_is_gone_is_refused_before_a_run_exists(
     _authorize(monkeypatch, conversation)
 
     with pytest.raises(RuntimeUnavailableError):
-        await service.retry_failed_run(
+        await service.retry(
             conversation_id=conversation.id,
             user_id=conversation.user_id,
             pod_id=conversation.pod_id,

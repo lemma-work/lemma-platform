@@ -9,9 +9,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
-from app.modules.agent.services.pause_resume import PauseResume
 
-import app.modules.agent.services.conversation_stop as stops
+import app.modules.agent.application.turns.stop as stops
 from app.modules.agent.domain.value_objects import ConversationStatus
 import app.modules.agent.tools.waiting.pydantic_adapter as adapter
 from app.modules.agent.domain.wait import (
@@ -376,7 +375,7 @@ async def test_wait_for_clamps_an_over_long_request(suspend_harness):
 async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeypatch):
     """Stop on a snoozed conversation used to do nothing at all.
 
-    ``stop_conversation`` only acted when there was an active run, and a snoozed
+    ``StopConversation`` only acted when there was an active run, and a snoozed
     turn has none by construction — the run ended cleanly when the tool paused
     it. So Stop returned success, the conversation stayed WAITING, and the timer
     still fired later and resumed the agent the user had just stopped.
@@ -384,7 +383,6 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
 
     wait = _wait(external_ref=str(uuid4()), spec={"note_to_self": "post it"})
     appended: list[dict] = []
-    resumed: list[str] = []
     statuses: list[object] = []
 
     class _Waits:
@@ -418,19 +416,15 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
 
     conversations = _Conversations()
     service = wire_repositories(
-        stops.StopCoordinator(None, None, None, PauseResume(None, None)),
+        stops.StopConversation(None, agent_repository=None, supersede=None),
         conversations,
     )
 
-    async def _append(**kwargs):
+    async def _append(uow, **kwargs):
         appended.append(kwargs)
         return True
 
-    async def _resume(**kwargs):
-        resumed.append("resumed")
-
-    monkeypatch.setattr(service.pauses, "append_pause_tool_return", _append)
-    monkeypatch.setattr(service.pauses, "start_resume_run_if_ready", _resume)
+    monkeypatch.setattr(stops, "append_pause_tool_return", _append)
 
     conversation = SimpleNamespace(id=wait.conversation_id, status=None)
     await service._cancel_active_wait(conversation=conversation)
@@ -449,5 +443,6 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
     assert call["tool_result"]["woke_because"] == "CANCELLED"
     assert call["tool_result"]["success"] is False
 
-    # But the agent must not wake. That is the whole point of Stop.
-    assert resumed == []
+    # But the agent must not wake. That is the whole point of Stop: the use case
+    # writes the return with the bare primitive and has no resume to start.
+    assert not hasattr(stops, "ResumeRun")

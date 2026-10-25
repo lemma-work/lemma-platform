@@ -4,7 +4,10 @@ Implements `workflow`'s own `AgentPort`. Here rather than in a third package
 because every collaborator it uses -- the agent and conversation repositories,
 the wait store, the runtime profile default -- belongs to this module, and a
 build step that lives elsewhere has to know where inside `agent` each of them
-happens to sit.
+happens to sit. The two that are services rather than repositories -- stopping
+a run and the pod's default runtime -- are handed in by the contract that
+builds it (`contracts/workflow_control`), so infrastructure does not import the
+service layer.
 
 Values crossing the port are `object`, not `Any`: a workflow's node output is
 JSON whose shape belongs to the workflow's author, and saying `Any` would let a
@@ -14,6 +17,8 @@ caller read a key off it without the type checker asking.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable
+from typing import Protocol
 from uuid import UUID
 
 from app.modules.pod.contracts.agent_access import pod_organization_id
@@ -26,6 +31,7 @@ from app.modules.agent.contracts.turns import AgentTurnStart, stage_agent_turn
 from app.modules.agent.domain.project_repo import parse_project_repo
 from app.modules.agent.domain.run_state import RunState, ScheduleFiring
 from app.modules.agent.domain.value_objects import (
+    AgentRunFinishResult,
     ConversationOrigin,
     ConversationStatus,
     ConversationType,
@@ -44,10 +50,6 @@ from app.modules.agent.infrastructure.conversation_idempotency_store import (
 )
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
-)
-from app.modules.agent.services.run_stop import stop_run
-from app.modules.agent.services.pod_runtime_defaults import (
-    default_agent_runtime_for_pod,
 )
 from app.modules.workflow.contracts import AgentPort
 
@@ -86,9 +88,39 @@ def _schedule_firing(
     return ScheduleFiring.from_json(facts)
 
 
+class RunStopper(Protocol):
+    """Stops one run in the caller's transaction (``services/run_stop``)."""
+
+    def __call__(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        repository: Runs,
+        *,
+        pod_id: UUID,
+        conversation_id: UUID,
+        run_id: UUID,
+    ) -> Awaitable[AgentRunFinishResult | None]: ...
+
+
+class PodDefaultRuntime(Protocol):
+    """This module's default runtime for a pod (``services/pod_runtime_defaults``)."""
+
+    def __call__(
+        self, uow: SqlAlchemyUnitOfWork, *, pod_id: UUID
+    ) -> Awaitable[AgentRuntimeConfig]: ...
+
+
 class AgentControlAdapter(AgentPort):
-    def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+    def __init__(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        *,
+        stop_run: RunStopper,
+        default_runtime: PodDefaultRuntime,
+    ) -> None:
         self.uow = uow
+        self._stop_run = stop_run
+        self._default_runtime = default_runtime
         self.agent_repo = AgentRepository(uow)
         self.conversations = Conversations(uow)
         self.messages = Messages(uow)
@@ -325,7 +357,7 @@ class AgentControlAdapter(AgentPort):
     async def stop_conversation(self, conversation_id: UUID, user_id: UUID) -> None:
         """Ask the conversation's active run to stop.
 
-        Mirrors ConversationService.stop_conversation minus the access checks —
+        Mirrors ``StopConversation`` minus the access checks —
         the caller is the engine cancelling a run it already authorized, not a
         user reaching in. Nothing to stop is success, not an error: the agent
         may have finished between the cancel and this call.
@@ -334,7 +366,7 @@ class AgentControlAdapter(AgentPort):
         if active_run is None:
             return
         del user_id  # the engine already authorized the cancel
-        await stop_run(
+        await self._stop_run(
             self.uow,
             self.runs,
             pod_id=await self._conversation_pod(conversation_id),
@@ -355,7 +387,7 @@ class AgentControlAdapter(AgentPort):
         # `Pod.config` here directly is how a workflow-started run could
         # resolve a different default model than the same agent started from a
         # conversation.
-        return await default_agent_runtime_for_pod(self.uow, pod_id=pod_id)
+        return await self._default_runtime(self.uow, pod_id=pod_id)
 
     async def _get_pod_organization_id(self, pod_id: UUID) -> UUID | None:
         return await pod_organization_id(self.uow, pod_id)

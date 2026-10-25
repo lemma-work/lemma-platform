@@ -26,7 +26,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     MessageKind,
 )
-from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
+from app.modules.agent.application.conversations.read import ConversationReads
 
 pytestmark = pytest.mark.unit
 
@@ -86,14 +86,10 @@ async def test_the_oldest_unresolved_pause_is_a_typed_pending_pause() -> None:
             )
         ]
 
-    coordinator = ApprovalCoordinator.__new__(ApprovalCoordinator)
-    coordinator.pausing_calls = SimpleNamespace(
-        pausing_calls_awaiting_a_decision=_awaiting
-    )
+    reads = ConversationReads.__new__(ConversationReads)
+    reads.pausing_calls = SimpleNamespace(pausing_calls_awaiting_a_decision=_awaiting)
 
-    pause = await coordinator.oldest_unresolved_pause(
-        conversation_id=uuid4(), tool_names=PAUSING_TOOL_NAMES
-    )
+    pause = await reads.pending_user_interaction(conversation_id=uuid4())
 
     assert pause == PendingPause(
         tool_call_id="call-1",

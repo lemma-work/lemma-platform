@@ -67,14 +67,11 @@ from app.modules.agent.services.pod_link_guards import (
     still_stewards,
 )
 from app.modules.agent.infrastructure.db.conversations import Conversations
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-)
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.application.conversations.start import StartConversation
+from app.modules.agent.application.turns.send_message import SendMessage
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.identity.contracts.profiles import UserProfileRef, user_profile
 from app.modules.pod.contracts.members import pod_name
-from app.modules.usage.contracts.execution import build_usage_service
 
 if TYPE_CHECKING:
     from app.modules.agent.tools.context import BaseAgentContext
@@ -199,14 +196,6 @@ class PodAskService:
     def __init__(self, uow_factory: UnitOfWorkFactory):
         self.uow_factory = uow_factory
 
-    @staticmethod
-    def _conversation_service(uow: SqlAlchemyUnitOfWork) -> ConversationService:
-        return ConversationService(
-            uow=uow,
-            agent_repository=AgentRepository(uow),
-            usage_service=build_usage_service(uow),
-        )
-
     async def teammates(
         self, *, user_id: UUID | None, organization_id: UUID | None, pod_id: UUID
     ) -> list[Teammate]:
@@ -318,7 +307,7 @@ class PodAskService:
                     teammate=teammate,
                     instructions=instructions,
                 )
-                await self._conversation_service(uow).add_user_message_and_start_run(
+                await SendMessage.build(uow).send(
                     conversation_id=thread_id,
                     user_id=owner,
                     content=request.strip(),
@@ -436,7 +425,7 @@ class PodAskService:
             )
             await PodAskQueries(uow).set_ask(thread_id, kept)
             return thread_id
-        created = await self._conversation_service(uow).create_conversation(
+        created = await StartConversation.build(uow).start(
             pod_id=teammate.pod_id,
             agent_name=None,
             user_id=owner_user_id,

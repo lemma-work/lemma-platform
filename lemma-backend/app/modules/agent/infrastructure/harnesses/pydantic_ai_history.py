@@ -353,7 +353,7 @@ def _build_tool_batch(
         # Pausing tools are the exception: an unmatched `ask_user` /
         # `request_approval` / `wait_for` is not a failure, it is the marker that
         # the conversation is waiting on a human (see
-        # `services/pause_resume.PAUSING_TOOL_NAMES`, and the pending-approval
+        # `domain/pausing_tools.PAUSING_TOOL_NAMES`, and the pending-approval
         # detection that keys on exactly this shape). Synthesizing a failure
         # there would tell the model its question failed while the user is still
         # being asked it.

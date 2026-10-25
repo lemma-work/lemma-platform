@@ -1,14 +1,14 @@
-"""One fake standing in for every repository a conversation service reads.
+"""One fake standing in for every repository a conversation use case reads.
 
-The services build their repositories from the unit of work
+The use cases build their repositories from the unit of work
 (``infrastructure/db``), one per aggregate. A unit test that drives the real
-service with a hand-written fake points each of them at that fake, here, rather
+use case with a hand-written fake points each of them at that fake, here, rather
 than threading one object through every constructor.
 """
 
 from __future__ import annotations
 
-#: The attribute each repository is held under, on every service that holds one.
+#: The attribute each repository is held under, on every use case that holds one.
 REPOSITORY_ATTRIBUTES = (
     "conversations",
     "runs",
@@ -18,12 +18,20 @@ REPOSITORY_ATTRIBUTES = (
     "approval_decisions",
 )
 
-#: The coordinators a service holds, which hold repositories of their own.
-_COORDINATORS = ("pauses", "approvals", "queries", "turns", "retries", "stops")
+#: The use cases a use case is built with, which hold repositories of their own.
+_COORDINATORS = (
+    "admit",
+    "reads",
+    "start_conversation",
+    "supersede",
+    "resume",
+    "reconcile",
+    "resolve",
+)
 
 
 def wire_repositories[T](target: T, fake: object) -> T:
-    """Point every repository ``target`` and its coordinators hold at ``fake``."""
+    """Point every repository ``target`` and the use cases it holds at ``fake``."""
     seen: set[int] = set()
 
     def visit(holder: object) -> None:

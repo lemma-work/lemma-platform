@@ -47,8 +47,8 @@ from app.modules.agent.infrastructure.models.conversation import MessageModel
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.approval_action import approval_action
-from app.modules.agent.services.pause_supersession import SUPERSEDED_KEY
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.domain.approvals import SUPERSEDED_KEY
+from app.modules.agent.application.pauses.decide import DecidePause
 from app.modules.channels.contracts import (
     Asker,
     ChannelKind,
@@ -364,7 +364,7 @@ async def _close_stale(
         decided = decisions.get(calls.get(question.ref, ""))
         if decided is None or decided.response.get(SUPERSEDED_KEY) is True:
             # Nobody decided -- or the member wrote past it, which denies it
-            # for the run's sake (``pause_supersession``) but answers nothing:
+            # for the run's sake (``SupersedeStalePauses``) but answers nothing:
             # the line was not answered, it stopped waiting.
             await channel_questions.close(
                 uow, message_id=question.message_id, state=QuestionState.CANCELLED
@@ -543,7 +543,7 @@ async def answer_tool(answering: Answering) -> Mapping[str, object] | None:
         )
         token = set_current_context(context)
         try:
-            await build_conversation_service(uow).resolve_user_approval(
+            await DecidePause.build(uow).decide(
                 conversation_id=conversation_id,
                 approval_id=tool_call_id,
                 user_id=user_id,

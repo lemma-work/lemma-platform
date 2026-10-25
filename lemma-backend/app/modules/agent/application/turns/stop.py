@@ -3,9 +3,6 @@
 Stop is the start of a turn in reverse, and the asymmetry is deliberate: a stop
 closes any pause the run was sitting on, but never starts the resume run that
 closing a pause normally triggers. Stop means stop.
-
-Split from `TurnCoordinator`, which still answers `stop_conversation`: the two
-share the lock and the pause machinery, but each is a file's worth of rules.
 """
 
 from __future__ import annotations
@@ -15,6 +12,7 @@ from uuid import UUID
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter
+from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pausing_tools import (
     USER_PAUSING_TOOL_NAMES,
@@ -23,6 +21,7 @@ from app.modules.agent.domain.pausing_tools import (
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.value_objects import ConversationStatus
 from app.modules.agent.domain.wait import AgentWaitWakeReason
+from app.modules.agent.infrastructure import repositories
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.pauses import Pauses
@@ -35,8 +34,7 @@ from app.modules.agent.services.conversation_access import (
     resolve_expected_agent_id,
     validate_conversation_access,
 )
-from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
-from app.modules.agent.services.pause_resume import PauseResume
+from app.modules.agent.services.pause_resume import append_pause_tool_return
 from app.modules.agent.services.realtime import (
     message_payload,
     publish_conversation_event,
@@ -50,15 +48,15 @@ from app.modules.agent.tools.waiting.models import (
 )
 
 
-class StopCoordinator:
+class StopConversation:
     """Stops the run in flight, or the pause a conversation is sitting on."""
 
     def __init__(
         self,
         uow: SqlAlchemyUnitOfWork,
+        *,
         agent_repository: AgentRepository,
-        approvals: ApprovalCoordinator,
-        pauses: PauseResume,
+        supersede: SupersedeStalePauses,
     ) -> None:
         self.uow = uow
         self.conversations = Conversations(uow)
@@ -66,10 +64,17 @@ class StopCoordinator:
         self.messages = Messages(uow)
         self.pausing_calls = Pauses(uow)
         self.agent_repository = agent_repository
-        self.approvals = approvals
-        self.pauses = pauses
+        self.supersede = supersede
 
-    async def stop_conversation(
+    @classmethod
+    def build(cls, uow: SqlAlchemyUnitOfWork) -> StopConversation:
+        return cls(
+            uow,
+            agent_repository=repositories.AgentRepository(uow),
+            supersede=SupersedeStalePauses.build(uow),
+        )
+
+    async def stop(
         self,
         *,
         conversation_id: UUID,
@@ -77,6 +82,7 @@ class StopCoordinator:
         pod_id: UUID,
         agent_name: str | None = None,
     ) -> Conversation:
+        """Stop the run in flight, closing whatever pause it was sitting on."""
         expected_agent_id = await resolve_expected_agent_id(
             self.agent_repository,
             pod_id=pod_id,
@@ -97,7 +103,7 @@ class StopCoordinator:
         active_run = await self.runs.get_active_agent_run_for_update(conversation.id)
         if active_run is not None:
             # What is said from here on is owed an answer once the run has
-            # stopped; what was said before it is not (`start_queued_followup`).
+            # stopped; what was said before it is not (`StartQueuedFollowUp`).
             said_before_stop = await self.messages.latest_message_sequence(
                 conversation.id
             )
@@ -128,7 +134,7 @@ class StopCoordinator:
     @property
     def wait_repository(self) -> AgentConversationWaitRepository:
         # Built on demand rather than in __init__: the repository binds a session
-        # eagerly, and plenty of callers construct this service without a real
+        # eagerly, and plenty of callers construct this use case without a real
         # unit of work to exercise paths that never touch the database.
         return AgentConversationWaitRepository(self.uow)
 
@@ -143,8 +149,8 @@ class StopCoordinator:
         The CANCELLED tool return is still written, so the paused call is not
         left dangling in history — a tool call with no return is dropped when
         history is rebuilt, and the model would see a turn that ends mid-thought.
-        What is deliberately skipped is ``start_resume_run_if_ready``: Stop means
-        the agent does not wake.
+        What is deliberately skipped is the resume run (``ResumeRun``): Stop
+        means the agent does not wake.
         """
         active = await self.wait_repository.find_active_for_conversation(
             conversation.id
@@ -170,7 +176,10 @@ class StopCoordinator:
             status=ConversationStatus.STOPPED,
         )
         conversation.status = ConversationStatus.STOPPED
-        await self.pauses.append_pause_tool_return(
+        await append_pause_tool_return(
+            self.uow,
+            pausing_calls=self.pausing_calls,
+            messages=self.messages,
             conversation=conversation,
             paused_run_id=wait.agent_run_id,
             tool_call_id=wait.tool_call_id,
@@ -193,12 +202,11 @@ class StopCoordinator:
         nothing and Stop returned the conversation untouched, on the one state
         where someone most wants to abandon a turn.
 
-        DENY, never approve, for the reason
-        ``supersede_stale_pending_interactions`` gives: this is a response
-        synthesized on the user's behalf, not a decision they made. And, as with
-        a wait, no resume run follows.
+        DENY, never approve, for the reason ``SupersedeStalePauses`` gives:
+        this is a response synthesized on the user's behalf, not a decision
+        they made. And, as with a wait, no resume run follows.
         """
-        superseded = await self.approvals.supersede_stale_pending_interactions(
+        superseded = await self.supersede.supersede(
             conversation=conversation,
             user_id=user_id,
         )
@@ -213,7 +221,7 @@ class StopCoordinator:
 
         # Published after the commit, not inside it: these are live UI frames
         # and sending them from here would hold a pooled connection across a
-        # Redis round trip. Same arrangement as `start`.
+        # Redis round trip. Same arrangement as `AdmitMessage`.
         frames = [
             message_payload(item.agent_run_id, message_to_payload(item))
             for item in superseded
@@ -234,7 +242,7 @@ class StopCoordinator:
         Superseding only closes pauses nobody decided. One the person approved
         is running its tool in a worker, which cannot be taken back -- but when
         it finishes it would start the resume run, and the agent would carry on
-        after Stop. STOPPED is what `start_resume_run_if_ready` refuses on.
+        after Stop. STOPPED is what ``ResumeRun`` refuses on.
         """
         in_flight = await self.pausing_calls.pausing_calls_decided_awaiting_a_return(
             conversation_id=conversation.id,

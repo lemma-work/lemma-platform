@@ -1679,14 +1679,12 @@ class TestPodAgentLifecycle:
         # The initial approval already ran the command once, for real (mocked).
         assert executed_calls == [{"tool_name": "exec_command", "args": approved_args}]
 
-        from app.modules.agent.api.controllers.conversation_controller import (
-            _build_conversation_service,
-        )
+        from app.modules.agent.infrastructure.repositories import AgentRepository
 
         async with create_uow_from_session_maker(async_session_maker) as uow:
             conversation = await Conversations(uow).get_conversation(conversation_id)
-            service = _build_conversation_service(uow)
-            live_deps = await service.resume_returns._build_resume_context(
+            builder = ResumeToolReturnBuilder(uow, AgentRepository(uow))
+            live_deps = await builder._build_resume_context(
                 conversation=conversation,
                 user_id=UUID(fixed_test_user["id"]),
                 agent_run_id=paused_run.id,

@@ -1,7 +1,7 @@
 """What a chat surface does to a conversation, as operations rather than a service.
 
 The last thing `app/composition/surface_agent.py` existed to hand over was a
-`ConversationService`, and handing one over is what let a delivery surface reach
+conversation service, and handing one over is what let a delivery surface reach
 a repository in another module. Twenty call sites in `agent_surfaces` went
 through it, and most of them were not method calls at all -- they read a
 collaborator *off* the service (`conversation_repository`, `agent_repository`,
@@ -10,7 +10,9 @@ collaborator *off* the service (`conversation_repository`, `agent_repository`,
 
 Twelve operations replace it. Two of the six collaborators turned out to be
 dead weight -- nothing ever read `authorization_service` or
-`fallback_model_name` -- and are gone from `ConversationService` altogether.
+`fallback_model_name` -- and are gone altogether. Each operation now runs the
+one use case it needs (``application``), built from the unit of work it is
+handed.
 
 Every operation takes the unit of work rather than being handed a bound service,
 which is also what makes the worker's two modes disappear from the caller: the
@@ -25,7 +27,7 @@ listing, so the only agent lookup published here is the one that needs an
 agent's *kind* to decide what a person should be shown it is called.
 
 A submodule rather than `contracts/__init__`, which is a leaf: these reach the
-service and repository layers, and everything importing any agent contract would
+use cases and repositories, and everything importing any agent contract would
 otherwise pay for it.
 """
 
@@ -41,7 +43,14 @@ from sqlalchemy import select
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.application.conversations.read import ConversationReads
+from app.modules.agent.application.conversations.start import (
+    StartConversation,
+    authorize_opening,
+)
+from app.modules.agent.application.pauses.resolve import ResolvePause
+from app.modules.agent.application.turns.retry import RetryFailedRun
+from app.modules.agent.application.turns.send_message import SendMessage
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.approvals import ApprovalResolution
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
@@ -66,11 +75,9 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
-from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.usage.contracts.execution import build_usage_service
 
 #: The pausing kind a surface renders as a decision rather than as a question.
-#: Named here rather than imported from `pause_resume` so the published surface
+#: Named here rather than imported from `pausing_tools` so the published surface
 #: says which kinds a caller may see, and so a new internal pausing tool does
 #: not silently widen it.
 _REQUEST_APPROVAL = "request_approval"
@@ -137,15 +144,6 @@ class SurfaceAgentIdentity:
     icon_url: str | None
 
 
-def _service(uow: SqlAlchemyUnitOfWork):
-    """The conversation service, from the module's own factory.
-
-    A plain factory despite its FastAPI ``Depends`` annotation -- calling it
-    directly is how the other non-request callers build the same service.
-    """
-    return build_conversation_service(uow)
-
-
 def _pending(pause: PendingPause | None) -> PendingInteraction | None:
     if pause is None:
         return None
@@ -209,8 +207,8 @@ async def authorize_surface_conversation(
     under a transaction-scoped lock checks here before taking the lock, and
     opens with ``require_execute_grant=False``.
     """
-    await _service(uow).authorize_opening(
-        pod_id=pod_id, agent_name=agent_name, user_id=user_id
+    await authorize_opening(
+        AgentRepository(uow), pod_id=pod_id, agent_name=agent_name, user_id=user_id
     )
 
 
@@ -242,7 +240,7 @@ async def open_surface_conversation(
     knows whose it is -- an inbound message runs as the sender, a notification
     as nobody in particular.
     """
-    conversation = await _service(uow).create_conversation(
+    conversation = await StartConversation.build(uow).start(
         pod_id=pod_id,
         agent_name=agent_name,
         user_id=user_id,
@@ -272,7 +270,7 @@ async def start_surface_turn(
     arriving while one is already going is handed to that run rather than
     starting a second.
     """
-    result = await _service(uow).add_user_message_and_start_run(
+    result = await SendMessage.build(uow).send(
         conversation_id=conversation_id,
         user_id=user_id,
         content=content,
@@ -344,7 +342,7 @@ async def pending_interaction(
     :func:`pending_approval`.
     """
     return _pending(
-        await _service(uow).get_pending_user_interaction(
+        await ConversationReads.build(uow).pending_user_interaction(
             conversation_id=conversation_id
         )
     )
@@ -370,7 +368,9 @@ async def pending_question(
 ) -> PendingInteraction | None:
     """The oldest unresolved ``ask_user``, or ``None``."""
     return _pending(
-        await _service(uow).get_pending_ask_user(conversation_id=conversation_id)
+        await ConversationReads.build(uow).pending_ask_user(
+            conversation_id=conversation_id
+        )
     )
 
 
@@ -386,7 +386,9 @@ async def pending_approval(
     WAITING with nobody told.
     """
     return _pending(
-        await _service(uow).get_pending_approval(conversation_id=conversation_id)
+        await ConversationReads.build(uow).pending_approval(
+            conversation_id=conversation_id
+        )
     )
 
 
@@ -401,7 +403,9 @@ async def pending_sign_in(
     and the row and the pause drifted apart.
     """
     return _pending(
-        await _service(uow).get_pending_sign_in(conversation_id=conversation_id)
+        await ConversationReads.build(uow).pending_sign_in(
+            conversation_id=conversation_id
+        )
     )
 
 
@@ -430,8 +434,8 @@ async def resolve_pending_interaction(
     action never ran; ``status`` is ``"queued"`` when a worker job owns the
     rest, so "done" is not yet true either.
 
-    Skips the authorization the HTTP entry point does, exactly as the service
-    method it replaces did: a surface has already matched the person who tapped
+    Skips the authorization the HTTP entry point (``DecidePause``) does, exactly
+    as the service method it replaced did: a surface has already matched the person who tapped
     against the conversation's owner, and it is holding a webhook deadline while
     it does. An approved command outlives the webhook that approved it, so it
     is a worker's: the decision commits with its ``agent.approval.execute``
@@ -445,7 +449,7 @@ async def resolve_pending_interaction(
     entity = await Conversations(uow).get_conversation(conversation_id)
     if entity is None:
         return None
-    return await _service(uow).resolve_user_approval_internal(
+    return await ResolvePause.build(uow).resolve(
         conversation=entity,
         approval_id=approval_id,
         user_id=user_id,
@@ -473,18 +477,14 @@ async def retry_failed_run(
     Sets the owner's authorization context for the duration, because the retry
     re-authorizes the conversation it is restarting and the surface that asked
     for it is not running as anybody. This is the whole of what
-    `agent_surfaces` used to build a second `ConversationService` for.
+    `agent_surfaces` used to build a second conversation service for.
     """
     auth_ctx = await create_authorization_data_service(uow).build_user_context(
         user_id=user_id, pod_id=pod_id
     )
     token = set_current_context(auth_ctx)
     try:
-        await ConversationService(
-            uow=uow,
-            agent_repository=AgentRepository(uow),
-            usage_service=build_usage_service(uow),
-        ).retry_failed_run(
+        await RetryFailedRun.build(uow).retry(
             conversation_id=conversation_id,
             user_id=user_id,
             pod_id=pod_id,

@@ -1,8 +1,9 @@
-"""Building the agent module's two application services from a unit of work.
+"""Building the agent service from a unit of work.
 
-The API binds these as FastAPI dependencies (``api/dependencies``) and the
-contracts build them for callers in other modules. Here, below both, so a
-contract never reaches into the API layer for a constructor.
+The API binds it as a FastAPI dependency (``api/dependencies``) and the
+contracts build it for callers in other modules. Here, below both, so a
+contract never reaches into the API layer for a constructor. The conversation
+use cases build themselves (``application``: each has a ``build(uow)``).
 """
 
 from __future__ import annotations
@@ -13,16 +14,6 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
 from app.modules.agent.services.agent_service import AgentService
-from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.usage.contracts.execution import build_usage_service
-
-
-def build_conversation_service(uow: SqlAlchemyUnitOfWork) -> ConversationService:
-    return ConversationService(
-        uow=uow,
-        agent_repository=AgentRepository(uow),
-        usage_service=build_usage_service(uow),
-    )
 
 
 def build_agent_service(uow: SqlAlchemyUnitOfWork) -> AgentService:

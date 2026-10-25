@@ -351,7 +351,7 @@ async def _carried_in(
     began = run
     for _ in range(_RETRIES_FOLLOWED):
         # What a run answers when that is stored elsewhere: the failed run a
-        # retry replaces (``conversation_retry_service``), and the pausing call
+        # retry replaces (``RetryFailedRun``), and the pausing call
         # a resumed run picks up from (``pause_resume``).
         failed_id = began.state.retried_run_id
         failed = await runs.get_agent_run(failed_id) if failed_id else None

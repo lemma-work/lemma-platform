@@ -79,7 +79,7 @@ from app.modules.agent.services.realtime import (
     conversation_channel,
     run_ending_payload,
 )
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.application.conversations.read import ConversationReads
 
 logger = get_logger(__name__)
 
@@ -161,18 +161,23 @@ async def _authorize(
             )
             async with context_scope(ctx):
                 assert_pod_membership(ctx, "use conversations in this pod")
-                service = build_conversation_service(uow)
-                await service.queries.get_conversation(
-                    conversation_id=conversation_id, user_id=user_id, pod_id=pod_id
-                )
+                reads = ConversationReads.build(uow)
                 if run_id is None:
-                    return await service.queries.get_active_agent_run(
+                    await reads.get_conversation(
+                        conversation_id=conversation_id, user_id=user_id, pod_id=pod_id
+                    )
+                    return await reads.get_active_agent_run(
                         conversation_id=conversation_id,
                         user_id=user_id,
                         pod_id=pod_id,
                     )
-                run = await service.runs.get_agent_run(run_id)
-                if run is None or run.conversation_id != conversation_id:
+                run = await reads.get_agent_run(
+                    conversation_id=conversation_id,
+                    agent_run_id=run_id,
+                    user_id=user_id,
+                    pod_id=pod_id,
+                )
+                if run is None:
                     raise LiveAccessDenied(LiveErrorCode.NOT_FOUND, "Run not found")
                 return run
         except (AgentNotFoundError, ConversationNotFoundError) as missing:

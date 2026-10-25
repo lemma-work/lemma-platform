@@ -68,7 +68,7 @@ from app.modules.agent.services.channel_background import (
     with_channel_background,
 )
 from app.modules.agent.services.contact_run_failures import RUN_FAILED_REASON
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services import channel_answers
 from app.modules.agent.services.message_reply_service import REPLY_SOURCE
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.services.runtime_history import (
@@ -77,12 +77,12 @@ from app.modules.agent.services.runtime_history import (
 )
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
-    conversation_service,
     messages,
     owner_uow,
     running_run,
     runs,
     seeded_conversation,
+    stop_conversation,
 )
 from app.modules.channels.contracts import (
     AgentAnswers,
@@ -419,12 +419,12 @@ async def test_a_run_that_did_not_answer_says_so_where_it_was_asked(
 async def test_a_line_refused_before_its_run_starts_says_why(
     pod: Pod, monkeypatch: pytest.MonkeyPatch
 ):
-    async def refuse(self, **_):
+    async def refuse(_agent_repository, **_):
         raise DomainError(
             "You don't have access to this agent.", code="FORBIDDEN", status_code=403
         )
 
-    monkeypatch.setattr(ConversationService, "authorize_opening", refuse)
+    monkeypatch.setattr(channel_answers, "authorize_opening", refuse)
     pod_id, owner = UUID(pod.id), UUID(pod.owner["id"])
     direct = await _direct(pod_id, owner)
     asked = await _says(direct, owner, "What is on today?")
@@ -621,7 +621,7 @@ async def test_a_line_after_a_stopped_request_is_answered_for_itself(pod: Pod):
         conversation_id=conversation_id,
     )
     async with owner_uow(stopper) as uow:
-        await conversation_service(uow).stop_conversation(
+        await stop_conversation(uow).stop(
             conversation_id=conversation_id, user_id=owner, pod_id=pod_id
         )
     await _drain(WorkClass.EVENTS)
