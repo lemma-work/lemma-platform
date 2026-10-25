@@ -109,6 +109,7 @@ def run_start_payload(
     carries_history: bool,
     resumed_tool_call_id: str | None = None,
     session_last_run_id: UUID | None = None,
+    session_seen_through: int | None = None,
 ) -> JsonObject:
     """Everything one dispatched run needs, and nothing it does not.
 
@@ -121,8 +122,9 @@ def run_start_payload(
     ``carries_history`` is set when the run is not even going to try to resume a
     provider session, so the prompt has to bring the conversation with it,
     ``resumed_tool_call_id`` names the pausing call this run exists to answer,
-    and ``session_last_run_id`` is the newest run whose prompt the session
-    being resumed holds. See :func:`turn_messages`.
+    ``session_last_run_id`` is the newest run whose prompt the session being
+    resumed holds, and ``session_seen_through`` the newest message of the
+    history that prompt was built from. See :func:`turn_messages`.
 
     Its destination is somebody's laptop, where the host keeps it in its own
     journal, so it carries the prompt and nothing else. It used to carry the
@@ -142,6 +144,7 @@ def run_start_payload(
                 resumed_tool_call_id=resumed_tool_call_id,
                 agent_run_id=agent_run_id,
                 session_last_run_id=session_last_run_id,
+                session_seen_through=session_seen_through,
             ),
             ctx=ctx,
             runtime_instructions=runtime_instructions,

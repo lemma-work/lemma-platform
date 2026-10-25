@@ -272,6 +272,7 @@ async def enqueue_run[DepsT: AgentContext](
     admission = _Admission(
         resume_session_id=session.session_id if session is not None else None,
         session_last_run_id=session.last_run_id if session is not None else None,
+        session_seen_through=getattr(session, "seen_through", None),
         harness_id=harness_id,
         host_id=host_id,
         steerable=steerable,
@@ -390,6 +391,7 @@ class _Admission:
 
     resume_session_id: str | None
     session_last_run_id: UUID | None
+    session_seen_through: int | None
     harness_id: UUID
     host_id: UUID
     steerable: bool
@@ -417,6 +419,7 @@ class _AdmittedRun:
     carried: frozenset[UUID]
     instructions_digest: str
     credential_expires_at: datetime | None
+    seen_through: int | None = None  # newest message of the prompt's history
 
 
 async def _admission_transaction(
@@ -445,6 +448,7 @@ async def _admission_transaction(
             conversation_id=admitted.run_spec.conversation_id,
             run_id=run_id,
             digest=admitted.instructions_digest,
+            seen_through=admitted.seen_through,
         )
         await run_resume.record_credential_expiry(
             uow, run_id=run_id, expires_at=admitted.credential_expires_at
@@ -512,6 +516,7 @@ async def _admit[DepsT: AgentContext](
         carries_history=resume_session_id is None,
         resumed_tool_call_id=admission.resumed_tool_call_id,
         session_last_run_id=admission.session_last_run_id,
+        session_seen_through=admission.session_seen_through,
     )
     prompt = json_object(payload.get("prompt"))
     mcp = await mcp_payload(
@@ -582,6 +587,7 @@ async def _admit[DepsT: AgentContext](
         carried=carried,
         instructions_digest=digest,
         credential_expires_at=token_expires_at(mcp),
+        seen_through=max((message.sequence for message in messages), default=None),
     )
     await _commit_admission(uow_factory, admitted)
     await poke_host(host_id)

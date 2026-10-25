@@ -22,6 +22,7 @@ def turn_messages(
     resumed_tool_call_id: str | None = None,
     agent_run_id: UUID | None = None,
     session_last_run_id: UUID | None = None,
+    session_seen_through: int | None = None,
 ) -> list[Message]:
     """The messages this prompt has to carry.
 
@@ -70,13 +71,18 @@ def turn_messages(
     }
     carried.update(
         message.id
-        for message in _written_since_the_session(ordered, session_last_run_id)
+        for message in _written_since_the_session(
+            ordered, session_last_run_id, seen_through=session_seen_through
+        )
     )
     return [message for message in ordered if message.id in carried]
 
 
 def _written_since_the_session(
-    ordered: Sequence[Message], last_run_id: UUID | None
+    ordered: Sequence[Message],
+    last_run_id: UUID | None,
+    *,
+    seen_through: int | None = None,
 ) -> list[Message]:
     """What the history carries in no run that the resumed session has not seen.
 
@@ -87,15 +93,22 @@ def _written_since_the_session(
     copy it frames; it keeps its side of it because the order is that
     history's.
 
-    New is what follows the start of ``last_run_id``, the newest run whose
-    prompt the session holds, because the history that run was sent stopped
-    where it began. A run that began with nothing of its own -- a follow-up, a
-    resume -- read on to its dispatch instead, and what was written between
-    that and its first message is taken as seen. With no such run known, or
-    one with nothing in the history -- older than every run it carries, or
-    silent -- all of it is sent: read twice is the smaller failure than never
-    read.
+    New is what follows ``seen_through``, the newest message of the history
+    the session's last landed prompt was built from, recorded at its dispatch.
+
+    A session bound before that was kept falls back to the start of
+    ``last_run_id``, the newest run whose prompt the session holds -- which
+    misses what a follow-up or resume (a run with nothing of its own at
+    dispatch) never carried, and is unknown once that run is collapsed out of
+    the history. With neither known, all of it is sent: read twice is the
+    smaller failure than never read.
     """
+    if seen_through is not None:
+        return [
+            message
+            for message in ordered
+            if message.agent_run_id is None and message.sequence > seen_through
+        ]
     began = min(
         (
             message.sequence

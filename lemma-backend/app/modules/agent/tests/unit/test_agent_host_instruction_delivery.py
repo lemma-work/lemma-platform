@@ -175,6 +175,39 @@ async def test_instructions_count_as_delivered_only_once_the_host_prompted(
     assert repository.stored["instructions_digest"] == "abc"
 
 
+@pytest.mark.anyio
+async def test_how_far_a_prompt_ran_is_recorded_only_once_it_landed(
+    repository: _Repository,
+) -> None:
+    """``seen_through`` rides the same promise as the instructions: kept
+    pending at dispatch, promoted only by a checkpoint that proves the prompt
+    landed, and never taken from another run's."""
+    conversation_id, harness_id = uuid4(), uuid4()
+    other_run, dispatched_run = uuid7(), uuid7()
+    uow = TestASessionIdIsNotProofThePromptLanded._uow(conversation_id, harness_id)
+
+    await memory.record_pending_instructions(
+        uow,
+        conversation_id=conversation_id,
+        run_id=dispatched_run,
+        digest="abc",
+        seen_through=41,
+    )
+    await memory.remember_provider_session(
+        uow, _checkpoint(dispatched_run, "sess-1", AgentHostRunState.FAILED)
+    )
+    assert "prompted_through" not in repository.stored
+
+    await memory.remember_provider_session(uow, _checkpoint(other_run, "sess-1"))
+    assert "prompted_through" not in repository.stored
+    assert repository.stored["pending_prompt"]["seen_through"] == 41
+
+    await memory.remember_provider_session(uow, _checkpoint(dispatched_run, "sess-1"))
+    assert repository.stored["prompted_through"] == 41
+    assert repository.stored["prompted_run_id"] == str(dispatched_run)
+    assert "pending_prompt" not in repository.stored
+
+
 class TestASessionIdIsNotProofThePromptLanded:
     """The host writes `provider_session_id` in `before_prompt` -- *before*
     `session/prompt` is sent -- and the journal then attaches it to every

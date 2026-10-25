@@ -53,6 +53,7 @@ async def _prompt(
     run: AgentRun,
     *,
     last_seen: UUID | None,
+    seen_through: int | None = None,
     carries_history: bool = False,
 ) -> str:
     """The prompt ``run`` is dispatched with, to a session whose newest run
@@ -74,6 +75,7 @@ async def _prompt(
         runtime_instructions="",
         carries_history=carries_history,
         session_last_run_id=last_seen,
+        session_seen_through=seen_through,
     )
     return str(payload["prompt"]["user_prompt"])
 
@@ -239,3 +241,44 @@ async def test_a_session_that_cannot_resume_is_told_it_all_once():
         "Send it.",
     ), prompt
     assert prompt.count("weekly report is ready") == 1
+
+
+async def test_what_came_between_a_followups_dispatch_and_its_first_word_goes_next():
+    """A follow-up has nothing of its own when it is dispatched, so where its
+    prompt's history ended is recorded then, not read later off its first
+    message. A reminder landing in between went with neither turn."""
+    chat = StoredConversation()
+    working = chat.turn("Refactor the parser.")
+    followup = chat.followup()
+    chat.said_meanwhile(working, "Keep the old API.", into=followup)
+    chat.answer(working, "Parser refactored.")
+    dispatched = await chat.history_for(followup)
+    seen_through = max(message.sequence for message in dispatched)
+    chat.notified("Reminder: code freeze at six.")
+    chat.answer(followup, "Old API kept.")
+    current = chat.turn("Ship it.")
+
+    prompt = await _prompt(
+        chat, current, last_seen=followup.id, seen_through=seen_through
+    )
+
+    assert _in_order(prompt, "code freeze at six", "Ship it."), prompt
+    assert "Keep the old API." not in prompt
+
+
+async def test_a_last_prompt_collapsed_out_of_the_history_still_places_the_session():
+    """Its run's messages are gone from the history, so its start cannot be
+    read there; where its prompt ran to was recorded when it went out."""
+    chat = StoredConversation()
+    seen = chat.turn("Hi", "Hello.")
+    chat.notified("Your weekly report is ready.")
+    seen_through = max(message.sequence for message in chat.messages)
+    for index in range(8):
+        chat.turn(f"in-process question {index}", f"answer {index}")
+    chat.notified("Priya opened the report.")
+    current = chat.turn("Did she reply?")
+
+    prompt = await _prompt(chat, current, last_seen=seen.id, seen_through=seen_through)
+
+    assert "Priya opened" in prompt
+    assert "weekly report is ready" not in prompt
