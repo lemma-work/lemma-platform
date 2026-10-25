@@ -1,9 +1,8 @@
 """A tool call's ``extra_content`` goes back to the endpoint that sent it.
 
 Gemini 3's OpenAI-compatible endpoint puts a ``thought_signature`` in a tool
-call's ``extra_content`` and refuses the next request in the tool loop when the
-call comes back without it -- every Gemini 3 run with a tool call failed on its
-second model request. The gateway below is a stand-in for any endpoint that
+call's ``extra_content`` and refuses a request that sends the call back
+without it. The gateway below is a stand-in for any endpoint that
 does this; the payload inside ``extra_content`` is opaque to the code under
 test, so its shape here is only illustrative.
 """

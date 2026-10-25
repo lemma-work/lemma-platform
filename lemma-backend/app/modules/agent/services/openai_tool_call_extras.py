@@ -3,14 +3,18 @@
 An OpenAI-compatible endpoint may put an ``extra_content`` object on a tool call
 it returns and require that object back, unchanged, on the same call when the
 conversation is sent again. Gemini 3's endpoint does exactly that: each turn's
-first function call carries ``extra_content.google.thought_signature``, and the
-next request in the tool loop is refused without it::
+first function call carries ``extra_content.google.thought_signature`` -- the
+model's reasoning, sealed -- and a request that sends the call back without it
+is refused::
 
     400 Function call is missing a thought_signature in functionCall parts.
 
 pydantic-ai's chat model reads only the spec fields of a tool call, so the
-object was dropped on the way in and never sent back: every Gemini 3 run with a
-tool call failed on its second model request.
+object was dropped on the way in and never sent back. The harness escaped the
+400 only by accident: it ends every request with the run-context user message
+(``domain/run_context_prompt``), and Gemini checks signatures only after the
+latest user message. So each step went out without the model's reasoning from
+the step before, and any request ending on a tool result failed outright.
 
 Nothing here reads inside the object. It is carried on the ``ToolCallPart``'s
 ``provider_details`` together with the base URL it came from, and echoed only
