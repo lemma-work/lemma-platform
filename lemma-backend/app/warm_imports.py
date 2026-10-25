@@ -52,6 +52,8 @@ TURN_WARM_MODULES: tuple[str, ...] = (
     *WARM_MODULES,
     "app.modules.agent.services.agent_runner_service",
 )
+#: How long a stopping worker waits for a tokenizer warm-up it cancelled.
+_TOKENIZER_SHUTDOWN_WAIT_SECONDS = 2.0
 
 
 async def warm_lazy_imports() -> None:
@@ -96,7 +98,10 @@ async def warmed_for_turns() -> AsyncIterator[None]:
         tokenizer.cancel()
         # `wait` rather than `await`: a warm-up that failed has already been
         # logged by the task's done callback, and must not fail the shutdown.
-        await asyncio.wait({tokenizer})
+        # Bounded, because cancelling does not stop the thread the build runs
+        # in, and tiktoken's download has no timeout: a stalled fetch would
+        # otherwise hold the worker's shutdown open until it is killed.
+        await asyncio.wait({tokenizer}, timeout=_TOKENIZER_SHUTDOWN_WAIT_SECONDS)
 
 
 async def warm_tokenizer() -> None:

@@ -48,7 +48,16 @@ from app.core.infrastructure.work.config import work_settings
 from app.core.infrastructure.work.process import WorkerContext, register_worker_modules
 from app.core.registry.assembly import enter_worker_lifespans
 from app.modules.agent.module import module as agent
+import app.warm_imports as warm_imports
 
+
+# The real build may download the vocabulary, with no timeout; that the build is
+# scheduled is the whole claim here.
+async def _no_tokenizer_build():
+    return None
+
+
+warm_imports.warm_tokenizer = _no_tokenizer_build
 register_worker_modules([agent])
 WATCHED = {watched!r}
 
@@ -136,6 +145,7 @@ def test_a_worker_that_runs_turns_loads_them_before_it_claims_one() -> None:
         text=True,
         cwd=ROOT,
         check=False,
+        timeout=120,
     )
     assert completed.returncode == 0, completed.stderr[-3000:]
     boots = json.loads(completed.stdout.strip().splitlines()[-1])
