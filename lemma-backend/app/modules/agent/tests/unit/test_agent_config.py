@@ -56,6 +56,7 @@ EXPECTED = [
         60,
     ),
     ("agent_memory_after_turn", "AGENT_MEMORY_AFTER_TURN", True),
+    ("agent_memory_pass_model", "AGENT_MEMORY_PASS_MODEL", None),
     ("function_run_poll_interval_seconds", "FUNCTION_RUN_POLL_INTERVAL_SECONDS", 0.5),
     ("conversation_title_model", "CONVERSATION_TITLE_MODEL", None),
     ("vision_model", "VISION_MODEL", None),
