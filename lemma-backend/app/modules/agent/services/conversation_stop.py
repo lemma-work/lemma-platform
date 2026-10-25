@@ -21,7 +21,6 @@ from app.modules.agent.domain.pausing_tools import (
     WAIT_TOOL_NAME,
 )
 from app.modules.agent.domain.ports import AgentRepository
-from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
 from app.modules.agent.domain.value_objects import ConversationStatus
 from app.modules.agent.domain.wait import AgentWaitWakeReason
 from app.modules.agent.infrastructure.db.conversations import Conversations
@@ -110,7 +109,7 @@ class StopCoordinator:
                 pod_id=conversation.pod_id,
                 conversation_id=conversation.id,
                 run_id=active_run.id,
-                stamp={STOP_REQUESTED_AFTER_SEQUENCE: said_before_stop},
+                stop_requested_after_sequence=said_before_stop,
             )
             if finish_result is not None:
                 conversation.status = finish_result.conversation_status

@@ -10,25 +10,12 @@ has already finished, and nothing else would look there again.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from uuid import UUID
 
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 
-#: On a follow-up run: the finished runs still holding messages of the kind it
-#: did not answer, for the follow-up after it to find.
-LEFTOVERS_KEY = "queued_leftovers_behind"
-
-
-def leftover_sources(run_metadata: Mapping[str, object] | None) -> list[UUID]:
-    stored = (run_metadata or {}).get(LEFTOVERS_KEY)
-    found: list[UUID] = []
-    for value in stored if isinstance(stored, list | tuple) else ():
-        try:
-            found.append(UUID(str(value)))
-        except ValueError:
-            continue
-    return found
+# The finished runs still holding messages of the kind a follow-up did not
+# answer are its `queued_leftovers_behind`, for the follow-up after it to find.
 
 
 async def next_queue(
@@ -57,9 +44,9 @@ async def still_waiting(
     answering: UUID,
     notes: bool,
     after_sequence: int | None = None,
-) -> list[str]:
+) -> list[UUID]:
     """The sources that will still hold unanswered messages once this one is claimed."""
-    waiting: list[str] = []
+    waiting: list[UUID] = []
     for source in sources:
         left = await repository.count_queued_user_messages(
             source,
@@ -67,5 +54,5 @@ async def still_waiting(
             after_sequence=after_sequence,
         )
         if left:
-            waiting.append(str(source))
+            waiting.append(source)
     return waiting

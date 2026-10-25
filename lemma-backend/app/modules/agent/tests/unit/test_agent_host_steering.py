@@ -10,9 +10,11 @@ these pin the rules that decide it.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from uuid import uuid7
 
-from app.modules.agent.domain.queued_messages import is_queued, is_withdrawable
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.value_objects import QueueState
 from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
     SteerSchedule,
     supports_steering,
@@ -45,31 +47,38 @@ class TestWithdrawing:
     """Until something is carrying it, a queued message can be taken back."""
 
     def test_a_message_nobody_has_read_is_queued_and_withdrawable(self) -> None:
-        metadata = {"during_active_run": True}
-        assert is_queued(metadata)
-        assert is_withdrawable(metadata)
+        state = MessageState(queue_state=QueueState.QUEUED)
+        assert state.is_queued
+        assert state.is_withdrawable
 
     def test_a_delivered_message_is_neither(self) -> None:
-        metadata = {"during_active_run": True, "steered_into_run": str(uuid7())}
-        assert not is_queued(metadata)
-        assert not is_withdrawable(metadata)
+        state = MessageState(
+            queue_state=QueueState.STEERED, steered_into_run_id=uuid7()
+        )
+        assert not state.is_queued
+        assert not state.is_withdrawable
 
     def test_a_steer_on_its_way_to_the_host_cannot_be_taken_back(self) -> None:
         """It may already be in the agent's context."""
-        metadata = {"during_active_run": True, "steer_dispatched_at": "2026-09-26"}
-        assert is_queued(metadata)
-        assert not is_withdrawable(metadata)
+        state = MessageState(queue_state=QueueState.QUEUED, steer_dispatched_at=_NOW)
+        assert state.is_queued
+        assert not state.is_withdrawable
 
     def test_a_steer_the_host_could_not_land_is_merely_queued_again(self) -> None:
-        metadata = {
-            "during_active_run": True,
-            "steer_dispatched_at": "2026-09-26",
-            "steer_undelivered": "turn_ended",
-        }
-        assert is_queued(metadata)
-        assert is_withdrawable(metadata)
+        state = MessageState(
+            queue_state=QueueState.STEER_UNDELIVERED, steer_dispatched_at=_NOW
+        )
+        assert state.is_queued
+        assert state.is_withdrawable
+
+    def test_one_held_behind_a_question_is_still_owed_an_answer(self) -> None:
+        state = MessageState(queue_state=QueueState.WAITING_ON_ANSWER)
+        assert state.is_queued
+        assert state.is_withdrawable
 
     def test_a_message_that_started_its_own_turn_was_never_queued(self) -> None:
-        assert not is_queued({"during_active_run": False})
-        assert not is_queued(None)
-        assert not is_withdrawable({})
+        assert not MessageState().is_queued
+        assert not MessageState().is_withdrawable
+
+
+_NOW = datetime(2026, 9, 26, tzinfo=timezone.utc)

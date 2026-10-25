@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
 
 
@@ -53,7 +52,7 @@ async def run_reply_material(
         status=str(run.status),
         answer=_answer_text(run.output_data),
         error=run.error,
-        private=run_is_private(run.run_metadata),
+        private=bool(run.private_note),
     )
 
 

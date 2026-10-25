@@ -38,7 +38,7 @@ from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.value_objects import AgentToolset, RunTrigger
 from app.modules.agent.config import agent_settings
 from app.modules.agent.infrastructure.context_brief_repository import (
     AgentContextBriefRepository,
@@ -235,7 +235,7 @@ class AgentContextBriefBuilder:
         user_id: UUID,
         pod_id: UUID,
         toolsets: Collection[AgentToolset] = (),
-        run_source: str | None = None,
+        run_trigger: RunTrigger | None = None,
         platform: str | None = None,
     ) -> ContextBrief:
         # The pod default assistant runs with the user's permissions and sees the
@@ -271,7 +271,7 @@ class AgentContextBriefBuilder:
                     user_id=user_id,
                 )
             per_run = (
-                run_framing(conversation, run_source=run_source, platform=platform),
+                run_framing(conversation, run_trigger=run_trigger, platform=platform),
                 "\n".join(asks),
                 cached.files,
                 memory,

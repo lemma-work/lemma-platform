@@ -53,6 +53,7 @@ from app.modules.agent.domain.pausing_tools import (
     PendingPause,
 )
 from app.modules.agent.domain.private_notes import answers_lemma_message
+from app.modules.agent.domain.conversations import surface_origin
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     MessageDraft,
@@ -194,7 +195,7 @@ async def lemma_message_run_started_at(
     run from one that somebody in the chat has since written into.
     """
     run = await Runs(uow).get_latest_agent_run_for_conversation(conversation_id)
-    if run is None or not answers_lemma_message(run.metadata):
+    if run is None or not answers_lemma_message(run.state):
         return None
     return run.started_at
 
@@ -224,18 +225,18 @@ async def open_surface_conversation(
     require_execute_grant: bool = True,
     contact_id: UUID | None = None,
     channel_id: UUID | None = None,
+    for_notification: bool = False,
 ) -> SurfaceConversation:
     """Start the conversation behind a surface thread.
 
-    ``require_execute_grant=False`` is for a notification opening a thread the
-    *recipient* owns: they did not ask for it, so they are not being checked for
-    permission to run the agent that is writing to them. Every inbound path
-    leaves it on.
-
-    ``channel_id`` is the channel it works in (``channel_conversations``).
-    ``contact_id`` opens a contact's conversation -- in a private chat, a group
-    or a web page. ``user_id`` is then the member who looks after it, and every
-    run in it authorizes as that contact (see ``domain/outsiders``).
+    ``require_execute_grant=False`` is for a notification (``for_notification``)
+    opening a thread the *recipient* owns: they did not ask for it, so they are
+    not checked for permission to run the agent writing to them. Every inbound
+    path leaves it on. ``channel_id`` is the channel it works in
+    (``channel_conversations``). ``contact_id`` opens a contact's conversation
+    -- in a private chat, a group or a web page. ``user_id`` is then the member
+    who looks after it, and every run in it authorizes as that contact (see
+    ``domain/outsiders``).
 
     The caller sets the authorization context, because it is the caller that
     knows whose it is -- an inbound message runs as the sender, a notification
@@ -250,6 +251,7 @@ async def open_surface_conversation(
         require_execute_grant=require_execute_grant,
         contact_id=contact_id,
         channel_id=channel_id,
+        origin=surface_origin(contact_id=contact_id, for_notification=for_notification),
     )
     return _conversation(conversation)
 

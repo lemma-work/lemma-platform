@@ -4,25 +4,20 @@ Read twice for every turn: when it starts, to pick the work class it runs in
 (nobody watches a schedule's turn live, so it never queues ahead of a person's
 chat), and when it ends, to fill in the ``AgentRunFinished`` fact whose
 subscribers decide with a pure predicate whether the run is theirs. Both read
-the same stored keys, so a turn cannot start as one kind of run and finish as
-another.
+the same stored columns, so a turn cannot start as one kind of run and finish
+as another.
 
-Pure: a view over the conversation's metadata and parent link, nothing read.
+Pure: a view over the conversation's typed state, nothing read.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
 from app.core.origin import Origin, OriginKind
-from app.modules.agent.domain.conversation_metadata import ConversationMetadataFields
-from app.modules.agent.domain.pod_asks import ASK_KEY, ASKS_OUT_KEY
-from app.modules.agent.domain.subagent_results import (
-    SUBAGENTS_OUT_KEY,
-    reports_to_parent,
-)
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 #: The same vocabulary as ``contracts.run_facts`` (which validates it); spelled
 #: here so the domain does not import its module's contracts.
@@ -31,8 +26,6 @@ RunOriginName = Literal[
 ]
 ParentKind = Literal["workflow", "agent", "pod_ask"]
 
-#: ``source`` a schedule stamps on the conversation it opens.
-SCHEDULE_SOURCE = "SCHEDULE"
 #: Keys a surface binding stamps on a conversation it answers on.
 _SURFACE_KEYS = ("surface_platform", "surface_id")
 
@@ -51,49 +44,44 @@ class RunOrigin:
     settles_pod_asks: bool = False
 
 
-def run_origin(
-    *,
-    metadata: Mapping[str, object] | None,
-    parent_id: object | None,
-    conversation_id: object,
-) -> RunOrigin:
-    """The origin of a conversation with ``metadata`` and ``parent_id``.
+def run_origin(conversation: Conversation) -> RunOrigin:
+    """The origin of ``conversation``'s turns.
 
     Precedence follows who is *waiting*: a workflow step and a pod that asked
     both wait on the outcome, a sub-agent's parent may; a schedule only records
     it, a surface only gets the reply.
     """
-    stored: Mapping[str, object] = metadata or {}
-    fields = ConversationMetadataFields.of(stored)
+    stored = conversation.metadata or {}
     has_reply_target = any(stored.get(key) for key in _SURFACE_KEYS)
-    settles_subagents = bool(
-        (parent_id is not None and reports_to_parent(stored))
-        or stored.get(SUBAGENTS_OUT_KEY) is True
-    )
-    settles_pod_asks = bool(stored.get(ASK_KEY) or stored.get(ASKS_OUT_KEY))
+    owes_parent = conversation.parent_id is not None and conversation.reports_to_parent
     common = {
         "has_reply_target": has_reply_target,
-        "settles_subagents": settles_subagents,
-        "settles_pod_asks": settles_pod_asks,
+        "settles_subagents": owes_parent or conversation.delegations_out,
+        "settles_pod_asks": conversation.ask is not None
+        or conversation.delegations_out,
     }
-    if fields.workflow_run_id is not None:
+    origin = conversation.origin
+    if origin is ConversationOrigin.WORKFLOW_STEP:
         # A workflow's AGENT step waits on the conversation itself: its wait's
         # external ref is the conversation id.
         return RunOrigin(
             origin="workflow",
             parent_kind="workflow",
-            parent_ref=str(conversation_id),
+            parent_ref=str(conversation.id),
             **common,
         )
-    if stored.get(ASK_KEY):
+    if origin is ConversationOrigin.POD_ASK:
         return RunOrigin(
             origin="pod_ask", parent_kind="pod_ask", parent_ref=None, **common
         )
-    if parent_id is not None:
+    if origin is ConversationOrigin.SUBAGENT and conversation.parent_id is not None:
         return RunOrigin(
-            origin="subagent", parent_kind="agent", parent_ref=str(parent_id), **common
+            origin="subagent",
+            parent_kind="agent",
+            parent_ref=str(conversation.parent_id),
+            **common,
         )
-    if (fields.source or "").upper() == SCHEDULE_SOURCE:
+    if origin is ConversationOrigin.SCHEDULE:
         return RunOrigin(origin="schedule", **common)
     if has_reply_target:
         return RunOrigin(origin="surface", **common)
@@ -109,12 +97,7 @@ _SCHEDULE_TYPE_ORIGINS: dict[str, OriginKind] = {
 }
 
 
-def conversation_origin(
-    *,
-    metadata: Mapping[str, object] | None,
-    parent_id: object | None,
-    conversation_id: object,
-) -> Origin | None:
+def conversation_origin(conversation: Conversation) -> Origin | None:
     """How a turn's work arrived (``app.core.origin``), as far as its row can say.
 
     A turn runs as a work item, which starts with no origin bound: the request
@@ -124,10 +107,8 @@ def conversation_origin(
     a pod's ask say nothing about which client was used, so they answer
     ``None`` rather than a guess.
     """
-    stored: Mapping[str, object] = metadata or {}
-    kind = run_origin(
-        metadata=stored, parent_id=parent_id, conversation_id=conversation_id
-    ).origin
+    stored = conversation.metadata or {}
+    kind = run_origin(conversation).origin
     if kind == "workflow":
         return Origin(OriginKind.WORKFLOW)
     if kind == "schedule":
@@ -143,4 +124,4 @@ def conversation_origin(
     return None
 
 
-__all__ = ["RunOrigin", "SCHEDULE_SOURCE", "conversation_origin", "run_origin"]
+__all__ = ["RunOrigin", "conversation_origin", "run_origin"]

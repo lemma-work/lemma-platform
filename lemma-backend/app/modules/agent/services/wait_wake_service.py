@@ -34,6 +34,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter
 from app.core.log.log import get_logger
 from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
+from app.modules.agent.domain.value_objects import RunTrigger
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitStatus,
@@ -293,7 +294,7 @@ class AgentWaitService:
                 user_id=conversation.user_id,
                 pod_id=claimed.pod_id,
                 agent_name=None,
-                source="wait_resume",
+                trigger=RunTrigger.WAKE,
             )
         finally:
             reset_current_context(token)

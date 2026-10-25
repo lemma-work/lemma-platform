@@ -11,7 +11,6 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.private_notes import run_is_private
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.history_reads import HistoryReads
 from app.modules.agent.infrastructure.repositories import (
@@ -68,8 +67,9 @@ async def load_run_context(
                 run_id=agent_run.id,
                 read_channel=partial(with_channel_background, uow),
             )
-            if Audience.of(conversation).answers_outsiders and not run_is_private(
-                agent_run.metadata
+            if (
+                Audience.of(conversation).answers_outsiders
+                and not agent_run.state.private_note
             ):
                 messages = without_private_runs(
                     messages, runs, current_run_id=agent_run.id

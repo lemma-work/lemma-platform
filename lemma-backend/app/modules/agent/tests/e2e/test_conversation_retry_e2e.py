@@ -41,6 +41,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
 )
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.test_support.e2e_authz import auth_headers
+from app.modules.agent.domain.value_objects import RunTrigger
 
 pytestmark = [pytest.mark.e2e]
 
@@ -88,8 +89,8 @@ async def test_a_failed_run_that_said_nothing_is_run_again_without_a_second_mess
     (_, retried) = await runs(seeded.conversation_id)
     assert retried.id == retry_id
     assert retried.status == AgentRunStatus.RUNNING.value
-    assert retried.run_metadata["source"] == "manual_retry"
-    assert retried.run_metadata["retried_agent_run_id"] == str(failed)
+    assert retried.trigger is RunTrigger.RETRY
+    assert retried.retried_run_id == failed
     said = [
         m for m in await messages(seeded.conversation_id) if m.role is MessageRole.USER
     ]
@@ -178,7 +179,7 @@ async def test_a_retry_that_failed_too_can_be_retried_again(scenario) -> None:
     assert again.json()["agent_run_id"] == str(second_retry)
     assert again.json()["started_new_run"] is False
     (_, _, newest) = await runs(seeded.conversation_id)
-    assert newest.run_metadata["retried_agent_run_id"] == str(first_retry)
+    assert newest.retried_run_id == first_retry
     _, prompt = history_and_prompt(
         await messages(seeded.conversation_id), current_run_id=second_retry
     )

@@ -5,7 +5,7 @@ caller's turns as messages, hands work to sub-agents, and decides what the voice
 says and what the call's canvas shows. Its sub-agents are in the call too: they
 draw on the same canvas, and only the coordinator speaks.
 
-The mark is a key in the conversation's metadata, copied to every sub-agent the
+The mark is the conversation's ``call`` column, copied to every sub-agent the
 coordinator spawns, so a run knows it is in a call without a lookup.
 """
 
@@ -15,8 +15,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
-
-CALL_METADATA_KEY = "call"
 
 #: The tools whose results the call's canvas shows.
 CANVAS_TOOL_NAMES = frozenset({"display_resource"})
@@ -35,24 +33,24 @@ class CallMark:
     call_id: UUID
     role: CallRole
 
-    def as_metadata(self) -> dict[str, str]:
+    def to_json(self) -> dict[str, str]:
         return {"call_id": str(self.call_id), "role": self.role.value}
 
     def for_worker(self) -> CallMark:
         return CallMark(call_id=self.call_id, role=CallRole.WORKER)
 
-
-def call_mark(metadata: Mapping[str, object] | None) -> CallMark | None:
-    """The call a conversation belongs to, from its metadata, if any."""
-    raw = (metadata or {}).get(CALL_METADATA_KEY)
-    if not isinstance(raw, Mapping):
-        return None
-    try:
-        return CallMark(
-            call_id=UUID(str(raw.get("call_id"))), role=CallRole(str(raw.get("role")))
-        )
-    except ValueError:
-        return None
+    @classmethod
+    def from_json(cls, raw: object) -> CallMark | None:
+        """The mark stored as ``raw``, or ``None`` for anything that is not one."""
+        if not isinstance(raw, Mapping):
+            return None
+        try:
+            return cls(
+                call_id=UUID(str(raw.get("call_id"))),
+                role=CallRole(str(raw.get("role"))),
+            )
+        except ValueError:
+            return None
 
 
 def coordinator_brief(*, agent_display_name: str) -> str:

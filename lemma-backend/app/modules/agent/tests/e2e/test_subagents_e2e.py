@@ -349,7 +349,6 @@ async def _create_running_child(
             conversation_id=conversation_id,
             agent_id=agent_id,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "subagent_direct_e2e"},
         )
         await uow.commit()
     return conversation_id

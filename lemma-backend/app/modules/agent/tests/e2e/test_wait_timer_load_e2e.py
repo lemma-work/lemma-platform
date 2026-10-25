@@ -90,7 +90,6 @@ async def _pause(conversation_id: UUID, pod_id: UUID, user_id: UUID) -> None:
             conversation_id=conversation_id,
             agent_id=None,
             agent_runtime=_RUNTIME,
-            metadata={"source": "e2e_wait_load"},
         )
         call = f"call-{uuid4().hex[:12]}"
         await messages.append_message(
@@ -213,9 +212,7 @@ async def test_a_thousand_timers_due_in_one_minute_fire_on_time(
         "FROM agent_conversation_waits WHERE status = 'COMPLETED') t"
     )
     assert isinstance(lateness, dict)
-    resumed = await _scalar(
-        "SELECT count(*) FROM agent_runs WHERE run_metadata->>'source' = 'wait_resume'"
-    )
+    resumed = await _scalar("SELECT count(*) FROM agent_runs WHERE trigger = 'WAKE'")
     dead = await _scalar("SELECT count(*) FROM work_items WHERE state = 'dead'")
     result = {
         "waits": total,

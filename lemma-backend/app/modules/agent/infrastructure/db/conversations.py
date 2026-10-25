@@ -1,8 +1,10 @@
 """Conversations: the row, its status and lock, the history list, the sub-agent tree.
 
-Also, transitionally, the generic key/value writes into a conversation's
-metadata JSON. Those are how several features and another module keep state
-that has no column yet; they move to typed columns in a later change.
+Also the targeted writes of the typed state that changes after creation -- the
+cwd recorded on a first run, the todo list, the delegation flag -- each one
+column, so a writer never overwrites what another is setting on the row. And,
+transitionally, the generic key/value writes into the metadata JSON that a chat
+surface and the Agent Host keep their state in until it has columns of its own.
 
 The conversation row lock and the status write are module functions because
 ``runs`` takes them too: a run starting or ending moves its conversation's
@@ -21,11 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.observability.product_metrics import record_conversation_started
+from app.modules.agent.domain.calls import CallMark
 from app.modules.agent.domain.conversation_metadata import surface_of
 from app.modules.agent.domain.entities import Conversation as ConversationEntity
 from app.modules.agent.domain.events import ConversationStartedEvent
 from app.modules.agent.domain.run_projections import ConversationOpeningTexts
-from app.modules.agent.domain.subagent_spawn import SPAWN_KEY
+from app.modules.agent.domain.todos import Todo, todos_from_json, todos_to_json
 from app.modules.agent.domain.value_objects import (
     ConversationAgentSelection,
     ConversationListCursor,
@@ -130,7 +133,7 @@ class Conversations(UnitOfWorkRepository):
         if model.parent_id is None:
             # Roots only: a child is a sub-agent's thread inside one the
             # person already started.
-            record_conversation_started(surface_of(conversation.metadata))
+            record_conversation_started(surface_of(conversation))
         return model.to_entity()
 
     async def update_conversation(
@@ -156,7 +159,10 @@ class Conversations(UnitOfWorkRepository):
         # own transaction (`runs.Runs.finish_agent_run`). An entity read before a
         # run ended and saved after -- a rename, an auto-title -- would write the
         # old RUNNING back over a finished conversation, and nothing would move
-        # it again.
+        # it again. Nor the typed state (`origin`, the sub-agent link, the ask,
+        # the location, the todos): set when the conversation opens, and moved
+        # after that only by the targeted writes below, so a stale copy saved
+        # here cannot undo one.
         model.conversation_metadata = conversation.metadata
         model.is_archived = conversation.is_archived
         await self.session.flush()
@@ -318,16 +324,15 @@ class Conversations(UnitOfWorkRepository):
     ) -> ConversationEntity | None:
         """The child one parent run already spawned for this exact task.
 
-        ``ix_agent_conv_parent`` narrows it to the parent's children, of which
-        there are few; the metadata comparison is over those.
+        ``ix_agent_conv_spawn_key`` answers it. The caller holds the parent's
+        lock, which is what keeps two identical spawns from both missing.
         """
-        metadata = ConversationModel.conversation_metadata
         model = await self.session.scalar(
             select(ConversationModel)
             .where(
                 ConversationModel.parent_id == parent_id,
-                metadata["parent_run_id"].astext == str(parent_run_id),
-                metadata[SPAWN_KEY].astext == spawn_key,
+                ConversationModel.parent_run_id == parent_run_id,
+                ConversationModel.spawn_key == spawn_key,
             )
             .order_by(ConversationModel.created_at)
             .limit(1)
@@ -345,6 +350,17 @@ class Conversations(UnitOfWorkRepository):
             )
         )
         return model.to_entity() if model is not None else None
+
+    async def set_parent_run(
+        self, conversation_id: UUID, parent_run_id: UUID | None
+    ) -> None:
+        """Record which parent run last gave a sub-agent work: the one that
+        may collect its result (``domain/subagent_results``)."""
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .values(parent_run_id=parent_run_id)
+        )
 
     async def set_spawn_call(self, conversation_id: UUID, spawn_call: str) -> None:
         """Record the call that spawned ``conversation_id``; unique per parent."""
@@ -421,6 +437,64 @@ class Conversations(UnitOfWorkRepository):
         )
         return {run.conversation_id: run for run in result.scalars()}
 
+    async def record_cwd(self, conversation_id: UUID, cwd: str) -> None:
+        """Write down the directory a conversation resolved to, if none is.
+
+        Conditional, so two first runs racing to record the same fallback
+        cannot overwrite a directory something else recorded meanwhile.
+        """
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .where(ConversationModel.cwd.is_(None))
+            .values(cwd=cwd)
+        )
+        await self.session.flush()
+
+    async def get_call(self, conversation_id: UUID) -> CallMark | None:
+        """The live call this conversation belongs to, if any."""
+        result = await self.session.execute(
+            select(ConversationModel.call).where(
+                ConversationModel.id == conversation_id
+            )
+        )
+        return CallMark.from_json(result.scalar_one_or_none())
+
+    async def set_call(self, conversation_id: UUID, mark: CallMark) -> None:
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .values(call=mark.to_json())
+        )
+        await self.session.flush()
+
+    async def mark_delegations_out(self, conversation_id: UUID) -> None:
+        """Record that this conversation has delegated: a run of it finishing
+        collects whatever results came back while it could not take them."""
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .where(ConversationModel.delegations_out.is_(False))
+            .values(delegations_out=True)
+        )
+        await self.session.flush()
+
+    async def get_todos(self, conversation_id: UUID) -> list[Todo]:
+        stored = await self.session.scalar(
+            select(ConversationModel.todos).where(
+                ConversationModel.id == conversation_id
+            )
+        )
+        return todos_from_json(stored)
+
+    async def set_todos(self, conversation_id: UUID, todos: list[Todo]) -> None:
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .values(todos=todos_to_json(todos))
+        )
+        await self.session.flush()
+
     async def get_conversation_metadata_key(
         self,
         conversation_id: UUID,
@@ -448,8 +522,8 @@ class Conversations(UnitOfWorkRepository):
     ) -> None:
         """Write a single metadata key without clobbering sibling keys.
 
-        Uses ``jsonb_set`` so concurrent writers touching other keys (e.g. the
-        ``is_sub_agent`` / ``surface_platform`` flags) are never overwritten.
+        Uses ``jsonb_set`` so concurrent writers touching other keys (e.g. a
+        surface's ``surface_held_replies`` record) are never overwritten.
 
         ``value`` must be bound with the ``JSONB`` type directly (``literal``,
         not ``cast(json.dumps(value), JSONB)``) — casting an already-serialized

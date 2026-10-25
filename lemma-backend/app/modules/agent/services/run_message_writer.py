@@ -27,6 +27,8 @@ from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
+    FINAL_ANSWER_KINDS,
+    AnswerKind,
     ConversationStatus,
     JsonObject,
     JsonValue,
@@ -76,16 +78,14 @@ def split_reasoning_drafts(draft: MessageDraft) -> list[MessageDraft]:
                     chunk.strip(),
                     role=draft.role,
                     metadata={
-                        # Never the answer, whatever the original claimed, and
-                        # marked so the row says why it is not a TEXT message.
-                        **{
-                            key: value
-                            for key, value in metadata.items()
-                            if key not in _ANSWER_ONLY_METADATA
-                        },
-                        "is_final_answer": False,
-                        "reclassified_inline_reasoning": True,
+                        key: value
+                        for key, value in metadata.items()
+                        if key not in _ANSWER_ONLY_METADATA
                     },
+                    # Never the answer, whatever the original claimed.
+                    state=draft.state.model_copy(
+                        update={"answer": AnswerKind.NOT_FINAL}
+                    ),
                 )
             )
         else:
@@ -95,10 +95,7 @@ def split_reasoning_drafts(draft: MessageDraft) -> list[MessageDraft]:
         drafts.append(draft.model_copy(update={"text": answer.strip()}))
 
     # Debug, not warning: on a model that always writes reasoning inline this
-    # fires every turn, and a warning per message is noise nobody reads. The
-    # durable signal is `reclassified_inline_reasoning` on the row above --
-    # queryable, permanent, and countable per model, which is what actually
-    # answers "has a provider started doing this to us".
+    # fires every turn, and a warning per message is noise nobody reads.
     logger.debug(
         "agent.run.inline_reasoning_reclassified.diagnostic",
         thought_count=sum(1 for one in drafts if one.kind is MessageKind.THINKING),
@@ -138,13 +135,15 @@ class RunMessageWriter:
         metadata: JsonObject = dict(draft.metadata or {})
         metadata.pop("author_user_id", None)
         metadata.pop("agent_run_id", None)
+        state = draft.state
         if (
             draft.role == MessageRole.ASSISTANT
             and draft.kind == MessageKind.TEXT
-            and "is_final_answer" not in metadata
+            and state.answer is None
         ):
-            metadata["is_final_answer"] = True
-        draft = draft.model_copy(update={"metadata": metadata})
+            # Nobody said it was not: assistant text is the answer.
+            state = state.model_copy(update={"answer": AnswerKind.FINAL})
+        draft = draft.model_copy(update={"metadata": metadata, "state": state})
 
         async with self.uow_factory() as uow:
             messages = Messages(uow)
@@ -243,7 +242,7 @@ class RunMessageWriter:
         """
         if draft.kind != MessageKind.TOOL_RETURN or not draft.tool_call_id:
             return None
-        if not (draft.metadata or {}).get("synthetic_tool_return"):
+        if not draft.state.synthetic_tool_return:
             return None
         return await repository.get_tool_return(
             conversation_id=conversation_id,
@@ -279,7 +278,8 @@ class RunMessageWriter:
         """What a run answered by ``answer`` hands back, by the rule for any answer."""
         draft = MessageDraft.of_text(
             answer.text or "",
-            metadata={**(answer.metadata or {}), "is_final_answer": True},
+            metadata=answer.metadata,
+            state=answer.state.model_copy(update={"answer": AnswerKind.FINAL}),
         )
         return self.output_data_from_event(
             AgentEvent(
@@ -297,16 +297,18 @@ class RunMessageWriter:
             return None
 
         metadata = data.metadata or {}
-        if metadata.get("is_final_answer") is False:
+        answer = data.state.answer
+        if answer is not None and answer not in FINAL_ANSWER_KINDS:
             return None
         is_assistant_text = (
             data.role == MessageRole.ASSISTANT and data.kind == MessageKind.TEXT
         )
-        if not metadata.get("is_final_answer") and not is_assistant_text:
+        is_final = answer in FINAL_ANSWER_KINDS
+        if not is_final and not is_assistant_text:
             return None
 
         structured_output = metadata.get("structured_output")
-        if metadata.get("is_final_answer") and structured_output is not None:
+        if is_final and structured_output is not None:
             return structured_output
         if structured_output is not None:
             if isinstance(structured_output, dict):

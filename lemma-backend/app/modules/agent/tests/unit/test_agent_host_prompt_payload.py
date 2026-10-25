@@ -46,6 +46,8 @@ from app.modules.agent.infrastructure.harnesses.remote_payload import (
     run_start_payload,
 )
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.value_objects import QueueState
 
 
 pytestmark = pytest.mark.asyncio
@@ -211,7 +213,7 @@ class TestWakingUp:
             MessageRole.USER,
             "Also do the patio booking.",
             paused,
-            {"during_active_run": True, "steered_into_run": str(resume)},
+            _steered_into(resume),
         )
         prompt = _user_prompt(
             carries_history=False,
@@ -241,12 +243,16 @@ def _in_run(
     role: str,
     text: str,
     run_id: UUID,
-    metadata: dict[str, object] | None = None,
+    state: MessageState | None = None,
 ) -> Message:
     message = _message(sequence, role, text)
     message.agent_run_id = run_id
-    message.metadata = metadata or {}
+    message.state = state or MessageState()
     return message
+
+
+def _steered_into(run_id: UUID) -> MessageState:
+    return MessageState(queue_state=QueueState.STEERED, steered_into_run_id=run_id)
 
 
 class TestQueuedMessages:
@@ -261,7 +267,7 @@ class TestQueuedMessages:
         -- whose session never saw the other two -- had no idea they existed.
         """
         working, followup = uuid7(), uuid7()
-        queued = {"during_active_run": True, "steered_into_run": str(followup)}
+        queued = _steered_into(followup)
         messages = [
             _in_run(1, MessageRole.USER, "Refactor the parser.", working),
             _in_run(2, MessageRole.USER, "Keep the old API.", working, queued),
@@ -290,7 +296,7 @@ class TestQueuedMessages:
                 MessageRole.USER,
                 "why does it fail?",
                 run,
-                {"during_active_run": True},
+                MessageState(queue_state=QueueState.QUEUED),
             ),
         ]
 

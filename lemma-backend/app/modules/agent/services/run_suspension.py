@@ -27,7 +27,6 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.pausing_tools import (
     ParkedSuspension,
-    parked_suspension_of,
 )
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.domain.wait import AgentConversationWaitEntity
@@ -91,4 +90,4 @@ async def run_suspended_while_parked(
     run = await Runs(uow).get_agent_run(agent_run_id)
     if run is None or run.status != AgentRunStatus.RUNNING:
         return None
-    return parked_suspension_of(run.metadata)
+    return run.state.suspended_while_parked

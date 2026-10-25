@@ -52,7 +52,9 @@ from app.modules.agent.domain.prompts import build_agent_instruction_parts
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import (
+    AnswerKind,
     AgentEvent,
     AgentEventType,
     HarnessKind,
@@ -497,10 +499,7 @@ class PydanticAIHarness:
             return None
 
         structured_output = to_json_value(output)
-        metadata: JsonObject = {
-            "is_final_answer": True,
-            "structured_output": structured_output,
-        }
+        metadata: JsonObject = {"structured_output": structured_output}
         if tool_name:
             metadata["tool_name"] = tool_name
             metadata["final_answer_tool_name"] = tool_name
@@ -525,7 +524,11 @@ class PydanticAIHarness:
         if not content_text:
             return None
 
-        return MessageDraft.of_text(content_text, metadata=metadata)
+        return MessageDraft.of_text(
+            content_text,
+            metadata=metadata,
+            state=MessageState(answer=AnswerKind.FINAL),
+        )
 
     def _final_answer_text(
         self,

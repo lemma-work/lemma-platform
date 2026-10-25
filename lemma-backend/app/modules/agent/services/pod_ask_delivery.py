@@ -23,7 +23,6 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.pod_asks import (
-    ASKS_OUT_KEY,
     AnswerOutcome,
     AskMode,
     DeliveredAnswer,
@@ -135,10 +134,7 @@ class PodAskDelivery:
             delivered += await self.deliver_owed(
                 asking_conversation_id=ask.from_conversation_id
             )
-        metadata = (
-            conversation.metadata if isinstance(conversation.metadata, dict) else {}
-        )
-        if metadata.get(ASKS_OUT_KEY) is True:
+        if conversation.delegations_out:
             delivered += await self.deliver_owed(asking_conversation_id=conversation.id)
         return delivered
 

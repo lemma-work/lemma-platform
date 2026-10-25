@@ -15,13 +15,13 @@ goes to the host the conversation's most recent host run chose
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_metadata import source_of
 from uuid import UUID
 
 from sqlalchemy import func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.domain.value_objects import RunTrigger
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
 
 #: The run-metadata key. Its value is ``{"target": "vm"}`` or ``{"target":
@@ -78,34 +78,6 @@ async def record_run_metadata_value(
     )
 
 
-async def claim_run_metadata_key(
-    uow: SqlAlchemyUnitOfWork, run_id: UUID, *, key: str, value: str
-) -> bool:
-    """Set ``key`` on the run's metadata if nobody has yet. True if this call did.
-
-    One ``UPDATE`` naming the key's absence, so of two racing claimers the
-    second waits on the first's row lock, re-reads it, and finds the key there.
-    """
-    claimed = await uow.session.execute(
-        update(AgentRunModel)
-        .where(
-            AgentRunModel.id == run_id,
-            ~func.coalesce(AgentRunModel.run_metadata, literal({}, JSONB)).has_key(key),
-        )
-        .values(
-            run_metadata=func.jsonb_set(
-                func.coalesce(AgentRunModel.run_metadata, literal({}, JSONB)),
-                array([key]),
-                literal(value, JSONB),
-                True,
-            )
-        )
-        .returning(AgentRunModel.id)
-        .execution_options(synchronize_session=False)
-    )
-    return claimed.scalar_one_or_none() is not None
-
-
 async def latest_host_execution(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> dict[str, object] | None:
@@ -129,15 +101,15 @@ async def latest_host_execution(
     return value if isinstance(value, dict) else None
 
 
-#: How far back ``earlier_run_sources`` looks. A chain of wait wakes longer
+#: How far back ``earlier_run_triggers`` looks. A chain of wait wakes longer
 #: than this is treated as having no person at its start.
 EARLIER_RUNS_LIMIT = 50
 
 
-async def earlier_run_sources(
+async def earlier_run_triggers(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID, run_id: UUID
-) -> list[str | None]:
-    """The ``source`` of each run started before ``run_id``, newest first.
+) -> list[RunTrigger]:
+    """What started each run before ``run_id``, newest first.
 
     What a continuation (a wait waking) continues is the work of the runs
     before it; host execution asks who started that work.
@@ -149,7 +121,7 @@ async def earlier_run_sources(
         return []
     rows = (
         await uow.session.execute(
-            select(AgentRunModel.run_metadata)
+            select(AgentRunModel.trigger)
             .where(
                 AgentRunModel.conversation_id == conversation_id,
                 AgentRunModel.id != run_id,
@@ -159,7 +131,4 @@ async def earlier_run_sources(
             .limit(EARLIER_RUNS_LIMIT)
         )
     ).scalars()
-    sources: list[str | None] = []
-    for metadata in rows:
-        sources.append(source_of(metadata))
-    return sources
+    return list(rows)

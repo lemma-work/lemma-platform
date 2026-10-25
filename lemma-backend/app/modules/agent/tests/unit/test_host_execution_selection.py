@@ -16,7 +16,12 @@ import pytest
 
 from sandbox_runtime.errors import SandboxRejected
 
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.value_objects import (
+    AgentRuntimeConfig,
+    ConversationOrigin,
+    RunTrigger,
+)
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.entities import AgentRun, Conversation
@@ -76,8 +81,8 @@ class Facts:
         self.opened: list[dict] = []
         self.records: dict[UUID, dict] = {}
         self.host_lookups: list[tuple[UUID, UUID | None]] = []
-        # Sources of the runs before the one being chosen for, newest first.
-        self.earlier: list[str | None] = ["user_message"]
+        # What started the runs before the one being chosen for, newest first.
+        self.earlier: list[RunTrigger] = [RunTrigger.MESSAGE]
 
     def build(self) -> HostExecutionFacts:
         async def usable_host(
@@ -100,13 +105,13 @@ class Facts:
                 sandbox_id=host_sandbox_id(kwargs["conversation_id"]), root=ROOT
             )
 
-        async def earlier_sources(
+        async def earlier_triggers(
             conversation_id: UUID, run_id: UUID
-        ) -> list[str | None]:
+        ) -> list[RunTrigger]:
             return self.earlier
 
         return HostExecutionFacts(
-            earlier_sources=earlier_sources,
+            earlier_triggers=earlier_triggers,
             is_desktop=lambda: self.desktop,
             usable_host=usable_host,
             open_workspace=open_workspace,
@@ -115,11 +120,19 @@ class Facts:
         )
 
 
-def _conversation(user_id: UUID = PAIRED, **metadata) -> Conversation:
+def _conversation(
+    user_id: UUID = PAIRED,
+    *,
+    origin: ConversationOrigin = ConversationOrigin.CHAT,
+    cwd: str = "/home/user/lemma/c/2026-09-25/abc12345",
+    **metadata,
+) -> Conversation:
     return Conversation(
         user_id=user_id,
         pod_id=uuid4(),
-        metadata={"cwd": "/home/user/lemma/c/2026-09-25/abc12345", **metadata},
+        origin=origin,
+        cwd=cwd,
+        metadata=metadata,
         created_at=datetime(2026, 9, 25, tzinfo=timezone.utc),
     )
 
@@ -127,12 +140,14 @@ def _conversation(user_id: UUID = PAIRED, **metadata) -> Conversation:
 _SYSTEM_RUNTIME = AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID)
 
 
-def _run(conversation: Conversation, source: str | None = "user_message") -> AgentRun:
+def _run(
+    conversation: Conversation, trigger: RunTrigger = RunTrigger.MESSAGE
+) -> AgentRun:
     return AgentRun(
         conversation_id=conversation.id,
         started_at=datetime.now(timezone.utc),
         agent_runtime=_SYSTEM_RUNTIME,
-        metadata={"source": source} if source else {},
+        state=RunState(trigger=trigger),
     )
 
 
@@ -140,14 +155,14 @@ async def _choose(
     facts: Facts,
     *,
     conversation: Conversation | None = None,
-    source: str | None = "user_message",
+    trigger: RunTrigger = RunTrigger.MESSAGE,
     user_id: UUID = PAIRED,
     run: AgentRun | None = None,
 ):
     conversation = conversation or _conversation()
     return await choose_host_workspace(
         conversation=conversation,
-        agent_run=run or _run(conversation, source),
+        agent_run=run or _run(conversation, trigger),
         user_id=user_id,
         facts=facts.build(),
     )
@@ -230,88 +245,102 @@ async def test_a_hosted_deployment_never_runs_on_a_host():
 
 
 @pytest.mark.parametrize(
-    ("source", "expected"),
+    ("trigger", "expected"),
     [
-        ("user_message", True),
-        ("queued_messages", True),
-        ("manual_retry", True),
-        ("approval_resume", True),
-        ("person", True),
-        ("subagent", False),
+        (RunTrigger.MESSAGE, True),
+        (RunTrigger.FOLLOW_UP, True),
+        (RunTrigger.RETRY, True),
+        (RunTrigger.RESUME, True),
         # A teammate's reply must not drive commands on the user's Mac.
-        ("message_replies", False),
-        (None, False),
-        ("something_new", False),
+        (RunTrigger.REPLIES, False),
+        (RunTrigger.SCHEDULE_FIRE, False),
+        (RunTrigger.WORKFLOW_START, False),
+        (RunTrigger.NOTIFICATION, False),
     ],
 )
-def test_which_run_sources_count_as_the_run_user(source, expected):
+def test_which_triggers_count_as_the_run_user(trigger, expected):
     conversation = _conversation()
-    assert triggered_by_run_user(conversation, _run(conversation, source)) is expected
+    assert triggered_by_run_user(conversation, _run(conversation, trigger)) is expected
+
+
+_WAKE, _MESSAGE = RunTrigger.WAKE, RunTrigger.MESSAGE
 
 
 @pytest.mark.parametrize(
     ("earlier", "expected"),
     [
-        (["user_message"], True),
+        ([_MESSAGE], True),
         # Wakes chain: the first run that is not a wake decides.
-        (["agent_wait", "wait_resume", "manual_retry"], True),
-        (["message_replies"], False),
-        (["agent_wait", "message_replies", "user_message"], False),
-        (["something_new"], False),
+        ([_WAKE, RunTrigger.DELEGATION_RESULT, RunTrigger.RETRY], True),
+        ([RunTrigger.REPLIES], False),
+        ([_WAKE, RunTrigger.REPLIES, _MESSAGE], False),
+        ([RunTrigger.WORKFLOW_START], False),
         ([], False),
-        (["agent_wait"], False),
+        ([_WAKE], False),
     ],
 )
-@pytest.mark.parametrize("source", ["agent_wait", "wait_resume"])
-def test_a_wake_qualifies_only_through_the_run_it_continues(source, earlier, expected):
+@pytest.mark.parametrize("trigger", [_WAKE, RunTrigger.DELEGATION_RESULT])
+def test_a_continuation_qualifies_only_through_the_run_it_continues(
+    trigger, earlier, expected
+):
     conversation = _conversation()
-    run = _run(conversation, source)
-    assert triggered_by_run_user(conversation, run, earlier_sources=earlier) is expected
-    # Without the earlier runs, a wake never qualifies.
+    run = _run(conversation, trigger)
+    assert (
+        triggered_by_run_user(conversation, run, earlier_triggers=earlier) is expected
+    )
+    # Without the earlier runs, a continuation never qualifies.
     assert not triggered_by_run_user(conversation, run)
 
 
 @pytest.mark.parametrize(
-    "metadata",
+    ("origin", "metadata"),
     [
-        {"source": "WORKFLOW_RUN", "workflow_run_id": str(uuid4())},
-        {"workflow_run_id": str(uuid4())},
-        {"source": "SCHEDULE", "started_by": "SCHEDULE"},
-        {"started_by": "SCHEDULE"},
-        {"source": "agent_surfaces"},
-        {"source": "notification"},
+        (ConversationOrigin.WORKFLOW_STEP, {}),
+        (ConversationOrigin.SCHEDULE, {}),
+        (ConversationOrigin.SURFACE, {"surface_platform": "SLACK"}),
+        (ConversationOrigin.NOTIFICATION, {"surface_platform": "SLACK"}),
+        (ConversationOrigin.CONTACT, {}),
+        (ConversationOrigin.POD_ASK, {}),
+        # The app opened it, and a platform has since bound it.
+        (ConversationOrigin.CHAT, {"surface_platform": "SLACK"}),
     ],
-    ids=["workflow", "workflow-id-only", "schedule", "started-by", "surface", "notice"],
+    ids=["workflow", "schedule", "surface", "notice", "contact", "pod-ask", "bound"],
 )
-@pytest.mark.parametrize("source", ["user_message", "agent_wait", "wait_resume"])
+@pytest.mark.parametrize("trigger", [_MESSAGE, _WAKE])
 async def test_a_conversation_something_else_opened_never_runs_on_the_host(
-    metadata, source
+    origin, metadata, trigger
 ):
     """A workflow's conversation waking from its wait, or a message typed into
     it, is still the workflow's: no run in it executes on the Mac."""
     facts = Facts()
-    conversation = _conversation(**metadata)
+    conversation = _conversation(origin=origin, **metadata)
 
-    assert await _choose(facts, conversation=conversation, source=source) is None
+    assert await _choose(facts, conversation=conversation, trigger=trigger) is None
     assert facts.opened == []
 
 
 async def test_a_wake_of_the_users_own_work_runs_on_their_mac():
     facts = Facts()
-    facts.earlier = ["agent_wait", "user_message"]
-    assert await _choose(facts, source="agent_wait") is not None
+    facts.earlier = [_WAKE, _MESSAGE]
+    assert await _choose(facts, trigger=_WAKE) is not None
 
 
 async def test_a_wake_of_a_teammates_reply_stays_in_the_vm():
     facts = Facts()
-    facts.earlier = ["message_replies", "user_message"]
-    assert await _choose(facts, source="agent_wait") is None
+    facts.earlier = [RunTrigger.REPLIES, _MESSAGE]
+    assert await _choose(facts, trigger=_WAKE) is None
     assert facts.opened == []
 
 
 def test_a_sub_agent_conversation_is_not_a_person_at_the_keyboard():
-    conversation = _conversation(is_sub_agent=True)
+    conversation = _conversation(origin=ConversationOrigin.SUBAGENT)
     assert not triggered_by_run_user(conversation, _run(conversation))
+
+
+def test_metadata_a_client_wrote_does_not_make_a_chat_unattended():
+    """The keys that used to stand for an origin are only tags now."""
+    conversation = _conversation(source="SCHEDULE", workflow_run_id=str(uuid4()))
+    assert triggered_by_run_user(conversation, _run(conversation))
 
 
 async def test_a_bound_folder_is_the_root_hint():
@@ -330,10 +359,10 @@ def test_a_conversation_without_a_dated_cwd_still_gets_a_folder():
 
 
 async def _native(
-    conversation: Conversation, facts: Facts, source: str | None = "user_message"
+    conversation: Conversation, facts: Facts, trigger: RunTrigger = RunTrigger.MESSAGE
 ) -> bool:
     return await host_runs_native_commands(
-        conversation, _run(conversation, source), facts=facts.build()
+        conversation, _run(conversation, trigger), facts=facts.build()
     )
 
 
@@ -345,29 +374,29 @@ async def test_agent_host_runs_drop_lemmas_command_tools_only_with_a_paired_host
 
 
 @pytest.mark.parametrize(
-    "metadata",
+    "origin",
     [
-        {"source": "workflow", "workflow_run_id": str(uuid4())},
-        {"source": "schedule"},
-        {"source": "surface", "surface_platform": "slack"},
+        ConversationOrigin.WORKFLOW_STEP,
+        ConversationOrigin.SCHEDULE,
+        ConversationOrigin.SURFACE,
     ],
 )
-async def test_an_unattended_agent_host_run_keeps_lemmas_command_tools(metadata):
+async def test_an_unattended_agent_host_run_keeps_lemmas_command_tools(origin):
     """The agent's own shell asks a person before every command, and nobody is
     watching a workflow or a schedule: withholding Lemma's tools, which run
     without asking, left such a run waiting out every approval."""
     facts = Facts()
 
-    assert not await _native(_conversation(**metadata), facts)
-    assert not await _native(_conversation(), facts, source="workflow")
+    assert not await _native(_conversation(origin=origin), facts)
+    assert not await _native(_conversation(), facts, trigger=RunTrigger.WORKFLOW_START)
 
 
 async def test_a_wake_keeps_whichever_toolset_the_work_it_continues_had():
     person, unattended = Facts(), Facts()
-    unattended.earlier = ["agent_wait", "workflow"]
+    unattended.earlier = [_WAKE, RunTrigger.WORKFLOW_START]
 
-    assert await _native(_conversation(), person, source="agent_wait")
-    assert not await _native(_conversation(), unattended, source="agent_wait")
+    assert await _native(_conversation(), person, trigger=_WAKE)
+    assert not await _native(_conversation(), unattended, trigger=_WAKE)
 
 
 @pytest.mark.parametrize(
@@ -526,7 +555,7 @@ def test_the_host_execution_runtime_names_the_shipped_lemma_cli():
 async def test_the_choice_is_recorded_on_the_run_either_way():
     facts = Facts()
     conversation = _conversation()
-    on_host, in_vm = _run(conversation), _run(conversation, "subagent")
+    on_host, in_vm = _run(conversation), _run(conversation, RunTrigger.REPLIES)
 
     await _choose(facts, conversation=conversation, run=on_host)
     await _choose(facts, conversation=conversation, run=in_vm)

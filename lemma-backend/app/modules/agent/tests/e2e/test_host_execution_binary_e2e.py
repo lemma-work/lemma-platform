@@ -189,7 +189,7 @@ def _conversation(user_id: UUID) -> Conversation:
     return Conversation(
         user_id=user_id,
         pod_id=uuid4(),
-        metadata={"cwd": "/home/user/lemma/c/2026-09-25/hostexec"},
+        cwd="/home/user/lemma/c/2026-09-25/hostexec",
         created_at=datetime(2026, 9, 25, tzinfo=timezone.utc),
     )
 

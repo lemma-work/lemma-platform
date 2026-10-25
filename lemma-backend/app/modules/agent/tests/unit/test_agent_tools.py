@@ -68,6 +68,8 @@ from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli import workspace_cli_toolset
 from app.modules.function.domain.entities import FunctionEntity, FunctionType
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from app.modules.agent.domain.todos import Todo
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 
 def _agent_run_with_messages(run_index: int, message_count: int = 5) -> AgentRun:
@@ -1032,7 +1034,7 @@ def test_workspace_agent_prompt_states_working_directory():
 def test_a_run_is_shown_the_task_list_it_is_supposed_to_be_ticking_off():
     """A plan written in turn one has to still be visible in turn five.
 
-    The list lives in conversation metadata; the only place a later run could
+    The list lives on the conversation row; the only place a later run could
     have seen it was the `write_todos` tool return, an old message that history
     trimming eventually drops. An agent that cannot see its own checklist cannot
     check anything off it -- which is how a plan gets written once and never
@@ -1042,12 +1044,10 @@ def test_a_run_is_shown_the_task_list_it_is_supposed_to_be_ticking_off():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={
-            "todos": [
-                {"content": "Fetch the Q3 report", "done": True},
-                {"content": "Summarize findings", "done": False},
-            ]
-        },
+        todos=[
+            Todo(content="Fetch the Q3 report", done=True),
+            Todo(content="Summarize findings", done=False),
+        ],
     )
 
     section = task_list_section(conversation, toolsets=[AgentToolset.TODO])
@@ -1068,7 +1068,7 @@ def test_a_named_agent_that_never_declared_todo_is_still_shown_its_list():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
+        todos=[Todo(content="Fetch the Q3 report")],
     )
     agent = Agent(
         pod_id=conversation.pod_id,
@@ -1092,7 +1092,7 @@ def test_the_task_list_is_never_in_the_system_prompt():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
+        todos=[Todo(content="Fetch the Q3 report")],
     )
     agent = Agent(
         pod_id=conversation.pod_id,
@@ -1125,7 +1125,7 @@ def test_an_agent_without_the_todo_toolset_is_never_shown_a_task_list():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": "Fetch the Q3 report", "done": False}]},
+        todos=[Todo(content="Fetch the Q3 report")],
     )
 
     assert task_list_section(conversation, toolsets=[AgentToolset.WORKSPACE_CLI]) == ""
@@ -1137,7 +1137,7 @@ def test_a_finished_plan_is_shown_as_history_rather_than_as_work():
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": "Ship it", "done": True}]},
+        todos=[Todo(content="Ship it", done=True)],
     )
 
     section = task_list_section(conversation, toolsets=[AgentToolset.TODO])
@@ -1642,9 +1642,9 @@ async def test_agent_tool_timeout_returns_handle_dict_even_no_output_schema(
 
 @pytest.mark.asyncio
 async def test_sub_agent_conversation_excludes_subagents_toolset():
-    # Depth=1: a run that IS a spawned sub-agent (metadata is_sub_agent=True) must
-    # not get the sub-agent control toolset. The source of truth is the metadata
-    # flag, not parent_id.
+    # Depth=1: a run that IS a spawned sub-agent (origin SUBAGENT) must not get
+    # the sub-agent control toolset. The source of truth is the origin, not
+    # parent_id.
     runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
     agent = Agent(
         pod_id=uuid4(),
@@ -1659,7 +1659,7 @@ async def test_sub_agent_conversation_excludes_subagents_toolset():
         user_id=agent.user_id,
         agent_id=agent.id,
         parent_id=uuid4(),
-        metadata={"is_sub_agent": True},
+        origin=ConversationOrigin.SUBAGENT,
     )
 
     top_ts = await runner.tool_assembler.assemble(agent=agent, conversation=top)
@@ -1687,7 +1687,7 @@ async def test_project_child_conversation_keeps_subagents_toolset():
         user_id=agent.user_id,
         agent_id=agent.id,
         parent_id=uuid4(),  # pinned under a project, but not spawned as a sub-agent
-        metadata={"cwd": f"{WORKSPACE_ROOT}/projects/foo"},
+        cwd=f"{WORKSPACE_ROOT}/projects/foo",
     )
 
     child_ts = await runner.tool_assembler.assemble(
@@ -1715,7 +1715,8 @@ async def test_child_conversation_inherits_parent_cwd_and_workspace():
         id=parent_id,
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": f"{WORKSPACE_ROOT}/projects/alpha", "workspace_id": "ws-1"},
+        cwd=f"{WORKSPACE_ROOT}/projects/alpha",
+        workspace_id="ws-1",
     )
 
     class _Repo:
@@ -1728,8 +1729,8 @@ async def test_child_conversation_inherits_parent_cwd_and_workspace():
     )
     await service._apply_inherited_cwd(child, parent=parent)
 
-    assert child.metadata["cwd"] == f"{WORKSPACE_ROOT}/projects/alpha"
-    assert child.metadata["workspace_id"] == "ws-1"
+    assert child.cwd == f"{WORKSPACE_ROOT}/projects/alpha"
+    assert child.workspace_id == "ws-1"
 
 
 @pytest.mark.asyncio
@@ -1742,16 +1743,17 @@ async def test_root_conversation_gets_own_cwd():
     convo = Conversation(pod_id=uuid4(), user_id=uuid4())
     await service._apply_inherited_cwd(convo, parent=None)
 
-    # A root gets its own pretty c/{date}/{slug} cwd stamped into metadata.
+    # A root gets its own pretty c/{date}/{slug} cwd stamped on its row.
     date = convo.created_at.date().isoformat()
-    cwd = convo.metadata["cwd"]
+    cwd = convo.cwd
+    assert cwd is not None
     assert cwd.startswith(f"{WORKSPACE_ROOT}/c/{date}/")
     # <root>/c/{date}/{slug}: one segment past the root, whatever the root is.
     assert cwd.count("/") == WORKSPACE_ROOT.count("/") + 3
 
 
 @pytest.mark.asyncio
-async def test_explicit_cwd_in_metadata_is_not_overridden():
+async def test_an_explicit_cwd_is_not_overridden():
     class _Repo:
         async def get_conversation(self, *args, **kwargs):  # pragma: no cover
             raise AssertionError("the parent is handed over, never re-read")
@@ -1760,17 +1762,17 @@ async def test_explicit_cwd_in_metadata_is_not_overridden():
     parent = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": f"{WORKSPACE_ROOT}/projects/parents"},
+        cwd=f"{WORKSPACE_ROOT}/projects/parents",
     )
     convo = Conversation(
         pod_id=parent.pod_id,
         user_id=parent.user_id,
         parent_id=parent.id,
-        metadata={"cwd": f"{WORKSPACE_ROOT}/custom"},
+        cwd=f"{WORKSPACE_ROOT}/custom",
     )
     await service._apply_inherited_cwd(convo, parent=parent)
 
-    assert convo.metadata["cwd"] == f"{WORKSPACE_ROOT}/custom"
+    assert convo.cwd == f"{WORKSPACE_ROOT}/custom"
 
 
 def test_runner_uses_final_answer_tool_for_structured_output_agents():
@@ -1813,7 +1815,7 @@ def test_final_answer_tool_output_becomes_normal_assistant_message():
     assert message.role == MessageRole.ASSISTANT
     assert message.kind == MessageKind.TEXT
     assert message.text == "Done brother"
-    assert message.metadata["is_final_answer"] is True
+    assert message.state.is_final_answer
     assert message.metadata["structured_output"]["score"] == 1
 
 

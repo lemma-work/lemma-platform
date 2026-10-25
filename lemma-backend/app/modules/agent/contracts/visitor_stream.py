@@ -27,7 +27,6 @@ from sqlalchemy import select
 
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
 from app.modules.agent.services.realtime import conversation_channel
@@ -102,8 +101,10 @@ def _message_frame(message: Mapping[str, object]) -> VisitorFrame | None:
         return _fill_frame(message)
     if message.get("role") != "assistant":
         return None
+    # The frame's metadata is the message as a client reads it, its note mark
+    # included (`domain/wire_metadata`).
     metadata = message.get("metadata")
-    if is_private_note(metadata if isinstance(metadata, Mapping) else None):
+    if isinstance(metadata, Mapping) and metadata.get("private_note") is True:
         return None
     if message.get("kind") == MessageKind.TOOL_CALL.value:
         return TYPING
@@ -147,10 +148,10 @@ def _private_run_lookup(
                 known[run_id] = True
                 return True
             async with uow_factory() as uow:
-                metadata = await uow.session.scalar(
-                    select(AgentRunModel.run_metadata).where(AgentRunModel.id == parsed)
+                private = await uow.session.scalar(
+                    select(AgentRunModel.private_note).where(AgentRunModel.id == parsed)
                 )
-            known[run_id] = run_is_private(metadata)
+            known[run_id] = bool(private)
         return known[run_id]
 
     return is_private

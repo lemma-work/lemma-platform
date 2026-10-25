@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from app.modules.agent.domain.folded_turns import folded_from
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.private_notes import defuse_lemma_labels, lemma_label
 from app.modules.agent.domain.surface_prompts import attachment_listing_block
 from app.modules.agent.domain.value_objects import (
@@ -32,6 +32,11 @@ from app.modules.agent.infrastructure.harnesses.sender_labels import (
 
 def _message_text(msg: object) -> str:
     return getattr(msg, "text", None) or ""
+
+
+def _state(msg: object) -> MessageState:
+    state = getattr(msg, "state", None)
+    return state if isinstance(state, MessageState) else MessageState()
 
 
 def timed_user_prompt_text(msg: object, *, with_roster: bool = True) -> str:
@@ -58,9 +63,9 @@ def _sent_at_note(msg: object) -> str | None:
     if getattr(msg, "kind", None) is not MessageKind.TEXT:
         return None
     metadata = getattr(msg, "metadata", None)
-    if isinstance(metadata, dict) and (
-        metadata.get("synthetic") or folded_from(metadata) is not None
-    ):
+    if isinstance(metadata, dict) and metadata.get("synthetic"):
+        return None
+    if _state(msg).folded_from is not None:
         return None
     sent = getattr(msg, "created_at", None)
     if not isinstance(sent, datetime):
@@ -87,7 +92,7 @@ def user_prompt_text(msg: object, *, with_roster: bool = True) -> str:
         return body
 
     platform = metadata.get("surface_platform")
-    label = lemma_label(metadata)
+    label = lemma_label(_state(msg))
     pieces = [
         label,
         sender_label(metadata, platform),

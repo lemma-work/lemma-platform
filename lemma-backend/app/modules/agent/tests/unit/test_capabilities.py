@@ -361,14 +361,16 @@ async def test_affinity_is_keyed_on_the_pod_and_agent_a_real_run_carries():
 
 
 class _FakeRepo:
+    """The conversation row's ``todos`` column, and one other column beside it."""
+
     def __init__(self, store: dict) -> None:
         self._store = store
 
-    async def get_conversation_metadata_key(self, _cid, key: str):
-        return self._store.get(key)
+    async def get_todos(self, _cid):
+        return list(self._store.get("todos", []))
 
-    async def set_conversation_metadata_key(self, _cid, key: str, value) -> None:
-        self._store[key] = value
+    async def set_todos(self, _cid, todos) -> None:
+        self._store["todos"] = list(todos)
 
 
 class _FakeUoW:
@@ -392,7 +394,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     from app.modules.agent.capabilities.todo import build_todo_toolset
     from app.modules.agent.tools.context import BaseAgentContext
 
-    store: dict = {"is_sub_agent": True}  # a sibling metadata key
+    store: dict = {"cwd": "/w"}  # a sibling column
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
 
     capability = _visible_capability(
@@ -426,8 +428,8 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     result = await call("write_todos", {"todos": ["ship it", "- [ ] test it"]})
     assert result["success"] is True
     assert result["todos"] == ["- [ ] ship it", "- [ ] test it"]
-    # Sibling metadata key is untouched (todos live under their own key).
-    assert store["is_sub_agent"] is True
+    # The sibling column is untouched (todos live in their own).
+    assert store["cwd"] == "/w"
     assert "todos" in store
 
     # A SINGLE line flips just that task (matched by text); the rest is preserved.
@@ -452,7 +454,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     # semantics: the line's state is authoritative for the matched task).
     result = await call("write_todos", {"todos": ["ship it"]})
     assert result["todos"][0] == "- [ ] ship it"
-    assert store["is_sub_agent"] is True
+    assert store["cwd"] == "/w"
 
     # Once the current plan is fully complete, new unchecked work starts a
     # fresh plan instead of retaining completed history forever.

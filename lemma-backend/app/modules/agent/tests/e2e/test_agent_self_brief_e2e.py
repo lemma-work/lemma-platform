@@ -35,6 +35,7 @@ from app.modules.test_support.e2e_authz import (
     invite_org_member,
     signup_user,
 )
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 pytestmark = pytest.mark.e2e
 
@@ -82,6 +83,7 @@ async def _default_agent_brief(*, pod_id: str, user_id: str) -> str:
             "metadata": {},
             "user_id": UUID(user_id),
             "type": None,
+            "origin": ConversationOrigin.CHAT,
         },
     )()
     brief = await AgentContextBriefBuilder(uow_factory).build(

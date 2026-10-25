@@ -318,15 +318,13 @@ def conversation_metadata(
 ) -> dict[str, JsonValue]:
     """What the started conversation knows about where it came from.
 
-    ``started_by`` is how a run tells that nobody is waiting on it, so it does
+    That a schedule opened it is the conversation's ``origin``, set by the
+    agent module, and how a run tells that nobody is waiting on it, so it does
     not reach for ``ask_user`` at six in the morning. A webhook source's
     repository context, when present, becomes the run's checkout, cloned
     through the pod's `github` connector.
     """
-    started: dict[str, JsonValue] = {
-        "started_by": "SCHEDULE",
-        "schedule_type": schedule.schedule_type.value,
-    }
+    started: dict[str, JsonValue] = {"schedule_type": schedule.schedule_type.value}
     if schedule.name:
         started["schedule_name"] = schedule.name
     repo = metadata.get("repo")

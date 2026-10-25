@@ -69,6 +69,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     runs,
     seeded_conversation,
 )
+from app.modules.agent.domain.value_objects import QueueState
 
 pytestmark = [pytest.mark.e2e]
 
@@ -166,7 +167,7 @@ async def test_an_open_question_is_not_answered_by_the_news(scenario):
     assert not [m for m in found if m.kind is MessageKind.TOOL_RETURN]
     (news,) = _news(found)
     assert news.agent_run_id == asking
-    assert news.metadata["during_active_run"] is True
+    assert news.state.queue_state is QueueState.QUEUED
 
 
 async def test_a_sleeping_conversation_is_woken_rather_than_written_past(scenario):

@@ -104,11 +104,6 @@ _PASS_USAGE_LIMITS = UsageLimits(
 )
 
 _WRITE_TOOL = "pod_write_file"
-#: Run metadata naming what a run answers when that is stored elsewhere: the
-#: failed run a retry replaces (``conversation_retry_service``), and the pausing
-#: call a resumed run picks up from (``pause_resume``).
-_RETRIED_RUN_KEY = "retried_agent_run_id"
-_RESUMED_CALL_KEY = "resumed_tool_call_id"
 #: Retries of retries followed back to the message they all answer.
 _RETRIES_FOLLOWED = 3
 
@@ -355,7 +350,10 @@ async def _carried_in(
     carried: list[TurnMessage] = []
     began = run
     for _ in range(_RETRIES_FOLLOWED):
-        failed_id = _uuid((began.metadata or {}).get(_RETRIED_RUN_KEY))
+        # What a run answers when that is stored elsewhere: the failed run a
+        # retry replaces (``conversation_retry_service``), and the pausing call
+        # a resumed run picks up from (``pause_resume``).
+        failed_id = began.state.retried_run_id
         failed = await runs.get_agent_run(failed_id) if failed_id else None
         if failed is None or failed.conversation_id != run.conversation_id:
             break
@@ -364,17 +362,10 @@ async def _carried_in(
             *carried,
         ]
         began = failed
-    resumed = (run.metadata or {}).get(_RESUMED_CALL_KEY)
-    if isinstance(resumed, str) and resumed:
+    resumed = run.state.resumed_tool_call_id
+    if resumed:
         carried.extend(await turns.list_tool_exchange(run.conversation_id, resumed))
     return carried, began.id
-
-
-def _uuid(value: object) -> UUID | None:
-    try:
-        return UUID(str(value)) if value else None
-    except ValueError:
-        return None
 
 
 def _run_model(resolved: ResolvedAgentRuntime) -> Model:

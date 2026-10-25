@@ -12,7 +12,6 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from app.modules.agent.domain.entities import Message as MessageEntity
-from app.modules.agent.domain.queued_messages import CLIENT_MESSAGE_ID
 from app.modules.agent.domain.value_objects import MessageDraft, to_json_value
 from app.modules.agent.infrastructure.db.base import UnitOfWorkRepository
 from app.modules.agent.infrastructure.db.conversation_activity import (
@@ -80,6 +79,7 @@ class Messages(UnitOfWorkRepository):
                 else None
             ),
             message_metadata=draft.metadata,
+            **MessageModel.state_values(draft.state),
         )
         self.session.add(model)
         await self.session.flush()
@@ -124,16 +124,14 @@ class Messages(UnitOfWorkRepository):
     ) -> MessageEntity | None:
         """The message an earlier send with this client id stored, if any.
 
-        Scoped to one conversation, so it reads that conversation's messages by
-        their conversation index. The caller holds the conversation lock, which
-        is what makes "look, then store" one step for two copies of a send.
+        ``uq_agent_message_client_id`` answers it. The caller holds the
+        conversation lock, which is what makes "look, then store" one step for
+        two copies of a send.
         """
-        metadata = MessageModel.message_metadata
         row = await self.session.scalar(
             select(MessageModel).where(
                 MessageModel.conversation_id == conversation_id,
-                metadata.has_key(CLIENT_MESSAGE_ID),
-                metadata[CLIENT_MESSAGE_ID].astext == client_message_id,
+                MessageModel.client_message_id == client_message_id,
             )
         )
         return row.to_entity() if row is not None else None

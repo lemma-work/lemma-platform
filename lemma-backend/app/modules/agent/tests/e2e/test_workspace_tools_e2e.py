@@ -897,7 +897,6 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
             conversation_id=conversation_id,
             agent_id=UUID(agent["id"]),
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "workspace_mcp_latency_e2e"},
         )
         await uow.commit()
 

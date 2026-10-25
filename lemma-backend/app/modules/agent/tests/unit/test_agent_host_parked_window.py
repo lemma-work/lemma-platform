@@ -15,11 +15,7 @@ from app.modules.agent.domain.agent_host_permissions import (
     AgentHostPermissionOption,
     AgentHostPermissionRequest,
 )
-from app.modules.agent.domain.pausing_tools import (
-    SUSPENDED_WHILE_PARKED_KEY,
-    ParkedSuspension,
-    parked_suspension_of,
-)
+from app.modules.agent.domain.pausing_tools import ParkedSuspension
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.infrastructure.harnesses.agent_host.parked_window import (
     ParkedWindow,
@@ -83,31 +79,20 @@ def test_a_disabled_window_never_looks() -> None:
 
 
 def test_the_mark_reads_back_as_the_pause_it_names() -> None:
-    metadata = {
-        "source": "chat",
-        SUSPENDED_WHILE_PARKED_KEY: {
-            "tool_call_id": "agent-host-permission:native-shell",
-            "tool_name": "request_approval",
-        },
+    stored = {
+        "tool_call_id": "agent-host-permission:native-shell",
+        "tool_name": "request_approval",
     }
 
-    assert parked_suspension_of(metadata) == ParkedSuspension(
+    assert ParkedSuspension.from_json(stored) == ParkedSuspension(
         tool_call_id="agent-host-permission:native-shell",
         tool_name="request_approval",
     )
 
 
-@pytest.mark.parametrize(
-    "metadata",
-    [
-        None,
-        {},
-        {SUSPENDED_WHILE_PARKED_KEY: True},
-        {SUSPENDED_WHILE_PARKED_KEY: {"tool_call_id": "x"}},
-    ],
-)
-def test_anything_else_is_not_a_mark(metadata) -> None:
-    assert parked_suspension_of(metadata) is None
+@pytest.mark.parametrize("stored", [None, {}, True, {"tool_call_id": "x"}])
+def test_anything_else_is_not_a_mark(stored) -> None:
+    assert ParkedSuspension.from_json(stored) is None
 
 
 _REQUEST = AgentHostPermissionRequest(

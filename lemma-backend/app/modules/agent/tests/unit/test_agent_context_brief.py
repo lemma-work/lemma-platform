@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.value_objects import AgentToolset, ConversationOrigin
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services import agent_memory_brief as memory_mod
@@ -250,6 +250,7 @@ def _conversation(is_pod_assistant: bool):
         user_id=None,
         type=None,
         metadata={},
+        origin=ConversationOrigin.CHAT,
     )
 
 

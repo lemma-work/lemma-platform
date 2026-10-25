@@ -27,6 +27,8 @@ from app.modules.agent.domain.value_objects import (
 )
 import app.modules.agent.services.conversation_retry_service as retry_service_module
 from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.value_objects import RunTrigger
 
 
 def _run(
@@ -161,10 +163,7 @@ async def test_retry_runs_on_the_conversation_s_current_runtime_without_a_new_me
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
         agent_runtime=_CURRENT_RUNTIME,
-        metadata={
-            "source": "manual_retry",
-            "retried_agent_run_id": str(failed_run.id),
-        },
+        state=RunState(trigger=RunTrigger.RETRY, retried_run_id=failed_run.id),
     )
     # Re-pointing the teammate at another model is how a retired-model failure
     # is fixed, so the retry must not replay the dead runtime.
@@ -282,28 +281,27 @@ async def test_a_retry_on_a_model_that_is_gone_is_refused_before_a_run_exists(
     uow.commit.assert_not_awaited()
 
 
-def _bare_failed_run(metadata: dict[str, object] | None) -> AgentRun:
+def _bare_failed_run(trigger: RunTrigger) -> AgentRun:
     return AgentRun(
         conversation_id=uuid4(),
         status=AgentRunStatus.FAILED,
         agent_runtime=_CURRENT_RUNTIME,
         started_at=datetime.now(timezone.utc),
-        metadata=metadata,
+        state=RunState(trigger=trigger),
     )
 
 
 def test_a_failed_retry_owning_no_messages_is_safely_retryable() -> None:
     """The turn a retry replays belongs to the run it retried."""
-    assert _bare_failed_run({"source": "manual_retry"}).is_safely_retryable
+    assert _bare_failed_run(RunTrigger.RETRY).is_safely_retryable
 
 
 def test_a_failed_run_with_no_turn_and_no_retry_behind_it_is_not() -> None:
-    assert not _bare_failed_run({"source": "user_message"}).is_safely_retryable
-    assert not _bare_failed_run(None).is_safely_retryable
+    assert not _bare_failed_run(RunTrigger.MESSAGE).is_safely_retryable
 
 
 def test_a_failed_retry_that_replied_is_not_safely_retryable() -> None:
-    retry = _bare_failed_run({"source": "manual_retry"})
+    retry = _bare_failed_run(RunTrigger.RETRY)
     retry.messages = [
         Message.create(
             conversation_id=retry.conversation_id,

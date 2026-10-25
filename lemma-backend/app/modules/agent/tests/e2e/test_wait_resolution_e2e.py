@@ -97,7 +97,6 @@ async def _a_wait(
             conversation_id=waiting_conversation["conversation_id"],
             agent_id=None,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "e2e_wait_resolution"},
         )
         await messages.append_message(
             conversation_id=waiting_conversation["conversation_id"],

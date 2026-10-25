@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.value_objects import ConversationType
+from app.modules.agent.domain.value_objects import ConversationOrigin, ConversationType
 from app.modules.agent.infrastructure.pod_ask_queries import Teammate
 from app.modules.agent.services.askable_pods_brief import askable_pod_lines
 
@@ -75,8 +75,11 @@ def _conversation(
     *,
     type: ConversationType = ConversationType.CHAT,
     metadata: dict[str, object] | None = None,
+    origin: ConversationOrigin = ConversationOrigin.CHAT,
 ) -> Conversation:
-    return Conversation(user_id=PERSON, pod_id=HERE, type=type, metadata=metadata)
+    return Conversation(
+        user_id=PERSON, pod_id=HERE, type=type, metadata=metadata, origin=origin
+    )
 
 
 async def _lines(conversation: Conversation, factory: _UowFactory | None = None):
@@ -109,7 +112,7 @@ async def test_a_task_lists_only_connected_pods_and_only_as_connected():
 
 
 async def test_a_scheduled_chat_is_a_task_for_this_purpose():
-    brief = "\n".join(await _lines(_conversation(metadata={"started_by": "SCHEDULE"})))
+    brief = "\n".join(await _lines(_conversation(origin=ConversationOrigin.SCHEDULE)))
 
     assert str(PERSON_ONLY) not in brief
     assert str(SHARED_ONLY) in brief

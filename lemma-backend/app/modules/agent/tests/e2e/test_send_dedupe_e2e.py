@@ -94,7 +94,7 @@ async def test_a_retried_send_with_the_same_client_id_is_stored_once(scenario):
     assert second["agent_run_id"] == first["agent_run_id"]
     assert len(await runs(seeded.conversation_id)) == 1
     (stored,) = await _typed(seeded, "Draft the memo.")
-    assert stored.metadata["client_message_id"] == client_id
+    assert stored.state.client_message_id == client_id
     assert await _typed(seeded, "Draft the memo!") == []
 
 
@@ -124,7 +124,7 @@ async def test_two_copies_of_a_send_racing_each_other_store_one_message(scenario
         message
         for message in await messages(seeded.conversation_id)
         if message.role is MessageRole.USER
-        and message.metadata.get("client_message_id") == client_id
+        and message.state.client_message_id == client_id
     ]
     assert len(stored) == 1
 

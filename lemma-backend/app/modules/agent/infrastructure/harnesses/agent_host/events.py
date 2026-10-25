@@ -33,7 +33,9 @@ from app.modules.agent.domain.agent_host import (
     AgentHostToolResultPayload,
     AgentHostToolStatus,
 )
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import (
+    AnswerKind,
     AgentEvent,
     AgentEventType,
     JsonObject,
@@ -375,10 +377,7 @@ class AgentHostEventNormalizer:
         message, message_id = self._message.take()
         if discard_text:
             message = ""
-        metadata: JsonObject = {
-            "agent_host_object_id": message_id,
-            "is_final_answer": final,
-        }
+        metadata: JsonObject = {"agent_host_object_id": message_id}
         if final:
             # Only the terminal flush consumes the record. A run that pauses for
             # a permission prompt flushes with final=False and must not burn it.
@@ -410,6 +409,9 @@ class AgentHostEventNormalizer:
                     data=MessageDraft.of_text(
                         message,
                         metadata=metadata,
+                        state=MessageState(
+                            answer=AnswerKind.FINAL if final else AnswerKind.NOT_FINAL
+                        ),
                     ),
                     agent_run_id=self.agent_run_id,
                 )

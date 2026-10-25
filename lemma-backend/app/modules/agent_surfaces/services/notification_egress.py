@@ -293,7 +293,6 @@ class NotificationEgress:
             channel_id=channel_id,
             title=outbound.title,
             metadata={
-                "source": "notification",
                 "channel_message_id": str(outbound.id),
                 "surface_id": str(surface.id),
                 "surface_platform": surface.surface_type.value,
@@ -303,6 +302,7 @@ class NotificationEgress:
                 ),
             },
             require_execute_grant=False,
+            for_notification=True,
         )
         return conversation.id
 

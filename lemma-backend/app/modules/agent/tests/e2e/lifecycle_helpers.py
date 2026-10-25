@@ -45,6 +45,9 @@ from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.tools.approval_denials import show_card
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.usage.contracts.execution import UsageService
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.value_objects import QueueState
 
 SYSTEM_RUNTIME = AgentRuntimeConfig(profile_id="system:lemma")
 
@@ -128,13 +131,13 @@ async def seeded_conversation(
     )
 
 
-async def running_run(seeded: Seeded, *, metadata: JsonObject | None = None) -> UUID:
+async def running_run(seeded: Seeded, *, state: RunState | None = None) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
         run = await Runs(uow).create_agent_run(
             conversation_id=seeded.conversation_id,
             agent_id=seeded.agent_id,
             agent_runtime=SYSTEM_RUNTIME,
-            metadata=metadata or {"source": "e2e_lifecycle"},
+            state=state,
         )
         await uow.commit()
     return run.id
@@ -155,7 +158,7 @@ async def pausing_call(
     *,
     tool_name: str,
     tool_args: JsonObject,
-    metadata: JsonObject | None = None,
+    state: MessageState | None = None,
 ) -> str:
     tool_call_id = f"call-{uuid4().hex[:12]}"
     await append(
@@ -165,7 +168,7 @@ async def pausing_call(
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             tool_args=tool_args,
-            metadata=metadata,
+            state=state,
         ),
     )
     inner = tool_args.get("tool_name")
@@ -190,7 +193,9 @@ async def queued_message(seeded: Seeded, run_id: UUID, text: str) -> Message:
         seeded,
         run_id,
         MessageDraft.of_text(
-            text, role=MessageRole.USER, metadata={"during_active_run": True}
+            text,
+            role=MessageRole.USER,
+            state=MessageState(queue_state=QueueState.QUEUED),
         ),
     )
 

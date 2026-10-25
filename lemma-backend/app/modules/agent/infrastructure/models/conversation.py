@@ -32,12 +32,20 @@ from app.modules.agent.domain.entities import (
     Message as MessageEntity,
 )
 from app.modules.agent.domain.conversation_lifecycle import conversation_status_for
+from app.modules.agent.domain.run_state import RunFailure
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
+    AnswerKind,
+    ConversationOrigin,
     ConversationStatus,
     ConversationType,
     MessageKind,
+    QueueState,
+    RunTrigger,
+    WrittenIn,
 )
 from app.modules.agent.infrastructure.model_converters import (
     agent_runtime_from_json,
@@ -45,6 +53,21 @@ from app.modules.agent.infrastructure.model_converters import (
 )
 
 from app.modules.agent.infrastructure.models.agent import AgentModel
+from app.modules.agent.infrastructure.models.typed_state import (
+    conversation_state_fields,
+    conversation_state_values,
+    enum_column,
+    flag_column,
+    json_column,
+    json_list_column,
+    message_state_of,
+    message_state_values,
+    run_state_of,
+    run_state_values,
+    sequence_column,
+    text_column,
+    timestamp_column,
+)
 
 
 class ConversationModel(UUIDAuditBase):
@@ -111,6 +134,22 @@ class ConversationModel(UUIDAuditBase):
             unique=True,
             postgresql_where=text("spawn_tool_call_id IS NOT NULL"),
         ),
+        # A parent's children by task (`find_spawned_child`). Not unique: the
+        # same task spawned from two runs is two children, and the run a child
+        # answers to moves on every `send`.
+        Index(
+            "ix_agent_conv_spawn_key",
+            "parent_id",
+            "spawn_key",
+            postgresql_where=text("spawn_key IS NOT NULL"),
+        ),
+        # The containment matches `PodAskQueries` makes on every finished run.
+        Index(
+            "ix_agent_conv_ask",
+            "ask",
+            postgresql_using="gin",
+            postgresql_where=text("ask IS NOT NULL"),
+        ),
     )
 
     user_id: Mapped[UUID] = mapped_column(
@@ -165,6 +204,22 @@ class ConversationModel(UUIDAuditBase):
     #: ``<parent run id>:<tool call id>`` of the ``spawn_subagent`` call that
     #: created this child; unique per parent (``uq_agent_conv_spawn_call``).
     spawn_tool_call_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # The typed state (`Conversation` documents each field; `typed_state`).
+    origin: Mapped[ConversationOrigin] = enum_column(
+        ConversationOrigin, length=32, default=ConversationOrigin.CHAT
+    )
+    workflow_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    parent_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    spawn_key: Mapped[str | None] = text_column()
+    reports_to_parent: Mapped[bool] = flag_column()
+    delegations_out: Mapped[bool] = flag_column()
+    ask: Mapped[dict[str, object] | None] = json_column()
+    call: Mapped[dict[str, object] | None] = json_column()
+    cwd: Mapped[str | None] = text_column()
+    workspace_id: Mapped[str | None] = text_column()
+    workspace_name: Mapped[str | None] = text_column()
+    repo: Mapped[dict[str, object] | None] = json_column()
+    todos: Mapped[list[object]] = json_list_column()
     #: Put away, not deleted: the row stays, the listing skips it, and a new
     #: message clears it (`append_message`).
     is_archived: Mapped[bool] = mapped_column(
@@ -254,6 +309,7 @@ class ConversationModel(UUIDAuditBase):
             "parent_id": conversation.parent_id,
             "conversation_metadata": conversation.metadata,
             "is_archived": conversation.is_archived,
+            **conversation_state_values(conversation),
         }
 
     def to_entity(self) -> ConversationEntity:
@@ -286,12 +342,13 @@ class ConversationModel(UUIDAuditBase):
             else None,
             output=self.output_data,
             metadata=self.conversation_metadata,
+            **conversation_state_fields(self),
             is_archived=bool(self.is_archived),  # None until the INSERT.
             last_activity_at=self.last_activity_at,
             last_run_status=latest_run.status if latest_run else None,
             last_run_error=latest_run.error if latest_run else None,
-            last_run_error_code=_failure_field(latest_run, "code"),
-            last_run_error_reason=_failure_field(latest_run, "reason"),
+            last_run_error_code=_failure_code(latest_run),
+            last_run_error_reason=_failure_reason(latest_run),
             last_run_finished_at=latest_run.finished_at if latest_run else None,
             messages=[message.to_entity() for message in loaded_messages],
             agent_runs=[agent_run.to_entity() for agent_run in loaded_runs],
@@ -351,6 +408,22 @@ class AgentRunModel(UUIDAuditBase):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     output_data: Mapped[dict | str | None] = mapped_column(JSONB, nullable=True)
     run_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # The typed state (`RunState` documents each field; `typed_state`).
+    trigger: Mapped[RunTrigger] = enum_column(
+        RunTrigger, length=32, default=RunTrigger.MESSAGE
+    )
+    private_note: Mapped[bool] = flag_column()
+    asked_in_lemma: Mapped[bool] = flag_column()
+    written_in: Mapped[WrittenIn | None] = enum_column(WrittenIn, length=16)
+    resumed_tool_call_id: Mapped[str | None] = text_column()
+    retried_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    queued_behind_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    queued_leftovers_behind: Mapped[list[object]] = json_list_column()
+    stop_requested_after_sequence: Mapped[int | None] = sequence_column()
+    delivered_to_parent_at: Mapped[datetime | None] = timestamp_column()
+    suspended_while_parked: Mapped[dict[str, object] | None] = json_column()
+    schedule_firing: Mapped[dict[str, object] | None] = json_column()
+    failure: Mapped[dict[str, object] | None] = json_column()
 
     conversation: Mapped["ConversationModel"] = relationship(
         ConversationModel,
@@ -373,6 +446,12 @@ class AgentRunModel(UUIDAuditBase):
         foreign_keys=lambda: [MessageModel.agent_run_id],
     )
 
+    def state(self) -> RunState:
+        return run_state_of(self)
+
+    #: The typed-state columns of a run in a ``RunState``, as written.
+    state_values = staticmethod(run_state_values)
+
     def to_entity(self) -> AgentRunEntity:
         return AgentRunEntity(
             id=self.id,
@@ -388,6 +467,7 @@ class AgentRunModel(UUIDAuditBase):
             error=self.error,
             output_data=self.output_data,
             metadata=self.run_metadata,
+            state=run_state_of(self),
             messages=[
                 message.to_entity() for message in self.__dict__.get("messages", [])
             ],
@@ -405,6 +485,21 @@ class MessageModel(UUIDCreatedBase):
         Index("ix_agent_message_conversation_sequence", "conversation_id", "sequence"),
         Index("ix_agent_message_run_sequence", "agent_run_id", "sequence"),
         Index("ix_agent_message_tool_call", "tool_call_id"),
+        # One message per send (`find_user_message_by_client_id`).
+        Index(
+            "uq_agent_message_client_id",
+            "conversation_id",
+            "client_message_id",
+            unique=True,
+            postgresql_where=text("client_message_id IS NOT NULL"),
+        ),
+        # What is queued in a conversation, without reading its transcript.
+        Index(
+            "ix_agent_message_queued",
+            "conversation_id",
+            "queue_state",
+            postgresql_where=text("queue_state <> 'NONE'"),
+        ),
     )
 
     conversation_id: Mapped[UUID] = mapped_column(
@@ -434,6 +529,21 @@ class MessageModel(UUIDCreatedBase):
     tool_call_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tool_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     message_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # The typed state (`MessageState` documents each field; `typed_state`).
+    queue_state: Mapped[QueueState] = enum_column(
+        QueueState, length=32, default=QueueState.NONE
+    )
+    steered_into_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    steer_dispatched_at: Mapped[datetime | None] = timestamp_column()
+    client_message_id: Mapped[str | None] = text_column()
+    private_note: Mapped[bool] = flag_column()
+    private_note_in_dm: Mapped[bool] = flag_column()
+    written_in: Mapped[WrittenIn | None] = enum_column(WrittenIn, length=16)
+    answer: Mapped[AnswerKind | None] = enum_column(AnswerKind, length=16)
+    held_for_a_person: Mapped[bool] = flag_column()
+    folded_from: Mapped[UUID | None] = mapped_column(nullable=True)
+    synthetic_tool_return: Mapped[bool] = flag_column()
+    parked_in_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
     conversation: Mapped["ConversationModel"] = relationship(
         ConversationModel,
@@ -445,6 +555,12 @@ class MessageModel(UUIDCreatedBase):
         back_populates="messages",
         foreign_keys=[agent_run_id],
     )
+
+    def state(self) -> MessageState:
+        return message_state_of(self)
+
+    #: The typed-state columns of a message in a ``MessageState``, as written.
+    state_values = staticmethod(message_state_values)
 
     def to_entity(self) -> MessageEntity:
         return MessageEntity(
@@ -461,12 +577,21 @@ class MessageModel(UUIDCreatedBase):
             tool_args=self.tool_args,
             tool_result=self.tool_result,
             metadata=self.message_metadata,
+            state=message_state_of(self),
         )
 
 
-def _failure_field(run: AgentRunModel | None, field: str) -> str | None:
-    if run is None or run.status != "FAILED":
+def _failure(run: AgentRunModel | None) -> RunFailure | None:
+    if run is None or run.status != AgentRunStatus.FAILED.value:
         return None
-    failure = (run.run_metadata or {}).get("failure")
-    value = failure.get(field) if isinstance(failure, dict) else None
-    return value if isinstance(value, str) else None
+    return RunFailure.from_json(run.failure)
+
+
+def _failure_code(run: AgentRunModel | None) -> str | None:
+    failure = _failure(run)
+    return failure.code if failure else None
+
+
+def _failure_reason(run: AgentRunModel | None) -> str | None:
+    failure = _failure(run)
+    return failure.reason if failure else None

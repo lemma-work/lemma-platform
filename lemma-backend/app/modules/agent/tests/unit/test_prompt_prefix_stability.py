@@ -28,6 +28,7 @@ from app.modules.agent.capabilities.prompt_caching import (
     PromptCachingCapability,
 )
 from app.modules.agent.tools.toolset_selection import resolve_toolset_names
+from app.modules.agent.domain.todos import Todo
 
 pytestmark = pytest.mark.unit
 
@@ -37,7 +38,7 @@ def _conversation(todo: str | None = "Render the video") -> Conversation:
         pod_id=uuid4(),
         user_id=uuid4(),
         agent_id=uuid4(),
-        metadata={"todos": [{"content": todo, "done": False}]} if todo else {},
+        todos=[Todo(content=todo)] if todo else [],
     )
 
 
@@ -72,9 +73,7 @@ class TestNothingThatChangesBetweenRunsIsInTheSystemPrompt:
 
     def test_a_checklist_update_leaves_the_system_prompt_byte_identical(self) -> None:
         before = _conversation("Render the video")
-        after = before.model_copy(
-            update={"metadata": {"todos": [{"content": "Render", "done": True}]}}
-        )
+        after = before.model_copy(update={"todos": [Todo(content="Render", done=True)]})
 
         assert self._instructions(before) == self._instructions(after)
 

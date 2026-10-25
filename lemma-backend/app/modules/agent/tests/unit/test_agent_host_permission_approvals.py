@@ -40,6 +40,8 @@ from app.modules.agent.services.conversation_resume_return import (
 from app.modules.agent.services.conversation_approvals import (
     ApprovalCoordinator,
 )
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.run_state import RunState
 
 _PAYLOAD = {
     "request_id": "call-9",
@@ -427,7 +429,7 @@ def _patch_agent_host(
             del uow
 
         async def get_agent_run(self, agent_run_id):
-            return SimpleNamespace(id=agent_run_id, metadata={})
+            return SimpleNamespace(id=agent_run_id, metadata={}, state=RunState())
 
     repositories = types.ModuleType("app.modules.agent.infrastructure.db.runs")
     repositories.Runs = _Runs
@@ -736,7 +738,7 @@ class TestAParkedInteractionDoesNotResume:
         # An ordinary request_approval — no ACP marker, so only the run's own
         # state can tell this apart from an in-process pause.
         repository.call.tool_args = {"tool_name": "exec_command", "args": {}}
-        repository.call.metadata = {"parked_in_run": True}
+        repository.call.state = MessageState(parked_in_run_id=run_id)
         repository.paused_run = SimpleNamespace(
             id=run_id, status=AgentRunStatus.RUNNING
         )

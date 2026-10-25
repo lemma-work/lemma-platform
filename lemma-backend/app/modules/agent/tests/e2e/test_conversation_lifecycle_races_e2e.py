@@ -51,6 +51,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     uow_factory,
 )
 from app.modules.test_support.e2e.function_helpers import create_table
+from app.modules.agent.domain.value_objects import QueueState
 
 pytestmark = [pytest.mark.e2e]
 
@@ -185,11 +186,11 @@ async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
     all_runs = await runs(seeded.conversation_id)
     assert [run.id for run in all_runs][:1] == [paused]
     (resume,) = all_runs[1:]
-    assert resume.run_metadata["resumed_tool_call_id"] == approval_id
+    assert resume.resumed_tool_call_id == approval_id
     typed = next(
         m for m in found if m.role is MessageRole.USER and "second" in (m.text or "")
     )
-    assert typed.metadata["steered_into_run"] == str(resume.id)
+    assert typed.state.steered_into_run_id == resume.id
 
     # And the resumed run is shown the approved result, not "did not answer".
     history, _prompt = history_and_prompt(found)
@@ -234,7 +235,7 @@ async def test_an_answer_that_lands_before_the_pause_is_written_still_resumes(
     assert resumed is not None
     resume = await _run(seeded, resumed)
     assert resume.status == AgentRunStatus.RUNNING.value
-    assert resume.run_metadata["resumed_tool_call_id"] == question
+    assert resume.resumed_tool_call_id == question
     assert (await conversation(seeded.conversation_id)).status == (
         ConversationStatus.RUNNING
     )
@@ -282,8 +283,8 @@ async def test_a_message_after_stop_is_answered_and_one_before_it_is_not(
     assert followup is not None
     found = {message.id: message for message in await messages(seeded.conversation_id)}
     after = next(m for m in found.values() if "README" in (m.text or ""))
-    assert after.metadata["steered_into_run"] == str(followup)
-    assert "steered_into_run" not in (found[before.id].metadata or {})
+    assert after.state.steered_into_run_id == followup
+    assert found[before.id].state.steered_into_run_id is None
 
 
 async def test_a_remote_harness_question_is_answered_inside_its_own_run(
@@ -310,7 +311,7 @@ async def test_a_remote_harness_question_is_answered_inside_its_own_run(
         arguments={"seconds": 60},
     )
     marks = {
-        m.tool_call_id: (m.metadata or {}).get("parked_in_run")
+        m.tool_call_id: m.state.parked_in_run_id is not None or None
         for m in await messages(seeded.conversation_id)
         if m.kind is MessageKind.TOOL_CALL
     }
@@ -424,7 +425,7 @@ async def test_messages_queued_behind_a_question_say_so_and_ride_its_answer(
 
     assert await _completed(seeded, asking) is None
     held = next(m for m in await messages(seeded.conversation_id) if m.id == waiting.id)
-    assert held.metadata["waiting_on_answer"] == str(asking)
+    assert held.state.queue_state is QueueState.WAITING_ON_ANSWER
 
     async with owner_uow(seeded) as uow:
         await conversation_service(uow).resolve_user_approval_internal(
@@ -439,7 +440,7 @@ async def test_messages_queued_behind_a_question_say_so_and_ride_its_answer(
     answered = next(
         m for m in await messages(seeded.conversation_id) if m.id == waiting.id
     )
-    assert answered.metadata["steered_into_run"] == str(resume.id)
+    assert answered.state.steered_into_run_id == resume.id
 
 
 async def test_a_client_cannot_mark_its_own_message_delivered(scenario) -> None:
@@ -468,10 +469,10 @@ async def test_a_client_cannot_mark_its_own_message_delivered(scenario) -> None:
         for m in await messages(seeded.conversation_id)
         if m.text == "Look at this too."
     )
-    assert stored.metadata["during_active_run"] is True
-    assert stored.metadata["keep_me"] == "yes"
-    for key in ("steered_into_run", "steer_dispatched_at", "waiting_on_answer"):
-        assert key not in stored.metadata, key
+    assert stored.state.queue_state is QueueState.QUEUED
+    assert stored.state.steered_into_run_id is None
+    assert stored.state.steer_dispatched_at is None
+    assert stored.metadata == {"keep_me": "yes"}
 
 
 @pytest.mark.parametrize("content", ["", "x" * 60_001])

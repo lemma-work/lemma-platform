@@ -16,7 +16,6 @@ import pytest
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.pod_asks import (
     ANSWER_SOURCE,
-    ASK_KEY,
     HANDED_BACK_SOURCES,
     MAX_ASK_DEPTH,
     AnswerOutcome,
@@ -28,7 +27,6 @@ from app.modules.agent.domain.pod_asks import (
     answer_message_metadata,
     ask_of,
     delivered_answer,
-    linked_asker_in,
 )
 from app.modules.agent.domain.pod_ask_rules import (
     AskingRun,
@@ -41,11 +39,9 @@ from app.modules.agent.domain.pod_ask_rules import (
 from app.modules.agent.infrastructure.pod_ask_queries import Teammate
 from app.modules.agent.services.askable_pods_brief import narrowed
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.server_metadata import (
-    client_metadata,
-    with_server_keys_kept,
-)
+from app.modules.agent.domain.conversations import client_tags, with_client_tags
 from app.modules.agent.domain.value_objects import (
+    ConversationOrigin,
     ConversationType,
     MessageKind,
     MessageRole,
@@ -63,8 +59,17 @@ def _conversation(
     user_id: UUID = PERSON,
     type: ConversationType = ConversationType.CHAT,
     metadata: dict[str, object] | None = None,
+    ask: PodAsk | None = None,
+    origin: ConversationOrigin = ConversationOrigin.CHAT,
 ) -> Conversation:
-    return Conversation(user_id=user_id, pod_id=HERE, type=type, metadata=metadata)
+    return Conversation(
+        user_id=user_id,
+        pod_id=HERE,
+        type=type,
+        metadata=metadata,
+        ask=ask,
+        origin=origin,
+    )
 
 
 def _run(
@@ -117,34 +122,37 @@ class TestTheChain:
 
     def test_it_survives_the_trip_through_metadata(self):
         chain = AskChain.start(HERE).onward_to(THERE)
-        assert AskChain.from_metadata(chain.to_metadata()) == chain
+        assert AskChain.from_json(chain.to_json()) == chain
 
 
 class TestTheAskOnTheConversation:
-    def test_it_survives_the_trip_through_metadata(self):
+    def test_it_survives_the_trip_through_its_column(self):
         ask = _ask()
-        conversation = _conversation(metadata={ASK_KEY: ask.to_metadata()})
-        assert ask_of(conversation) == ask
+        assert PodAsk.from_json(ask.to_json()) == ask
+        assert ask_of(_conversation(ask=ask)) == ask
 
     @pytest.mark.parametrize(
         "raw",
         [None, "an ask", {"from_pod_id": "not a uuid"}, {"mode": "AS_PERSON"}],
     )
     def test_anything_that_does_not_read_as_an_ask_is_none(self, raw):
-        assert ask_of(_conversation(metadata={ASK_KEY: raw})) is None
+        assert PodAsk.from_json(raw) is None
 
     def test_a_client_can_neither_change_nor_drop_it(self):
-        stored = {ASK_KEY: _ask().to_metadata(), "pinned": True}
-        forged = {ASK_KEY: _ask(for_user_id=uuid4()).to_metadata(), "pinned": False}
-        assert with_server_keys_kept(stored, forged) == {
-            ASK_KEY: stored[ASK_KEY],
+        """The ask is a column; metadata a client sends is only tags, and an
+        ``ask`` key among them is read by nothing."""
+        forged = _ask(for_user_id=uuid4())
+        conversation = _conversation(ask=_ask(), metadata={"ask": forged.to_json()})
+        assert ask_of(conversation) == conversation.ask != forged
+        assert with_client_tags({}, {"ask": {}, "pinned": False}) == {
+            "ask": {},
             "pinned": False,
         }
-        assert with_server_keys_kept(stored, None) == {ASK_KEY: stored[ASK_KEY]}
 
     def test_a_client_cannot_open_a_conversation_claiming_one(self):
-        assert client_metadata({ASK_KEY: {"anything": 1}, "cwd": "/me"}) == {
-            "cwd": "/me"
+        """What a client sends is kept as tags; the ask is the server's column."""
+        assert client_tags({"surface_id": "s", "lemma_resource": "x"}) == {
+            "lemma_resource": "x"
         }
 
 
@@ -184,12 +192,12 @@ class TestWhoMayAskAsTheirPerson:
         task = _conversation(type=ConversationType.TASK)
         with pytest.raises(AskRefused, match="Nobody started this"):
             chain_for_person(_run(task), to_pod_id=THERE)
-        scheduled = _conversation(metadata={"started_by": "SCHEDULE"})
+        scheduled = _conversation(origin=ConversationOrigin.SCHEDULE)
         with pytest.raises(AskRefused, match="Nobody started this"):
             chain_for_person(_run(scheduled), to_pod_id=THERE)
 
     def test_not_a_sub_agent(self):
-        child = _conversation(metadata={"is_sub_agent": True})
+        child = _conversation(origin=ConversationOrigin.SUBAGENT)
         with pytest.raises(AskRefused, match="sub-agent"):
             chain_for_person(_run(child), to_pod_id=THERE)
 
@@ -216,7 +224,7 @@ class TestWhoMayAskAsTheirPerson:
 
     def test_answering_an_ask_for_the_same_person_carries_the_chain_on(self):
         incoming = _ask()
-        answering = _conversation(metadata={ASK_KEY: incoming.to_metadata()})
+        answering = _conversation(ask=incoming)
         chain = chain_for_person(_run(answering), to_pod_id=THERE)
         assert chain.chain_id == incoming.chain.chain_id
         assert chain.depth == incoming.chain.depth + 1
@@ -224,13 +232,13 @@ class TestWhoMayAskAsTheirPerson:
     def test_answering_an_ask_cannot_ask_back_the_pod_that_asked(self):
         asker = uuid4()
         incoming = _ask(chain=AskChain.start(asker).onward_to(HERE))
-        answering = _conversation(metadata={ASK_KEY: incoming.to_metadata()})
+        answering = _conversation(ask=incoming)
         with pytest.raises(AskRefused, match="already part of this request"):
             chain_for_person(_run(answering), to_pod_id=asker)
 
     def test_answering_an_ask_for_someone_else_cannot_ask_on(self):
         incoming = _ask(for_user_id=uuid4())
-        answering = _conversation(metadata={ASK_KEY: incoming.to_metadata()})
+        answering = _conversation(ask=incoming)
         with pytest.raises(AskRefused, match="for someone else"):
             chain_for_person(_run(answering), to_pod_id=THERE)
 
@@ -337,9 +345,7 @@ class TestHowItAsks:
             )
 
     def test_a_conversation_answering_a_link_cannot_ask_on(self):
-        answering = _conversation(
-            metadata={ASK_KEY: _link_ask(from_pod=uuid4()).to_metadata()}
-        )
+        answering = _conversation(ask=_link_ask(from_pod=uuid4()))
         with pytest.raises(AskRefused):
             plan_ask(
                 _run(answering), to_pod_id=THERE, through_you=False, connected=True
@@ -349,22 +355,20 @@ class TestHowItAsks:
 class TestALinkConversation:
     def test_it_answers_from_outside_the_pod_as_the_asking_pod(self):
         asker = uuid4()
-        conversation = _conversation(
-            metadata={ASK_KEY: _link_ask(from_pod=asker).to_metadata()}
-        )
+        conversation = _conversation(ask=_link_ask(from_pod=asker))
         audience = Audience.of(conversation)
         assert audience.asking_pod_id == asker
         assert audience.answers_outsiders
 
     def test_an_ask_as_a_person_is_not_one(self):
-        conversation = _conversation(metadata={ASK_KEY: _ask().to_metadata()})
+        conversation = _conversation(ask=_ask())
         audience = Audience.of(conversation)
         assert audience.asking_pod_id is None
         assert not audience.answers_outsiders
 
     def test_asking_as_a_person_needs_a_person(self):
-        raw = {**_ask().to_metadata(), "for_user_id": None}
-        assert ask_of(_conversation(metadata={ASK_KEY: raw})) is None
+        raw = {**_ask().to_json(), "for_user_id": None}
+        assert PodAsk.from_json(raw) is None
 
 
 def test_an_answer_awaited_inline_is_left_to_the_asker_until_then():
@@ -372,7 +376,7 @@ def test_an_answer_awaited_inline_is_left_to_the_asker_until_then():
     ask = replace(_ask(), inline_until=now + timedelta(seconds=20))
     assert ask.awaited_inline(now)
     assert not ask.awaited_inline(now + timedelta(seconds=21))
-    assert PodAsk.from_metadata(ask.to_metadata()) == ask
+    assert PodAsk.from_json(ask.to_json()) == ask
 
 
 class TestWhatTheAskerIsTold:
@@ -462,9 +466,7 @@ class TestWhichWaysAreOpen:
         assert open_modes(_run(outsider=True)) == OpenModes(False, False)
 
     def test_a_link_thread_may_not_pass_its_ask_on_over_a_link(self):
-        answering = _conversation(
-            metadata={ASK_KEY: _link_ask(from_pod=uuid4()).to_metadata()}
-        )
+        answering = _conversation(ask=_link_ask(from_pod=uuid4()))
         assert not open_modes(_run(answering)).over_link
 
     @pytest.mark.parametrize("source", sorted(HANDED_BACK_SOURCES))
@@ -500,9 +502,7 @@ class TestNarrowing:
 class TestTheLinkedAsker:
     def test_it_is_the_asking_pod_over_a_link_and_nobody_otherwise(self):
         asker = uuid4()
-        assert (
-            linked_asker_in({ASK_KEY: _link_ask(from_pod=asker).to_metadata()}) == asker
-        )
-        assert linked_asker_in({ASK_KEY: _ask().to_metadata()}) is None
-        assert linked_asker_in({ASK_KEY: "forged"}) is None
-        assert linked_asker_in(None) is None
+        linked = Audience.of(_conversation(ask=_link_ask(from_pod=asker)))
+        assert linked.asking_pod_id == asker
+        assert Audience.of(_conversation(ask=_ask())).asking_pod_id is None
+        assert Audience.of(_conversation()).asking_pod_id is None

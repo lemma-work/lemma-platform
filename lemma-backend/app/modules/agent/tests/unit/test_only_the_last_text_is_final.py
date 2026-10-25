@@ -101,8 +101,8 @@ async def _texts(model: FunctionModel, monkeypatch, **options) -> list[MessageDr
 
 
 def _final(draft: MessageDraft) -> bool:
-    # Unmarked assistant text is stored final (`RunMessageWriter.persist`).
-    return (draft.metadata or {}).get("is_final_answer", True) is True
+    # Undecided assistant text is stored final (`RunMessageWriter.persist`).
+    return draft.state.answer is None or draft.state.is_final_answer
 
 
 @pytest.mark.asyncio
@@ -154,15 +154,18 @@ async def test_an_answer_the_run_goes_on_past_is_not_the_final_answer(
     assert (finals[0].metadata or {}).get("structured_output") == {"verdict": "ok"}
 
 
+def _flag(draft: MessageDraft) -> bool | None:
+    """The draft's answer as the old flag read: None for undecided."""
+    answer = draft.state.answer
+    return None if answer is None else draft.state.is_final_answer
+
+
 def test_settling_a_response_leaves_only_a_closing_text_undecided() -> None:
     def message(draft: MessageDraft) -> AgentEvent:
         return AgentEvent(type=AgentEventType.MESSAGE, data=draft)
 
     def shown(events: list[AgentEvent]) -> list[tuple[str | None, object]]:
-        return [
-            (event.data.text, (event.data.metadata or {}).get("is_final_answer"))
-            for event in events
-        ]
+        return [(event.data.text, _flag(event.data)) for event in events]
 
     call = MessageDraft.of_tool_call(tool_name="t", tool_call_id="c", tool_args={})
     first, second = MessageDraft.of_text("a"), MessageDraft.of_text("b")

@@ -2,18 +2,21 @@
 
 Both the agent run and the approval executor must run in the *same* workspace
 session and cwd, so the resolution lives here instead of being duplicated. The
-location is configurable per conversation via ``metadata``:
+location is the conversation's own columns:
 
 - ``cwd`` — explicit working directory; a fresh root conversation gets a default
-  of ``/workspace/c/{date}/{slug}``. Stamped into metadata at creation
+  of ``/workspace/c/{date}/{slug}``. Stamped at creation
   (``ConversationService._apply_inherited_cwd``) and read back thereafter.
 - ``repo`` — a GitHub repository this conversation works in, as
   ``{owner, repo, ref?}``. It *derives* the cwd
   (``/workspace/repos/{owner}/{repo}``), so picking a project is the same act as
   picking a directory and there is no second source of truth to keep in step.
-- ``workspace_name`` / ``workspace_id`` — selects the workspace; defaults to the
-  single per-user workspace today. Kept metadata-driven so multi-workspace
-  switching becomes a metadata-only change later.
+- ``workspace_id`` / ``workspace_name`` — selects the workspace; defaults to the
+  single per-user workspace today.
+
+None of them is a client's to set: a conversation's directory is where its
+agent's shell starts and its files land, so a client that could write it could
+point a run at another conversation's files.
 
 A repo path is deliberately *not* conversation-scoped. One sandbox per user
 means two conversations on the same project share one checkout, the same way two
@@ -26,13 +29,11 @@ workspace cwd by swapping the ``/workspace`` prefix for ``/me`` — so an agent'
 scratchpad (``/workspace/c/{date}/{slug}``) and its pod filesystem
 (``/me/c/{date}/{slug}``) line up under the same short, human-readable path
 instead of a raw conversation UUID. No extra persisted field is needed: the cwd
-already lives in conversation metadata.
+already lives on the conversation.
 """
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_metadata import ConversationMetadataFields
-import re
 import secrets
 import string
 from collections.abc import Awaitable, Callable
@@ -42,70 +43,15 @@ from uuid import UUID
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.project_repo import (
+    ProjectRepo as ProjectRepo,
+    parse_project_repo as parse_project_repo,
+)
 
 _SLUG_ALPHABET = string.ascii_lowercase + string.digits
 _SLUG_LENGTH = 8
 _WORKSPACE_ROOT = WORKSPACE_ROOT
 _POD_ROOT = "/me"
-_REPOS_ROOT = f"{_WORKSPACE_ROOT}/repos"
-
-# An owner/repo pair becomes both a filesystem path and part of a clone URL, so
-# these are validated rather than trusted. The patterns are GitHub's own naming
-# rules, which have no room for a path separator, a `..`, or a leading `-` that
-# git would read as an option.
-_OWNER_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
-_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
-# A ref is passed to `git clone --branch`, so it must not begin with `-`.
-_REF_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]{0,254}$")
-
-
-@dataclass(frozen=True, slots=True)
-class ProjectRepo:
-    """A GitHub repository a conversation works in."""
-
-    owner: str
-    repo: str
-    ref: str | None = None
-    # No account here: the credential bridge clones as whatever the pod's
-    # `github` connector resolves to for the person acting, never as an account
-    # a conversation names.
-
-    @property
-    def full_name(self) -> str:
-        return f"{self.owner}/{self.repo}"
-
-    @property
-    def cwd(self) -> str:
-        return f"{_REPOS_ROOT}/{self.owner}/{self.repo}"
-
-    def as_metadata(self) -> dict[str, str]:
-        value = {"owner": self.owner, "repo": self.repo}
-        if self.ref:
-            value["ref"] = self.ref
-        return value
-
-
-def parse_project_repo(value: object) -> ProjectRepo | None:
-    """Read a repo out of untrusted metadata, or ``None`` if it isn't one.
-
-    Invalid input is dropped rather than raised on: metadata is a free-form JSON
-    object a client can put anything in, and a malformed repo should leave the
-    conversation on a normal scratchpad cwd rather than fail the whole run.
-    """
-    if not isinstance(value, dict):
-        return None
-    owner = str(value.get("owner") or "").strip()
-    repo = str(value.get("repo") or "").strip()
-    # `.git` is how a clone URL ends and how people paste repo names; it is
-    # never part of the directory a clone produces.
-    repo = repo.removesuffix(".git")
-    if not _OWNER_PATTERN.match(owner) or not _REPO_PATTERN.match(repo):
-        return None
-    if repo in {".", ".."}:
-        return None
-    raw_ref = str(value.get("ref") or "").strip()
-    ref = raw_ref if _REF_PATTERN.match(raw_ref) else None
-    return ProjectRepo(owner=owner, repo=repo, ref=ref)
 
 
 @dataclass(slots=True)
@@ -121,13 +67,13 @@ def generate_cwd_slug() -> str:
 
 
 def default_cwd_for(*, conversation_id: UUID, created_at: datetime) -> str:
-    """A deterministic fallback for legacy rows missing persisted cwd metadata."""
+    """A deterministic fallback for legacy rows missing a persisted cwd."""
     date = created_at.date().isoformat()
     return f"{_WORKSPACE_ROOT}/c/{date}/{conversation_id.hex[:_SLUG_LENGTH]}"
 
 
 def default_workspace_cwd(conversation: Conversation) -> str:
-    """A deterministic fallback for legacy rows missing persisted cwd metadata."""
+    """A deterministic fallback for legacy rows missing a persisted cwd."""
     return default_cwd_for(
         conversation_id=conversation.id, created_at=conversation.created_at
     )
@@ -139,152 +85,95 @@ def new_workspace_cwd(conversation: Conversation) -> str:
     return f"{_WORKSPACE_ROOT}/c/{date}/{generate_cwd_slug()}"
 
 
-def workspace_location_for(
-    *,
-    metadata: object,
-    conversation_id: UUID,
-    created_at: datetime,
-) -> WorkspaceLocation:
-    """Resolve a location from the three conversation fields it actually reads.
-
-    Split from ``resolve_workspace_location`` so callers holding the fields but
-    not the entity -- the API response, which derives ``pod_cwd`` -- go through
-    the same ladder rather than reimplementing it. Two implementations of this
-    would put a person's attachment in a directory the agent's cwd never points
-    at, which is the bug this exists to prevent.
-    """
-    metadata = metadata if isinstance(metadata, dict) else {}
-    workspace = metadata.get("workspace")
-    workspace = workspace if isinstance(workspace, dict) else {}
-    workspace_id = str(
-        workspace.get("id")
-        or metadata.get("workspace_id")
-        or metadata.get("workspace_name")
-        or "default"
-    )
-    repo = parse_project_repo(workspace.get("repo") or metadata.get("repo"))
-    # An explicit cwd still wins over the repo's derived one. Creation normally
-    # stamps the two to agree (`_apply_inherited_cwd`), so a disagreement here
-    # means a caller deliberately overrode the directory -- honour it, and let
-    # the checkout land where they asked rather than somewhere they didn't.
-    cwd = str(
-        workspace.get("cwd")
-        or ConversationMetadataFields.of(metadata).cwd
-        or (repo.cwd if repo else None)
-        or default_cwd_for(conversation_id=conversation_id, created_at=created_at)
-    )
-    return WorkspaceLocation(workspace_id=workspace_id, cwd=cwd, repo=repo)
-
-
 def resolve_workspace_location(conversation: Conversation) -> WorkspaceLocation:
-    return workspace_location_for(
-        metadata=conversation.metadata,
-        conversation_id=conversation.id,
-        created_at=conversation.created_at,
+    """Where ``conversation`` works.
+
+    An explicit cwd still wins over the repo's derived one. Creation normally
+    stamps the two to agree (`_apply_inherited_cwd`), so a disagreement here
+    means the server deliberately overrode the directory -- honour it, and let
+    the checkout land where it was asked rather than somewhere it wasn't.
+    """
+    repo = conversation.repo
+    return WorkspaceLocation(
+        workspace_id=conversation.workspace_id
+        or conversation.workspace_name
+        or "default",
+        cwd=conversation.cwd
+        or (repo.cwd if repo else None)
+        or default_workspace_cwd(conversation),
+        repo=repo,
     )
 
 
-async def apply_location_metadata(
+async def apply_location(
     conversation: Conversation,
     *,
     fetch_parent: Callable[[], Awaitable[Conversation | None]],
 ) -> None:
-    """Write the conversation's workspace location into its metadata, once.
+    """Write the conversation's workspace location onto it, once.
 
     A child (a sub-agent, or a conversation pinned under a PROJECT) inherits the
     parent's resolved cwd, project, and workspace selection, so it works
     alongside the parent instead of in a directory of its own. A root
-    conversation gets its own ``/workspace/c/{date}/{slug}``. An explicit ``cwd``
-    always wins over both.
+    conversation gets its own ``/workspace/c/{date}/{slug}``. A cwd its opener
+    set always wins over both.
 
-    A conversation created against a ``repo`` gets that repository's directory:
+    A conversation opened against a ``repo`` gets that repository's directory:
     picking a project *is* picking a directory, so there is only ever one thing
-    to keep in step. The repo is rewritten from its parsed form rather than
-    stored as the client sent it, so what is persisted is exactly what
-    ``resolve_workspace_location`` will read back.
+    to keep in step.
 
     The cwd is the single source of truth for both filesystems — the pod working
     directory (``/me/{suffix}``) is derived from it at read time — so nothing
     pod-specific is persisted here.
     """
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    conversation.metadata = metadata
-
-    repo = parse_project_repo(metadata.get("repo"))
-    if repo is not None:
-        _write_repo(metadata, repo)
-    else:
-        # An unparseable repo would resolve to nothing anyway; dropping it keeps
-        # metadata honest about what is actually in effect.
-        metadata.pop("repo", None)
-        metadata.pop("repo_full_name", None)
-
-    if ConversationMetadataFields.of(metadata).cwd:
+    if conversation.cwd:
         return
-    if repo is not None:
-        metadata["cwd"] = repo.cwd
+    if conversation.repo is not None:
+        conversation.cwd = conversation.repo.cwd
         return
 
     parent = await fetch_parent()
     if parent is None:
-        metadata["cwd"] = new_workspace_cwd(conversation)
+        conversation.cwd = new_workspace_cwd(conversation)
         return
 
-    parent_meta = parent.metadata if isinstance(parent.metadata, dict) else {}
     parent_location = resolve_workspace_location(parent)
-    metadata["cwd"] = parent_location.cwd
-    if parent_location.repo is not None:
-        _write_repo(metadata, parent_location.repo, overwrite=False)
-    for key in ("workspace", "workspace_id", "workspace_name"):
-        if key in parent_meta:
-            metadata.setdefault(key, parent_meta[key])
-
-
-def _write_repo(metadata: dict, repo: ProjectRepo, *, overwrite: bool = True) -> None:
-    write = metadata.__setitem__ if overwrite else metadata.setdefault
-    write("repo", repo.as_metadata())
-    # Flat and denormalized on purpose: conversation listing filters metadata by
-    # JSONB containment over string values only, so
-    # `?metadata.repo_full_name=owner/name` is the query that finds every
-    # conversation on a project. A nested key cannot be filtered at all.
-    write("repo_full_name", repo.full_name)
+    conversation.cwd = parent_location.cwd
+    if conversation.repo is None:
+        conversation.repo = parent_location.repo
+    conversation.workspace_id = conversation.workspace_id or parent.workspace_id
+    conversation.workspace_name = conversation.workspace_name or parent.workspace_name
 
 
 def has_recorded_cwd(conversation: Conversation) -> bool:
-    """Whether this conversation's own metadata names its directory."""
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    workspace = metadata.get("workspace")
-    workspace = workspace if isinstance(workspace, dict) else {}
-    return bool(workspace.get("cwd") or ConversationMetadataFields.of(metadata).cwd)
+    """Whether this conversation's own row names its directory."""
+    return bool(conversation.cwd)
 
 
 async def ensure_recorded_location(
     conversation: Conversation,
     *,
-    record: Callable[[UUID, str, str], Awaitable[None]],
+    record: Callable[[UUID, str], Awaitable[None]],
 ) -> WorkspaceLocation:
     """Resolve the location, writing the cwd down if nothing had written it.
 
-    Metadata is meant to be the single source of truth for where a conversation
-    works, and creation stamps it (`apply_location_metadata`). A row that
-    predates that, or that was created by some path which did not stamp, falls
-    back to `default_workspace_cwd` -- deterministic, so stable, but recomputed
-    forever and recorded nowhere. That is a source of truth in name only: the
-    moment the fallback's formula changes, every such conversation moves house,
-    and the files from its previous turns do not move with it.
+    The row is meant to be the single source of truth for where a conversation
+    works, and creation stamps it (`apply_location`). A row that predates that,
+    or that was created by some path which did not stamp, falls back to
+    `default_workspace_cwd` -- deterministic, so stable, but recomputed forever
+    and recorded nowhere. That is a source of truth in name only: the moment the
+    fallback's formula changes, every such conversation moves house, and the
+    files from its previous turns do not move with it.
 
-    So the first run that resolves one writes the answer down, through
-    `set_conversation_metadata_key` rather than a whole-metadata update, because
-    sibling keys (`is_sub_agent`, `surface_platform`) are written concurrently by
-    other paths. After that this is a pure read.
+    So the first run that resolves one writes the answer down, as the ``cwd``
+    column alone, so nothing else a concurrent writer is setting on the row is
+    overwritten. After that this is a pure read.
     """
     location = resolve_workspace_location(conversation)
     if has_recorded_cwd(conversation):
         return location
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    metadata["cwd"] = location.cwd
-    conversation.metadata = metadata
-    await record(conversation.id, "cwd", location.cwd)
+    conversation.cwd = location.cwd
+    await record(conversation.id, location.cwd)
     return location
 
 
@@ -302,22 +191,6 @@ def pod_cwd_from_workspace_cwd(workspace_cwd: str) -> str:
     if workspace_cwd.startswith(f"{_WORKSPACE_ROOT}/"):
         return f"{_POD_ROOT}/{workspace_cwd[len(_WORKSPACE_ROOT) + 1 :]}"
     return f"{_POD_ROOT}/{workspace_cwd.lstrip('/')}"
-
-
-def pod_cwd_for(
-    *,
-    metadata: object,
-    conversation_id: UUID,
-    created_at: datetime,
-) -> str:
-    """``resolve_pod_cwd`` for a caller holding the fields, not the entity."""
-    return pod_cwd_from_workspace_cwd(
-        workspace_location_for(
-            metadata=metadata,
-            conversation_id=conversation_id,
-            created_at=created_at,
-        ).cwd
-    )
 
 
 def resolve_pod_cwd(conversation: Conversation) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
+from app.modules.agent.domain.wire_metadata import message_wire_metadata
 
 
 def message_to_payload(message: Message) -> JsonObject:
@@ -23,6 +24,6 @@ def message_to_payload(message: Message) -> JsonObject:
         "tool_result": to_json_value(message.tool_result)
         if message.tool_result is not None
         else None,
-        "metadata": to_json_value(message.metadata or {}),
+        "metadata": to_json_value(message_wire_metadata(message)),
         "created_at": message.created_at.isoformat(),
     }

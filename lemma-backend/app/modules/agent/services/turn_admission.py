@@ -2,7 +2,7 @@
 
 `TurnCoordinator.start` decides whether a message joins a run, starts one, or
 waits. This is the part of that decision that is about the message rather than
-the lock: the metadata it is stored with, and the pause that holds it.
+the lock: what it is stored with, and the pause that holds it.
 
 A pause holds a message in two cases:
 
@@ -24,74 +24,63 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.domain.private_notes import (
-    NOTE_IN_DM_KEY,
-    WRITTEN_IN_LEMMA_KEY,
-    is_private_note,
     note_in_member_dm,
+    requested_private_note,
     written_in_lemma_into,
 )
-from app.modules.agent.domain.queued_messages import (
-    CLIENT_MESSAGE_ID,
-    DURING_ACTIVE_RUN,
-    SERVER_OWNED_KEYS,
-)
+from app.modules.agent.domain.queued_messages import SERVER_OWNED_KEYS
 from app.modules.agent.domain.value_objects import ConversationStatus
 
 
-def stamped(
+def admitted_state(
     message_metadata: dict[str, object] | None,
     conversation: Conversation,
     *,
     typed_in_lemma: bool,
-) -> dict[str, object] | None:
-    """The caller's metadata, with where it was written decided by the server.
+    client_message_id: str | None,
+) -> MessageState:
+    """What the server records about a user message, decided by the server.
 
-    A client never says it: the mark changes who the model takes the writer to
-    be, so a chat platform's payload or a client's body claiming it is dropped.
+    A note is the one mark the caller asks for, and it is read off the request
+    here, once. Where the message was written is never the caller's to say:
+    the mark changes who the model takes the writer to be, so it comes from
+    whether a person typed it in Lemma, and into what.
     """
-    if not message_metadata and not typed_in_lemma:
-        return message_metadata
-    marked = dict(message_metadata or {})
-    marked.pop(WRITTEN_IN_LEMMA_KEY, None)
-    written_in = written_in_lemma_into(conversation) if typed_in_lemma else None
-    if written_in is not None:
-        marked[WRITTEN_IN_LEMMA_KEY] = written_in
-    return marked or message_metadata
+    private_note = requested_private_note(message_metadata)
+    return MessageState(
+        client_message_id=client_message_id,
+        private_note=private_note,
+        private_note_in_dm=private_note and note_in_member_dm(conversation),
+        written_in=written_in_lemma_into(conversation) if typed_in_lemma else None,
+    )
 
 
 def user_message_metadata(
     message_metadata: dict[str, object] | None,
-    conversation: Conversation,
-    *,
-    joins_a_run: bool,
-    client_message_id: str | None,
 ) -> dict[str, object]:
-    """What a user message is stored with.
+    """What a user message keeps of what its caller passed as metadata.
 
-    The server's keys go on *after* the caller's are filtered, not before: a
-    surface builds this dict out of webhook fields and a client sends it in a
-    request body, and neither gets a vote on which run the message belongs to,
-    whether it has been delivered, or which send it is a retry of.
+    A surface builds this dict out of webhook fields and a client sends it in
+    a request body, and neither gets a vote on which run the message belongs
+    to, whether it has been delivered, or which send it is a retry of: every
+    key the server keeps in a column is dropped.
     """
-    metadata = {
+    return {
         key: value
         for key, value in (message_metadata or {}).items()
         if key not in SERVER_OWNED_KEYS
-        # `synthetic` marks a notice history assembly writes, which is read as
-        # Lemma's own and never defused; it is never stored, so a stored one
-        # could only be a caller imitating it.
-        and key not in {"author_user_id", "agent_run_id", NOTE_IN_DM_KEY, "synthetic"}
     }
-    metadata[DURING_ACTIVE_RUN] = joins_a_run
-    if client_message_id is not None:
-        metadata[CLIENT_MESSAGE_ID] = client_message_id
-    if is_private_note(metadata) and note_in_member_dm(conversation):
-        metadata[NOTE_IN_DM_KEY] = True
-    return metadata
+
+
+def message_source(message_metadata: dict[str, object] | None) -> str | None:
+    """The ``source`` its caller labelled a message with, if any."""
+    source = (message_metadata or {}).get("source")
+    return source if isinstance(source, str) and source else None
 
 
 @dataclass(frozen=True, slots=True)

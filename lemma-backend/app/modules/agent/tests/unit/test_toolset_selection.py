@@ -12,7 +12,7 @@ import pytest
 
 from app.core.authorization.context import ResourceType
 from app.modules.agent.domain.agent_kind import AgentKind
-from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.value_objects import AgentToolset, ConversationOrigin
 from app.modules.agent.tools.toolset_selection import (
     ALWAYS_ON_TOOLSETS,
     DECLARABLE_TOOLSETS,
@@ -38,8 +38,8 @@ def _agent(*toolsets: AgentToolset, kind: AgentKind = AgentKind.USER):
 
 
 def _conversation(*, is_sub_agent: bool = False):
-    metadata = {"is_sub_agent": True} if is_sub_agent else {}
-    return SimpleNamespace(id=uuid4(), metadata=metadata)
+    origin = ConversationOrigin.SUBAGENT if is_sub_agent else ConversationOrigin.CHAT
+    return SimpleNamespace(id=uuid4(), metadata={}, origin=origin)
 
 
 def _grants(*resource_types: ResourceType) -> AgentGrantSummary:

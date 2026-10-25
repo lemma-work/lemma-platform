@@ -103,7 +103,7 @@ async def test_a_wait_past_its_deadline_resumes_saying_the_wait_expired(
     assert "may still be running" in told.tool_result["message"]
 
     (_, resumed) = await runs(parent.conversation_id)
-    assert resumed.run_metadata["resumed_tool_call_id"] == call
+    assert resumed.resumed_tool_call_id == call
     (child_run,) = await runs(child.conversation_id)
     assert child_run.status == AgentRunStatus.RUNNING.value, (
         "giving up on a wait must not stop what was being waited on"

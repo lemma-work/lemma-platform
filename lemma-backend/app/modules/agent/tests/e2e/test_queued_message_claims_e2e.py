@@ -24,6 +24,7 @@ from app.modules.agent.infrastructure.models import (
     MessageModel,
 )
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
+from app.modules.agent.domain.value_objects import QueueState
 
 pytestmark = [pytest.mark.e2e]
 
@@ -57,7 +58,7 @@ async def _seed(db_session, scenario) -> tuple[UUID, UUID, list[MessageModel]]:
             role="user",
             kind="TEXT",
             text=text,
-            message_metadata={"during_active_run": index > 0},
+            queue_state=QueueState.QUEUED if index > 0 else QueueState.NONE,
             created_at=_BASE + timedelta(seconds=index),
         )
         for index, text in enumerate(
@@ -137,7 +138,7 @@ async def _seed_mixed(db_session, scenario, *, private_run: bool):
         conversation_id=conversation.id,
         status="RUNNING",
         agent_runtime={"profile_id": "system:lemma"},
-        run_metadata={"private_note": True} if private_run else {"source": "x"},
+        private_note=private_run,
         started_at=_BASE,
         created_at=_BASE,
     )
@@ -151,16 +152,14 @@ async def _seed_mixed(db_session, scenario, *, private_run: bool):
             role="user",
             kind="TEXT",
             text=text,
-            message_metadata=metadata,
+            queue_state=QueueState.QUEUED,
+            private_note=private_note,
             created_at=_BASE + timedelta(seconds=index),
         )
-        for index, (text, metadata) in enumerate(
+        for index, (text, private_note) in enumerate(
             [
-                (
-                    "Don't promise Friday.",
-                    {"during_active_run": True, "private_note": True},
-                ),
-                ("@lemmabot and the PO number?", {"during_active_run": True}),
+                ("Don't promise Friday.", True),
+                ("@lemmabot and the PO number?", False),
             ],
             start=1,
         )

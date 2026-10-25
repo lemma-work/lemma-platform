@@ -28,8 +28,9 @@ from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.server_metadata import client_metadata
-from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
+from app.modules.agent.domain.conversations import client_tags
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.surface_prompts import audience_notice
 from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.harnesses.channel_context import (
@@ -71,7 +72,7 @@ def test_a_members_conversation_stays_theirs_whatever_its_metadata_claims():
 
 def test_a_client_cannot_create_a_contacts_conversation():
     """No key a client sends names a contact: the column is the server's."""
-    sent = client_metadata({"audience": "contact", "contact_id": str(uuid4())})
+    sent = client_tags({"audience": "contact", "contact_id": str(uuid4())})
 
     assert Audience.of(_conversation(sent)) == Audience.member()
 
@@ -90,7 +91,7 @@ def _run(*, private: bool) -> AgentRun:
         conversation_id=uuid4(),
         started_at=datetime.now(timezone.utc),
         agent_runtime=_SYSTEM_RUNTIME,
-        metadata={PRIVATE_NOTE_KEY: True} if private else {"source": "user_message"},
+        state=RunState(private_note=private),
     )
 
 
@@ -102,7 +103,7 @@ def _message(run: AgentRun, text: str, *, note: bool = False) -> Message:
         role="user",
         kind=MessageKind.TEXT,
         text=text,
-        metadata={PRIVATE_NOTE_KEY: True} if note else {},
+        state=MessageState(private_note=note),
     )
 
 

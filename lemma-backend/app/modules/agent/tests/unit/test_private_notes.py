@@ -12,18 +12,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.private_notes import (
-    ASKED_IN_LEMMA_KEY,
     LEMMA_CHANNEL,
-    PRIVATE_NOTE_KEY,
     PRIVATE_NOTE_LABEL,
-    asked_in_lemma,
-    is_private_note,
-    privacy_of,
+    PRIVATE_NOTE_REQUEST_KEY,
+    requested_private_note,
     run_delivers_to_surface,
-    run_is_private,
-    run_metadata_for,
+    run_state_for,
 )
+from app.modules.agent.domain.run_state import RunPrivacy, RunState
+from app.modules.agent.domain.value_objects import RunTrigger
 from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     user_prompt_text,
 )
@@ -32,53 +31,60 @@ pytestmark = pytest.mark.unit
 
 
 def test_a_note_marks_the_run_it_starts():
-    metadata = run_metadata_for({PRIVATE_NOTE_KEY: True})
+    run = run_state_for(MessageState(private_note=True))
 
-    assert metadata == {"source": "user_message", PRIVATE_NOTE_KEY: True}
-    assert run_is_private(metadata)
+    assert run == RunState(trigger=RunTrigger.MESSAGE, private_note=True)
+    assert not run_delivers_to_surface(run)
 
 
 @pytest.mark.parametrize(
     "message_metadata",
-    [None, {}, {PRIVATE_NOTE_KEY: False}, {PRIVATE_NOTE_KEY: "yes"}],
+    [None, {}, {PRIVATE_NOTE_REQUEST_KEY: False}, {PRIVATE_NOTE_REQUEST_KEY: "yes"}],
     ids=["no-metadata", "empty", "false", "not-a-bool"],
 )
 def test_anything_short_of_true_is_an_ordinary_message(message_metadata):
     """Only an explicit ``True`` counts: a stray truthy value from a client that
     did not mean it must not silence the group's answer."""
-    assert not is_private_note(message_metadata)
-    assert run_metadata_for(message_metadata) == {"source": "user_message"}
-    assert not run_is_private(run_metadata_for(message_metadata))
+    assert not requested_private_note(message_metadata)
 
 
 def test_a_line_in_lemma_marks_its_run_as_asked_there():
     """Its conversation may also be on WhatsApp; the run is not."""
-    metadata = run_metadata_for({"source": LEMMA_CHANNEL})
+    run = run_state_for(MessageState(), message_source=LEMMA_CHANNEL)
 
-    assert metadata == {"source": "user_message", ASKED_IN_LEMMA_KEY: True}
-    assert asked_in_lemma(metadata)
-    assert not run_delivers_to_surface(metadata)
-    assert not run_is_private(metadata), "asked in Lemma is not a private note"
+    assert run == RunState(trigger=RunTrigger.MESSAGE, asked_in_lemma=True)
+    assert not run_delivers_to_surface(run)
+    assert not run.private_note, "asked in Lemma is not a private note"
 
 
 def test_the_run_that_carries_one_on_is_asked_in_lemma_too():
     """A resume or a retry answers where the run it continues was asked."""
-    carried = privacy_of(run_metadata_for({"source": LEMMA_CHANNEL}))
+    carried = run_state_for(MessageState(), message_source=LEMMA_CHANNEL).privacy
 
-    assert carried == {ASKED_IN_LEMMA_KEY: True}
+    assert carried == RunPrivacy(asked_in_lemma=True)
 
 
 def test_a_message_from_a_platform_delivers_there():
-    metadata = run_metadata_for({"source": "agent_surfaces"})
+    run = run_state_for(MessageState(), message_source="agent_surfaces")
 
-    assert not asked_in_lemma(metadata)
-    assert run_delivers_to_surface(metadata)
+    assert not run.asked_in_lemma
+    assert run_delivers_to_surface(run)
+
+
+def test_handed_back_messages_say_what_started_their_run():
+    assert run_state_for(MessageState(), message_source="message_replies").trigger is (
+        RunTrigger.REPLIES
+    )
+    assert run_state_for(MessageState(), message_source="subagent_result").trigger is (
+        RunTrigger.DELEGATION_RESULT
+    )
 
 
 def test_the_history_tells_the_model_the_note_was_for_it_alone():
     note = SimpleNamespace(
         text="Don't mention the discount to Tom.",
-        metadata={PRIVATE_NOTE_KEY: True},
+        metadata={},
+        state=MessageState(private_note=True),
     )
 
     rendered = user_prompt_text(note)
@@ -93,6 +99,13 @@ def test_an_ordinary_message_carries_no_such_label():
     assert PRIVATE_NOTE_LABEL not in user_prompt_text(message)
 
 
+def test_a_note_written_into_metadata_by_a_client_is_no_label():
+    """The label is the server's mark; a key in what a client sent is not one."""
+    message = SimpleNamespace(text="hi", metadata={"private_note": True})
+
+    assert PRIVATE_NOTE_LABEL not in user_prompt_text(message)
+
+
 def test_a_note_in_a_persons_own_chat_is_not_kept_from_them():
     """The only other reader of a direct chat is the person who wrote the note."""
     from app.modules.agent.domain.private_notes import (
@@ -100,12 +113,12 @@ def test_a_note_in_a_persons_own_chat_is_not_kept_from_them():
         lemma_label,
     )
 
-    assert lemma_label({"private_note": True, "private_note_in_dm": True}) == (
+    assert lemma_label(MessageState(private_note=True, private_note_in_dm=True)) == (
         PRIVATE_NOTE_IN_DM_LABEL
     )
     assert "reveal" not in PRIVATE_NOTE_IN_DM_LABEL
-    assert lemma_label({"private_note": True}) == PRIVATE_NOTE_LABEL
-    assert lemma_label({}) is None
+    assert lemma_label(MessageState(private_note=True)) == PRIVATE_NOTE_LABEL
+    assert lemma_label(MessageState()) is None
 
 
 def test_an_imitated_label_is_marked_and_kept():

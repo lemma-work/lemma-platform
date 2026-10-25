@@ -17,12 +17,14 @@ from uuid import uuid4
 import pytest
 
 from app.core.origin import Origin, OriginKind, origin_scope
-from app.modules.agent.domain.pod_asks import ASK_KEY
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.pod_asks import AskChain, AskMode, PodAsk
 from app.modules.agent.domain.run_origin import conversation_origin, run_origin
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     AgentRunStatus,
+    ConversationOrigin,
     MessageDraft,
 )
 from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
@@ -36,9 +38,19 @@ from app.modules.usage.contracts import AgentRunUsage
 pytestmark = pytest.mark.unit
 
 
-def _origin(metadata: dict[str, object] | None, parent_id=None) -> Origin | None:
-    return conversation_origin(
-        metadata=metadata, parent_id=parent_id, conversation_id=uuid4()
+def _conversation(**fields: object) -> Conversation:
+    return Conversation(user_id=uuid4(), pod_id=uuid4(), **fields)
+
+
+def _ask() -> PodAsk:
+    asker = uuid4()
+    return PodAsk(
+        from_pod_id=asker,
+        from_pod_name="Sales",
+        from_conversation_id=uuid4(),
+        for_user_id=None,
+        mode=AskMode.LINK,
+        chain=AskChain.start(asker),
     )
 
 
@@ -52,40 +64,42 @@ def _origin(metadata: dict[str, object] | None, parent_id=None) -> Origin | None
     ],
 )
 def test_a_scheduled_conversation_names_what_fired_it(schedule_type, kind) -> None:
-    metadata = {"source": "SCHEDULE", "started_by": "SCHEDULE"}
-    if schedule_type is not None:
-        metadata["schedule_type"] = schedule_type
-    assert _origin(metadata) == Origin(kind)
+    metadata = {"schedule_type": schedule_type} if schedule_type is not None else {}
+    conversation = _conversation(origin=ConversationOrigin.SCHEDULE, metadata=metadata)
+    assert conversation_origin(conversation) == Origin(kind)
 
 
 def test_a_surface_conversation_names_its_platform() -> None:
-    origin = _origin(
-        {"source": "agent_surfaces", "surface_platform": "SLACK", "surface_id": "s"}
+    conversation = _conversation(
+        origin=ConversationOrigin.SURFACE,
+        metadata={"surface_platform": "SLACK", "surface_id": "s"},
     )
-    assert origin == Origin(OriginKind.SURFACE, platform="slack")
+    assert conversation_origin(conversation) == Origin(
+        OriginKind.SURFACE, platform="slack"
+    )
 
 
 def test_a_workflow_step_is_the_workflow() -> None:
-    origin = _origin({"source": "WORKFLOW_RUN", "workflow_run_id": str(uuid4())})
-    assert origin == Origin(OriginKind.WORKFLOW)
+    conversation = _conversation(
+        origin=ConversationOrigin.WORKFLOW_STEP, workflow_run_id=uuid4()
+    )
+    assert conversation_origin(conversation) == Origin(OriginKind.WORKFLOW)
 
 
 @pytest.mark.parametrize(
-    ("kind", "metadata", "parent_id"),
+    ("kind", "fields"),
     [
-        ("chat", {}, None),
-        ("subagent", {}, uuid4()),
-        ("pod_ask", {ASK_KEY: {"from": "x"}}, None),
+        ("chat", {}),
+        ("subagent", {"origin": ConversationOrigin.SUBAGENT, "parent_id": uuid4()}),
+        ("pod_ask", {"origin": ConversationOrigin.POD_ASK, "ask": _ask()}),
     ],
 )
-def test_a_conversation_that_cannot_say_which_client_answers_none(
-    kind, metadata, parent_id
-) -> None:
+def test_a_conversation_that_cannot_say_which_client_answers_none(kind, fields) -> None:
     """A person's chat came through some client the row does not record. No
     origin is a gap; a guessed one is a wrong number."""
-    started = run_origin(metadata=metadata, parent_id=parent_id, conversation_id=1)
-    assert started.origin == kind
-    assert _origin(metadata, parent_id) is None
+    conversation = _conversation(**fields)
+    assert run_origin(conversation).origin == kind
+    assert conversation_origin(conversation) is None
 
 
 def _usage(**fields) -> AgentRunUsage:
@@ -155,13 +169,10 @@ def test_the_completed_event_carries_the_runs_origin_and_usage() -> None:
 
 
 def test_a_turn_run_by_a_worker_takes_the_origin_its_conversation_records() -> None:
-    conversation = SimpleNamespace(
-        id=uuid4(),
+    conversation = _conversation(
         organization_id=uuid4(),
-        pod_id=uuid4(),
-        agent_id=None,
-        parent_id=None,
-        metadata={"source": "SCHEDULE", "schedule_type": "DATASTORE"},
+        origin=ConversationOrigin.SCHEDULE,
+        metadata={"schedule_type": "DATASTORE"},
     )
     agent_run = SimpleNamespace(started_at=None)
 
@@ -179,12 +190,8 @@ def test_a_turn_run_by_a_worker_takes_the_origin_its_conversation_records() -> N
 
 
 def test_a_turn_run_inside_a_request_keeps_the_requests_origin() -> None:
-    conversation = SimpleNamespace(
-        id=uuid4(),
-        organization_id=None,
-        pod_id=uuid4(),
-        agent_id=None,
-        parent_id=None,
+    conversation = _conversation(
+        origin=ConversationOrigin.SURFACE,
         metadata={"surface_platform": "SLACK", "surface_id": "s"},
     )
     agent_run = SimpleNamespace(started_at=None)

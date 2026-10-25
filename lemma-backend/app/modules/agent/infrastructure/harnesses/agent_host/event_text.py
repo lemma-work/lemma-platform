@@ -14,7 +14,9 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import (
+    AnswerKind,
     AgentEvent,
     AgentEventType,
     JsonObject,
@@ -162,11 +164,8 @@ def narration_event(
         type=AgentEventType.MESSAGE,
         data=MessageDraft.of_text(
             text,
-            metadata={
-                "agent_host_object_id": object_id,
-                "is_final_answer": False,
-                "is_intermediate_assistant_message": True,
-            },
+            metadata={"agent_host_object_id": object_id},
+            state=MessageState(answer=AnswerKind.INTERMEDIATE),
         ),
         agent_run_id=agent_run_id,
     )
@@ -183,7 +182,8 @@ def thought_event(
         type=AgentEventType.MESSAGE,
         data=MessageDraft.of_thinking(
             text,
-            metadata={"agent_host_object_id": object_id, "is_final_answer": False},
+            metadata={"agent_host_object_id": object_id},
+            state=MessageState(answer=AnswerKind.NOT_FINAL),
         ),
         agent_run_id=agent_run_id,
     )

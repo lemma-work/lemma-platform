@@ -1,106 +1,39 @@
-"""The keys of a conversation's (or a run's) metadata JSON that code decides on.
+"""Where a conversation started, in the product-metrics vocabulary.
 
-Metadata is free-form JSON, and most of it is a client's business. A few keys
-are not: where the conversation works (``cwd``), what opened it (``source``),
-and which workflow run it belongs to (``workflow_run_id``). Read as
-``metadata.get("cwd")`` at each site, each read re-decided what a missing or
-mistyped value means. These models read them once, typed, and leniently: the
-JSON was written by every release since the key existed, and one unreadable
-value is read as absent rather than failing whatever asked.
-
-Views only -- the stored JSON is unchanged, and writers still write the plain
-keys, through ``origin_metadata`` where the origin is concerned.
+A view of its ``origin`` column, which says what the conversation is for --
+and of the platform its surface binding names, the one thing about it still
+kept in metadata until agent_surfaces' keys move to a table of their own.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Annotated
-from uuid import UUID
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict
-
-CWD_KEY = "cwd"
-SOURCE_KEY = "source"
-WORKFLOW_RUN_ID_KEY = "workflow_run_id"
-#: The ``source`` of a run started by ``POST .../retry``. Such a run owns no
-#: message of its own: it replays the person's turn, which stays on the run it
-#: retried.
-MANUAL_RETRY_SOURCE = "manual_retry"
+#: The label each origin was counted under when it was the ``source`` key.
+_SURFACE_LABELS: dict[ConversationOrigin, str] = {
+    ConversationOrigin.WORKFLOW_STEP: "workflow",
+    ConversationOrigin.SCHEDULE: "SCHEDULE",
+    ConversationOrigin.POD_ASK: "pod_ask",
+    ConversationOrigin.NOTIFICATION: "notification",
+    ConversationOrigin.CHANNEL: "lemma_channel",
+}
 
 
-def _text(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
+def surface_of(conversation: Conversation) -> str:
+    """Where ``conversation`` started, as ``product_metrics`` counts it.
 
-
-def _uuid(value: object) -> UUID | None:
-    if isinstance(value, UUID):
-        return value
-    try:
-        return UUID(str(value))
-    except ValueError:
-        return None
-
-
-LenientText = Annotated[str | None, BeforeValidator(_text)]
-LenientUuid = Annotated[UUID | None, BeforeValidator(_uuid)]
-
-
-class ConversationMetadataFields(BaseModel):
-    """The typed keys of a conversation's metadata. Everything else is ignored."""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    #: The workspace directory this conversation works in, once recorded.
-    cwd: LenientText = None
-    #: What opened it, when something other than a person in the app did.
-    source: LenientText = None
-    #: The workflow run it is a step of.
-    workflow_run_id: LenientUuid = None
-
-    @classmethod
-    def of(cls, metadata: object) -> ConversationMetadataFields:
-        if not isinstance(metadata, Mapping):
-            return cls()
-        return cls.model_validate(
-            {
-                key: metadata.get(key)
-                for key in (CWD_KEY, SOURCE_KEY, WORKFLOW_RUN_ID_KEY)
-                if metadata.get(key) is not None
-            }
-        )
-
-
-def source_of(metadata: object) -> str | None:
-    """``source`` off any metadata JSON -- a conversation's, a run's, a message's."""
-    if not isinstance(metadata, Mapping):
-        return None
-    return _text(metadata.get(SOURCE_KEY))
-
-
-def origin_metadata(*, source: str, workflow_run_id: UUID | None) -> dict[str, object]:
-    """The keys that say what opened a conversation, as they are stored."""
-    stamped: dict[str, object] = {SOURCE_KEY: source}
-    if workflow_run_id is not None:
-        stamped[WORKFLOW_RUN_ID_KEY] = str(workflow_run_id)
-    return stamped
-
-
-def surface_of(metadata: object) -> str:
-    """Where a conversation started, in the product-metrics vocabulary.
-
-    No ``source`` means a person opened it in the app (or through the API,
-    which writes the same rows and is not told apart here). An external
-    surface names its platform in ``surface_platform``; the label is folded
-    onto a fixed set by ``product_metrics.surface_label``.
+    A person in the app (or through the API, which writes the same rows and is
+    not told apart here) is ``app``. An external surface names its platform in
+    ``surface_platform``; the label is folded onto a fixed set by
+    ``product_metrics.surface_label``.
     """
-    if not isinstance(metadata, Mapping):
-        return "app"
-    if metadata.get(WORKFLOW_RUN_ID_KEY) is not None:
-        return "workflow"
-    source = source_of(metadata)
-    if source is None:
-        return "app"
-    if source == "agent_surfaces":
-        return _text(metadata.get("surface_platform")) or "other"
-    return source
+    stored = conversation.metadata or {}
+    platform = stored.get("surface_platform")
+    if conversation.origin is ConversationOrigin.SURFACE:
+        return platform if isinstance(platform, str) and platform else "other"
+    if conversation.origin is ConversationOrigin.CONTACT:
+        if stored.get("web_widget_id"):
+            return "web_widget"
+        return platform if isinstance(platform, str) and platform else "other"
+    return _SURFACE_LABELS.get(conversation.origin, "app")

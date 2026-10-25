@@ -2,7 +2,7 @@
 
 A remote harness cannot pause mid tool call, so what a person is asked inside
 an Agent Host turn is *parked* in that turn: an ``ask_user`` or
-``request_approval`` Lemma recorded over MCP (``parked_in_run`` on the call),
+``request_approval`` Lemma recorded over MCP (``parked_in_run_id`` on the call),
 or an ACP permission request the host holds open (the ``agent_host_permission``
 marker in its arguments). These are the two reads and the one write the
 parked window needs: how long the oldest such pause has gone unanswered, and
@@ -18,16 +18,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, exists, func, literal, or_, select, update
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import ColumnElement, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.modules.agent.domain.agent_host_permissions import AGENT_HOST_PERMISSION_KEY
 from app.modules.agent.domain.pausing_tools import (
-    PARKED_IN_RUN_KEY,
-    SUSPENDED_WHILE_PARKED_KEY,
     USER_PAUSING_TOOL_NAMES,
+    ParkedSuspension,
 )
 from app.modules.agent.domain.value_objects import AgentRunStatus, MessageKind
 from app.modules.agent.infrastructure.models import (
@@ -68,15 +66,12 @@ def in_a_run_suspended_while_parked() -> ColumnElement[bool]:
     """Correlated on ``MessageModel``: its run was ended for a parked pause."""
     return exists().where(
         AgentRunModel.id == MessageModel.agent_run_id,
-        AgentRunModel.run_metadata.has_key(SUSPENDED_WHILE_PARKED_KEY),
+        AgentRunModel.suspended_while_parked.is_not(None),
     )
 
 
 def _parked_in_run() -> ColumnElement[bool]:
-    return (
-        func.coalesce(MessageModel.message_metadata[PARKED_IN_RUN_KEY].astext, "false")
-        == "true"
-    )
+    return MessageModel.parked_in_run_id.is_not(None)
 
 
 def _unanswered() -> list[ColumnElement[bool]]:
@@ -153,19 +148,9 @@ async def mark_suspended_while_parked(
             AgentRunModel.status == AgentRunStatus.RUNNING.value,
         )
         .values(
-            run_metadata=func.coalesce(
-                AgentRunModel.run_metadata, literal({}, JSONB)
-            ).op("||")(
-                literal(
-                    {
-                        SUSPENDED_WHILE_PARKED_KEY: {
-                            "tool_call_id": pause.tool_call_id,
-                            "tool_name": pause.tool_name,
-                        }
-                    },
-                    JSONB,
-                )
-            )
+            suspended_while_parked=ParkedSuspension(
+                tool_call_id=pause.tool_call_id, tool_name=pause.tool_name
+            ).to_json()
         )
         .returning(AgentRunModel.id)
         .execution_options(synchronize_session=False)

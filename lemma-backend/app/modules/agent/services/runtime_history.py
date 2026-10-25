@@ -34,8 +34,6 @@ from uuid import UUID
 from app.modules.agent.domain.folded_turns import framed_folds, newest_folds
 from app.modules.agent.domain.history_notices import SYNTHETIC_NOTICE_PREFIX
 from app.modules.agent.domain.unattached_cut import newest_unattached
-from app.modules.agent.domain.private_notes import is_private_note, run_is_private
-from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.domain.entities import (
     AgentRun,
@@ -326,17 +324,13 @@ def without_private_runs(
     what they saw of it (``folded_turns``).
     """
     private = {
-        run.id
-        for run in runs
-        if run.id != current_run_id and run_is_private(run.metadata)
+        run.id for run in runs if run.id != current_run_id and run.state.private_note
     }
     return [
         message
         for message in messages
         if message.agent_run_id not in private
-        and not (
-            message.agent_run_id != current_run_id and is_private_note(message.metadata)
-        )
+        and not (message.agent_run_id != current_run_id and message.state.private_note)
     ]
 
 
@@ -392,9 +386,7 @@ def _closed_by_stop(run: AgentRun, messages: list[Message]) -> list[Message]:
     answers, so they read as coming after the stop, not as part of what
     was stopped.
     """
-    stop_after = (run.metadata or {}).get(STOP_REQUESTED_AFTER_SEQUENCE)
-    if isinstance(stop_after, bool) or not isinstance(stop_after, int):
-        stop_after = None
+    stop_after = run.state.stop_requested_after_sequence
     cut = len(messages)
     if stop_after is not None:
         while (

@@ -19,15 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.modules.agent.domain.conversation_lifecycle import conversation_status_for
-from app.modules.agent.domain.conversation_metadata import (
-    MANUAL_RETRY_SOURCE,
-    SOURCE_KEY,
-)
 from app.modules.agent.domain.entities import (
     AgentRun as AgentRunEntity,
     Message as MessageEntity,
     MessageRole,
 )
+from app.modules.agent.domain.run_state import RunFailure, RunState
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     TERMINAL_AGENT_RUN_STATUSES,
@@ -35,9 +32,9 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
     ConversationStatus,
-    JsonObject,
     JsonValue,
     MessageKind,
+    RunTrigger,
 )
 from app.modules.agent.infrastructure.db.base import UnitOfWorkRepository
 from app.modules.agent.infrastructure.db.conversations import (
@@ -63,7 +60,7 @@ class Runs(UnitOfWorkRepository):
         agent_id: UUID | None,
         agent_runtime: AgentRuntimeConfig,
         parent_run_id: UUID | None = None,
-        metadata: JsonObject | None = None,
+        state: RunState | None = None,
     ) -> AgentRunEntity:
         now = datetime.now(timezone.utc)
         model = AgentRunModel(
@@ -73,7 +70,7 @@ class Runs(UnitOfWorkRepository):
             status=AgentRunStatus.RUNNING.value,
             agent_runtime=agent_runtime.model_dump(mode="json"),
             started_at=now,
-            run_metadata=metadata,
+            **AgentRunModel.state_values(state or RunState()),
         )
         self.session.add(model)
         await update_conversation_status(
@@ -96,7 +93,7 @@ class Runs(UnitOfWorkRepository):
         error_code: str | None = None,
         error_reason: str | None = None,
         output_data: JsonValue | None = None,
-        stamp: JsonObject | None = None,
+        stop_requested_after_sequence: int | None = None,
     ) -> AgentRunFinishResult | None:
         """Move a run on from the status it is in, once, whoever else is trying.
 
@@ -126,7 +123,6 @@ class Runs(UnitOfWorkRepository):
                     select(
                         AgentRunModel.status,
                         AgentRunModel.conversation_id,
-                        AgentRunModel.run_metadata,
                     ).where(AgentRunModel.id == agent_run_id)
                 )
             ).one_or_none()
@@ -156,16 +152,17 @@ class Runs(UnitOfWorkRepository):
             ):
                 # Stopped, not failed: it must not inherit a failure's message.
                 next_status, error = AgentRunStatus.STOPPED, None
-            metadata = dict(row.run_metadata or {})
-            metadata.pop("failure", None)
-            if next_status == AgentRunStatus.FAILED and error_code:
-                metadata["failure"] = {"code": error_code, "reason": error_reason}
-            metadata.update(stamp or {})
             values: dict[str, object] = {
                 "status": next_status.value,
                 "error": error,
-                "run_metadata": metadata,
+                "failure": (
+                    RunFailure(code=error_code, reason=error_reason).to_json()
+                    if next_status == AgentRunStatus.FAILED and error_code
+                    else None
+                ),
             }
+            if stop_requested_after_sequence is not None:
+                values["stop_requested_after_sequence"] = stop_requested_after_sequence
             if output_data is not None:
                 values["output_data"] = output_data
             if next_status in TERMINAL_AGENT_RUN_STATUSES:
@@ -274,11 +271,11 @@ class Runs(UnitOfWorkRepository):
         common path never reaches this query at all.
 
         A run started by a retry owns no message -- the turn it replays stays
-        on the run it retried -- so it is asked for by its ``source`` instead.
+        on the run it retried -- so it is asked for by its ``trigger`` instead.
         Without that, a retry that failed too could never be retried again.
         """
         is_retry = (
-            select(AgentRunModel.run_metadata[SOURCE_KEY].astext == MANUAL_RETRY_SOURCE)
+            select(AgentRunModel.trigger == RunTrigger.RETRY)
             .where(AgentRunModel.id == agent_run_id)
             .scalar_subquery()
         )
@@ -331,6 +328,26 @@ class Runs(UnitOfWorkRepository):
             .limit(limit)
         )
         return [model.to_entity() for model in result.scalars()]
+
+    async def claim_delivered_to_parent(self, agent_run_id: UUID) -> bool:
+        """Mark a sub-agent run's result as handed to its parent, if nobody
+        has. True if this call did.
+
+        One ``UPDATE`` naming the column's emptiness, so of two racing
+        collectors the second waits on the first's row lock, re-reads it, and
+        finds it set.
+        """
+        claimed = await self.session.execute(
+            update(AgentRunModel)
+            .where(
+                AgentRunModel.id == agent_run_id,
+                AgentRunModel.delivered_to_parent_at.is_(None),
+            )
+            .values(delivered_to_parent_at=func.now())
+            .returning(AgentRunModel.id)
+            .execution_options(synchronize_session=False)
+        )
+        return claimed.scalar_one_or_none() is not None
 
     async def last_run_message(self, agent_run_id: UUID) -> MessageEntity | None:
         """The step this run committed last, if any (``ix_agent_message_run_sequence``)."""

@@ -15,27 +15,16 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import exists, func, literal, select, update
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.domain.entities import Message as MessageEntity
 from app.modules.agent.domain.value_objects import (
-    JsonObject,
+    AnswerKind,
     MessageKind,
     MessageRole,
 )
 from app.modules.agent.infrastructure.models import MessageModel
-
-#: What a step on the way is marked with (``narration_event``); an answer is not.
-INTERMEDIATE_KEY = "is_intermediate_assistant_message"
-#: Says why a message sent as narration reads as the answer: the run ended
-#: without one and these were its last words. Queryable, so how often an
-#: adapter leaves an answer to be found this way can be counted.
-ANSWER_FROM_LAST_WORDS_KEY = "answer_from_last_words"
-#: The return a run's ending makes up for a call nobody answered
-#: (``missing_tool_return_events``): no result of the tool's own.
-SYNTHETIC_RETURN_KEY = "synthetic_tool_return"
 
 
 async def last_text(
@@ -61,11 +50,9 @@ async def tool_result_after(
 ) -> bool:
     """Whether a tool returned a result in this run after ``sequence``.
 
-    A return the run's ending made up for a call that never ran is not one.
+    A return the run's ending made up for a call that never ran is not one
+    (``missing_tool_return_events``): no result of the tool's own.
     """
-    synthetic = func.coalesce(
-        MessageModel.message_metadata[SYNTHETIC_RETURN_KEY].astext, "false"
-    )
     return bool(
         await session.scalar(
             select(
@@ -73,7 +60,7 @@ async def tool_result_after(
                     MessageModel.agent_run_id == agent_run_id,
                     MessageModel.sequence > sequence,
                     MessageModel.kind == MessageKind.TOOL_RETURN.value,
-                    synthetic != "true",
+                    ~MessageModel.synthetic_tool_return,
                 )
             )
         )
@@ -83,19 +70,17 @@ async def tool_result_after(
 async def mark_final_answer(
     session: AsyncSession, *, message_id: UUID
 ) -> MessageEntity | None:
-    """Make a message its run's answer: final, and no longer a step on the way."""
-    answer: JsonObject = {"is_final_answer": True, ANSWER_FROM_LAST_WORDS_KEY: True}
+    """Make a message its run's answer: final, and no longer a step on the way.
+
+    ``LAST_WORDS`` says why a message sent as narration reads as the answer:
+    the run ended without one and these were its last words. Queryable, so how
+    often an adapter leaves an answer to be found this way can be counted.
+    """
     row = (
         await session.execute(
             update(MessageModel)
             .where(MessageModel.id == message_id)
-            .values(
-                message_metadata=func.coalesce(
-                    MessageModel.message_metadata, literal({}, JSONB)
-                )
-                .op("-")(INTERMEDIATE_KEY)
-                .op("||")(literal(answer, JSONB))
-            )
+            .values(answer=AnswerKind.LAST_WORDS)
             .returning(MessageModel)
             .execution_options(synchronize_session=False)
         )
@@ -104,9 +89,6 @@ async def mark_final_answer(
 
 
 __all__ = [
-    "ANSWER_FROM_LAST_WORDS_KEY",
-    "INTERMEDIATE_KEY",
-    "SYNTHETIC_RETURN_KEY",
     "last_text",
     "mark_final_answer",
     "tool_result_after",

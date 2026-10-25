@@ -374,7 +374,6 @@ class WebChat:
                 user_id=owner,
                 title=f"{widget.name}: {name or 'visitor'}"[:255],
                 metadata={
-                    "source": "web_widget",
                     "web_widget_id": str(widget.id),
                     "web_session_id": str(session.id),
                 },

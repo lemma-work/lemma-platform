@@ -29,19 +29,15 @@ from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     AgentRunStatus,
     AgentRuntimeConfig,
+    ConversationOrigin,
     ConversationStatus,
     JsonObject,
 )
 from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
 from app.modules.agent.domain.subagent_results import (
-    COLLECTED_BY_AWAIT,
-    COLLECTED_BY_STATUS,
     DELIVERED_STATUSES,
-    PARENT_RUN_KEY,
-    REPORTS_TO_PARENT_KEY,
-    SUBAGENTS_OUT_KEY,
 )
-from app.modules.agent.domain.subagent_spawn import SPAWN_KEY, spawn_key
+from app.modules.agent.domain.subagent_spawn import spawn_key
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.pauses import Pauses
@@ -232,26 +228,18 @@ class SubAgentService:
                         uow, deps, is_self=is_self, target_name=target_name
                     ),
                     require_execute_grant=not is_self,
-                    metadata={
-                        # Source of truth for depth=1 gating (RunToolAssembler):
-                        # this child IS a sub-agent, so its run gets no spawn tools.
-                        "is_sub_agent": True,
-                        "spawned_by_agent": deps.agent_name,
-                        PARENT_RUN_KEY: str(deps.agent_run_id)
-                        if deps.agent_run_id
-                        else None,
-                        "self_spawned": is_self,
-                        SPAWN_KEY: key,
-                        REPORTS_TO_PARENT_KEY: True,
-                        **in_call,
-                    },
+                    # The source of truth for depth=1 gating (RunToolAssembler):
+                    # this child IS a sub-agent, so its run gets no spawn tools.
+                    origin=ConversationOrigin.SUBAGENT,
+                    parent_run_id=deps.agent_run_id,
+                    spawn_key=key,
+                    reports_to_parent=True,
+                    call=in_call,
                     instructions=worker_canvas_note() if in_call else None,
                 )
                 if spawn_call is not None:
                     await Conversations(uow).set_spawn_call(conversation.id, spawn_call)
-                await Conversations(uow).set_conversation_metadata_key(
-                    deps.conversation_id, SUBAGENTS_OUT_KEY, True
-                )
+                await Conversations(uow).mark_delegations_out(deps.conversation_id)
                 result = await service.add_user_message_and_start_run(
                     conversation_id=conversation.id,
                     user_id=deps.user_id,
@@ -404,7 +392,7 @@ class SubAgentService:
             if report["status"] == _NEEDS_INPUT:
                 report.update(await _open_question(uow, conversation_id))
             elif latest.status in DELIVERED_STATUSES:
-                await mark_collected(uow, latest.id, by=COLLECTED_BY_STATUS)
+                await mark_collected(uow, latest.id)
                 await uow.commit()
             return report
 
@@ -427,10 +415,8 @@ class SubAgentService:
                 )
                 # This run gave the child its work now, so this run is the one
                 # that may collect the result (`domain/subagent_results`).
-                await Conversations(uow).set_conversation_metadata_key(
-                    conversation_id,
-                    PARENT_RUN_KEY,
-                    str(deps.agent_run_id) if deps.agent_run_id else None,
+                await Conversations(uow).set_parent_run(
+                    conversation_id, deps.agent_run_id
                 )
                 result = await service.add_user_message_and_start_run(
                     conversation_id=conversation_id,
@@ -512,7 +498,7 @@ class SubAgentService:
                     if report["status"] != _NEEDS_INPUT and (
                         run.status in DELIVERED_STATUSES
                     ):
-                        await mark_collected(uow, run.id, by=COLLECTED_BY_AWAIT)
+                        await mark_collected(uow, run.id)
                         await uow.commit()
                     return report
             if loop.time() >= deadline:

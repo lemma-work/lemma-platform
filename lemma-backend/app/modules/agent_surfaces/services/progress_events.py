@@ -108,8 +108,7 @@ def _is_final_answer_event(event: AgentEvent) -> bool:
     data = event.data
     if not isinstance(data, MessageDraft):
         return False
-    metadata = data.metadata or {}
-    return metadata.get("is_final_answer") is True
+    return data.state.is_final_answer
 
 
 def _is_agent_host_permission_event(event: AgentEvent) -> bool:

@@ -25,7 +25,7 @@ from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.services.brief_lines import run_is_unattended, run_source_of
+from app.modules.agent.services.brief_lines import run_is_unattended, run_trigger_of
 
 logger = get_logger(__name__)
 
@@ -41,7 +41,7 @@ def budget_for_run(run: object) -> RunSpend:
     """
     wall_clock = (
         agent_settings.agent_run_budget_unattended_wall_clock_seconds
-        if run_is_unattended(run_source_of(run))
+        if run_is_unattended(run_trigger_of(run))
         else agent_settings.agent_run_budget_wall_clock_seconds
     )
     return RunSpend(

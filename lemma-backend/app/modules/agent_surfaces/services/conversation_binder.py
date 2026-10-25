@@ -249,7 +249,6 @@ def _surface_metadata(
         surface.surface_type.value, parsed.metadata
     )
     return {
-        "source": "agent_surfaces",
         "surface_id": str(surface.id),
         "surface_platform": surface.surface_type.value,
         "external_channel_id": parsed.external_channel_id,

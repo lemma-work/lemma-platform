@@ -236,10 +236,8 @@ async def test_failed_run_persists_structured_reason_without_overwriting_termina
         run = await uow.session.get(AgentRunModel, run_id)
         assert run is not None
         assert run.status == "FAILED"
-        assert run.run_metadata == {
-            "preserved": True,
-            "failure": {"code": "USAGE_LIMIT_EXCEEDED", "reason": "exhausted"},
-        }
+        assert run.run_metadata == {"preserved": True}
+        assert run.failure == {"code": "USAGE_LIMIT_EXCEEDED", "reason": "exhausted"}
         conversation = await uow.session.get(ConversationModel, conversation_id)
         assert conversation is not None
         await uow.session.refresh(conversation, ["agent_runs"])

@@ -75,9 +75,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     )
     # Deliberately the legacy root: a conversation recorded before the move
     # keeps the cwd it was stamped with, and rebinding must not re-home it.
-    await Conversations(uow).set_conversation_metadata_key(
-        conversation_id, "cwd", "/workspace/c/test/sandbox"
-    )
+    await Conversations(uow).record_cwd(conversation_id, "/workspace/c/test/sandbox")
     previous = await db_session.get(AgentRunModel, old_run_id)
     assert previous is not None
     previous.status = "FAILED"
@@ -157,10 +155,8 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
     assert stored["host_id"] == str(machine["host_id"])
     assert "instructions_digest" not in stored
     assert stored["pending_instructions"]["digest"] == "new-instructions"
-    assert (
-        await Conversations(uow).get_conversation_metadata_key(conversation_id, "cwd")
-        == "/workspace/c/test/sandbox"
-    )
+    kept = await Conversations(uow).get_conversation(conversation_id)
+    assert kept is not None and kept.cwd == "/workspace/c/test/sandbox"
     assert (
         await remember_provider_session(
             uow,

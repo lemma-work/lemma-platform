@@ -4,8 +4,8 @@ One place for the queue: the predicate every party agrees on, counting what is
 still owed an answer, claiming messages into a run, marking them as waiting on
 a question, and the three writes the Agent Host's steering added -- marking a
 message as on its way to a host, recording what the host said, and withdrawing
-one nobody is carrying yet. All of it is about the metadata keys in
-``domain/queued_messages.py``.
+one nobody is carrying yet. All of it is about a message's ``queue_state``
+(``domain/queued_messages.py``).
 
 Every write here is one ``UPDATE ... RETURNING`` (or ``DELETE ... RETURNING``)
 whose ``WHERE`` restates the state it moves the message out of. That is what
@@ -22,25 +22,14 @@ from uuid import UUID
 from sqlalchemy import delete, func, or_, select, update
 
 from app.modules.agent.domain.entities import Message as MessageEntity
-from app.modules.agent.domain.queued_messages import (
-    DURING_ACTIVE_RUN,
-    WAITING_ON_ANSWER,
-    STEER_DISPATCHED_AT,
-    STEER_UNDELIVERED,
-    STEERED_INTO_RUN,
+from app.modules.agent.domain.value_objects import (
+    UNANSWERED_QUEUE_STATES,
+    AgentRunStatus,
+    MessageRole,
+    QueueState,
 )
-from app.modules.agent.domain.value_objects import AgentRunStatus, MessageRole
-from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
 from app.modules.agent.infrastructure.db.base import UnitOfWorkRepository
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
-
-
-def stamp(**values: str):
-    """``metadata || jsonb_build_object(...)``: add keys, keep the rest."""
-    arguments: list[str] = []
-    for key, value in values.items():
-        arguments.extend((key, value))
-    return MessageModel.message_metadata.op("||")(func.jsonb_build_object(*arguments))
 
 
 def in_order(rows) -> list[MessageEntity]:
@@ -56,16 +45,11 @@ def unclaimed_queued_messages(
 ):
     """Messages that arrived after this run started and nobody has read yet.
 
-    ``start`` stamps ``during_active_run`` on a message it appends to a run
-    already in flight, because that run loaded its history before the
-    message existed. ``steered_into_run`` is stamped back by whoever
-    delivered it into a model request, so the same predicate answers both
-    questions that matter: what to steer in next, and what is still owed an
-    answer once the run ends.
-
-    Compared as text rather than cast to boolean, because the column is free
-    JSONB -- a cast would raise on a row where something else wrote a
-    non-boolean under that key, and a miscount is the better failure.
+    ``start`` queues a message it appends to a run already in flight,
+    because that run loaded its history before the message existed. Whoever
+    delivered it into a model request marks it steered, so the same predicate
+    answers both questions that matter: what to steer in next, and what is
+    still owed an answer once the run ends.
 
     ``as_run`` keeps to messages of the run's own kind, which is what may be
     steered into it: a private note must not shape an answer that goes to the
@@ -81,8 +65,7 @@ def unclaimed_queued_messages(
     criteria = (
         MessageModel.agent_run_id == agent_run_id,
         MessageModel.role == MessageRole.USER.value,
-        MessageModel.message_metadata[DURING_ACTIVE_RUN].astext == "true",
-        MessageModel.message_metadata[STEERED_INTO_RUN].astext.is_(None),
+        MessageModel.queue_state.in_(UNANSWERED_QUEUE_STATES),
         *(
             (MessageModel.sequence > after_sequence,)
             if after_sequence is not None
@@ -93,13 +76,7 @@ def unclaimed_queued_messages(
         return (*criteria, _is_note() if notes else ~_is_note())
     if as_run:
         run = (
-            select(
-                func.coalesce(
-                    AgentRunModel.run_metadata[PRIVATE_NOTE_KEY].astext == "true",
-                    False,
-                ).label("private"),
-                AgentRunModel.status,
-            )
+            select(AgentRunModel.private_note.label("private"), AgentRunModel.status)
             .where(AgentRunModel.id == agent_run_id)
             .subquery()
         )
@@ -111,9 +88,7 @@ def unclaimed_queued_messages(
 
 
 def _is_note():
-    return func.coalesce(
-        MessageModel.message_metadata[PRIVATE_NOTE_KEY].astext == "true", False
-    )
+    return MessageModel.private_note
 
 
 class QueuedMessages(UnitOfWorkRepository):
@@ -154,12 +129,7 @@ class QueuedMessages(UnitOfWorkRepository):
         private note; None when nothing is queued. A follow-up turn answers one
         kind, and the oldest message decides which goes first."""
         flag = await self.session.scalar(
-            select(
-                func.coalesce(
-                    MessageModel.message_metadata[PRIVATE_NOTE_KEY].astext == "true",
-                    False,
-                )
-            )
+            select(MessageModel.private_note)
             .where(
                 *unclaimed_queued_messages(agent_run_id, after_sequence=after_sequence)
             )
@@ -215,9 +185,8 @@ class QueuedMessages(UnitOfWorkRepository):
                     ),
                 )
                 .values(
-                    message_metadata=stamp(
-                        **{STEERED_INTO_RUN: str(into_run_id or agent_run_id)}
-                    )
+                    queue_state=QueueState.STEERED,
+                    steered_into_run_id=into_run_id or agent_run_id,
                 )
                 .returning(MessageModel)
                 .execution_options(synchronize_session=False)
@@ -239,11 +208,9 @@ class QueuedMessages(UnitOfWorkRepository):
                 update(MessageModel)
                 .where(
                     *unclaimed_queued_messages(agent_run_id),
-                    MessageModel.message_metadata[WAITING_ON_ANSWER].astext.is_(None),
+                    MessageModel.queue_state != QueueState.WAITING_ON_ANSWER,
                 )
-                .values(
-                    message_metadata=stamp(**{WAITING_ON_ANSWER: str(agent_run_id)})
-                )
+                .values(queue_state=QueueState.WAITING_ON_ANSWER)
                 .returning(MessageModel)
                 .execution_options(synchronize_session=False)
             )
@@ -258,15 +225,15 @@ class QueuedMessages(UnitOfWorkRepository):
         Not a claim: the message stays owed until the host says it landed
         (``settle_steer``). It only stops the next check sending it again.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc)
         rows = (
             await self.session.execute(
                 update(MessageModel)
                 .where(
                     *unclaimed_queued_messages(agent_run_id, as_run=True),
-                    MessageModel.message_metadata[STEER_DISPATCHED_AT].astext.is_(None),
+                    MessageModel.steer_dispatched_at.is_(None),
                 )
-                .values(message_metadata=stamp(**{STEER_DISPATCHED_AT: now}))
+                .values(steer_dispatched_at=now)
                 .returning(MessageModel)
                 .execution_options(synchronize_session=False)
             )
@@ -288,12 +255,13 @@ class QueuedMessages(UnitOfWorkRepository):
         carries it -- and says why, which also makes it withdrawable again.
 
         Returns the updated message, or None when it was no longer queued: the
-        person withdrew it, or the host reported twice.
+        person withdrew it, or the host reported twice. The host's reason for an
+        undelivered steer is logged by the caller, not kept.
         """
-        values = (
-            {STEERED_INTO_RUN: str(agent_run_id)}
+        values: dict[str, object] = (
+            {"queue_state": QueueState.STEERED, "steered_into_run_id": agent_run_id}
             if delivered
-            else {STEER_UNDELIVERED: (detail or "undelivered")[:512]}
+            else {"queue_state": QueueState.STEER_UNDELIVERED}
         )
         row = (
             await self.session.execute(
@@ -302,7 +270,7 @@ class QueuedMessages(UnitOfWorkRepository):
                     MessageModel.id == message_id,
                     *unclaimed_queued_messages(agent_run_id),
                 )
-                .values(message_metadata=stamp(**values))
+                .values(**values)
                 .returning(MessageModel)
                 .execution_options(synchronize_session=False)
             )
@@ -317,20 +285,18 @@ class QueuedMessages(UnitOfWorkRepository):
         The whole condition is in the ``DELETE``, so a message that a run
         claimed -- or that went to a host -- a moment before is simply not
         matched rather than deleted out from under the agent reading it. See
-        ``domain.queued_messages.is_withdrawable`` for the rule in words.
+        ``MessageState.is_withdrawable`` for the rule in words.
         """
-        metadata = MessageModel.message_metadata
         deleted = await self.session.execute(
             delete(MessageModel)
             .where(
                 MessageModel.id == message_id,
                 MessageModel.conversation_id == conversation_id,
                 MessageModel.role == MessageRole.USER.value,
-                metadata[DURING_ACTIVE_RUN].astext == "true",
-                metadata[STEERED_INTO_RUN].astext.is_(None),
+                MessageModel.queue_state.in_(UNANSWERED_QUEUE_STATES),
                 or_(
-                    metadata[STEER_DISPATCHED_AT].astext.is_(None),
-                    metadata[STEER_UNDELIVERED].astext.is_not(None),
+                    MessageModel.steer_dispatched_at.is_(None),
+                    MessageModel.queue_state == QueueState.STEER_UNDELIVERED,
                 ),
             )
             .returning(MessageModel.id)

@@ -197,7 +197,7 @@ async def test_the_choice_is_written_on_the_run_and_read_back(db_session, scenar
         conversation_id=UUID(created.json()["id"]),
         status="RUNNING",
         started_at=datetime.now(timezone.utc),
-        run_metadata={"source": "user_message"},
+        run_metadata={"kept": "beside it"},
     )
     db_session.add(run)
     await db_session.flush()
@@ -210,7 +210,7 @@ async def test_the_choice_is_written_on_the_run_and_read_back(db_session, scenar
     assert await read_run_execution(uow, run.id) == choice
     await db_session.refresh(run)
     # Written beside what was there, not over it.
-    assert run.run_metadata["source"] == "user_message"
+    assert run.run_metadata["kept"] == "beside it"
 
 
 @pytest.mark.asyncio
@@ -250,7 +250,7 @@ async def test_a_host_sandbox_follows_the_conversations_latest_host_run(
             status="COMPLETED",
             started_at=start,
             created_at=start + timedelta(seconds=offset),
-            run_metadata={"source": "user_message"},
+            run_metadata={"kept": "beside it"},
         )
         db_session.add(run)
         await db_session.flush()
@@ -263,7 +263,7 @@ async def test_a_host_sandbox_follows_the_conversations_latest_host_run(
         status="RUNNING",
         started_at=start,
         created_at=start + timedelta(seconds=5),
-        run_metadata={"source": "user_message"},
+        run_metadata={"kept": "beside it"},
     )
     db_session.add(later)
     await db_session.flush()

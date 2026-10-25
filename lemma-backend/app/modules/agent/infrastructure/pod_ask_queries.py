@@ -1,9 +1,9 @@
 """Finding the conversation an ask opened, and delivering its answer once.
 
-An ask lives on the conversation it opened in the pod being asked, under the
-``ask`` metadata key (``domain/pod_asks.py``), so both questions here are about
-that key. The thread lookup is a containment match the ``conversation_metadata``
-GIN index answers.
+An ask lives on the conversation it opened in the pod being asked, in its
+``ask`` column (``domain/pod_asks.py``), so both questions here are about that
+column. The thread lookup is a containment match the ``ix_agent_conv_ask`` GIN
+index answers.
 
 The delivery claim is one ``UPDATE ... RETURNING`` whose ``WHERE`` restates the
 state it moves the ask out of -- "not yet delivered for this run" -- so the
@@ -13,7 +13,6 @@ same answer, and neither has to take a lock to know.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_metadata import source_of
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
@@ -22,7 +21,7 @@ from sqlalchemy import func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.pod_asks import ASK_KEY, AskMode
+from app.modules.agent.domain.pod_asks import AskMode, PodAsk
 from app.modules.agent.domain.value_objects import ConversationStatus, MessageRole
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
@@ -75,12 +74,10 @@ class PodAskQueries:
             .where(
                 ConversationModel.pod_id == to_pod_id,
                 ConversationModel.user_id == owner_user_id,
-                ConversationModel.conversation_metadata.contains(
+                ConversationModel.ask.contains(
                     {
-                        ASK_KEY: {
-                            "from_conversation_id": str(from_conversation_id),
-                            "mode": mode.value,
-                        }
+                        "from_conversation_id": str(from_conversation_id),
+                        "mode": mode.value,
                     }
                 ),
             )
@@ -99,8 +96,8 @@ class PodAskQueries:
         rows = await self.session.scalars(
             select(ConversationModel.id)
             .where(
-                ConversationModel.conversation_metadata.contains(
-                    {ASK_KEY: {"from_conversation_id": str(from_conversation_id)}}
+                ConversationModel.ask.contains(
+                    {"from_conversation_id": str(from_conversation_id)}
                 ),
             )
             .order_by(ConversationModel.created_at, ConversationModel.id)
@@ -116,13 +113,8 @@ class PodAskQueries:
             select(ConversationModel.id, ConversationModel.user_id).where(
                 ConversationModel.pod_id == to_pod_id,
                 ConversationModel.status.in_(_BUSY_STATUSES),
-                ConversationModel.conversation_metadata.contains(
-                    {
-                        ASK_KEY: {
-                            "from_pod_id": str(from_pod_id),
-                            "mode": AskMode.LINK.value,
-                        }
-                    }
+                ConversationModel.ask.contains(
+                    {"from_pod_id": str(from_pod_id), "mode": AskMode.LINK.value}
                 ),
             )
         )
@@ -140,13 +132,8 @@ class PodAskQueries:
             )
             .where(
                 ConversationModel.pod_id == to_pod_id,
-                ConversationModel.conversation_metadata.contains(
-                    {
-                        ASK_KEY: {
-                            "from_pod_id": str(from_pod_id),
-                            "mode": AskMode.LINK.value,
-                        }
-                    }
+                ConversationModel.ask.contains(
+                    {"from_pod_id": str(from_pod_id), "mode": AskMode.LINK.value}
                 ),
                 AgentRunModel.created_at >= since,
             )
@@ -164,24 +151,33 @@ class PodAskQueries:
             .order_by(MessageModel.sequence.desc())
             .limit(1)
         )
-        return source_of(metadata)
+        source = metadata.get("source") if isinstance(metadata, dict) else None
+        return source if isinstance(source, str) and source else None
+
+    async def set_ask(self, conversation_id: UUID, ask: PodAsk) -> None:
+        """Replace the ask a thread is answering: a further ask in the same
+        thread, from the same conversation, continues it."""
+        await self.session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == conversation_id)
+            .values(ask=ask.to_json())
+        )
+        await self.session.flush()
 
     async def claim_delivery(self, *, conversation_id: UUID, run_id: UUID) -> bool:
         """Mark this run's answer delivered; ``False`` if it already was."""
-        delivered = ConversationModel.conversation_metadata[
-            (ASK_KEY, _DELIVERED_RUN_KEY)
-        ].astext
+        delivered = ConversationModel.ask[_DELIVERED_RUN_KEY].astext
         claimed = await self.session.scalar(
             update(ConversationModel)
             .where(
                 ConversationModel.id == conversation_id,
-                ConversationModel.conversation_metadata.has_key(ASK_KEY),
+                ConversationModel.ask.is_not(None),
                 delivered.is_distinct_from(str(run_id)),
             )
             .values(
-                conversation_metadata=func.jsonb_set(
-                    ConversationModel.conversation_metadata,
-                    array([ASK_KEY, _DELIVERED_RUN_KEY]),
+                ask=func.jsonb_set(
+                    ConversationModel.ask,
+                    array([_DELIVERED_RUN_KEY]),
                     literal(str(run_id), JSONB),
                     True,
                 )

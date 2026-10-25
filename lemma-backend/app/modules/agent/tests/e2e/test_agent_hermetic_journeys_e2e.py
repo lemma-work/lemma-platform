@@ -19,6 +19,9 @@ from app.modules.test_support.e2e.scripted_model import (
 )
 from app.modules.test_support.e2e.waiters import eventually
 from sandbox_runtime.paths import WORKSPACE_ROOT
+from app.modules.agent.infrastructure.models import ConversationModel
+from app.core.infrastructure.db.session import async_session_maker
+from sqlalchemy import update
 
 pytestmark = pytest.mark.e2e
 
@@ -1389,18 +1392,27 @@ async def test_a_project_conversation_is_checked_out_before_python_runs(
         json={
             "agent_name": agent_name,
             "title": "On a project",
-            "metadata": {
-                "mock_llm_script": script,
-                "repo": {"owner": owner, "repo": repo},
-            },
+            "metadata": {"mock_llm_script": script},
         },
     )
     assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
     conversation_id = conversation.json()["id"]
+    # A project is the server's to open a conversation on (a schedule's
+    # webhook names one): the repo is a column no request reaches.
+    async with async_session_maker() as session:
+        await session.execute(
+            update(ConversationModel)
+            .where(ConversationModel.id == UUID(conversation_id))
+            .values(repo={"owner": owner, "repo": repo}, cwd=None)
+        )
+        await session.commit()
+    read = await authenticated_client.get(
+        f"/pods/{pod_id}/conversations/{conversation_id}"
+    )
     # The repo derives the directory: one source of truth, not two to keep in
     # step.
-    recorded_cwd = conversation.json()["metadata"]["cwd"]
-    assert recorded_cwd == f"{WORKSPACE_ROOT}/repos/{owner}/{repo}", conversation.json()
+    recorded_cwd = read.json()["workspace_cwd"]
+    assert recorded_cwd == f"{WORKSPACE_ROOT}/repos/{owner}/{repo}", read.json()
 
     events = await _send_message(
         authenticated_client,

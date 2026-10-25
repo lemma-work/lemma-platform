@@ -40,9 +40,6 @@ from app.modules.agent.domain.pod_ask_rules import (
     plan_ask,
 )
 from app.modules.agent.domain.pod_asks import (
-    ASK_KEY,
-    ASK_SOURCE,
-    ASKS_OUT_KEY,
     AnswerOutcome,
     AskChain,
     AskMode,
@@ -54,6 +51,7 @@ from app.modules.agent.domain.pod_asks import (
 )
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
+    ConversationOrigin,
     ConversationStatus,
 )
 from app.modules.agent.infrastructure.pod_ask_queries import (
@@ -344,9 +342,7 @@ class PodAskService:
                 reset_current_context(token)
             # Marks this conversation as one that may be owed answers, so its
             # own completions look for any that arrived while it was paused.
-            await conversations.set_conversation_metadata_key(
-                asking.id, ASKS_OUT_KEY, True
-            )
+            await conversations.mark_delegations_out(asking.id)
             await uow.commit()
         logger.info(
             "agent.pod_ask.asked",
@@ -438,16 +434,15 @@ class PodAskService:
                 ask,
                 delivered_run_id=previous.delivered_run_id if previous else None,
             )
-            await conversations.set_conversation_metadata_key(
-                thread_id, ASK_KEY, kept.to_metadata()
-            )
+            await PodAskQueries(uow).set_ask(thread_id, kept)
             return thread_id
         created = await self._conversation_service(uow).create_conversation(
             pod_id=teammate.pod_id,
             agent_name=None,
             user_id=owner_user_id,
             instructions=instructions,
-            metadata={"source": ASK_SOURCE, ASK_KEY: ask.to_metadata()},
+            origin=ConversationOrigin.POD_ASK,
+            ask=ask,
         )
         return created.id
 

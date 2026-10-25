@@ -11,7 +11,6 @@ from app.modules.agent.domain.calls import (
     CANVAS_TOOL_NAMES,
     CallMark,
     CallRole,
-    call_mark,
     coordinator_brief,
     worker_canvas_note,
 )
@@ -24,27 +23,24 @@ pytestmark = pytest.mark.unit
 
 def test_a_call_mark_round_trips_and_a_worker_inherits_the_call() -> None:
     mark = CallMark(call_id=uuid4(), role=CallRole.COORDINATOR)
-    assert call_mark({"call": mark.as_metadata()}) == mark
+    assert CallMark.from_json(mark.to_json()) == mark
     assert mark.for_worker() == CallMark(call_id=mark.call_id, role=CallRole.WORKER)
-    assert call_mark({"call": {"call_id": "nope", "role": "coordinator"}}) is None
-    assert call_mark({"call": "x"}) is None
-    assert call_mark(None) is None
+    assert CallMark.from_json({"call_id": "nope", "role": "coordinator"}) is None
+    assert CallMark.from_json("x") is None
+    assert CallMark.from_json(None) is None
 
 
 def test_only_the_coordinator_gets_the_voice_and_nothing_else_is_added() -> None:
-    def conversation(metadata: dict[str, object] | None) -> SimpleNamespace:
-        return SimpleNamespace(metadata=metadata)
+    def conversation(call: CallMark | None) -> SimpleNamespace:
+        return SimpleNamespace(call=call)
 
     call_id = uuid4()
     coordinator = CallMark(call_id=call_id, role=CallRole.COORDINATOR)
-    [toolset] = _call_toolsets(conversation({"call": coordinator.as_metadata()}))
+    [toolset] = _call_toolsets(conversation(coordinator))
     assert set(toolset.tools) == {"relay_to_voice"}  # type: ignore[attr-defined]
     # Its sub-agents show things with `display_resource` like any run.
-    assert (
-        _call_toolsets(conversation({"call": coordinator.for_worker().as_metadata()}))
-        == []
-    )
-    assert _call_toolsets(conversation({})) == []
+    assert _call_toolsets(conversation(coordinator.for_worker())) == []
+    assert _call_toolsets(conversation(None)) == []
     assert _call_toolsets(None) == []
 
 

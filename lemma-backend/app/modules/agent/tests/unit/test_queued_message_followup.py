@@ -23,6 +23,8 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.services.conversation_turns import TurnCoordinator
 from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.value_objects import RunTrigger
 
 
 def _runtime() -> AgentRuntimeConfig:
@@ -43,7 +45,7 @@ def _coordinator(
     queued: int,
     active_run: AgentRun | None = None,
     notes: int = 0,
-    finished_metadata: dict | None = None,
+    finished_state: RunState | None = None,
     queues: dict | None = None,
 ):
     """A coordinator over a fake queue.
@@ -60,7 +62,7 @@ def _coordinator(
         agent_runtime=_runtime(),
     )
     finished = _run(conversation.id, AgentRunStatus.COMPLETED)
-    finished.metadata = finished_metadata or {}
+    finished.state = finished_state or RunState()
     created = _run(conversation.id)
     waiting = {finished.id: (queued, notes), **(queues or {})}
 
@@ -114,10 +116,9 @@ async def test_a_message_queued_behind_a_busy_run_gets_its_own_turn() -> None:
     # the pooled connection is handed back.
     assert superseded == []
     # No message is appended: the messages already exist, unanswered.
-    assert repository.create_agent_run.await_args.kwargs["metadata"] == {
-        "source": "queued_messages",
-        "queued_behind_agent_run_id": str(finished.id),
-    }
+    assert repository.create_agent_run.await_args.kwargs["state"] == RunState(
+        trigger=RunTrigger.FOLLOW_UP, queued_behind_run_id=finished.id
+    )
     # The turn is written in the same transaction as the run it executes.
     turn = uow.session.item("agent.turn")
     assert turn["dedup_key"] == f"agent-run:{created.id}"
@@ -260,8 +261,8 @@ async def test_a_note_queued_behind_a_run_is_answered_where_nobody_else_sees() -
         conversation=conversation, completed_run_id=finished.id
     )
 
-    metadata = repository.create_agent_run.await_args.kwargs["metadata"]
-    assert metadata["private_note"] is True
+    state = repository.create_agent_run.await_args.kwargs["state"]
+    assert state.private_note is True
     assert repository.claim_queued_user_messages.await_args.kwargs["notes"] is True
 
 
@@ -276,10 +277,10 @@ async def test_the_kind_a_followup_did_not_answer_is_remembered_for_the_next() -
         conversation=conversation, completed_run_id=finished.id
     )
 
-    metadata = repository.create_agent_run.await_args.kwargs["metadata"]
+    state = repository.create_agent_run.await_args.kwargs["state"]
     # The oldest was a note, so this one answers notes; the other message waits.
-    assert metadata["private_note"] is True
-    assert metadata["queued_leftovers_behind"] == [str(finished.id)]
+    assert state.private_note is True
+    assert state.queued_leftovers_behind == [finished.id]
 
 
 @pytest.mark.asyncio
@@ -287,7 +288,7 @@ async def test_what_an_earlier_run_left_waiting_is_answered_next() -> None:
     earlier = uuid4()
     coordinator, conversation, repository, _uow, finished, _created = _coordinator(
         queued=0,
-        finished_metadata={"queued_leftovers_behind": [str(earlier)]},
+        finished_state=RunState(queued_leftovers_behind=[earlier]),
         queues={earlier: (1, 0)},
     )
 
@@ -296,7 +297,7 @@ async def test_what_an_earlier_run_left_waiting_is_answered_next() -> None:
     )
 
     assert started is not None
-    metadata = repository.create_agent_run.await_args.kwargs["metadata"]
-    assert "private_note" not in metadata
-    assert metadata["queued_behind_agent_run_id"] == str(earlier)
+    state = repository.create_agent_run.await_args.kwargs["state"]
+    assert state.private_note is False
+    assert state.queued_behind_run_id == earlier
     assert repository.claim_queued_user_messages.await_args.args == (earlier,)

@@ -168,7 +168,7 @@ async def test_a_decision_commits_with_the_item_that_carries_it_out(scenario) ->
     assert result["executed"] is True
     (first, resumed) = await runs(seeded.conversation_id)
     assert first.id == paused
-    assert resumed.run_metadata["resumed_tool_call_id"] == approval_id
+    assert resumed.resumed_tool_call_id == approval_id
     assert await _items(seeded, approval_id) == 0
 
 
@@ -311,7 +311,7 @@ async def test_a_worker_killed_after_the_claim_never_runs_the_tool_again(
     assert await _chores_left(scenario) == 1, "the approved delete ran again"
     (first, resumed) = await runs(seeded.conversation_id)
     assert first.id == paused
-    assert resumed.run_metadata["resumed_tool_call_id"] == approval_id
+    assert resumed.resumed_tool_call_id == approval_id
     assert await _items(seeded, approval_id) == 0
     print(f"APPROVAL_KILL_RESULT settled_after_lease_seconds={settled_seconds:.2f}")
 

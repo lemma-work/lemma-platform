@@ -16,7 +16,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.modules.agent.domain.entities import AgentRun, Message
-from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
+from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
@@ -106,7 +106,7 @@ def test_a_stopped_run_is_closed_before_what_was_said_after_stop() -> None:
     run answers, so the stop is said between the work and that line."""
     [run] = _conversation(1)
     run.status = AgentRunStatus.STOPPED
-    run.metadata = {STOP_REQUESTED_AFTER_SEQUENCE: 5}
+    run.state = RunState(stop_requested_after_sequence=5)
     run.messages.append(
         Message(
             conversation_id=run.conversation_id,

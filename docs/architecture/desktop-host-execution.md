@@ -41,9 +41,9 @@ of these hold; otherwise it gets the VM sandbox, exactly as before
    `wait_for` waking qualifies only when the run it continues -- the newest
    earlier run in the conversation that is not itself a wake -- was one of
    those. The conversation itself must have been opened in the app: one that
-   a workflow, a schedule, a surface or a notification opened carries a
-   `source` (or `workflow_run_id`, `started_by`) in its metadata, and no run
-   in it ever executes on the host, whatever later arrives in it. A teammate's
+   a workflow, a schedule, a surface or a notification opened says so in its
+   `origin`, and no run in it ever executes on the host, whatever later
+   arrives in it. A teammate's
    reply to a message the agent sent (`message_replies`) never qualifies:
    somebody else's words would drive commands on the user's Mac. Nor does an
    inbound channel message (Slack, email, Telegram, WhatsApp -- the platform's
@@ -499,19 +499,18 @@ contract left to it.
 
 - **Selection** (§2) is `agent/services/host_execution_selection.py`, called
   once from `build_run_context`. "Triggering human" is read from how the run
-  started: a person in Lemma's own app qualifies (`user_message`,
-  `queued_messages`, `manual_retry`, `approval_resume`, `person`). A wake
-  (`agent_wait`, `wait_resume`) qualifies only through the run it continues:
-  the conversation's earlier runs are walked back past other wakes
-  (`run_execution_record.earlier_run_sources`), and the first that is not a
-  wake has to be one of those person sources. `message_replies` -- a
-  teammate's reply -- never qualifies. A conversation whose metadata carries
-  `source`, `workflow_run_id`, `started_by`, `surface_platform` or
-  `is_sub_agent` was not opened in the app (`opened_in_app`), so no run in it
-  qualifies: that covers workflows, schedules, surfaces, notifications and
-  sub-agents, and a channel sender resolved to the paired user too, because
-  that identity is the platform's assertion, not the user's session. An
-  unknown source does not qualify. A Mac that cannot open the workspace at selection time gives
+  started, the run's `trigger`: a person in Lemma's own app qualifies
+  (`MESSAGE`, `FOLLOW_UP`, `RETRY`, `RESUME`). A continuation (`WAKE`,
+  `DELEGATION_RESULT`) qualifies only through the run it continues: the
+  conversation's earlier runs are walked back past other continuations
+  (`run_execution_record.earlier_run_triggers`), and the first that is not
+  one has to be one of those person triggers. `REPLIES` -- a teammate's reply
+  -- never qualifies. A conversation whose `origin` is not `CHAT`, `PROJECT`
+  or `CALL`, or that a surface has bound (`surface_platform`), was not opened
+  in the app (`opened_in_app`), so no run in it qualifies: that covers
+  workflows, schedules, surfaces, notifications and sub-agents, and a channel
+  sender resolved to the paired user too, because that identity is the
+  platform's assertion, not the user's session. A Mac that cannot open the workspace at selection time gives
   the run the VM; nothing has run yet, so nothing moves.
 - **Where the choice is recorded.** A host sandbox's id is a UUIDv8 tagged
   `lmhost`, derived from the conversation (`workspace/domain/host_execution.py`),

@@ -30,8 +30,8 @@ sub-agent controls nor the ``agent_<name>`` spawn tools, so a sub-agent cannot
 spawn its own. That subtraction happens last, after the always-on set, or
 sub-agents would be handed back the very toolsets they are withheld from.
 
-The depth rule reads ``is_sub_agent``, stamped by ``SubAgentService.spawn``, and
-deliberately not ``parent_id``: a conversation can have a parent -- pinned under
+The depth rule reads the conversation's ``origin`` (``SUBAGENT``), set by
+``SubAgentService.spawn``, and deliberately not ``parent_id``: a conversation can have a parent -- pinned under
 a project, say -- without being a sub-agent, and those keep their spawning
 ability.
 """
@@ -44,7 +44,7 @@ from app.core.authorization.context import ResourceType
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.outsiders import OUTSIDER_TOOLSETS, Audience
-from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.domain.value_objects import AgentToolset, ConversationOrigin
 from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
 
 # What the agent editor offers and ``Agent.toolsets`` is expected to hold. Each
@@ -196,10 +196,7 @@ class ResolvedToolsets:
 
 def is_sub_agent_run(conversation: Conversation | None) -> bool:
     """Whether this conversation was spawned as somebody else's sub-agent."""
-    if conversation is None:
-        return False
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    return bool(metadata.get("is_sub_agent"))
+    return getattr(conversation, "origin", None) is ConversationOrigin.SUBAGENT
 
 
 def derived_toolsets(grants: AgentGrantSummary | None) -> frozenset[AgentToolset]:

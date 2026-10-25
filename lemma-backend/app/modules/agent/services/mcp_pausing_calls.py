@@ -33,8 +33,8 @@ from uuid import UUID, uuid4
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.pausing_tools import (
-    PARKED_IN_RUN_KEY,
     PAUSING_TOOL_NAMES,
     USER_PAUSING_TOOL_NAMES,
 )
@@ -94,8 +94,8 @@ async def record_pausing_tool_call(
                 # still going while the host's bridge waits for it; a resume
                 # would put a second run on the turn (`PauseResume`). A wait
                 # is not parked: it ends the remote run (`suspend_remote_run`).
-                metadata=(
-                    {PARKED_IN_RUN_KEY: True}
+                state=(
+                    MessageState(parked_in_run_id=agent_run_id)
                     if tool_name in USER_PAUSING_TOOL_NAMES
                     else None
                 ),

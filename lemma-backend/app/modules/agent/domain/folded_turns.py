@@ -25,14 +25,11 @@ bound of their own, and the notice says when it left some out.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
+from uuid import UUID
 
 from app.modules.agent.domain.entities import Message, MessageKind, MessageRole
 from app.modules.agent.domain.history_notices import SYNTHETIC_NOTICE_PREFIX
-
-#: On a message copied from a conversation that lost its seat when its contact
-#: was merged into another: the conversation it came from.
-FOLDED_FROM_KEY = "folded_from"
 
 #: Opens each stretch of copies in the history a run reads.
 FOLDED_CHAT_OPENS = (
@@ -51,10 +48,9 @@ FOLDED_CHAT_ENDS = (
 )
 
 
-def folded_from(metadata: Mapping[str, object] | None) -> str | None:
+def folded_from(message: Message) -> UUID | None:
     """The conversation a copy came from; None for a message nobody copied."""
-    value = (metadata or {}).get(FOLDED_FROM_KEY)
-    return value if isinstance(value, str) else None
+    return message.state.folded_from
 
 
 def newest_folds(
@@ -68,7 +64,7 @@ def newest_folds(
     copies = [
         index
         for index, message in enumerate(messages)
-        if folded_from(message.metadata) is not None
+        if folded_from(message) is not None
     ]
     left_out = set(copies[: max(0, len(copies) - keep)])
     kept = [message for index, message in enumerate(messages) if index not in left_out]
@@ -85,7 +81,7 @@ def framed_folds(messages: Sequence[Message], *, cut: bool = False) -> list[Mess
     framed: list[Message] = []
     stretch: str | None = None
     for message in messages:
-        fold = folded_from(message.metadata)
+        fold = folded_from(message)
         if fold != stretch:
             if stretch is not None:
                 framed.extend(_closing(framed[-1], newest=newest))

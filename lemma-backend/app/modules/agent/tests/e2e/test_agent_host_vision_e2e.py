@@ -301,17 +301,17 @@ async def test_a_repo_backed_conversation_reaches_a_remote_harness(
     )
 
     created = await scenario.owner_client.post(
-        f"/pods/{scenario.pod_id}/conversations",
-        json={
-            "title": "on a project",
-            # The shape `parse_project_repo` accepts. A bare
-            # "owner/name" string is dropped, which is the point of
-            # parsing untrusted metadata at all.
-            "metadata": {"repo": {"owner": "lemma-work", "repo": "lemma-platform"}},
-        },
+        f"/pods/{scenario.pod_id}/conversations", json={"title": "on a project"}
     )
     assert created.status_code in {200, 201}, created.text
     conversation_id = created.json()["id"]
+    # A conversation on a project is the server's to open: the repo is a
+    # column no request reaches. Stamped as opening it against one would.
+    await db_session.execute(
+        update(ConversationModel)
+        .where(ConversationModel.id == UUID(conversation_id))
+        .values(repo={"owner": "lemma-work", "repo": "lemma-platform"}, cwd=None)
+    )
 
     run = AgentRunModel(
         conversation_id=conversation_id,
@@ -342,7 +342,7 @@ async def test_a_repo_backed_conversation_reaches_a_remote_harness(
 async def test_a_conversation_without_a_recorded_cwd_gets_one_written_down(
     db_session, scenario
 ):
-    """Metadata is the source of truth, so it has to actually hold the answer.
+    """The row is the source of truth, so it has to actually hold the answer.
 
     Creation stamps the cwd, but a row that predates that stamping -- or one
     written by a path that skipped it -- resolved through a deterministic
@@ -364,7 +364,7 @@ async def test_a_conversation_without_a_recorded_cwd_gets_one_written_down(
     await db_session.execute(
         update(ConversationModel)
         .where(ConversationModel.id == conversation_id)
-        .values(conversation_metadata={})
+        .values(cwd=None)
     )
     run = AgentRunModel(
         conversation_id=conversation_id,
@@ -386,9 +386,7 @@ async def test_a_conversation_without_a_recorded_cwd_gets_one_written_down(
     )
 
     stored = await db_session.scalar(
-        select(ConversationModel.conversation_metadata).where(
-            ConversationModel.id == conversation_id
-        )
+        select(ConversationModel.cwd).where(ConversationModel.id == conversation_id)
     )
-    assert stored.get("cwd") == ctx.get_workspace_cwd(), stored
-    assert stored["cwd"].startswith(f"{WORKSPACE_ROOT}/c/"), stored
+    assert stored == ctx.get_workspace_cwd(), stored
+    assert stored.startswith(f"{WORKSPACE_ROOT}/c/"), stored

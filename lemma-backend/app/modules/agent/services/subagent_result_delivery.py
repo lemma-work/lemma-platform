@@ -25,12 +25,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.subagent_results import (
-    COLLECTED_BY_DELIVERY,
-    COLLECTED_KEY,
     DELIVERED_STATUSES,
-    SUBAGENTS_OUT_KEY,
-    collector_run_id,
-    reports_to_parent,
     result_message,
     result_metadata,
 )
@@ -42,9 +37,7 @@ from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
-from app.modules.agent.infrastructure.run_execution_record import (
-    claim_run_metadata_key,
-)
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
@@ -64,9 +57,10 @@ class _Owed:
     metadata: dict[str, object]
 
 
-async def mark_collected(uow: SqlAlchemyUnitOfWork, run_id: UUID, *, by: str) -> bool:
-    """Record that a child run's result reached its parent. True if first."""
-    return await claim_run_metadata_key(uow, run_id, key=COLLECTED_KEY, value=by)
+async def mark_collected(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> bool:
+    """Record that a child run's result reached its parent -- by delivery, an
+    await, a status check or a wait. True if first."""
+    return await Runs(uow).claim_delivered_to_parent(run_id)
 
 
 class SubagentResultDelivery:
@@ -84,11 +78,9 @@ class SubagentResultDelivery:
         if conversation is None:
             return 0
         delivered = 0
-        if conversation.parent_id is not None and reports_to_parent(
-            conversation.metadata
-        ):
+        if conversation.parent_id is not None and conversation.reports_to_parent:
             delivered += await self.deliver_owed(parent_id=conversation.parent_id)
-        if (conversation.metadata or {}).get(SUBAGENTS_OUT_KEY) is True:
+        if conversation.delegations_out:
             delivered += await self.deliver_owed(parent_id=conversation.id)
         return delivered
 
@@ -160,7 +152,7 @@ class SubagentResultDelivery:
             if not _finished_and_owed(child, latest, busy_run=busy_run):
                 continue
             assert latest is not None
-            if not await mark_collected(uow, latest.id, by=COLLECTED_BY_DELIVERY):
+            if not await mark_collected(uow, latest.id):
                 continue
             agent = agents.get(child.agent_id) if child.agent_id else None
             owed.append(
@@ -190,13 +182,13 @@ def _finished_and_owed(
     child waits on a question either: that is not a result, and the parent
     reads it from the child's status when it looks.
     """
-    if not reports_to_parent(child.metadata) or latest is None:
+    if not child.reports_to_parent or latest is None:
         return False
     if latest.status not in DELIVERED_STATUSES:
         return False
     if child.status is ConversationStatus.WAITING:
         return False
-    if (latest.metadata or {}).get(COLLECTED_KEY) is not None:
+    if latest.state.delivered_to_parent_at is not None:
         return False
-    collector = collector_run_id(child.metadata)
+    collector = str(child.parent_run_id) if child.parent_run_id else None
     return busy_run is None or collector != busy_run

@@ -18,7 +18,8 @@ from app.modules.agent.contracts.contact_conversations import (
     _seen_by_them,
     _was_seen,
 )
-from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY
+from app.modules.agent.domain.conversations import MOVED_MESSAGE_KEYS
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
@@ -36,7 +37,7 @@ async def fold_history(
     so does their chat from the other browser, read back from that one.
 
     Copied, not moved -- the runs, waits and answers that point at the
-    unseated one stay with it -- and marked (``FOLDED_FROM_KEY``), so an
+    unseated one stay with it -- and marked (``folded_from``), so an
     export does not carry it twice and the agent's history reads it as the
     other chat's. Appended after what the seated one holds.
     """
@@ -48,9 +49,8 @@ async def fold_history(
     )
     seen = [
         message
-        for message, run_metadata in rows
-        if _was_seen(message, run_metadata)
-        and FOLDED_FROM_KEY not in (message.message_metadata or {})
+        for message, run_private in rows
+        if _was_seen(message, run_private) and message.folded_from is None
     ]
     messages = Messages(uow)
     for message in seen:
@@ -62,9 +62,11 @@ async def fold_history(
                 kind=MessageKind(message.kind),
                 text=message.text,
                 metadata={
-                    **(message.message_metadata or {}),
-                    FOLDED_FROM_KEY: str(orphan_id),
+                    key: value
+                    for key, value in (message.message_metadata or {}).items()
+                    if key not in MOVED_MESSAGE_KEYS
                 },
+                state=MessageState(answer=message.answer, folded_from=orphan_id),
             ),
         )
 

@@ -62,11 +62,7 @@ def turn_for(
     agent_name: str | None = None,
 ) -> AgentTurnStart:
     """The turn of ``run_id`` in ``conversation``, its origin read off the row."""
-    origin = run_origin(
-        metadata=conversation.metadata,
-        parent_id=conversation.parent_id,
-        conversation_id=conversation.id,
-    ).origin
+    origin = run_origin(conversation).origin
     return AgentTurnStart(
         conversation_id=conversation.id,
         run_id=run_id,

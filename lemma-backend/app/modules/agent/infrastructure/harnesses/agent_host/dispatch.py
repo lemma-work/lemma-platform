@@ -23,7 +23,6 @@ from app.core.infrastructure.db.transient_errors import (
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.agent_host import (
     NEW_SESSION_ONLY,
     AgentHostPreApproval,
@@ -32,7 +31,6 @@ from app.modules.agent.domain.agent_host import (
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
-from app.modules.agent.domain.queued_messages import is_queued
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
@@ -190,9 +188,7 @@ async def refresh_credential[DepsT: AgentContext](
 
 def _resumed_tool_call_id(run: AgentRun | None) -> str | None:
     """Which paused tool call this run was started to answer, if any."""
-    metadata = (run.metadata if run is not None else None) or {}
-    value = metadata.get("resumed_tool_call_id")
-    return value if isinstance(value, str) and value else None
+    return run.state.resumed_tool_call_id if run is not None else None
 
 
 async def enqueue_run[DepsT: AgentContext](
@@ -255,17 +251,16 @@ async def enqueue_run[DepsT: AgentContext](
         # And only of this run's kind: a private note waits for a run that
         # answers in Lemma, and a message for the platform for one that
         # answers there (`domain/private_notes`).
-        private = run_is_private(run.metadata if run is not None else None)
+        private = run is not None and run.state.private_note
         messages = [
             message
             for message in messages
-            if not is_queued(message.metadata)
-            or is_private_note(message.metadata) == private
+            if not message.state.is_queued or message.state.private_note == private
         ]
         carried = frozenset(
             message.id
             for message in messages
-            if message.agent_run_id == agent_run_id and is_queued(message.metadata)
+            if message.agent_run_id == agent_run_id and message.state.is_queued
         )
     resumed_tool_call_id = _resumed_tool_call_id(run)
     admission = _Admission(

@@ -34,6 +34,8 @@ from app.modules.agent.services.run_metrics import (
 from app.modules.agent.services.run_phase_spans import observe_first_output
 from app.modules.agent.tools.graceful_toolset import GracefulToolset, tool_kind_of
 from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 pytestmark = pytest.mark.unit
 
@@ -145,13 +147,13 @@ class _UnreachableDatabase:
 def _runner(
     run_metrics: AgentRunMetrics, exc: BaseException, monkeypatch
 ) -> AgentRunnerService:
-    conversation = SimpleNamespace(
+    conversation = Conversation(
         id=UUID("00000000-0000-0000-0000-000000000010"),
         organization_id=UUID("00000000-0000-0000-0000-000000000011"),
         pod_id=UUID("00000000-0000-0000-0000-000000000012"),
         agent_id=UUID("00000000-0000-0000-0000-000000000013"),
-        metadata={"source": "SCHEDULE"},
-        parent_id=None,
+        user_id=UUID("00000000-0000-0000-0000-000000000014"),
+        origin=ConversationOrigin.SCHEDULE,
     )
     agent_run = SimpleNamespace(
         started_at=None,

@@ -77,12 +77,7 @@ class RunIdentity:
             agent_id=conversation.agent_id,
             started_at=agent_run.started_at,
             usage_source=usage_source,
-            origin=current_origin()
-            or conversation_origin(
-                metadata=conversation.metadata,
-                parent_id=conversation.parent_id,
-                conversation_id=conversation.id,
-            ),
+            origin=current_origin() or conversation_origin(conversation),
         )
 
     @property

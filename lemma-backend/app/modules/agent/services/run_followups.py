@@ -68,11 +68,7 @@ def run_finished_fact(
     started_at: datetime | None = None,
 ) -> AgentRunFinished:
     """The fact a finished run announces, read off its conversation."""
-    origin = run_origin(
-        metadata=conversation.metadata,
-        parent_id=conversation.parent_id,
-        conversation_id=conversation.id,
-    )
+    origin = run_origin(conversation)
     status = finish.status
     if status not in (
         AgentRunStatus.COMPLETED,
@@ -127,11 +123,7 @@ async def stage_run_followups(
     )
     work = WorkWriter.of(uow)
     subscribers = await facts.emit(uow, fact, writer=work)
-    origin = run_origin(
-        metadata=conversation.metadata,
-        parent_id=conversation.parent_id,
-        conversation_id=conversation.id,
-    )
+    origin = run_origin(conversation)
     ns = pod_namespace(conversation.pod_id)
     payload = ConversationWork(conversation_id=conversation.id, run_id=run_id)
     # Every finish: what was said while it ran, or a pause answered before it

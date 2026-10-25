@@ -26,17 +26,17 @@ the queued follow-up of messages they sent. A ``wait_for`` waking qualifies
 only when the work it continues was started that way: the runs before it are
 walked back past other wakes, and the first one that is not a wake has to be
 one of those person sources. Nothing a schedule or a workflow started does,
-whatever later runs in its conversation were: a conversation that carries a
-``source`` in its metadata (a workflow run, a schedule, a surface, a
-notification) or a ``workflow_run_id`` was not opened by a person in the app,
-so no run in it executes on the host. A teammate's reply to a message the
+whatever later runs in its conversation were: a conversation whose ``origin``
+is anything but the app's (a workflow run, a schedule, a surface, a
+notification) was not opened by a person in the app, so no run in it executes
+on the host. A teammate's reply to a message the
 agent sent (``message_replies``) does not qualify either: somebody else's
 words would drive commands on the user's Mac. Nothing that arrived on a
 channel does: a Slack or email or Telegram sender is the platform's
 assertion, not the user's session, so an inbound channel run never executes
 on the host, whoever it resolved to. Sub-agent conversations never do either.
-An unknown source does not qualify -- a new source has to be added here on
-purpose.
+A delegated result coming back qualifies only through the run that
+delegated, as a wake does. A new trigger has to be added here on purpose.
 
 **Once.** The check runs the first time the run's context is built, and the
 answer -- host or VM, and for the host which Mac and which folder -- is
@@ -58,10 +58,6 @@ before each command.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_metadata import (
-    ConversationMetadataFields,
-    source_of,
-)
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
@@ -78,8 +74,9 @@ from app.modules.agent.infrastructure.agent_host.host_execution import (
 from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
+from app.modules.agent.domain.value_objects import ConversationOrigin, RunTrigger
 from app.modules.agent.infrastructure.run_execution_record import (
-    earlier_run_sources,
+    earlier_run_triggers,
     read_run_execution,
     record_run_execution,
 )
@@ -94,18 +91,17 @@ from app.modules.workspace.contracts.host_execution import (
 logger = get_logger(__name__)
 
 #: A person, in Lemma, on this turn.
-PERSON_SOURCES = frozenset(
-    {
-        "user_message",
-        "queued_messages",
-        "manual_retry",
-        "approval_resume",
-        "person",
-    }
+PERSON_TRIGGERS = frozenset(
+    {RunTrigger.MESSAGE, RunTrigger.FOLLOW_UP, RunTrigger.RETRY, RunTrigger.RESUME}
 )
-#: Continuing earlier work in the conversation, with nobody new involved.
-#: Qualifies only through the run it continues (``origin_source``).
-CONTINUATION_SOURCES = frozenset({"agent_wait", "wait_resume"})
+#: Continuing earlier work in the conversation, with nobody new involved: a
+#: wait waking, a delegated result coming back. Qualifies only through the run
+#: it continues (``origin_trigger``).
+CONTINUATION_TRIGGERS = frozenset({RunTrigger.WAKE, RunTrigger.DELEGATION_RESULT})
+#: What a person opens in Lemma's own app.
+_APP_ORIGINS = frozenset(
+    {ConversationOrigin.CHAT, ConversationOrigin.PROJECT, ConversationOrigin.CALL}
+)
 
 _CWD_SUFFIX = re.compile(r"/c/(\d{4}-\d{2}-\d{2})/([A-Za-z0-9_-]{1,64})/?$")
 
@@ -113,32 +109,21 @@ _CWD_SUFFIX = re.compile(r"/c/(\d{4}-\d{2}-\d{2})/([A-Za-z0-9_-]{1,64})/?$")
 def opened_in_app(conversation: Conversation) -> bool:
     """Whether a person opened this conversation in Lemma's own app.
 
-    Every conversation something else opens says so in its metadata: a
-    workflow or schedule stamps ``source`` (and ``workflow_run_id``), a surface
-    or a notification stamps ``source``; a surface also stamps
-    ``surface_platform`` and a sub-agent ``is_sub_agent``. The app stamps none.
+    Every conversation something else opens says so in its ``origin``: a
+    workflow, a schedule, a surface, a notification, a sub-agent, another
+    pod. A surface binding on a conversation the app opened is the platform's
+    too.
     """
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    origin = ConversationMetadataFields.of(metadata)
-    if origin.source or origin.workflow_run_id:
-        return False
-    return not any(
-        metadata.get(key) for key in ("started_by", "surface_platform", "is_sub_agent")
-    )
+    stored = conversation.metadata or {}
+    return conversation.origin in _APP_ORIGINS and not stored.get("surface_platform")
 
 
-def run_source(agent_run: AgentRun) -> str | None:
-    # Read as `brief_lines.run_source_of` does; not imported, to keep the
-    # prompt-brief machinery out of this module's import graph.
-    return source_of(agent_run.metadata)
-
-
-def origin_source(earlier_sources: list[str | None]) -> str | None:
-    """The source of the run a continuation continues: the newest earlier run
+def origin_trigger(earlier: list[RunTrigger]) -> RunTrigger | None:
+    """What started the run a continuation continues: the newest earlier run
     that is not itself a continuation. None when there is none."""
-    for source in earlier_sources:
-        if source not in CONTINUATION_SOURCES:
-            return source
+    for trigger in earlier:
+        if trigger not in CONTINUATION_TRIGGERS:
+            return trigger
     return None
 
 
@@ -146,22 +131,22 @@ def triggered_by_run_user(
     conversation: Conversation,
     agent_run: AgentRun,
     *,
-    earlier_sources: list[str | None] | None = None,
+    earlier_triggers: list[RunTrigger] | None = None,
 ) -> bool:
     """Whether the run's user, in Lemma's own app, started this run. See the module.
 
-    ``earlier_sources`` are the sources of the conversation's runs before this
+    ``earlier_triggers`` are what started the conversation's runs before this
     one, newest first; only a continuation reads them, and without them a
     continuation does not qualify.
     """
     if not opened_in_app(conversation):
         return False
-    source = run_source(agent_run)
-    if source in PERSON_SOURCES:
+    trigger = agent_run.state.trigger
+    if trigger in PERSON_TRIGGERS:
         return True
-    if source not in CONTINUATION_SOURCES or earlier_sources is None:
+    if trigger not in CONTINUATION_TRIGGERS or earlier_triggers is None:
         return False
-    return origin_source(earlier_sources) in PERSON_SOURCES
+    return origin_trigger(earlier_triggers) in PERSON_TRIGGERS
 
 
 async def _recorded_choice(run_id: UUID) -> dict[str, object] | None:
@@ -169,9 +154,9 @@ async def _recorded_choice(run_id: UUID) -> dict[str, object] | None:
         return await read_run_execution(uow, run_id)
 
 
-async def _earlier_sources(conversation_id: UUID, run_id: UUID) -> list[str | None]:
+async def _earlier_triggers(conversation_id: UUID, run_id: UUID) -> list[RunTrigger]:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        return await earlier_run_sources(uow, conversation_id, run_id)
+        return await earlier_run_triggers(uow, conversation_id, run_id)
 
 
 async def _record_choice(run_id: UUID, value: dict[str, object]) -> None:
@@ -231,9 +216,9 @@ class HostExecutionFacts:
     open_workspace: Callable[..., Awaitable[HostWorkspace]] = open_host_workspace
     recorded: Callable[[UUID], Awaitable[dict[str, object] | None]] = _recorded_choice
     record: Callable[[UUID, dict[str, object]], Awaitable[None]] = _record_choice
-    #: ``(conversation_id, run_id) -> sources of the runs before it``.
-    earlier_sources: Callable[[UUID, UUID], Awaitable[list[str | None]]] = (
-        _earlier_sources
+    #: ``(conversation_id, run_id) -> what started the runs before it``.
+    earlier_triggers: Callable[[UUID, UUID], Awaitable[list[RunTrigger]]] = (
+        _earlier_triggers
     )
 
 
@@ -383,10 +368,10 @@ async def started_by_run_user(
     facts: HostExecutionFacts = FACTS,
 ) -> bool:
     """``triggered_by_run_user``, reading the earlier runs a continuation needs."""
-    earlier: list[str | None] | None = None
-    if opened_in_app(conversation) and run_source(agent_run) in CONTINUATION_SOURCES:
-        earlier = await facts.earlier_sources(conversation.id, agent_run.id)
-    return triggered_by_run_user(conversation, agent_run, earlier_sources=earlier)
+    earlier: list[RunTrigger] | None = None
+    if opened_in_app(conversation) and agent_run.state.trigger in CONTINUATION_TRIGGERS:
+        earlier = await facts.earlier_triggers(conversation.id, agent_run.id)
+    return triggered_by_run_user(conversation, agent_run, earlier_triggers=earlier)
 
 
 async def host_runs_native_commands(

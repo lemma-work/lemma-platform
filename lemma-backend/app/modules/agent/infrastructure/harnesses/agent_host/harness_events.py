@@ -267,7 +267,7 @@ def _closes_a_pause(event: AgentEvent) -> bool:
         and isinstance(draft, MessageDraft)
         and draft.kind is MessageKind.TOOL_RETURN
         and draft.tool_name in USER_PAUSING_TOOL_NAMES
-        and bool((draft.metadata or {}).get("synthetic_tool_return"))
+        and draft.state.synthetic_tool_return
     )
 
 

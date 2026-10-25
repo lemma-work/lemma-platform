@@ -15,11 +15,11 @@ from app.modules.agent.services.conversation_pauses import ConversationPauses
 from app.modules.agent.services.conversation_turns import TurnCoordinator
 from app.modules.agent.services.conversation_retry_service import RetryCoordinator
 from app.modules.agent.services.send_window import SendWindow, window_key
-from app.modules.agent.domain.queued_messages import CLIENT_MESSAGE_ID
+from app.modules.agent.domain.queued_messages import CLIENT_MESSAGE_ID_REQUEST_KEY
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
-from app.modules.agent.domain.server_metadata import with_server_keys_kept
+from app.modules.agent.domain.conversations import with_client_tags
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.core.authorization.permissions import Permissions
@@ -34,9 +34,11 @@ from app.modules.agent.services.conversation_access import (
 from app.modules.agent.domain.conversation_titles import (
     normalize_conversation_title,
 )
+from app.modules.agent.domain.calls import CallMark
 from app.modules.agent.domain.entities import (
     Conversation,
 )
+from app.modules.agent.domain.pod_ask_record import PodAsk
 from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
 )
@@ -46,11 +48,10 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRuntimeConfig,
+    ConversationOrigin,
     ConversationType,
 )
-from app.modules.agent.domain.workspace_location import (
-    apply_location_metadata,
-)
+from app.modules.agent.domain.workspace_location import apply_location
 from app.modules.pod.contracts.agent_access import pod_organization_id
 from app.modules.agent.services.runtime_availability import (
     TurnRuntimeCheck,
@@ -106,12 +107,21 @@ class ConversationService(ConversationPauses):
         require_execute_grant: bool = True,
         contact_id: UUID | None = None,
         channel_id: UUID | None = None,
+        origin: ConversationOrigin | None = None,
+        parent_run_id: UUID | None = None,
+        spawn_key: str | None = None,
+        reports_to_parent: bool = False,
+        ask: PodAsk | None = None,
+        call: CallMark | None = None,
     ) -> Conversation:
         """A new conversation in the pod.
 
         ``contact_id`` makes it a contact's (``domain/outsiders``): only the
         server's own openers pass it -- the surface that met the contact -- and
-        no request a client sends reaches it.
+        no request a client sends reaches it. Neither does the typed state
+        after it: ``origin`` (a person's chat, or a project, when no opener
+        says otherwise), a sub-agent's link to its parent, the ask another pod
+        opened it with, the call it belongs to.
         """
         organization_id = await self._get_pod_organization_id(pod_id)
         # A parent is the caller's own conversation in this pod, or it does not
@@ -165,6 +175,17 @@ class ConversationService(ConversationPauses):
             parent_id=parent_id,
             type=conversation_type,
             metadata=dict(metadata) if metadata else {},
+            origin=origin
+            or (
+                ConversationOrigin.PROJECT
+                if conversation_type == ConversationType.PROJECT
+                else ConversationOrigin.CHAT
+            ),
+            parent_run_id=parent_run_id,
+            spawn_key=spawn_key,
+            reports_to_parent=reports_to_parent,
+            ask=ask,
+            call=call,
         )
         await self._apply_inherited_cwd(conversation, parent=parent)
         return await self.conversations.create_conversation(conversation)
@@ -216,7 +237,7 @@ class ConversationService(ConversationPauses):
         """Record where this conversation works, once, at creation.
 
         The rules — inheritance, an explicit cwd, a project repo — all live in
-        ``workspace_location.apply_location_metadata``, which is also what reads
+        ``workspace_location.apply_location``, which is also what reads
         the result back. Creation hands over the parent it already read to
         check the caller may reach it; otherwise it is fetched lazily, because
         most conversations settle their location without ever needing one.
@@ -227,7 +248,7 @@ class ConversationService(ConversationPauses):
                 return parent
             return await self.conversations.get_conversation(parent_id)
 
-        await apply_location_metadata(conversation, fetch_parent=_parent)
+        await apply_location(conversation, fetch_parent=_parent)
 
     async def update_conversation(
         self,
@@ -274,9 +295,7 @@ class ConversationService(ConversationPauses):
         if not isinstance(agent_runtime, UnsetType):
             conversation.agent_runtime = agent_runtime
         if not isinstance(metadata, UnsetType):
-            conversation.metadata = with_server_keys_kept(
-                conversation.metadata, metadata
-            )
+            conversation.metadata = with_client_tags(conversation.metadata, metadata)
         if not isinstance(is_archived, UnsetType):
             conversation.is_archived = is_archived
 
@@ -398,7 +417,7 @@ class ConversationService(ConversationPauses):
         sub-agent's or a reply delivery's must never arrive this way. A client
         id sent only in the metadata, as the web app first did, is used too.
         """
-        carried = (message_metadata or {}).get(CLIENT_MESSAGE_ID)
+        carried = (message_metadata or {}).get(CLIENT_MESSAGE_ID_REQUEST_KEY)
         return await self.add_user_message_and_start_run(
             conversation_id=conversation_id,
             user_id=user_id,

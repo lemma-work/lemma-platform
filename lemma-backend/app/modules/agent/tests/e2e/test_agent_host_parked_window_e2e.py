@@ -35,8 +35,7 @@ from app.modules.agent.domain.agent_host import (
 )
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.pausing_tools import SUSPENDED_WHILE_PARKED_KEY
-from app.modules.agent.domain.queued_messages import WAITING_ON_ANSWER
+from app.modules.agent.domain.value_objects import QueueState, RunTrigger
 from app.modules.agent.domain.value_objects import (
     AgentEventType,
     AgentRunApprovalDecision,
@@ -342,7 +341,7 @@ async def test_a_question_left_past_the_window_ends_the_run_waiting(scenario):
     assert not any(e.type is AgentEventType.STOPPED for e in observer.events)
     (ended,) = await runs(seeded.conversation_id)
     assert ended.status == AgentRunStatus.COMPLETED.value
-    assert ended.run_metadata[SUSPENDED_WHILE_PARKED_KEY]["tool_call_id"] == question
+    assert ended.suspended_while_parked["tool_call_id"] == question
     assert (await conversation(seeded.conversation_id)).status is (
         ConversationStatus.WAITING
     )
@@ -350,7 +349,7 @@ async def test_a_question_left_past_the_window_ends_the_run_waiting(scenario):
     # What was typed during the window waits on the answer, not a turn of its own.
     assert await _completed(seeded, run_id) is None
     held = next(m for m in await messages(seeded.conversation_id) if m.id == typed.id)
-    assert held.metadata[WAITING_ON_ANSWER] == str(run_id)
+    assert held.state.queue_state is QueueState.WAITING_ON_ANSWER
     assert await _pending(scenario) == [(question, "QUESTION")]
 
     await _decide(
@@ -363,14 +362,14 @@ async def test_a_question_left_past_the_window_ends_the_run_waiting(scenario):
     first, resumed = await runs(seeded.conversation_id)
     assert first.id == run_id
     assert resumed.status == AgentRunStatus.RUNNING.value
-    assert resumed.run_metadata["source"] == "approval_resume"
-    assert resumed.run_metadata["resumed_tool_call_id"] == question
+    assert resumed.trigger is RunTrigger.RESUME
+    assert resumed.resumed_tool_call_id == question
     found = await messages(seeded.conversation_id)
     (answer,) = _returns(found, question)
     assert answer.tool_result["answers"] == {"Which branch should I deploy?": "main"}
     claimed = next(m for m in found if m.id == typed.id)
     assert claimed.agent_run_id == resumed.id or (
-        claimed.metadata.get("steered_into_run") == str(resumed.id)
+        claimed.state.steered_into_run_id == resumed.id
     )
     assert await _pending(scenario) == []
 
@@ -435,7 +434,7 @@ async def test_a_permission_left_past_the_window_resumes_with_the_decision(scena
     assert decided.tool_result["message"].startswith("Approved. Your earlier turn")
     first, resumed = await runs(seeded.conversation_id)
     assert first.id == run_id
-    assert resumed.run_metadata["resumed_tool_call_id"] == _PERMISSION_ID
+    assert resumed.resumed_tool_call_id == _PERMISSION_ID
 
 
 async def test_a_question_answered_inside_the_window_is_answered_in_its_turn(
@@ -474,7 +473,7 @@ async def test_a_question_answered_inside_the_window_is_answered_in_its_turn(
     assert not any(e.type is AgentEventType.WAITING for e in observer.events)
     (only,) = await runs(seeded.conversation_id)
     assert only.status == AgentRunStatus.COMPLETED.value
-    assert SUSPENDED_WHILE_PARKED_KEY not in (only.run_metadata or {})
+    assert only.suspended_while_parked is None
     assert len(_returns(await messages(seeded.conversation_id), question)) == 1
     assert await _completed(seeded, run_id) is None
     assert [r.id for r in await runs(seeded.conversation_id)] == [run_id]
@@ -535,7 +534,7 @@ async def test_a_late_approval_is_carried_to_the_resumed_turn_once(scenario):
     # What the resume run's START_RUN carries, from what is on the record.
     carried = pre_approvals_for(
         await messages(seeded.conversation_id),
-        resumed_tool_call_id=resumed.run_metadata["resumed_tool_call_id"],
+        resumed_tool_call_id=resumed.resumed_tool_call_id,
     )
     assert [approval.model_dump(mode="json") for approval in carried] == [
         {

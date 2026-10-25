@@ -41,7 +41,6 @@ from app.modules.agent.domain.entities import (
     RuntimeHistoryWindow,
 )
 from app.modules.agent.domain.folded_turns import folded_from
-from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
@@ -226,15 +225,12 @@ class AgentSide:
             and (after_sequence is None or message.sequence > after_sequence)
             and (before_sequence is None or message.sequence < before_sequence)
         ]
-        copies = [m for m in within if folded_from(m.metadata) is not None]
+        copies = [m for m in within if folded_from(m) is not None]
         others = [
             m
             for m in within
-            if folded_from(m.metadata) is None
-            and (
-                m.kind is MessageKind.NOTIFICATION
-                or (m.metadata or {}).get(HELD_FOR_A_PERSON) is True
-            )
+            if folded_from(m) is None
+            and (m.kind is MessageKind.NOTIFICATION or m.state.held_for_a_person)
         ]
         carried = {m.id for m in others[-limit:] + copies[-folded_limit:]}
         return [message for message in within if message.id in carried]

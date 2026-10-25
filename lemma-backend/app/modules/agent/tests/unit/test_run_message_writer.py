@@ -13,6 +13,7 @@ from uuid import uuid7
 
 from app.modules.agent.domain.value_objects import MessageDraft
 from app.modules.agent.services.run_message_writer import RunMessageWriter
+from app.modules.agent.domain.message_state import MessageState
 
 
 class _Repository:
@@ -46,7 +47,7 @@ def _synthetic_return() -> MessageDraft:
         tool_name="request_approval",
         tool_call_id="agent-host-permission:toolu_1",
         tool_result={"success": False, "error": "The agent run failed."},
-        metadata={"synthetic_tool_return": True},
+        state=MessageState(synthetic_tool_return=True),
     )
 
 

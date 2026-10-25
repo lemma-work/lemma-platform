@@ -173,7 +173,7 @@ class TurnResume:
         """The answer this run already committed as its last step, if it did."""
         async with self.uow_factory() as uow:
             last = await Runs(uow).last_run_message(run_id)
-        if last is None or (last.metadata or {}).get("is_final_answer") is not True:
+        if last is None or not last.state.is_final_answer:
             return None
         logger.warning("agent.turn.resumed_answered", agent_run_id=str(run_id))
         return MessageDraft(
@@ -183,6 +183,7 @@ class TurnResume:
             tool_name=last.tool_name,
             tool_call_id=last.tool_call_id,
             metadata=last.metadata,
+            state=last.state,
         )
 
     async def finish_on(
@@ -228,13 +229,12 @@ class TurnResume:
                     run_id,
                     call,
                     {"success": False, "error": OUTCOME_UNKNOWN},
-                    klass,
                 )
                 report.unknown += 1
                 report.unknown_tools.append(str(call.tool_name))
                 continue
             result = await self._run_again(run_id, conversation, agent, ctx, call, args)
-            await self._persist(conversation.id, run_id, call, result, klass)
+            await self._persist(conversation.id, run_id, call, result)
             report.replayed += 1
         if report.unknown:
             await self._tell_the_reader(conversation.id, run_id, report)
@@ -260,11 +260,7 @@ class TurnResume:
         saved = await self.message_writer.notice(
             conversation_id=conversation_id,
             text=INTERRUPTED_NOTICE.format(tools=", ".join(tools)),
-            metadata={
-                "source": "turn_resume",
-                "interrupted_run_id": str(run_id),
-                "tool_names": list(tools),
-            },
+            metadata={"source": "turn_resume", "tool_names": list(tools)},
         )
         await publish_conversation_event(
             conversation_id, message_payload(None, message_to_payload(saved))
@@ -310,7 +306,6 @@ class TurnResume:
         run_id: UUID,
         call: Message,
         result: object,
-        klass: ReplayClass,
     ) -> None:
         assert call.tool_call_id is not None
         await self.message_writer.persist(
@@ -320,7 +315,6 @@ class TurnResume:
                 tool_call_id=call.tool_call_id,
                 tool_name=call.tool_name,
                 tool_result=to_json_value(result),
-                metadata={"replayed_on_resume": True, "replay_class": klass.value},
             ),
         )
 

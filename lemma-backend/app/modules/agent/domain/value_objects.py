@@ -14,6 +14,16 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.core.domain.runtime import AgentRuntimeConfig
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.state_kinds import (
+    FINAL_ANSWER_KINDS as FINAL_ANSWER_KINDS,
+    UNANSWERED_QUEUE_STATES as UNANSWERED_QUEUE_STATES,
+    AnswerKind as AnswerKind,
+    ConversationOrigin as ConversationOrigin,
+    QueueState as QueueState,
+    RunTrigger as RunTrigger,
+    WrittenIn as WrittenIn,
+)
 from app.modules.usage.contracts import AgentRunUsage as AgentRunUsage
 
 JsonPrimitive = str | int | float | bool | None
@@ -236,6 +246,8 @@ class MessageDraft(BaseModel):
     tool_args: JsonValue = None
     tool_result: JsonValue = None
     metadata: JsonObject | None = None
+    #: What the server records about the message beyond its body.
+    state: MessageState = MessageState()
 
     @classmethod
     def of_text(
@@ -244,8 +256,15 @@ class MessageDraft(BaseModel):
         *,
         role: MessageRole = MessageRole.ASSISTANT,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "MessageDraft":
-        return cls(role=role, kind=MessageKind.TEXT, text=text, metadata=metadata)
+        return cls(
+            role=role,
+            kind=MessageKind.TEXT,
+            text=text,
+            metadata=metadata,
+            state=state or MessageState(),
+        )
 
     @classmethod
     def of_thinking(
@@ -254,8 +273,15 @@ class MessageDraft(BaseModel):
         *,
         role: MessageRole = MessageRole.ASSISTANT,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "MessageDraft":
-        return cls(role=role, kind=MessageKind.THINKING, text=text, metadata=metadata)
+        return cls(
+            role=role,
+            kind=MessageKind.THINKING,
+            text=text,
+            metadata=metadata,
+            state=state or MessageState(),
+        )
 
     @classmethod
     def of_notification(
@@ -264,9 +290,14 @@ class MessageDraft(BaseModel):
         *,
         role: MessageRole = MessageRole.ASSISTANT,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "MessageDraft":
         return cls(
-            role=role, kind=MessageKind.NOTIFICATION, text=text, metadata=metadata
+            role=role,
+            kind=MessageKind.NOTIFICATION,
+            text=text,
+            metadata=metadata,
+            state=state or MessageState(),
         )
 
     @classmethod
@@ -278,6 +309,7 @@ class MessageDraft(BaseModel):
         tool_args: JsonValue = None,
         role: MessageRole = MessageRole.ASSISTANT,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "MessageDraft":
         return cls(
             role=role,
@@ -286,6 +318,7 @@ class MessageDraft(BaseModel):
             tool_call_id=tool_call_id,
             tool_args=tool_args,
             metadata=metadata,
+            state=state or MessageState(),
         )
 
     @classmethod
@@ -297,6 +330,7 @@ class MessageDraft(BaseModel):
         tool_result: JsonValue = None,
         role: MessageRole = MessageRole.TOOL,
         metadata: JsonObject | None = None,
+        state: MessageState | None = None,
     ) -> "MessageDraft":
         return cls(
             role=role,
@@ -305,6 +339,7 @@ class MessageDraft(BaseModel):
             tool_call_id=tool_call_id,
             tool_result=tool_result,
             metadata=metadata,
+            state=state or MessageState(),
         )
 
 

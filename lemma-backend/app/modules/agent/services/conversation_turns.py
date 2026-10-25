@@ -22,11 +22,9 @@ from app.modules.agent.services.usage_preflight import assert_usage_preflight_al
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.private_notes import (
-    PRIVATE_NOTE_KEY,
-    run_metadata_for,
-)
-from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.private_notes import run_state_for
+from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
@@ -35,6 +33,8 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     MessageDraft,
     MessageRole,
+    QueueState,
+    RunTrigger,
 )
 from app.modules.agent.services.conversation_access import (
     require_agent_action,
@@ -51,12 +51,7 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
 from app.modules.agent.services.conversation_stop import StopCoordinator
 from app.modules.agent.services.pause_resume import PauseResume
-from app.modules.agent.services.queued_followups import (
-    LEFTOVERS_KEY,
-    leftover_sources,
-    next_queue,
-    still_waiting,
-)
+from app.modules.agent.services.queued_followups import next_queue, still_waiting
 from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
@@ -73,9 +68,10 @@ from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.services.run_dispatch import run_enqueue_suppressed
 from app.modules.agent.services.turn_admission import (
     HeldTurn,
+    admitted_state,
     hold_behind,
+    message_source,
     pause_holding_the_turn,
-    stamped,
     user_message_metadata,
 )
 from app.modules.agent.services.serialization import message_to_payload
@@ -97,7 +93,7 @@ def _owed_an_answer(
         return None if stopped_after is None else ([completed_run_id], stopped_after)
     return [
         completed_run_id,
-        *leftover_sources(completed_run.metadata if completed_run else None),
+        *(completed_run.state.queued_leftovers_behind if completed_run else ()),
     ], None
 
 
@@ -107,10 +103,15 @@ def _said_after_stop(run: AgentRun | None) -> int | None:
     None for a stop that did not record one, which is answered as Stop always
     was: nothing starts.
     """
-    value = (run.metadata or {}).get(STOP_REQUESTED_AFTER_SEQUENCE) if run else None
-    if isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value
+    return run.state.stop_requested_after_sequence if run else None
+
+
+def _queued_unless(started_new_run: bool, state: MessageState) -> MessageState:
+    """A message that did not start its run joins one already going, which
+    loaded its history before the message existed: it is queued."""
+    if started_new_run:
+        return state
+    return state.model_copy(update={"queue_state": QueueState.QUEUED})
 
 
 class TurnCoordinator:
@@ -163,8 +164,11 @@ class TurnCoordinator:
         back rather than a second message. ``supersede_pauses`` is False for a
         sender who is not the person a pause asked (``turn_admission``).
         """
-        message_metadata = stamped(
-            message_metadata, conversation, typed_in_lemma=typed_in_lemma
+        message_state = admitted_state(
+            message_metadata,
+            conversation,
+            typed_in_lemma=typed_in_lemma,
+            client_message_id=client_message_id,
         )
         # Resolve the agent (a read) before taking the conversation lock, so the
         # FOR UPDATE span covers only the active-run check + run/message writes.
@@ -214,7 +218,12 @@ class TurnCoordinator:
         started_new_run = active_run is None and held is None
         if started_new_run:
             active_run = await self._create_run(
-                conversation, agent, user_id=user_id, message_metadata=message_metadata
+                conversation,
+                agent,
+                user_id=user_id,
+                state=run_state_for(
+                    message_state, message_source=message_source(message_metadata)
+                ),
             )
         answering_run_id = active_run.id if active_run is not None else None
         if held is not None:
@@ -228,12 +237,8 @@ class TurnCoordinator:
             draft=MessageDraft.of_text(
                 content,
                 role=MessageRole.USER,
-                metadata=user_message_metadata(
-                    message_metadata,
-                    conversation,
-                    joins_a_run=not started_new_run,
-                    client_message_id=client_message_id,
-                ),
+                metadata=user_message_metadata(message_metadata),
+                state=_queued_unless(started_new_run, message_state),
             ),
         )
 
@@ -283,7 +288,7 @@ class TurnCoordinator:
         agent: Agent,
         *,
         user_id: UUID,
-        message_metadata: dict[str, object] | None,
+        state: RunState,
     ) -> AgentRun:
         selected_agent_runtime = await turn_runtime(self.uow, conversation, agent)
         await self.runtime_check(
@@ -299,7 +304,7 @@ class TurnCoordinator:
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=selected_agent_runtime,
-            metadata=run_metadata_for(message_metadata),
+            state=state,
         )
 
     async def start_queued_followup(
@@ -400,13 +405,13 @@ class TurnCoordinator:
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=agent_runtime,
-            metadata={
-                "source": "queued_messages",
-                "queued_behind_agent_run_id": str(answering),
+            state=RunState(
+                trigger=RunTrigger.FOLLOW_UP,
+                queued_behind_run_id=answering,
                 # One kind per run: a note's answer stays in Lemma.
-                **({PRIVATE_NOTE_KEY: True} if notes else {}),
-                **({LEFTOVERS_KEY: leftovers} if leftovers else {}),
-            },
+                private_note=notes,
+                queued_leftovers_behind=leftovers,
+            ),
         )
         # Claimed by the run that will answer them, in the same transaction
         # that creates it. That is what tells an Agent Host dispatch which

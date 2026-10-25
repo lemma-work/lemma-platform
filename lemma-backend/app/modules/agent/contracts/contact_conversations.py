@@ -27,9 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import aliased
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY
 from app.modules.agent.domain.held_turns import held_messages
-from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.value_objects import MessageDraft, MessageKind
 from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
@@ -174,10 +172,11 @@ async def export_contact_conversations(
     )
 
 
-def _seen_by_them() -> Select[tuple[MessageModel, dict[str, object] | None]]:
-    """Messages a person outside the pod could have seen, with their run's metadata."""
+def _seen_by_them() -> Select[tuple[MessageModel, bool | None]]:
+    """Messages a person outside the pod could have seen, with whether their
+    run was a private note's."""
     return (
-        select(MessageModel, AgentRunModel.run_metadata.label("run_metadata"))
+        select(MessageModel, AgentRunModel.private_note.label("run_private"))
         .outerjoin(AgentRunModel, AgentRunModel.id == MessageModel.agent_run_id)
         .where(
             MessageModel.role.in_(("user", "assistant")),
@@ -209,16 +208,15 @@ async def _messages_of(
     )
     seen = aliased(MessageModel, numbered)
     rows = await uow.session.execute(
-        select(seen, numbered.c.run_metadata)
+        select(seen, numbered.c.run_private)
         .where(numbered.c.place <= MAX_EXPORTED_MESSAGES)
         .order_by(numbered.c.conversation_id, numbered.c.sequence)
     )
     # A folded copy was exported with the conversation it came from.
     seen = [
         row
-        for row, run_metadata in rows
-        if _was_seen(row, run_metadata)
-        and FOLDED_FROM_KEY not in (row.message_metadata or {})
+        for row, run_private in rows
+        if _was_seen(row, run_private) and row.folded_from is None
     ]
     said = await _said(uow, seen)
     grouped: dict[UUID, list[ExportedMessage]] = {}
@@ -248,9 +246,7 @@ async def visible_messages(
         .order_by(MessageModel.sequence)
         .limit(limit)
     )
-    seen = [
-        message for message, run_metadata in rows if _was_seen(message, run_metadata)
-    ]
+    seen = [message for message, run_private in rows if _was_seen(message, run_private)]
     said = await _said(uow, seen)
     return tuple(
         VisibleMessage(
@@ -305,12 +301,8 @@ def _exported(message: MessageModel, text: str) -> ExportedMessage:
     )
 
 
-def _was_seen(message: MessageModel, run_metadata: dict[str, object] | None) -> bool:
-    return (
-        _was_said_to_them(message)
-        and not is_private_note(message.message_metadata)
-        and not run_is_private(run_metadata)
-    )
+def _was_seen(message: MessageModel, run_private: bool | None) -> bool:
+    return _was_said_to_them(message) and not message.private_note and not run_private
 
 
 def _client_nonce(message: MessageModel) -> str | None:

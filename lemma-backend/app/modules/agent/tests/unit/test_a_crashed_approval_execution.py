@@ -27,7 +27,7 @@ from uuid import uuid4, uuid7
 import pytest
 
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
-from app.modules.agent.domain.entities import Agent, Message
+from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRuntimeConfig,
@@ -179,15 +179,15 @@ async def _noop(*_args, **_kwargs) -> None:
     return None
 
 
-def _conversation(repository: _Repository):
-    return SimpleNamespace(
+def _conversation(repository: _Repository) -> Conversation:
+    return Conversation(
         id=repository.conversation_id,
         agent_id=None,
         pod_id=_POD_ID,
+        user_id=uuid7(),
         organization_id=None,
         agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
         metadata={},
-        parent_id=None,
     )
 
 

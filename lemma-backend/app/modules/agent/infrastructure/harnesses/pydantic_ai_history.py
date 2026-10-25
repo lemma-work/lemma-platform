@@ -34,13 +34,14 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
 )
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
-from app.modules.agent.domain.queued_messages import DURING_ACTIVE_RUN
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.infrastructure.harnesses.user_turn_text import (
     timed_user_prompt_text,
 )
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.value_objects import (
     TEXTUAL_MESSAGE_KINDS,
+    QueueState,
     MessageKind,
     MessageRole,
 )
@@ -274,8 +275,8 @@ def _match_tool_returns(
 
 
 def _sent_while_running(message: object) -> bool:
-    metadata = getattr(message, "metadata", None)
-    return isinstance(metadata, dict) and metadata.get(DURING_ACTIVE_RUN) is True
+    state = getattr(message, "state", None)
+    return isinstance(state, MessageState) and state.queue_state is not QueueState.NONE
 
 
 #: Where a tool call's provider identity is stored on its message row. Some

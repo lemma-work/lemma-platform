@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 
+from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -30,10 +31,8 @@ def missing_tool_return_events(
                         else {}
                     ),
                 },
-                metadata={
-                    "synthetic_tool_return": True,
-                    "terminal_event": terminal_event.type.value,
-                },
+                metadata={"terminal_event": terminal_event.type.value},
+                state=MessageState(synthetic_tool_return=True),
             ),
             agent_run_id=terminal_event.agent_run_id,
         )

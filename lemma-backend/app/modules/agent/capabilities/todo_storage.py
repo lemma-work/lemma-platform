@@ -1,9 +1,8 @@
-"""Conversation-metadata-backed todo storage.
+"""Todo storage on the conversation's ``todos`` column.
 
-Persists the agent's todo list as a plain list of ``{content, done}`` dicts under
-a single ``todos`` key in the conversation's metadata JSON blob (via
-non-clobbering ``jsonb_set``), so planning survives across turns without a
-dedicated table.
+Persists the agent's todo list as a list of ``{content, done}`` entries, so
+planning survives across turns without a dedicated table. The column is
+written on its own, so nothing else being set on the row is overwritten.
 """
 
 from __future__ import annotations
@@ -11,10 +10,9 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent.domain.todos import Todo
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.db.conversations import Conversations
-
-_TODOS_KEY = "todos"
 
 
 class ConversationTodoStore:
@@ -28,18 +26,13 @@ class ConversationTodoStore:
 
     async def read(self) -> list[JsonObject]:
         async with self._uow_factory() as uow:
-            raw = await Conversations(uow).get_conversation_metadata_key(
-                self._conversation_id, _TODOS_KEY
-            )
-        return (
-            [item for item in raw if isinstance(item, dict)]
-            if isinstance(raw, list)
-            else []
-        )
+            todos = await Conversations(uow).get_todos(self._conversation_id)
+        return [todo.to_json() for todo in todos]
 
     async def write(self, todos: list[JsonObject]) -> None:
         async with self._uow_factory() as uow:
-            await Conversations(uow).set_conversation_metadata_key(
-                self._conversation_id, _TODOS_KEY, todos
+            await Conversations(uow).set_todos(
+                self._conversation_id,
+                [todo for item in todos if (todo := Todo.from_json(item)) is not None],
             )
             await uow.commit()

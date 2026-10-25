@@ -69,22 +69,7 @@ def run_context_for(ctx: object, *, now: datetime | None = None) -> str:
 
 def stored_todos(conversation: Conversation) -> list[tuple[str, bool]]:
     """The conversation's task list as ``(content, done)``, oldest first."""
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    raw = metadata.get("todos")
-    if not isinstance(raw, list):
-        return []
-    items: list[tuple[str, bool]] = []
-    for entry in raw:
-        if not isinstance(entry, dict):
-            continue
-        content = str(entry.get("content") or "").strip()
-        if content:
-            # `status == "completed"` is the pre-simplification shape; rows in
-            # that form are still in metadata on older conversations.
-            items.append(
-                (content, bool(entry.get("done")) or entry.get("status") == "completed")
-            )
-    return items
+    return [(todo.content, todo.done) for todo in conversation.todos]
 
 
 #: Not "# Task list": that is the heading of the todo tool's own guidance, and
@@ -97,7 +82,7 @@ def task_list_section(
 ) -> str:
     """Show the run its own task list, and say what finishing an item requires.
 
-    Without this a run starts blind: the list lives in conversation metadata,
+    Without this a run starts blind: the list lives on the conversation row,
     and the tool return that last showed it is an old message that history
     trimming can drop. An agent that cannot see its own plan cannot tick
     anything off it.

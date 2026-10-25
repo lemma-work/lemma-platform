@@ -58,6 +58,7 @@ from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.tool_call_ids import first_per_call_id
 from app.modules.agent.domain.value_objects import (
+    AnswerKind,
     AgentEvent,
     AgentEventType,
     JsonObject,
@@ -102,17 +103,15 @@ def _is_open_answer(event: AgentEvent) -> bool:
         and isinstance(draft, MessageDraft)
         and draft.role is MessageRole.ASSISTANT
         and draft.kind is MessageKind.TEXT
-        and "is_final_answer" not in (draft.metadata or {})
+        and draft.state.answer is None
     )
 
 
 def _not_final(event: AgentEvent) -> AgentEvent:
     draft = event.data
     assert isinstance(draft, MessageDraft)
-    metadata = {**(draft.metadata or {}), "is_final_answer": False}
-    return event.model_copy(
-        update={"data": draft.model_copy(update={"metadata": metadata})}
-    )
+    state = draft.state.model_copy(update={"answer": AnswerKind.NOT_FINAL})
+    return event.model_copy(update={"data": draft.model_copy(update={"state": state})})
 
 
 def settle_response_answers(

@@ -22,7 +22,6 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.modules.agent.domain.pod_asks import (
     ANSWER_SOURCE,
-    ASK_KEY,
     ASK_SOURCE,
     AskRefused,
 )
@@ -174,7 +173,7 @@ async def test_an_ask_runs_as_the_person_and_its_answer_arrives_once(
     assert thread.status_code == status.HTTP_200_OK, thread.text
     body = thread.json()
     assert body["metadata"]["source"] == ASK_SOURCE
-    ask = body["metadata"][ASK_KEY]
+    ask = body["metadata"]["ask"]
     assert ask["from_conversation_id"] == str(asking)
     assert ask["for_user_id"] == fixed_test_user["id"]
     assert ask["chain"]["depth"] == 1
@@ -270,14 +269,14 @@ async def test_a_client_cannot_aim_an_answer_at_another_conversation(
         await authenticated_client.get(
             f"/pods/{billing}/conversations/{outcome.conversation_id}"
         )
-    ).json()["metadata"][ASK_KEY]
+    ).json()["metadata"]["ask"]
     forged = {**stored, "from_conversation_id": str(elsewhere)}
     response = await authenticated_client.patch(
         f"/pods/{billing}/conversations/{outcome.conversation_id}",
-        json={"metadata": {ASK_KEY: forged, "pinned": True}},
+        json={"metadata": {"ask": forged, "pinned": True}},
     )
     assert response.status_code == status.HTTP_200_OK, response.text
-    assert response.json()["metadata"][ASK_KEY] == stored
+    assert response.json()["metadata"]["ask"] == stored
     assert response.json()["metadata"]["pinned"] is True
 
 

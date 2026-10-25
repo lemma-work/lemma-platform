@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
@@ -45,11 +45,11 @@ from app.modules.agent.contracts.run_replies import (
     run_reply_material,
 )
 from app.modules.agent.domain.pod_asks import HANDED_BACK_SOURCES
-from app.modules.agent.domain.private_notes import LEMMA_CHANNEL, PRIVATE_NOTE_KEY
-from app.modules.agent.domain.queued_messages import (
-    DURING_ACTIVE_RUN,
-    STEERED_INTO_RUN,
+from app.modules.agent.domain.private_notes import (
+    LEMMA_CHANNEL,
+    PRIVATE_NOTE_REQUEST_KEY,
 )
+from app.modules.agent.domain.value_objects import ConversationOrigin, QueueState
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
@@ -321,7 +321,8 @@ async def _members_conversation(
         agent_name=agent_name,
         user_id=user_id,
         title=(channel.title or "Lemma")[:255],
-        metadata={"source": LEMMA_CHANNEL, "channel_kind": channel.kind.value},
+        metadata={"channel_kind": channel.kind.value},
+        origin=ConversationOrigin.CHANNEL,
         require_execute_grant=False,
         channel_id=channel.id,
     )
@@ -339,7 +340,7 @@ def turn_metadata(
     if line.members_only:
         # A note among members: its answer is one too, and nothing said for
         # it is repeated anywhere it would be carried.
-        metadata[PRIVATE_NOTE_KEY] = True
+        metadata[PRIVATE_NOTE_REQUEST_KEY] = True
     if channel.title:
         metadata["channel_name"] = channel.title
     if line.sender.display_name:
@@ -446,7 +447,7 @@ async def _lines_read_by(
     """
     metadata = MessageModel.message_metadata
     started_it = (MessageModel.agent_run_id == run_id) & (
-        func.coalesce(metadata[DURING_ACTIVE_RUN].astext, "false") != "true"
+        MessageModel.queue_state == QueueState.NONE
     )
     rows = (
         await uow.session.execute(
@@ -458,7 +459,7 @@ async def _lines_read_by(
             .where(
                 MessageModel.conversation_id == conversation_id,
                 MessageModel.role == "user",
-                started_it | (metadata[STEERED_INTO_RUN].astext == str(run_id)),
+                started_it | (MessageModel.steered_into_run_id == run_id),
             )
             .order_by(MessageModel.sequence)
             .limit(MAX_LINES_A_RUN_READS)

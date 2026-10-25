@@ -69,6 +69,8 @@ from app.modules.test_support.e2e_authz import (
     item_names,
 )
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.value_objects import AnswerKind
 
 pytestmark = pytest.mark.e2e
 
@@ -139,7 +141,6 @@ async def _seed_paused_interaction(
             conversation_id=conversation_id,
             agent_id=UUID(agent["id"]),
             agent_runtime=AgentRuntimeConfig(**resolved_agent_runtime),
-            metadata={"source": "approval_e2e"},
         )
         await messages.append_message(
             conversation_id=conversation_id,
@@ -225,7 +226,6 @@ async def _seed_paused_interactions(
             conversation_id=conversation_id,
             agent_id=UUID(agent["id"]),
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "approval_e2e"},
         )
         for idx, (tool_name, tool_args) in enumerate(interactions):
             approval_id = f"functions.{tool_name}:e2e-{idx}"
@@ -415,7 +415,6 @@ async def _create_active_run(
             conversation_id=conversation_id,
             agent_id=agent_id,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "e2e_stop"},
         )
         return run.id
 
@@ -435,7 +434,6 @@ async def _start_real_agent_run(
             conversation_id=conversation_id,
             agent_id=agent_id,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "e2e_stop_running"},
         )
         await messages.append_message(
             conversation_id=conversation_id,
@@ -818,7 +816,6 @@ class TestPodAgentLifecycle:
                 conversation_id=conversation_id,
                 agent_id=UUID(agent["id"]),
                 agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-                metadata={"source": "harness_message_persistence_test"},
             )
             await uow.commit()
         agent_run_id = run.id
@@ -834,7 +831,8 @@ class TestPodAgentLifecycle:
                 agent_run_id=agent_run_id,
                 data=MessageDraft.of_text(
                     "Checking before tool.",
-                    metadata={"is_final_answer": False, "harness_kind": "CODEX"},
+                    metadata={"harness_kind": "CODEX"},
+                    state=MessageState(answer=AnswerKind.NOT_FINAL),
                 ),
             ),
             run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
@@ -3205,7 +3203,6 @@ class TestFinalAnswerToolset:
                 conversation_id=conversation_id,
                 agent_id=agent_id,
                 agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-                metadata={"source": "final_answer_e2e"},
             )
             await uow.commit()
 

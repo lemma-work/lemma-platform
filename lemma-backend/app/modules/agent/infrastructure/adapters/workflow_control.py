@@ -13,7 +13,6 @@ caller read a key off it without the type checker asking.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_metadata import origin_metadata
 import json
 from uuid import UUID
 
@@ -24,11 +23,15 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.errors import AgentNotFoundError
 from app.modules.agent.contracts.turns import AgentTurnStart, stage_agent_turn
+from app.modules.agent.domain.project_repo import parse_project_repo
+from app.modules.agent.domain.run_state import RunState, ScheduleFiring
 from app.modules.agent.domain.value_objects import (
+    ConversationOrigin,
     ConversationStatus,
     ConversationType,
     MessageDraft,
     MessageRole,
+    RunTrigger,
 )
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
@@ -51,10 +54,11 @@ from app.modules.workflow.contracts import AgentPort
 #: The run source whose opening message is a wake-up rather than a node's input.
 SCHEDULE_SOURCE = "SCHEDULE"
 
-#: Metadata keys that describe the *firing*, not the event, written by
-#: `ScheduleStartService._build_trigger`. Rendered as a sentence at the top of
-#: the wake message, so they are dropped from the event body below it rather
-#: than printed twice.
+#: Keys of a firing's ``input_data["metadata"]`` that describe the *firing*,
+#: not the event, written by `ScheduleStartService._build_trigger`. Rendered as
+#: a sentence at the top of the wake message, so they are dropped from the
+#: event body below it rather than printed twice -- and recorded on the run as
+#: its ``schedule_firing``.
 _FIRING_FACTS = frozenset(
     {
         "schedule_id",
@@ -65,6 +69,21 @@ _FIRING_FACTS = frozenset(
         "timezone",
     }
 )
+
+
+def _schedule_firing(
+    input_data: dict[str, object], conversation_metadata: dict[str, object]
+) -> ScheduleFiring | None:
+    """The facts about the firing that started this run, as the run keeps them."""
+    raw = input_data.get("metadata")
+    facts = {
+        key: value
+        for key, value in (raw if isinstance(raw, dict) else {}).items()
+        if key in _FIRING_FACTS
+    }
+    facts.setdefault("schedule_name", conversation_metadata.get("schedule_name"))
+    facts.setdefault("trigger_type", conversation_metadata.get("schedule_type"))
+    return ScheduleFiring.from_json(facts)
 
 
 class AgentControlAdapter(AgentPort):
@@ -135,11 +154,12 @@ class AgentControlAdapter(AgentPort):
         instructions: str | None,
         runtime_override: AgentRuntimeConfig | None = None,
     ) -> UUID:
-        metadata: dict[str, object] = {
-            **(conversation_metadata or {}),
-            **origin_metadata(source=source, workflow_run_id=workflow_run_id),
-        }
         started_by_schedule = source == SCHEDULE_SOURCE
+        # What the caller says about where the conversation came from. The
+        # repository a webhook delivery names is the run's checkout; the rest
+        # (which schedule, which kind) is kept as the conversation's own.
+        metadata = dict(conversation_metadata or {})
+        repo = parse_project_repo(metadata.pop("repo", None))
         entity_values: dict[str, object] = {
             "user_id": user_id,
             "pod_id": pod_id,
@@ -154,6 +174,13 @@ class AgentControlAdapter(AgentPort):
             ),
             "type": ConversationType.TASK,
             "metadata": metadata,
+            "origin": (
+                ConversationOrigin.SCHEDULE
+                if started_by_schedule
+                else ConversationOrigin.WORKFLOW_STEP
+            ),
+            "workflow_run_id": workflow_run_id,
+            "repo": repo,
             # What the trigger asked for, in the author's words. Lands in the
             # system prompt as `# Conversation Instructions`, after the agent's
             # own instruction — so a named agent keeps its identity and gains a
@@ -189,7 +216,14 @@ class AgentControlAdapter(AgentPort):
             conversation_id=conversation.id,
             agent_id=agent_id,
             agent_runtime=runtime,
-            metadata=metadata,
+            state=RunState(
+                trigger=RunTrigger.SCHEDULE_FIRE
+                if started_by_schedule
+                else RunTrigger.WORKFLOW_START,
+                schedule_firing=_schedule_firing(input_data, metadata)
+                if started_by_schedule
+                else None,
+            ),
         )
         await self.messages.append_message(
             conversation_id=conversation.id,
@@ -199,11 +233,7 @@ class AgentControlAdapter(AgentPort):
                 if started_by_schedule
                 else self._workflow_input_prompt(input_data),
                 role=MessageRole.USER,
-                metadata={
-                    "author_user_id": str(user_id),
-                    **metadata,
-                    "content_format": "json",
-                },
+                metadata={"source": source, "content_format": "json"},
             ),
         )
         await stage_agent_turn(

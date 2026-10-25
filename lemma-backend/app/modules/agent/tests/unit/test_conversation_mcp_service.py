@@ -14,6 +14,7 @@ from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 
 class _SurfaceToolRequest(BaseModel):
@@ -368,14 +369,16 @@ _SUBAGENT_TOOLS = {
 }
 
 
-async def _agent_host_tool_names(*, metadata: dict[str, object]) -> set[str]:
+async def _agent_host_tool_names(
+    *, origin: ConversationOrigin = ConversationOrigin.CHAT
+) -> set[str]:
     user_id, pod_id, conversation_id = uuid4(), uuid4(), uuid4()
     conversation = Conversation(
         id=conversation_id,
         user_id=user_id,
         pod_id=pod_id,
         title="Delegation",
-        metadata=metadata,
+        origin=origin,
     )
     ctx = BaseAgentContext(
         user_id=user_id,
@@ -393,14 +396,14 @@ async def _agent_host_tool_names(*, metadata: dict[str, object]) -> set[str]:
 
 
 async def test_an_agent_host_run_is_offered_the_subagent_tools_under_their_mcp_names():
-    names = await _agent_host_tool_names(metadata={})
+    names = await _agent_host_tool_names()
 
     assert _SUBAGENT_TOOLS <= names
 
 
 async def test_a_sub_agent_on_agent_host_is_not_offered_the_subagent_tools():
     """The depth rule: a child cannot spawn, or wait inside its parent's turn."""
-    names = await _agent_host_tool_names(metadata={"is_sub_agent": True})
+    names = await _agent_host_tool_names(origin=ConversationOrigin.SUBAGENT)
 
     assert not _SUBAGENT_TOOLS & names
     # Still a working run, not an empty tool list.

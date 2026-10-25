@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.pod_asks import linked_asker_in
+from app.modules.agent.domain.pod_ask_record import AskMode, PodAsk
 from app.modules.agent.domain.value_objects import AgentToolset
 
 
@@ -123,9 +123,9 @@ class Audience(BaseModel):
         contact_id = getattr(conversation, "contact_id", None)
         if isinstance(contact_id, UUID):
             return cls.contact(contact_id)
-        asking_pod = linked_asker_in(getattr(conversation, "metadata", None))
-        if asking_pod is not None:
-            return cls.pod(asking_pod)
+        ask = getattr(conversation, "ask", None)
+        if isinstance(ask, PodAsk) and ask.mode is AskMode.LINK:
+            return cls.pod(ask.from_pod_id)
         return cls.member()
 
     @property

@@ -7,21 +7,17 @@ checks, and nothing else the service carries.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_metadata import (
-    MANUAL_RETRY_SOURCE,
-    SOURCE_KEY,
-    source_of,
-)
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
-from app.modules.agent.domain.private_notes import privacy_of
+from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.errors import ConversationStateError
 from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRunStatus,
+    RunTrigger,
 )
 from app.modules.agent.services.conversation_access import (
     authorized_conversation,
@@ -72,7 +68,7 @@ class RetryCoordinator:
         await self.conversations.lock_conversation(conversation.id)
         active_run = await self.runs.get_active_agent_run_for_update(conversation.id)
         if active_run is not None:
-            if source_of(active_run.metadata) == MANUAL_RETRY_SOURCE:
+            if active_run.state.trigger is RunTrigger.RETRY:
                 return AgentRunStartResult(
                     conversation_id=conversation.id,
                     agent_run_id=active_run.id,
@@ -114,11 +110,11 @@ class RetryCoordinator:
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=runtime,
-            metadata={
-                SOURCE_KEY: MANUAL_RETRY_SOURCE,
-                "retried_agent_run_id": str(failed_run.id),
-                **privacy_of(failed_run.metadata),
-            },
+            state=RunState(
+                trigger=RunTrigger.RETRY,
+                retried_run_id=failed_run.id,
+                **failed_run.state.privacy.model_dump(),
+            ),
         )
         await stage_agent_turn(
             self.uow,

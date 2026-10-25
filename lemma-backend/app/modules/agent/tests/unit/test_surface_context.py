@@ -18,7 +18,7 @@ import pytest
 
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import ConversationType
-from app.modules.agent.domain.private_notes import ASKED_IN_LEMMA_KEY
+from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.services.surface_context import surface_context_for_run
 
 pytestmark = pytest.mark.unit
@@ -36,7 +36,7 @@ def _conversation(metadata: dict | None) -> Conversation:
 
 def _ordinary_run(conversation: Conversation):
     """A run a surface or a person in the conversation itself started."""
-    return surface_context_for_run(conversation, {"source": "user_message"})
+    return surface_context_for_run(conversation, RunState())
 
 
 def test_a_conversation_with_no_surface_reads_as_all_nulls() -> None:
@@ -128,7 +128,7 @@ def test_a_run_asked_in_lemma_talks_over_no_platform() -> None:
     )
 
     asked_in_lemma = surface_context_for_run(
-        heard_on_whatsapp, {"source": "user_message", ASKED_IN_LEMMA_KEY: True}
+        heard_on_whatsapp, RunState(asked_in_lemma=True)
     )
 
     assert all(value is None for value in asked_in_lemma.values())

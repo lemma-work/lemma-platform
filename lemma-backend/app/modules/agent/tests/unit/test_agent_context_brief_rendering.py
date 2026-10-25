@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.value_objects import ConversationOrigin, RunTrigger
 from app.modules.agent.services import agent_self_brief as self_mod
 from app.modules.agent.services import brief_lines
 from app.modules.datastore.domain.datastore_entities import (
@@ -116,10 +118,17 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
     human ones that ``approval_resume`` was missing from.
     """
 
-    SCHEDULED = {"started_by": "SCHEDULE", "schedule_name": "daily-invoices"}
+    @staticmethod
+    def _scheduled() -> SimpleNamespace:
+        return SimpleNamespace(
+            origin=ConversationOrigin.SCHEDULE,
+            metadata={"schedule_name": "daily-invoices"},
+        )
 
     def test_a_scheduled_firing_is_told_nobody_is_watching(self):
-        framed = brief_lines.run_framing(SimpleNamespace(metadata=self.SCHEDULED))
+        framed = brief_lines.run_framing(
+            self._scheduled(), run_trigger=RunTrigger.SCHEDULE_FIRE
+        )
         assert "daily-invoices" in framed
         assert "Assume nobody is watching" in framed
 
@@ -128,19 +137,18 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         Lemma, and its framing must not say it arrived from WhatsApp."""
         heard = SimpleNamespace(metadata={"surface_platform": "WHATSAPP"})
 
-        in_lemma = brief_lines.run_framing(heard, run_source="user_message")
+        in_lemma = brief_lines.run_framing(heard, run_trigger=RunTrigger.MESSAGE)
         on_whatsapp = brief_lines.run_framing(
-            heard, run_source="user_message", platform="WHATSAPP"
+            heard, run_trigger=RunTrigger.MESSAGE, platform="WHATSAPP"
         )
 
         assert "whatsapp" not in in_lemma.lower()
         assert "This arrived from whatsapp" in on_whatsapp
 
     def test_a_person_typing_into_a_scheduled_conversation_is_not_ignored(self):
-        """``started_by`` stays on the conversation; a person may return to it."""
+        """A schedule opened the conversation; a person may return to it."""
         framed = brief_lines.run_framing(
-            SimpleNamespace(metadata=self.SCHEDULED),
-            run_source="user_message",
+            self._scheduled(), run_trigger=RunTrigger.MESSAGE
         )
         assert "Assume nobody is watching" not in framed
         assert "a person is now asking" in framed
@@ -148,15 +156,14 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
     def test_an_approval_resume_is_a_person_answering(self):
         """The reproduction that forced the second correction.
 
-        Approving, or answering `ask_user`, resumes the run with source
-        ``approval_resume``. Classified against an allow-list of human sources
-        that did not contain it, the run that exists *because* somebody just
-        responded was told nothing had come from a person — so it would carry on
-        as though unattended and file its answer away from them.
+        Approving, or answering `ask_user`, resumes the run. Classified against
+        an allow-list of human sources that did not contain it, the run that
+        exists *because* somebody just responded was told nothing had come from
+        a person — so it would carry on as though unattended and file its
+        answer away from them.
         """
         framed = brief_lines.run_framing(
-            SimpleNamespace(metadata=self.SCHEDULED),
-            run_source="approval_resume",
+            self._scheduled(), run_trigger=RunTrigger.RESUME
         )
         assert "Assume nobody is watching" not in framed
         assert "A person answered what you were waiting on" in framed
@@ -164,35 +171,39 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
     def test_an_approval_resume_says_so_outside_a_schedule_too(self):
         """Most approvals happen in an ordinary conversation."""
         framed = brief_lines.run_framing(
-            SimpleNamespace(metadata={}),
-            run_source="approval_resume",
+            SimpleNamespace(metadata={}), run_trigger=RunTrigger.RESUME
         )
         assert "A person answered what you were waiting on" in framed
 
-    def test_a_snooze_resume_is_a_timer_not_a_person(self):
+    def test_a_wake_is_a_timer_not_a_person(self):
         """The other resume: nobody pressed anything, a clock came due."""
-        framed = brief_lines.run_framing(
-            SimpleNamespace(metadata=self.SCHEDULED),
-            run_source="wait_resume",
-        )
+        framed = brief_lines.run_framing(self._scheduled(), run_trigger=RunTrigger.WAKE)
         assert "Assume nobody is watching" in framed
 
-    def test_an_unrecognised_source_is_never_called_unattended(self):
-        """The list is of *automatic* sources, and that direction is the point.
+    @pytest.mark.parametrize(
+        "trigger",
+        [
+            RunTrigger.MESSAGE,
+            RunTrigger.FOLLOW_UP,
+            RunTrigger.RETRY,
+            RunTrigger.REPLIES,
+            RunTrigger.DELEGATION_RESULT,
+        ],
+    )
+    def test_only_a_known_automatic_trigger_is_called_unattended(self, trigger):
+        """The list is of *automatic* triggers, and that direction is the point.
 
-        A source this build has not heard of is not evidence that nobody is
-        there, and claiming otherwise is the failure that costs somebody an
-        answer. This is the shape that would have caught `approval_resume`.
+        Claiming nobody is there is the failure that costs somebody an answer.
+        This is the shape that would have caught the resume.
         """
-        framed = brief_lines.run_framing(
-            SimpleNamespace(metadata=self.SCHEDULED),
-            run_source="some_future_human_action",
-        )
+        framed = brief_lines.run_framing(self._scheduled(), run_trigger=trigger)
         assert "Assume nobody is watching" not in framed
 
     def test_the_unattended_wording_does_not_claim_the_reply_vanishes(self):
         """Replies are persisted. Nobody reading it *now* is the honest claim."""
-        framed = brief_lines.run_framing(SimpleNamespace(metadata=self.SCHEDULED))
+        framed = brief_lines.run_framing(
+            self._scheduled(), run_trigger=RunTrigger.SCHEDULE_FIRE
+        )
         assert "still saved to this conversation" in framed
 
     def test_a_surface_run_is_told_where_the_person_is(self):
@@ -227,9 +238,9 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         assert "nobody is watching" not in framing.lower()
 
     def test_an_unattended_run_is_told_to_take_the_time_it_needs(self):
-        conversation = SimpleNamespace(metadata={"started_by": "SCHEDULE"})
+        conversation = SimpleNamespace(origin=ConversationOrigin.SCHEDULE, metadata={})
 
-        framing = brief_lines.run_framing(conversation, run_source="wait_resume")
+        framing = brief_lines.run_framing(conversation, run_trigger=RunTrigger.WAKE)
 
         assert "Take the time the work needs" in framing
         assert "A person is waiting" not in framing
@@ -241,16 +252,16 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         assert "nobody is watching" not in framing.lower()
 
 
-class TestTheRunSourceComesOffTheRun:
+class TestTheRunTriggerComesOffTheRun:
     """The conversation cannot answer this; only the run can."""
 
-    def test_the_source_is_read_from_run_metadata(self):
-        run = SimpleNamespace(metadata={"source": "approval_resume"})
-        assert brief_lines.run_source_of(run) == "approval_resume"
+    def test_the_trigger_is_read_from_the_run(self):
+        run = SimpleNamespace(state=RunState(trigger=RunTrigger.RESUME))
+        assert brief_lines.run_trigger_of(run) is RunTrigger.RESUME
 
-    def test_a_run_without_metadata_has_no_source(self):
-        assert brief_lines.run_source_of(SimpleNamespace()) is None
-        assert brief_lines.run_source_of(SimpleNamespace(metadata=None)) is None
+    def test_a_run_without_state_has_no_trigger(self):
+        assert brief_lines.run_trigger_of(SimpleNamespace()) is None
+        assert brief_lines.run_trigger_of(SimpleNamespace(state=None)) is None
 
 
 class TestAScheduleReadsLikeAJob:

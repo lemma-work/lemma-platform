@@ -40,8 +40,6 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
-from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY
-from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
 from app.modules.agent.infrastructure.db.base import UnitOfWorkRepository
 
@@ -296,7 +294,7 @@ def _newest_unattached_ids(
     every candidate with a window function instead read and sorted all of a
     conversation's run-less rows, full text included, on every run.
     """
-    is_copy = MessageModel.message_metadata[FOLDED_FROM_KEY].astext.is_not(None)
+    is_copy = MessageModel.folded_from.is_not(None)
     side = (
         is_copy
         if folded
@@ -304,7 +302,7 @@ def _newest_unattached_ids(
             ~is_copy,
             or_(
                 MessageModel.kind == MessageKind.NOTIFICATION.value,
-                MessageModel.message_metadata[HELD_FOR_A_PERSON].astext == "true",
+                MessageModel.held_for_a_person,
             ),
         )
     )

@@ -91,7 +91,6 @@ async def _pause_then_bury_it(conversation_id: UUID, *, tool_name: str) -> str:
             conversation_id=conversation_id,
             agent_id=None,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "e2e_approval_window"},
         )
         await messages_repo.append_message(
             conversation_id=conversation_id,

@@ -22,12 +22,11 @@ from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.conversation_access import (
     resolve_agent,
 )
-from app.modules.agent.domain.private_notes import privacy_of, run_is_private
+from app.modules.agent.domain.run_state import RunPrivacy, RunState
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.pausing_tools import (
-    PARKED_IN_RUN_KEY,
     PAUSING_TOOL_NAMES as _PAUSING_TOOL_NAMES_DOMAIN,
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -36,13 +35,13 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
     MessageDraft,
+    RunTrigger,
 )
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.services.queued_followups import LEFTOVERS_KEY
 from app.modules.agent.services.realtime import (
     error_payload,
     message_payload,
@@ -166,7 +165,7 @@ class PauseResume:
         call = await self.pausing_calls.get_tool_call(
             conversation_id=conversation_id, tool_call_id=tool_call_id
         )
-        if call is None or not (call.metadata or {}).get(PARKED_IN_RUN_KEY):
+        if call is None or call.state.parked_in_run_id is None:
             return False
         run = await self.runs.get_agent_run(paused_run_id)
         return run is not None and run.status == AgentRunStatus.RUNNING
@@ -180,7 +179,7 @@ class PauseResume:
         user_id: UUID,
         pod_id: UUID,
         agent_name: str | None,
-        source: str,
+        trigger: RunTrigger,
     ) -> None:
         """Start the run that replays the synthesized return, at most once.
 
@@ -223,7 +222,7 @@ class PauseResume:
             user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
-            source=source,
+            trigger=trigger,
             publish_claimed=True,
         )
 
@@ -281,7 +280,7 @@ class PauseResume:
                 user_id=conversation.user_id,
                 pod_id=conversation.pod_id,
                 agent_name=None,
-                source="approval_resume",
+                trigger=RunTrigger.RESUME,
             )
         held = await self.queued_messages.mark_queued_waiting_on_answer(paused_run_id)
         await self.uow.commit()
@@ -296,7 +295,7 @@ class PauseResume:
         user_id: UUID,
         pod_id: UUID,
         agent_name: str | None,
-        source: str,
+        trigger: RunTrigger,
         publish_claimed: bool = False,
     ) -> ResumeStarted | None:
         """Create the resume run and claim what was said while it was paused.
@@ -333,8 +332,8 @@ class PauseResume:
             await self.uow.commit()
             return None
         paused_run = await self.runs.get_agent_run(paused_run_id)
-        paused_metadata = paused_run.metadata if paused_run else None
-        notes = run_is_private(paused_metadata)
+        privacy = paused_run.state.privacy if paused_run else RunPrivacy()
+        notes = privacy.private_note
         # A resume answers one kind, like a follow-up turn: the other kind
         # waits for the turn after it, which has to know where to look.
         leftovers = await self.queued_messages.count_queued_user_messages(
@@ -344,13 +343,13 @@ class PauseResume:
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=selected_agent_runtime,
-            metadata={
-                "source": source,
-                "resumed_tool_call_id": resumed_tool_call_id,
+            state=RunState(
+                trigger=trigger,
+                resumed_tool_call_id=resumed_tool_call_id,
                 # A note that paused for an approval finishes where it began.
-                **privacy_of(paused_metadata),
-                **({LEFTOVERS_KEY: [str(paused_run_id)]} if leftovers else {}),
-            },
+                **privacy.model_dump(),
+                queued_leftovers_behind=[paused_run_id] if leftovers else [],
+            ),
         )
         # What the person said while the pause was open is this run's to
         # answer: claimed into it, so a host carries it in the prompt and the

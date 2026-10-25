@@ -15,11 +15,10 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.subagent_results import (
-    PARENT_RUN_KEY,
-    REPORTS_TO_PARENT_KEY,
+from app.modules.agent.domain.value_objects import (
+    AgentRuntimeConfig,
+    ConversationOrigin,
 )
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.services import subagent_service as subagent_module
 from app.modules.agent.services.subagent_service import (
     SubAgentError,
@@ -209,9 +208,9 @@ async def test_a_spawned_child_reports_to_the_run_that_spawned_it(monkeypatch):
 
     await service.spawn(deps, agent_name=None, input_data="Count the issues.")
 
-    metadata = captured.create_kwargs["metadata"]
-    assert metadata[REPORTS_TO_PARENT_KEY] is True
-    assert metadata[PARENT_RUN_KEY] == str(deps.agent_run_id)
+    assert captured.create_kwargs["origin"] is ConversationOrigin.SUBAGENT
+    assert captured.create_kwargs["reports_to_parent"] is True
+    assert captured.create_kwargs["parent_run_id"] == deps.agent_run_id
 
 
 async def test_self_spawn_with_own_name_bypasses_grant(monkeypatch):

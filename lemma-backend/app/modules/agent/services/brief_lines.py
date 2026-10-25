@@ -16,7 +16,7 @@ whether a person was typing or a schedule had fired at six in the morning.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_metadata import source_of
+from app.modules.agent.domain.value_objects import ConversationOrigin, RunTrigger
 from typing import TYPE_CHECKING
 
 from uuid import UUID
@@ -54,22 +54,17 @@ def more_note(shown: int, total: object, noun: str) -> list[str]:
     ]
 
 
-#: Run sources known to start without a person: a timer coming due. A schedule's
-#: own first firing records no source at all, which ``None`` covers.
+#: Triggers known to start a run without a person: a timer coming due, a
+#: schedule firing.
 #:
-#: An allow-list of *human* sources was the first shape of this and it was the
-#: wrong way round. ``approval_resume`` -- somebody clicked approve, or answered
+#: An allow-list of *human* triggers was the first shape of this and it was the
+#: wrong way round. A resume -- somebody clicked approve, or answered
 #: ``ask_user`` -- was missing from it, so the run that exists precisely because
 #: a person had just responded was told nothing had come from a person. Listing
-#: the automatic ones instead means an unrecognised source is never called
+#: the automatic ones instead means an unrecognised trigger is never called
 #: unattended, and wrongly claiming nobody is watching is the failure that
 #: actually costs somebody an answer.
-AUTOMATIC_RUN_SOURCES = frozenset({"wait_resume", "agent_wait"})
-
-#: A person answered a pause: an approval decision, or a reply to ``ask_user``.
-#: Worth saying out loud, because the run resumes mid-task and the answer it was
-#: waiting for is now sitting in its history.
-RESUMED_BY_PERSON = "approval_resume"
+AUTOMATIC_TRIGGERS = frozenset({RunTrigger.WAKE, RunTrigger.SCHEDULE_FIRE})
 
 
 def _with_budget(framing: str, *, unattended: bool) -> str:
@@ -126,7 +121,7 @@ def _with_budget(framing: str, *, unattended: bool) -> str:
     )
 
 
-def run_is_unattended(run_source: str | None) -> bool:
+def run_is_unattended(run_trigger: RunTrigger | None) -> bool:
     """Whether nobody is expected to be watching this turn.
 
     The claim has to be positively established, never inferred from absence:
@@ -137,22 +132,27 @@ def run_is_unattended(run_source: str | None) -> bool:
     a quick reply; the run budget uses a longer ceiling, because nobody is
     waiting — and still a ceiling, because nobody is watching the spend either.
     """
-    return run_source is None or run_source in AUTOMATIC_RUN_SOURCES
+    return run_trigger is None or run_trigger in AUTOMATIC_TRIGGERS
 
 
-def run_source_of(agent_run) -> str | None:
-    """What kicked off this run, from its own metadata.
+def run_trigger_of(agent_run: object) -> RunTrigger | None:
+    """What kicked off this run.
 
     Lives here rather than with the runner because the only thing that reads it
-    is the framing below, and the pair is one fact: a schedule stamps the
+    is the framing below, and the pair is one fact: a schedule opens the
     *conversation* once, so the conversation cannot say whether a person is here
     on this turn. Only the run can.
     """
-    return source_of(getattr(agent_run, "metadata", None))
+    state = getattr(agent_run, "state", None)
+    trigger = getattr(state, "trigger", None)
+    return trigger if isinstance(trigger, RunTrigger) else None
 
 
 def run_framing(
-    conversation, *, run_source: str | None = None, platform: str | None = None
+    conversation,
+    *,
+    run_trigger: RunTrigger | None = None,
+    platform: str | None = None,
 ) -> str:
     """Say what started **this run**, and whether anybody is waiting on it.
 
@@ -165,27 +165,28 @@ def run_framing(
     nobody was going to give.
 
     Two corrections since. The first version read only the conversation --
-    ``started_by`` is stamped there when a schedule creates it and it stays
-    there, so a person opening that conversation the next morning was still told
-    nobody would read the reply. The second used an allow-list of human sources
-    and left ``approval_resume`` out of it, which meant the run that exists
-    *because* somebody had just approved something was told nothing had come
-    from a person.
+    a schedule opens it and it stays a schedule's, so a person opening that
+    conversation the next morning was still told nobody would read the reply.
+    The second used an allow-list of human sources and left a resume out of it,
+    which meant the run that exists *because* somebody had just approved
+    something was told nothing had come from a person.
 
-    So: the conversation says how it began, ``run_source`` says what started this
-    turn, and the unattended claim needs the source to be positively known
-    automatic. Anything unrecognised is not called unattended. ``platform`` is
+    So: the conversation's ``origin`` says how it began, ``run_trigger`` says
+    what started this turn, and the unattended claim needs the trigger to be
+    positively known automatic. Anything unrecognised is not called unattended. ``platform`` is
     the one the run talks over (``surface_context_for_run``), never the
     conversation's: a member's conversation in a channel was last heard on
     WhatsApp as often as not when they ask in Lemma.
     """
     metadata = getattr(conversation, "metadata", None)
     metadata = metadata if isinstance(metadata, dict) else {}
-    started_by_schedule = str(metadata.get("started_by") or "").upper() == "SCHEDULE"
-    unattended = run_is_unattended(run_source)
+    started_by_schedule = (
+        getattr(conversation, "origin", None) is ConversationOrigin.SCHEDULE
+    )
+    unattended = run_is_unattended(run_trigger)
     where = f" from {platform.lower()}" if platform else ""
 
-    if run_source == RESUMED_BY_PERSON:
+    if run_trigger is RunTrigger.RESUME:
         return _with_budget(
             "## This run\n"
             "- A person answered what you were waiting on — an approval, or a "

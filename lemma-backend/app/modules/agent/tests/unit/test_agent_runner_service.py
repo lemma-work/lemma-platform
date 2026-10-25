@@ -27,6 +27,7 @@ from app.modules.agent.services.agent_runner_service import (
     AgentRunnerService,
 )
 from app.modules.test_support.fakes import FakeUnitOfWork
+from app.modules.agent.domain.entities import Conversation
 
 
 _GENERIC_REJECTION = "The Agent Host rejected this run before dispatch. Try again."
@@ -205,13 +206,12 @@ async def test_execute_re_raises_cancelled_error(monkeypatch) -> None:
     )
 
     # Build minimal domain objects so _load_run_context returns valid values.
-    conversation = SimpleNamespace(
+    conversation = Conversation(
         id=UUID("00000000-0000-0000-0000-000000000010"),
         organization_id=UUID("00000000-0000-0000-0000-000000000011"),
         pod_id=UUID("00000000-0000-0000-0000-000000000012"),
         agent_id=UUID("00000000-0000-0000-0000-000000000013"),
-        metadata=None,
-        parent_id=None,
+        user_id=UUID("00000000-0000-0000-0000-000000000014"),
     )
     agent = SimpleNamespace(name="test-agent")
     agent_run = SimpleNamespace(

@@ -14,10 +14,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.outsiders import Audience, AudienceKind
-from app.modules.agent.domain.server_metadata import (
-    client_metadata,
-    with_server_keys_kept,
-)
+from app.modules.agent.domain.conversations import client_tags, with_client_tags
 from app.modules.agent.domain.surface_prompts import surface_platform_guidance
 from app.modules.agent.services.outsider_brief import render_contact_brief
 
@@ -73,8 +70,8 @@ def test_a_client_can_write_the_old_audience_keys_and_change_nothing():
     """They are ordinary metadata now: kept as sent, and read by nobody."""
     sent = {"audience": "contact", "contact_id": str(CONTACT_ID), "title": "x"}
 
-    assert client_metadata(sent) == sent
-    assert with_server_keys_kept({"title": "y"}, sent) == sent
+    assert client_tags(sent) == sent
+    assert with_client_tags({"title": "y"}, sent) == sent
 
 
 def test_a_contacts_run_is_told_the_chat_is_private():

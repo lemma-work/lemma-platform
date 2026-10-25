@@ -21,13 +21,12 @@ current shape should still run with the raw payload rather than not at all.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import TypedDict
 from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.private_notes import asked_in_lemma
+from app.modules.agent.domain.run_state import RunPrivacy
 
 logger = get_logger(__name__)
 
@@ -82,11 +81,11 @@ def _no_surface() -> SurfaceContext:
 
 
 def surface_context_for_run(
-    conversation: Conversation, run_metadata: Mapping[str, object] | None
+    conversation: Conversation, run: RunPrivacy | None
 ) -> SurfaceContext:
     """The surface fields a run's tool context needs: nulls for a run asked
     in Lemma, or in a conversation no surface has heard."""
-    if asked_in_lemma(run_metadata):
+    if run is not None and run.asked_in_lemma:
         return _no_surface()
     metadata = conversation.metadata or {}
     surface_id = metadata.get("surface_id")

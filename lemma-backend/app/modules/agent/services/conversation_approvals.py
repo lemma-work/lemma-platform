@@ -48,7 +48,6 @@ from app.modules.agent.domain.pausing_tools import (
     PAUSING_TOOL_NAMES,
     PausingKind,
     PendingPause,
-    parked_suspension_of,
 )
 from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
 from app.modules.agent.infrastructure.db.conversations import Conversations
@@ -58,6 +57,7 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
+    RunTrigger,
 )
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
@@ -352,12 +352,12 @@ class ApprovalCoordinator:
             user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
-            source="approval_resume",
+            trigger=RunTrigger.RESUME,
         )
 
     async def _turn_ended_while_parked(self, paused_run_id: UUID) -> bool:
         run = await self.runs.get_agent_run(paused_run_id)
-        return run is not None and parked_suspension_of(run.metadata) is not None
+        return run is not None and run.state.suspended_while_parked is not None
 
     async def record_unconfirmed_execution(
         self,

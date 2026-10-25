@@ -11,7 +11,6 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from app.modules.agent.domain.entities import Message
-from app.modules.agent.domain.queued_messages import STEERED_INTO_RUN
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
 
 
@@ -148,7 +147,7 @@ def _own_messages(
             if message.role == MessageRole.USER
             and (
                 message.agent_run_id == agent_run_id
-                or (message.metadata or {}).get(STEERED_INTO_RUN) == str(agent_run_id)
+                or message.state.steered_into_run_id == agent_run_id
             )
         ]
         if answering:

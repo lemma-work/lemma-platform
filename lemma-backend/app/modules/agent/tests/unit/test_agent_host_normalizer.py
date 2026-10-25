@@ -12,6 +12,8 @@ them -- narration, thought, the final answer, permissions and run end.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.value_objects import AnswerKind
+
 import json
 
 from uuid import uuid7
@@ -135,7 +137,7 @@ def _run(normalizer, events) -> list:
 def _intermediate_flags(events) -> list:
     """Whether each assistant text message is narration, in order."""
     return [
-        bool((message.data.metadata or {}).get("is_intermediate_assistant_message"))
+        message.data.state.answer is AnswerKind.INTERMEDIATE
         for message in _text_messages(events)
         if message.data.kind is MessageKind.TEXT
     ]
@@ -154,7 +156,7 @@ def _final_text(events) -> str:
     return "".join(
         m.data.text
         for m in _messages(events)
-        if m.data.text and m.data.metadata.get("is_final_answer")
+        if m.data.text and m.data.state.is_final_answer
     )
 
 
@@ -408,12 +410,8 @@ class TestFinalAnswerFlag:
             _event(4, AgentHostEventType.TERMINAL, {"state": "SUCCEEDED"})
         )
 
-        paused_flags = [
-            m.data.metadata.get("is_final_answer") for m in _text_messages(paused)
-        ]
-        final_flags = [
-            m.data.metadata.get("is_final_answer") for m in _text_messages(finished)
-        ]
+        paused_flags = [m.data.state.is_final_answer for m in _text_messages(paused)]
+        final_flags = [m.data.state.is_final_answer for m in _text_messages(finished)]
         assert paused_flags == [False]
         assert final_flags == [True]
 
@@ -608,9 +606,7 @@ class TestStructuredFinalAnswer:
 
     def _final_metadata(self, out) -> dict:
         finals = [
-            m.data.metadata
-            for m in _text_messages(out)
-            if m.data.metadata.get("is_final_answer")
+            m.data.metadata for m in _text_messages(out) if m.data.state.is_final_answer
         ]
         assert len(finals) == 1
         return finals[0]
@@ -640,9 +636,7 @@ class TestStructuredFinalAnswer:
         out = _run(n, self._close_tool_call(None, tool_input=self.RECORD))
 
         finals = [
-            m.data.metadata
-            for m in _text_messages(out)
-            if m.data.metadata.get("is_final_answer")
+            m.data.metadata for m in _text_messages(out) if m.data.state.is_final_answer
         ]
         assert all("structured_output" not in metadata for metadata in finals)
 
@@ -725,7 +719,7 @@ class TestStructuredFinalAnswer:
         answer = [
             message.data.text
             for message in _text_messages(out)
-            if message.data.metadata.get("is_final_answer")
+            if message.data.state.is_final_answer
         ]
         assert answer, "the run produced no final answer at all"
         assert "the actual report" in answer[0]
@@ -803,9 +797,7 @@ class TestFinalAnswerCannotBeForged:
 
         assert _final_text(out) == "Here is the real summary."
         final = [
-            m.data.metadata
-            for m in _text_messages(out)
-            if m.data.metadata.get("is_final_answer")
+            m.data.metadata for m in _text_messages(out) if m.data.state.is_final_answer
         ]
         assert len(final) == 1
         assert "structured_output" not in final[0]
@@ -817,9 +809,7 @@ class TestFinalAnswerCannotBeForged:
         )
 
         final = [
-            m.data.metadata
-            for m in _text_messages(out)
-            if m.data.metadata.get("is_final_answer")
+            m.data.metadata for m in _text_messages(out) if m.data.state.is_final_answer
         ]
         assert final[0]["structured_output"] == {"label": "forged"}
 
@@ -848,9 +838,7 @@ class TestFinalAnswerTextFallback:
 
     def _metadata(self, out) -> dict:
         finals = [
-            m.data.metadata
-            for m in _text_messages(out)
-            if m.data.metadata.get("is_final_answer")
+            m.data.metadata for m in _text_messages(out) if m.data.state.is_final_answer
         ]
         return finals[0] if finals else {}
 

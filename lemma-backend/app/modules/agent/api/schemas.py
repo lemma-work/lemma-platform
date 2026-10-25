@@ -9,6 +9,8 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ModelWrapValidatorHandler,
+    PrivateAttr,
     computed_field,
     field_validator,
     model_validator,
@@ -25,6 +27,8 @@ from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import (
     MAX_AGENT_INSTRUCTION_CHARACTERS,
     MAX_MESSAGE_CHARACTERS,
+    Conversation,
+    Message,
 )
 from app.modules.agent.domain.pending_interactions import PendingInteractionKind
 from app.modules.agent.domain.value_objects import (
@@ -38,9 +42,14 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
     MessageKind,
 )
+from app.modules.agent.domain.wire_metadata import (
+    conversation_wire_metadata,
+    message_wire_metadata,
+)
 from app.modules.agent.domain.workspace_location import (
-    pod_cwd_for,
-    workspace_location_for,
+    default_cwd_for,
+    pod_cwd_from_workspace_cwd,
+    resolve_workspace_location,
 )
 from app.modules.agent.tools.toolset_selection import NEW_AGENT_DEFAULT_TOOLSETS
 
@@ -181,6 +190,32 @@ class ConversationResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    #: Resolved from the conversation's own row when built from one; a response
+    #: built any other way falls back to the directory a row with none records.
+    _workspace_cwd: str | None = PrivateAttr(default=None)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _from_conversation(
+        cls, data: object, handler: ModelWrapValidatorHandler[ConversationResponse]
+    ) -> ConversationResponse:
+        """A conversation as a client reads it: its typed state said in
+        ``metadata`` too (``domain/wire_metadata``), and its directory."""
+        if not isinstance(data, Conversation):
+            return handler(data)
+        response = handler(
+            {
+                **{
+                    name: getattr(data, name)
+                    for name in cls.model_fields
+                    if name != "metadata" and hasattr(data, name)
+                },
+                "metadata": conversation_wire_metadata(data),
+            }
+        )
+        response._workspace_cwd = resolve_workspace_location(data).cwd
+        return response
+
     @computed_field(  # type: ignore[prop-decorator]
         return_type=str,
         description=(
@@ -195,15 +230,14 @@ class ConversationResponse(BaseModel):
         # over. The file pane rebuilt this path itself as
         # `/workspace/conversations/{id}` -- which is the *fallback* branch of
         # `BaseAgentContext.get_workspace_cwd()`, reached only by contexts with
-        # no conversation row. Every real run resolves through the ladder below
-        # to `/workspace/c/{date}/{slug}`, so the pane asked for a directory
-        # that has never existed and got back an empty listing, because a
-        # missing directory and an empty one answer identically.
-        return workspace_location_for(
-            metadata=self.metadata,
-            conversation_id=self.id,
-            created_at=self.created_at,
-        ).cwd
+        # no conversation row. Every real run resolves through
+        # `workspace_location` to `/workspace/c/{date}/{slug}`, so the pane
+        # asked for a directory that has never existed and got back an empty
+        # listing, because a missing directory and an empty one answer
+        # identically.
+        return self._workspace_cwd or default_cwd_for(
+            conversation_id=self.id, created_at=self.created_at
+        )
 
     @computed_field(  # type: ignore[prop-decorator]
         return_type=str,
@@ -215,16 +249,11 @@ class ConversationResponse(BaseModel):
     )
     @property
     def pod_cwd(self) -> str:
-        # Derived rather than stored: the cwd already lives in metadata, and
-        # `workspace_location` owns the ladder that reads it. A client that
-        # rebuilt this path itself would be a second implementation of a rule
-        # the agent's tools also depend on, which is how an upload ends up
-        # somewhere the agent never looks.
-        return pod_cwd_for(
-            metadata=self.metadata,
-            conversation_id=self.id,
-            created_at=self.created_at,
-        )
+        # Derived rather than stored: `workspace_location` owns the rule that
+        # resolves the cwd. A client that rebuilt this path itself would be a
+        # second implementation of a rule the agent's tools also depend on,
+        # which is how an upload ends up somewhere the agent never looks.
+        return pod_cwd_from_workspace_cwd(self.workspace_cwd)
 
 
 class ConversationListResponse(BaseModel):
@@ -266,6 +295,22 @@ class MessageResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_message(cls, data: object) -> object:
+        """A message as a client reads it: its typed state said in ``metadata``
+        too (``domain/wire_metadata``)."""
+        if not isinstance(data, Message):
+            return data
+        return {
+            **{
+                name: getattr(data, name)
+                for name in cls.model_fields
+                if name != "metadata" and hasattr(data, name)
+            },
+            "metadata": message_wire_metadata(data),
+        }
 
 
 class MessageListResponse(BaseModel):

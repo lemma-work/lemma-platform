@@ -82,6 +82,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
 )
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.test_support.e2e.waiters import eventually
+from app.modules.agent.domain.value_objects import RunTrigger
 
 pytestmark = pytest.mark.e2e
 
@@ -747,10 +748,10 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
         .all()
     )
     assert len(runs) == 2, "the timer did not start the run that carries on"
-    assert runs[-1].run_metadata["source"] == "wait_resume"
+    assert runs[-1].trigger is RunTrigger.WAKE
     # Named so the dispatch can prompt the woken agent with what it woke to,
     # rather than re-sending a request its provider session already holds.
-    assert runs[-1].run_metadata["resumed_tool_call_id"] == tool_call_id
+    assert runs[-1].resumed_tool_call_id == tool_call_id
     assert _resumed_tool_call_id(runs[-1].to_entity()) == tool_call_id
 
     messages, _ = await Messages(uow).list_messages(

@@ -47,7 +47,7 @@ from app.modules.agent.services.attached_document_brief import (
 )
 from app.modules.agent.services.outsider_brief import outsider_brief
 from app.modules.agent.services.link_brief import link_brief
-from app.modules.agent.services.brief_lines import run_source_of
+from app.modules.agent.services.brief_lines import run_trigger_of
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import surface_context_for_run
 from app.modules.agent.domain.workspace_location import (
@@ -88,22 +88,17 @@ async def build_run_context(
     the harness options, and two calls to `runtime_snapshot()` would be two
     objects that only happen to agree.
     """
-    surface_context = surface_context_for_run(conversation, agent_run.metadata)
+    surface_context = surface_context_for_run(conversation, agent_run.state)
     workspace_location = resolve_workspace_location(conversation)
     # Same rule the MCP bridge follows: a conversation that never had a
-    # cwd written down gets one now, so metadata is the source of truth
+    # cwd written down gets one now, so the row is the source of truth
     # in fact. Costs nothing on the common path -- creation stamps it,
     # so this only opens a unit of work for a row that predates that.
     if not has_recorded_cwd(conversation):
         async with uow_factory() as uow:
-            await Conversations(uow).set_conversation_metadata_key(
-                conversation.id, "cwd", workspace_location.cwd
-            )
+            await Conversations(uow).record_cwd(conversation.id, workspace_location.cwd)
             await uow.commit()
-        conversation.metadata = {
-            **(conversation.metadata or {}),
-            "cwd": workspace_location.cwd,
-        }
+        conversation.cwd = workspace_location.cwd
     pod_cwd = pod_cwd_from_workspace_cwd(workspace_location.cwd)
     # Resolved from the run's *effective* toolsets, not the agent's configured
     # ones, so the always-on set, the grant-derived ones and the sub-agent
@@ -120,11 +115,7 @@ async def build_run_context(
             memory_enabled=memory_enabled,
             in_process=resolved_runtime.harness_kind == HarnessKind.LEMMA,
             answers_outsiders=for_outsider,
-            origin=run_origin(
-                metadata=conversation.metadata,
-                parent_id=conversation.parent_id,
-                conversation_id=conversation.id,
-            ).origin,
+            origin=run_origin(conversation).origin,
         )
     )
     ctx = ConversationContext(
@@ -160,8 +151,8 @@ async def build_run_context(
         workspace_readable=AgentToolset.WORKSPACE_CLI in run_toolsets,
         grant_summary=grant_summary,
         audience=audience,
-        delivers_to_surface=run_delivers_to_surface(agent_run.metadata),
-        keeper_asking=for_outsider and keeper_started(agent_run.metadata),
+        delivers_to_surface=run_delivers_to_surface(agent_run.state),
+        keeper_asking=for_outsider and keeper_started(agent_run.state),
         **surface_context,
     )
     run_brief = ""
@@ -191,7 +182,7 @@ async def build_run_context(
                 # began. A schedule stamps the conversation once and it stays
                 # stamped, so only the run can say whether a person is here on
                 # this turn.
-                run_source=run_source_of(agent_run),
+                run_trigger=run_trigger_of(agent_run),
                 platform=surface_context["surface_platform"],
             )
             ctx.context_brief, run_brief = brief.stable, brief.per_run

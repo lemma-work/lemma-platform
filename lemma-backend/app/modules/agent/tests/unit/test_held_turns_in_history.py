@@ -22,13 +22,11 @@ from pydantic_ai.messages import (
 )
 
 from app.modules.agent.domain.entities import Message, MessageRole
-from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON, held_messages
+from app.modules.agent.domain.held_turns import held_messages
 from app.modules.agent.domain.private_notes import (
-    IN_OUTSIDERS_THREAD,
     PRIVATE_NOTE_FROM_KEEPER_LABEL,
-    PRIVATE_NOTE_KEY,
+    PRIVATE_NOTE_REQUEST_KEY,
     WRITTEN_BY_KEEPER_LABEL,
-    WRITTEN_IN_LEMMA_KEY,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
@@ -86,13 +84,14 @@ def test_a_held_turn_keeps_their_message_and_what_they_were_told_both_marked():
     assert (theirs.role, theirs.text, theirs.metadata) == (
         USER,
         "Is anybody there?",
-        {"sender_display_name": "Dana", HELD_FOR_A_PERSON: True},
+        {"sender_display_name": "Dana"},
     )
     assert (told.role, told.text, told.metadata) == (
         AGENT,
         "A person from the shop will reply here.",
-        {"handed_off": True, HELD_FOR_A_PERSON: True},
+        {"handed_off": True},
     )
+    assert theirs.state.held_for_a_person and told.state.held_for_a_person
     # Told nothing: only their message is kept.
     assert [draft.text for draft in held_messages("Hello?", None, reply=None)] == [
         "Hello?"
@@ -218,7 +217,7 @@ async def test_a_stranger_reads_their_own_held_words_and_never_a_members_note():
     # never carries what would make it read as the member's, or drop as a note.
     chat.held(
         "Can you do 35k?",
-        **{PRIVATE_NOTE_KEY: True, WRITTEN_IN_LEMMA_KEY: IN_OUTSIDERS_THREAD},
+        **{PRIVATE_NOTE_REQUEST_KEY: True, "written_in_lemma": "outsiders"},
     )
     chat.turn("Our floor is 40k -- don't go below.", "Understood.", note=True)
     current = chat.turn("So, 35k?")

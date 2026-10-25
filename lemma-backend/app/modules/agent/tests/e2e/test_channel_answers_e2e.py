@@ -187,7 +187,7 @@ async def test_the_pods_agent_answers_a_line_once_however_often_it_is_retried(
         if message.role is MessageRole.USER
     ]
     assert [message.text for message in asked] == ["What is on today?"]
-    assert asked[0].metadata["client_message_id"] == turn_client_id(said.id)
+    assert asked[0].state.client_message_id == turn_client_id(said.id)
 
     await _finish_with(run.id, "Two meetings.")
     finished = _finished(run, pod_id=pod_id, user_id=owner)

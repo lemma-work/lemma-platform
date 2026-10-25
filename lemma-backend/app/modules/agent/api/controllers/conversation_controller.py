@@ -19,7 +19,7 @@ from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import AgentRun
-from app.modules.agent.domain.server_metadata import client_metadata
+from app.modules.agent.domain.conversations import client_tags
 from app.modules.agent.services.runtime_availability import (
     check_conversation_runtime_for_pod,
 )
@@ -123,7 +123,7 @@ async def create_conversation(
         type=data.type,
         # Only the server opens a conversation for people outside the pod, or
         # one answering another pod; a client cannot make one look like either.
-        metadata=client_metadata(data.metadata),
+        metadata=client_tags(data.metadata),
     )
     return ConversationResponse.model_validate(conversation)
 

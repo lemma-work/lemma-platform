@@ -215,11 +215,7 @@ class AgentRunnerService:
             return
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
-        run_kind = run_origin(
-            metadata=conversation.metadata,
-            parent_id=conversation.parent_id,
-            conversation_id=conversation.id,
-        ).origin
+        run_kind = run_origin(conversation).origin
         # Known once the runtime resolves; a run that fails before that is
         # counted against no model rather than not counted.
         run_model: str | None = None

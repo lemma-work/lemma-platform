@@ -344,10 +344,10 @@ class ConversationMCPService:
                 # through would read the run as the pod's own assistant, which
                 # acts with the person's full standing.
                 raise AgentRemoved(f"Agent {agent_id} no longer exists")
-            # Records the cwd when nothing had recorded it, so metadata is
+            # Records the cwd when nothing had recorded it, so the row is
             # the source of truth in fact and not only by intention.
             workspace_location = await ensure_recorded_location(
-                conversation, record=conversations.set_conversation_metadata_key
+                conversation, record=conversations.record_cwd
             )
             lease = (
                 await uow.session.get(AgentHostRunLeaseModel, run.id)
@@ -544,7 +544,7 @@ def _tool_context(
         # nothing to the platform from here either -- `display_resource`
         # included.
         delivers_to_surface=run_delivers_to_surface(
-            run.metadata if run is not None else None
+            run.state if run is not None else None
         ),
         # The runner computes these for the in-process harness, and this
         # bridge has to as well -- it is the tool path for *every*
@@ -567,9 +567,7 @@ def _tool_context(
         workspace_cwd=workspace_location.cwd,
         workspace_repo=workspace_location.repo,
         pod_cwd=pod_cwd_from_workspace_cwd(workspace_location.cwd),
-        **surface_context_for_run(
-            conversation, run.metadata if run is not None else None
-        ),
+        **surface_context_for_run(conversation, run.state if run is not None else None),
     )
 
 

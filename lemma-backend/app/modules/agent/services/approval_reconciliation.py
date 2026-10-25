@@ -22,7 +22,6 @@ from app.modules.agent.domain.agent_host_permissions import (
     AgentHostPermissionRequest,
     agent_host_permission_request,
 )
-from app.modules.agent.domain.pausing_tools import parked_suspension_of
 from app.modules.agent.domain.run_budget_pause import is_budget_pause
 from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE, approval_key
 from app.modules.agent.domain.value_objects import (
@@ -302,7 +301,7 @@ async def _turn_ended_while_parked(
     from app.modules.agent.infrastructure.db.runs import Runs
 
     run = await Runs(uow).get_agent_run(agent_run_id)
-    return run is not None and parked_suspension_of(run.metadata) is not None
+    return run is not None and run.state.suspended_while_parked is not None
 
 
 async def _resume_carries_the_approval(

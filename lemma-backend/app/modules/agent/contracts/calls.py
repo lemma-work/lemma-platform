@@ -21,14 +21,12 @@ from sqlalchemy import or_, select
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.calls import (
-    CALL_METADATA_KEY,
     CANVAS_TOOL_NAMES,
     CallMark,
     CallRole,
-    call_mark,
     coordinator_brief,
 )
-from app.modules.agent.domain.value_objects import MessageKind
+from app.modules.agent.domain.value_objects import ConversationOrigin, MessageKind
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.service_factories import build_conversation_service
@@ -80,10 +78,11 @@ async def open_call(
         title=title,
         instructions=coordinator_brief(agent_display_name=agent_display_name),
         agent_runtime=runtime,
+        origin=ConversationOrigin.CALL,
     )
-    mark = CallMark(call_id=conversation.id, role=CallRole.COORDINATOR)
-    await Conversations(uow).set_conversation_metadata_key(
-        conversation.id, CALL_METADATA_KEY, mark.as_metadata()
+    # Named by its own id, which the row has only once it is written.
+    await Conversations(uow).set_call(
+        conversation.id, CallMark(call_id=conversation.id, role=CallRole.COORDINATOR)
     )
     return OpenedCall(conversation_id=conversation.id, title=conversation.title)
 
@@ -97,13 +96,13 @@ async def owned_call(
             select(
                 ConversationModel.user_id,
                 ConversationModel.pod_id,
-                ConversationModel.conversation_metadata,
+                ConversationModel.call,
             ).where(ConversationModel.id == conversation_id)
         )
     ).one_or_none()
     if row is None or row.user_id != user_id or row.pod_id != pod_id:
         return False
-    mark = call_mark(row.conversation_metadata)
+    mark = CallMark.from_json(row.call)
     return mark is not None and mark.role is CallRole.COORDINATOR
 
 

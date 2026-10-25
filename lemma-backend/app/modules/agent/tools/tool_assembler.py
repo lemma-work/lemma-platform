@@ -7,7 +7,6 @@ see the exact same tools for a given (agent, conversation).
 
 from __future__ import annotations
 
-from app.modules.agent.domain.conversation_metadata import source_of
 from typing import Literal, cast
 
 from pydantic_ai.toolsets import AbstractToolset
@@ -327,9 +326,9 @@ def _call_toolsets(
     gets it by being called, whatever it was configured with. Its sub-agents
     show things with `display_resource` like any run, and only it speaks.
     """
-    from app.modules.agent.domain.calls import CallRole, call_mark
+    from app.modules.agent.domain.calls import CallRole
 
-    mark = call_mark(conversation.metadata if conversation is not None else None)
+    mark = getattr(conversation, "call", None)
     if mark is None or mark.role is not CallRole.COORDINATOR:
         return []
     from app.modules.agent.tools.call.pydantic_adapter import coordinator_toolset
@@ -346,5 +345,5 @@ def _in_a_group(conversation: Conversation | None) -> bool:
 def _on_a_web_page(conversation: Conversation | None) -> bool:
     """A visitor chatting on a web page, where a form may sit beside the chat."""
     return bool(
-        conversation is not None and source_of(conversation.metadata) == "web_widget"
+        conversation is not None and (conversation.metadata or {}).get("web_widget_id")
     )

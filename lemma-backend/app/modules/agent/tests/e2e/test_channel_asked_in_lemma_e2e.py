@@ -34,10 +34,7 @@ from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.contracts.conversations import merge_conversation_metadata
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.domain.asked_questions import batch_of, message_ref
-from app.modules.agent.domain.private_notes import (
-    asked_in_lemma,
-    run_delivers_to_surface,
-)
+from app.modules.agent.domain.private_notes import run_delivers_to_surface
 from app.modules.agent.domain.surface_prompts import surface_platform_guidance
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
@@ -157,7 +154,6 @@ async def _heard_on_whatsapp(conversation_id: UUID) -> None:
             uow,
             conversation_id,
             {
-                "source": "agent_surfaces",
                 "surface_id": str(uuid4()),
                 "surface_platform": "WHATSAPP",
                 "external_channel_id": "15556295168",
@@ -183,10 +179,10 @@ async def test_a_line_in_lemma_is_not_asked_on_whatsapp(pod: Pod):
 
     assert same_conversation == conversation_id, "one conversation per person"
     [run] = [run for run in await runs(conversation_id) if run.id == asked_here]
-    assert asked_in_lemma(run.run_metadata)
-    assert not run_delivers_to_surface(run.run_metadata)
+    assert run.state().asked_in_lemma
+    assert not run_delivers_to_surface(run.state())
     loaded = await conversation(conversation_id)
-    context = surface_context_for_run(loaded, run.run_metadata)
+    context = surface_context_for_run(loaded, run.state())
     assert context["surface_platform"] is None
     assert context["external_channel_id"] is None
     assert surface_platform_guidance(context["surface_platform"]) == ""

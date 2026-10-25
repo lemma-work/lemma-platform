@@ -511,7 +511,6 @@ async def test_conversation_mcp_refuses_a_run_of_another_conversation(
                 conversation_id=UUID(conversation_id),
                 agent_id=UUID(agent["id"]),
                 agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-                metadata={"source": "mcp_run_ownership_e2e"},
             )
             runs[conversation_id] = run.id
         await uow.commit()

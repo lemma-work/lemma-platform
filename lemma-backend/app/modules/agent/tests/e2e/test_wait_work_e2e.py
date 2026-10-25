@@ -165,7 +165,7 @@ async def test_a_process_poll_rearms_until_the_process_exits(
     assert await _items(wait.id) == 0, "re-armed after the process exited"
     assert len(looks) == 3
     (_, resumed) = await runs(seeded.conversation_id)
-    assert resumed.run_metadata["resumed_tool_call_id"] == wait.tool_call_id
+    assert resumed.resumed_tool_call_id == wait.tool_call_id
     del paused
 
 
