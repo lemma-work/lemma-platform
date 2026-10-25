@@ -176,3 +176,35 @@ async def test_a_booting_worker_waits_for_a_full_database(monkeypatch) -> None:
     monkeypatch.setattr(maintenance, "arm_periodics", broken)
     with pytest.raises(OperationalError):
         await work._arm_periodics()  # noqa: SLF001
+
+
+SKEW = [
+    pytest.param(_db("42703"), id="undefined_column"),
+    pytest.param(_db("42P01"), id="undefined_table"),
+]
+
+
+@pytest.mark.parametrize("exc", SKEW)
+def test_a_missing_column_mid_rollout_waits_uncharged(exc: Exception) -> None:
+    """A release runs new code before its migration finishes, and work queued in
+    that window used to spend all three attempts on `UndefinedColumn`."""
+    decision = decide(_spec(), FRESH, exc, NOW)
+
+    assert isinstance(decision, Requeue)
+    assert decision.attempts == 0
+    assert decision.error_class == "unavailable:schema_skew"
+    assert decision.first_unavailable_at == NOW
+
+
+@pytest.mark.parametrize("exc", SKEW)
+def test_a_missing_column_past_any_rollout_is_charged(exc: Exception) -> None:
+    """A column that is still missing long after a release is a bug, not a
+    rollout, and costs the attempt it always did."""
+    state = AttemptState(
+        attempts=0, lease_losses=0, first_unavailable_at=NOW - timedelta(hours=1)
+    )
+
+    decision = decide(_spec(), state, exc, NOW)
+
+    assert isinstance(decision, Dead)
+    assert decision.reason == "attempts_exhausted"

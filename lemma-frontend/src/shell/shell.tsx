@@ -541,8 +541,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     }, [pod, openCall]);
     const endCall = useCallback(() => { closeCall(); setCallPod(null); }, [closeCall]);
     /* Offered only once the server says it can place one: a voice engine is
-       a server setting, which no settings page here configures. */
-    const voiceReady = useVoiceConfigured(pod?.id ?? null) === true;
+       a server setting, which no settings page here configures. The sample
+       pod has no server to ask. */
+    const voiceReady = useVoiceConfigured(source.label === "sample" ? null : pod?.id ?? null) === true;
 
     const podTabs = useQuery({
         queryKey: ["tabs", pod?.id],
