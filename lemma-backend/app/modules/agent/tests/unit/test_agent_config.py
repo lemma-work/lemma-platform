@@ -24,6 +24,7 @@ EXPECTED = [
         7200.0,
     ),
     ("agent_run_budget_tool_failures", "AGENT_RUN_BUDGET_TOOL_FAILURES", 15),
+    ("agent_run_budget_repeated_calls", "AGENT_RUN_BUDGET_REPEATED_CALLS", 10),
     (
         "agent_run_budget_unattended_wall_clock_seconds",
         "AGENT_RUN_BUDGET_UNATTENDED_WALL_CLOCK_SECONDS",
