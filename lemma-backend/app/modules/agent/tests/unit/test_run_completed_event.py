@@ -19,7 +19,13 @@ import pytest
 from app.core.origin import Origin, OriginKind, origin_scope
 from app.modules.agent.domain.pod_asks import ASK_KEY
 from app.modules.agent.domain.run_origin import conversation_origin, run_origin
-from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.domain.value_objects import (
+    AgentEvent,
+    AgentEventType,
+    AgentRunStatus,
+    MessageDraft,
+)
+from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
 from app.modules.agent.services.run_finalizer import (
     completed_event,
     counted_tool_calls,
@@ -91,10 +97,38 @@ def test_tool_calls_are_counted_only_where_the_runtime_counts_them() -> None:
     assert counted_tool_calls(run, _usage(tool_call_count=0)) == 0
     assert counted_tool_calls(run, _usage(tool_call_count=4)) == 4
     assert counted_tool_calls(run, None) is None
+    # The in-process harness reports no usage; the calls it streamed count.
+    assert counted_tool_calls(run, None, seen=3) == 3
     # An Agent Host reports tokens and nothing about tools: its zero is the
     # field's default, not a count.
     hosted = run.with_runtime_profile({"harness_id": str(uuid4())})
     assert counted_tool_calls(hosted, _usage(tool_call_count=0)) is None
+
+
+def test_the_pump_counts_the_tool_calls_a_run_writes() -> None:
+    """What `seen` is: the in-process harness's only count of its tool calls."""
+    writer = SimpleNamespace(
+        output_data_from_event=lambda event: None,
+        final_status_from_event=lambda event: (None, None),
+    )
+    pump = RunEventPump(message_writer=writer, finalizer=None)
+    outcome = RunOutcome()
+    run_id = uuid4()
+    for draft in (
+        MessageDraft.of_text("Looking."),
+        MessageDraft.of_tool_call(
+            tool_name="pod_query", tool_call_id="a", tool_args={}
+        ),
+        MessageDraft.of_tool_call(
+            tool_name="web_search", tool_call_id="b", tool_args={}
+        ),
+    ):
+        pump._absorb_message(
+            AgentEvent(type=AgentEventType.MESSAGE, data=draft, agent_run_id=run_id),
+            outcome,
+        )
+
+    assert outcome.tool_calls_seen == 2
 
 
 def test_the_completed_event_carries_the_runs_origin_and_usage() -> None:

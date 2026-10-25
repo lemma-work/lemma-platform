@@ -423,6 +423,44 @@ async def test_a_completed_surface_run_answers_and_may_activate(
     ]
 
 
+async def test_a_run_that_paused_has_not_answered_yet(
+    sink: MemorySink, reads: _Reads
+) -> None:
+    """A run that stopped to ask finishes COMPLETED with its conversation
+    WAITING. The run that resumes it answers; counting both would answer one
+    message twice."""
+    await _project(
+        reads,
+        _surface_run(AgentRunStatus.COMPLETED, data={"conversation_status": "WAITING"}),
+    )
+
+    assert [event.name for event in sink.events] == ["agent_run.completed"]
+    assert reads.delivered == []
+
+
+@pytest.mark.parametrize("origin", ["SCHEDULE", "DATA_TRIGGER", "CONNECTOR"])
+async def test_an_unattended_run_is_credited_to_its_owner_as_delegated_work(
+    sink: MemorySink, reads: _Reads, origin: str
+) -> None:
+    await _project(
+        reads,
+        AgentRunCompletedEvent(
+            conversation_id=uuid4(),
+            agent_run_id=uuid4(),
+            status=AgentRunStatus.COMPLETED,
+            pod_id=POD,
+            organization_id=ORG,
+            user_id=USER,
+            **_o(origin),
+        ),
+    )
+
+    assert [
+        (call["recipient_user_id"], call["delegated_by_user_id"])
+        for call in reads.delivered
+    ] == [(None, USER)]
+
+
 async def test_a_run_reports_how_much_it_did_when_it_is_known(
     sink: MemorySink, reads: _Reads
 ) -> None:

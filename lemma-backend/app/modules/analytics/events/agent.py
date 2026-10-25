@@ -34,7 +34,10 @@ from app.modules.analytics.services.buckets import (
     duration_seconds,
     seconds_bucket,
 )
-from app.modules.analytics.services.pod_delivery import DeliveryVia
+from app.modules.analytics.services.pod_delivery import (
+    AUTONOMOUS_ORIGINS,
+    DeliveryVia,
+)
 
 WIRED = frozenset(
     {
@@ -186,15 +189,26 @@ async def _record_run_completed(
     # neither activates the pod nor answers the surface that asked.
     if parsed.status.value.upper() not in DELIVERED_STATUSES:
         return
+    # A run that paused for an answer, an approval or a wait finishes COMPLETED
+    # with its conversation WAITING. It has delivered nothing yet; the run that
+    # resumes it is the one that does, so counting both would answer one
+    # message twice.
+    if (parsed.data or {}).get("conversation_status") == "WAITING":
+        return
 
     creator_user_id = await reads.pod_creator(scope.pod_id)
+    # Unattended work (a schedule, a data trigger, a connector event) reached
+    # nobody in particular: it is credited to its owner as delegated work, as
+    # the schedule's own projection does, rather than as their direct action.
+    autonomous = origin is not None and origin.kind in AUTONOMOUS_ORIGINS
     await reads.deliver(
         pod_id=scope.pod_id,
         organization_id=organization_id,
         via=DeliveryVia.AGENT_RUN,
         origin=origin,
-        recipient_user_id=scope.user_id,
+        recipient_user_id=None if autonomous else scope.user_id,
         creator_user_id=creator_user_id,
+        delegated_by_user_id=scope.user_id if autonomous else None,
     )
 
     # `surface.message_answered` is projected from here rather than from the

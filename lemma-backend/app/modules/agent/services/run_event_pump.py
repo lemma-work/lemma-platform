@@ -112,6 +112,8 @@ class RunOutcome:
     final_status: ConversationStatus | None = None
     final_error: str | None = None
     usage_data: AgentRunUsage | None = None
+    #: Tool calls this run wrote, for the run's analytics when no usage counted them.
+    tool_calls_seen: int = 0
     terminal_seen: bool = False
 
 
@@ -207,6 +209,7 @@ class RunEventPump:
                 error_code=event.error_code,
                 error_reason=event.error_reason,
                 usage_data=outcome.usage_data,
+                tool_calls_seen=outcome.tool_calls_seen,
                 run=run,
             )
             return True
@@ -219,6 +222,7 @@ class RunEventPump:
                 status=AgentRunStatus.FAILED,
                 error=rejected_run_error_message(event.data),
                 usage_data=outcome.usage_data,
+                tool_calls_seen=outcome.tool_calls_seen,
                 run=run,
             )
             return True
@@ -233,6 +237,7 @@ class RunEventPump:
                 conversation_status=ConversationStatus.WAITING,
                 output_data=outcome.output_data,
                 usage_data=outcome.usage_data,
+                tool_calls_seen=outcome.tool_calls_seen,
                 run=run,
             )
             return True
@@ -263,6 +268,7 @@ class RunEventPump:
             error=outcome.final_error,
             output_data=outcome.output_data,
             usage_data=outcome.usage_data,
+            tool_calls_seen=outcome.tool_calls_seen,
             run=run,
             answer=answer,
         )
@@ -368,6 +374,7 @@ class RunEventPump:
             error="The agent stopped without producing a result. Please try again.",
             output_data=outcome.output_data,
             usage_data=outcome.usage_data,
+            tool_calls_seen=outcome.tool_calls_seen,
         )
 
     async def _persist_message(self, event: AgentEvent, run: RunIdentity) -> None:
@@ -438,6 +445,9 @@ class RunEventPump:
         event has already been persisted, and only overwrites what the event
         actually carried.
         """
+        draft = event.data
+        if isinstance(draft, MessageDraft) and draft.kind is MessageKind.TOOL_CALL:
+            outcome.tool_calls_seen += 1
         saved_output = self.message_writer.output_data_from_event(event)
         if saved_output is not None:
             outcome.output_data = saved_output
