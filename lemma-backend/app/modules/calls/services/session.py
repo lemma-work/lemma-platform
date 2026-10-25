@@ -79,6 +79,10 @@ class CallLimits:
     quiet_window_ms: int
 
 
+#: The background a coordinator is sent with its first turn, at most.
+_MAX_BACKGROUND_CHARS = 8_000
+
+
 @dataclass(slots=True)
 class CallStats:
     """What a call carried, for the log line that says how it ended: a call
@@ -99,6 +103,7 @@ class CallSession:
         agents: CallAgents,
         gate: Gate,
         limits: CallLimits,
+        background: str | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._socket = socket
@@ -118,6 +123,12 @@ class CallSession:
         self._routing = asyncio.Lock()
         self._titles: dict[str, str] = {}
         self._failures_reported: set[str] = set()
+        #: What the voice was told before the call (the pod, the chat it was
+        #: started from), told to the agents with their first turn. Without it
+        #: the two knew different things: the voice spoke of a chat the
+        #: coordinator had never seen, and the coordinator answered as if
+        #: nothing had been said.
+        self._background = (background or "").strip()[:_MAX_BACKGROUND_CHARS] or None
         self.end_reason: str | None = None
         self.stats = CallStats()
 
@@ -310,6 +321,11 @@ class CallSession:
                     "\n\nEarlier on the call (already handled, or no work needed):\n"
                     + "\n".join(earlier)
                 )
+            if self._background:
+                content += (
+                    "\n\nBefore the call, the voice was told:\n" + self._background
+                )
+                self._background = None
             try:
                 await self._agents.send_turn(content)
             except DomainError, SQLAlchemyError, OSError:

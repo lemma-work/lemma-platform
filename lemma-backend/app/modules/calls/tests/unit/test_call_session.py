@@ -348,3 +348,30 @@ async def test_a_call_counts_the_audio_and_turns_it_carried() -> None:
     await running
     # A typed turn is a turn too.
     assert session.stats == CallStats(audio_in_bytes=640, caller_turns=2, voice_lines=1)
+
+
+async def test_the_agents_are_told_what_the_voice_was_told_once_with_their_first_turn() -> (
+    None
+):
+    # The voice was briefed with the chat the call grew out of; the
+    # coordinator, never told, answered as if nothing had been said.
+    caller, voice, agents = Caller(), Voice(), Agents()
+    session = CallSession(
+        socket=caller,
+        engine=voice,  # type: ignore[arg-type]
+        agents=agents,  # type: ignore[arg-type]
+        gate=_gate({}),
+        limits=CallLimits(max_seconds=30, quiet_window_ms=0),
+        background="Recent chat: they asked for Goa venues for 12.",
+    )
+    running = asyncio.create_task(session.run())
+    await voice.out.put(Heard("make it fifteen people", final=True))
+    await _until(lambda: agents.turns)
+    await voice.out.put(Heard("and near the beach", final=True))
+    await _until(lambda: len(agents.turns) == 2)
+    caller.inbox.put_nowait(None)
+    await running
+    first, second = agents.turns
+    assert "Before the call, the voice was told:" in first
+    assert "Goa venues for 12" in first
+    assert "Goa venues" not in second

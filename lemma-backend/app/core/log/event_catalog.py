@@ -687,6 +687,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'calls.slots.claim_unavailable.degraded': EventSpec('warning', frozenset()),
     'calls.slots.refresh_unavailable.degraded': EventSpec('warning', frozenset()),
     'calls.socket.ended.observed': EventSpec('info', frozenset({'call_id', 'caller_audio_seconds', 'caller_turns', 'reason', 'voice_lines'})),
+    'calls.socket.retire.failed': EventSpec('warning', frozenset({'call_id'})),
     'calls.socket.started.observed': EventSpec('info', frozenset({'call_id', 'engine'})),
     'channels.changes.pruned.observed': EventSpec('info', frozenset({'backlog', 'count'})),
     'channels.deliveries.due_again.observed': EventSpec('info', frozenset({'backlog', 'count'})),
