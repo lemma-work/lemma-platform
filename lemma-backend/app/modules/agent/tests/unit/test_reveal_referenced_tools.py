@@ -188,3 +188,14 @@ async def test_the_prompt_stays_the_last_thing_the_model_reads():
     assert any(
         isinstance(part, UserPromptPart) and part.content == WAKE for part in last.parts
     )
+
+
+def test_what_a_compaction_replaced_is_not_referenced():
+    """pydantic-ai resets discovery at a compaction; so does this."""
+    from pydantic_ai.messages import CompactionPart
+
+    compacted = ModelResponse(parts=[CompactionPart(content="summary")])
+
+    names = referenced_tool_names([*_earlier_run(), compacted])
+
+    assert "channel_read" not in names

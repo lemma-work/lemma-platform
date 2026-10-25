@@ -34,7 +34,7 @@ rewritten and its cached prefix stays as it was.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -49,6 +49,7 @@ from pydantic_ai.messages import (
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
+    post_compaction_window,
 )
 from pydantic_ai.models import ModelRequestContext
 
@@ -61,11 +62,16 @@ _SEARCH_TOOLS = "search_tools"
 _CALL_SHAPED = re.compile(r"\b([a-z][a-z0-9_]*)\(")
 
 
-def referenced_tool_names(messages: Iterable[ModelMessage]) -> set[str]:
-    """Every tool name the conversation shows found, called or named as a call."""
+def referenced_tool_names(messages: Sequence[ModelMessage]) -> set[str]:
+    """Every tool name the conversation shows found, called or named as a call.
+
+    Read from the ``post_compaction_window``, the boundary pydantic-ai resets
+    its own discoveries at: what a provider compaction replaced, the model no
+    longer sees referenced.
+    """
     names: set[str] = set()
     texts: list[str] = []
-    for message in messages:
+    for message in post_compaction_window(messages):
         if isinstance(message, ModelResponse):
             names.update(
                 part.tool_name
