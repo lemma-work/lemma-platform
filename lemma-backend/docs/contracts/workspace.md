@@ -41,7 +41,9 @@ measure it, they are absent.
 
 Lists one directory of the caller's own workspace. A workspace is keyed by user,
 so the session is the whole authorization check and there is no sandbox
-parameter to point elsewhere.
+parameter to point elsewhere. There is one per person, whichever pod or agent a
+conversation is with, so these routes take no pod or agent either: what an
+agent wrote in any conversation is here.
 
 **Ambient by default.** A paused workspace is not started to answer; the response
 comes back with `sleeping: true` and no entries. `wake=true` starts it. This is

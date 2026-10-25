@@ -1,13 +1,11 @@
 from datetime import datetime
 from typing import Optional
-from uuid import UUID
 
 from sqlalchemy import select, update
 
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.connect_request import (
-    GRANTED_ACCOUNT_ATTRIBUTE,
     ConnectRequestEntity,
     ConnectRequestStatus,
 )
@@ -63,29 +61,6 @@ class ConnectRequestRepository(
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return instance.to_entity() if instance else None
-
-    async def latest_grant(
-        self, *, account_id: UUID, user_id: UUID, auth_config_id: UUID
-    ) -> Optional[ConnectRequestEntity]:
-        """The most recent request that stored a grant on this account.
-
-        Narrowed by the indexed person and install first; the account id is in
-        the attributes the callback recorded (``with_grant``).
-        """
-        stmt = (
-            select(ConnectRequest)
-            .where(
-                ConnectRequest.user_id == user_id,
-                ConnectRequest.auth_config_id == auth_config_id,
-                ConnectRequest.status == ConnectRequestStatus.SUCCESS.value,
-                ConnectRequest.attributes[GRANTED_ACCOUNT_ATTRIBUTE].astext
-                == str(account_id),
-            )
-            .order_by(ConnectRequest.updated_at.desc())
-            .limit(1)
-        )
-        instance = (await self.session.execute(stmt)).scalars().first()
         return instance.to_entity() if instance else None
 
 

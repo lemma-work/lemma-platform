@@ -29,14 +29,14 @@ from app.modules.agent_surfaces.services.surface_service import AgentSurfaceServ
 
 def test_resend_is_email_and_default_webhook_binding():
     assert SurfacePlatform.RESEND.is_email is True
-    # RESEND is system-credentialed email over a native webhook (no account_id).
+    # RESEND is system-credentialed email over a native webhook (no connector).
     surface = AgentSurfaceEntity.create(
         pod_id=uuid4(),
         surface_type=SurfacePlatform.RESEND,
         agent_id=uuid4(),
         config=SurfaceConfig(),
         credential_mode=SurfaceCredentialMode.SYSTEM,
-        account_id=None,
+        pod_connector_slug=None,
     )
     assert surface.surface_type.is_email
 
@@ -244,7 +244,7 @@ async def test_a_connected_account_does_not_need_the_deployment_s_key(monkeypatc
         name="inbox",
         config=SurfaceConfig(),
         credential_mode=SurfaceCredentialMode.CUSTOM,
-        account_id=uuid4(),
+        pod_connector_slug="ops-resend",
     )
 
     address = service.create_surface.await_args.kwargs["surface_identity_email"]
@@ -348,7 +348,7 @@ async def test_connecting_email_adopts_the_mailbox_that_already_exists(monkeypat
     existing = SimpleNamespace(id=uuid4(), surface_identity_email="ops.acme@x.test")
     service = _minting_service(existing)
     service.update_surface = AsyncMock(return_value=existing)
-    account_id = uuid4()
+    pod_connector_slug = "ops-resend"
 
     result = await email_surface_provisioning.create_surface_on_minted_address(
         service,
@@ -360,7 +360,7 @@ async def test_connecting_email_adopts_the_mailbox_that_already_exists(monkeypat
         name=None,
         config=SurfaceConfig(),
         credential_mode=SurfaceCredentialMode.CUSTOM,
-        account_id=account_id,
+        pod_connector_slug=pod_connector_slug,
     )
 
     assert result is existing
@@ -369,7 +369,7 @@ async def test_connecting_email_adopts_the_mailbox_that_already_exists(monkeypat
     updated = service.update_surface.await_args.kwargs
     assert updated["surface_id"] == existing.id
     assert updated["credential_mode"] is SurfaceCredentialMode.CUSTOM
-    assert updated["account_id"] == account_id
+    assert updated["pod_connector_slug"] == pod_connector_slug
 
 
 async def test_a_named_request_mints_rather_than_adopting(monkeypatch):
@@ -877,7 +877,7 @@ async def test_an_email_reply_resolves_credentials_from_its_surface(monkeypatch)
     context = SimpleNamespace(
         platform=SurfacePlatform.RESEND.value,
         surface_id=surface.id,
-        surface_account_id=None,
+        surface_connector=None,
         event=None,
     )
 
@@ -900,7 +900,7 @@ async def test_chat_platforms_do_not_pay_for_an_extra_surface_read(monkeypatch):
     context = SimpleNamespace(
         platform=SurfacePlatform.SLACK.value,
         surface_id=uuid4(),
-        surface_account_id=None,
+        surface_connector=None,
         event=None,
     )
 

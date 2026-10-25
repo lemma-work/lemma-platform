@@ -49,6 +49,7 @@ from app.modules.connectors.domain.connect_request import (
 from app.modules.connectors.contracts.facts import ConnectorAccountConnected
 from app.modules.connectors.domain.connector import ConnectorEntity
 from app.modules.connectors.domain.errors import (
+    ConnectRequestBrowserMismatchError,
     ConnectRequestIdentityMismatchError,
     AccountAlreadyConnectedError,
     ConnectRequestNotFoundError,
@@ -67,7 +68,11 @@ from app.modules.connectors.services.account_identity import (
     resolve_account_identity,
 )
 from app.modules.connectors.services.auth.github_installation import (
-    bound_external_ref,
+    proved_external_ref,
+)
+from app.modules.connectors.services.github_callback_binding import (
+    bind_or_leave_for_an_admin,
+    closed_attributes,
 )
 from app.modules.connectors.services.connect_request_lifecycle import (
     followup_account_id,
@@ -76,7 +81,6 @@ from app.modules.connectors.services.connect_request_lifecycle import (
     purpose_of,
     stored_code_verifier,
     stored_provider_state,
-    with_grant,
     without_spent_secrets,
 )
 from app.modules.connectors.services.install_provisioning import (
@@ -127,12 +131,15 @@ async def handle_oauth_callback(
     """Turn a provider's redirect into a connected account.
 
     ``browser_user_id`` is whose Lemma session the returning browser carried,
-    if any. The request is completed by ``state`` alone either way; whether
-    the two match is recorded on the grant (``browser_bound``) for the modules
-    that treat a grant as proof of who the provider's user is.
+    if any. It must be the person the request was made for (audit H2): a link
+    minted by one person and completed in somebody else's browser would put the
+    second person's provider account on the first one's Lemma account. A link
+    an agent or the CLI minted keeps working when its person opens it in their
+    own signed-in browser, which is the only place it was ever meant to go.
     """
     if not state:
         raise ConnectRequestStateRequiredError()
+    await _refuse_a_different_browser(service, state, browser_user_id)
 
     # Claimed, not merely read: the status check and the write that spends it
     # used to be separated by the whole provider exchange, so two callbacks
@@ -185,8 +192,6 @@ async def handle_oauth_callback(
         auth_config=auth_config,
         connector=connector,
         identity=identity,
-        browser_bound=browser_user_id is not None
-        and browser_user_id == pending_request.user_id,
     )
 
     # After the commit: an install whose token lives on the account can only be
@@ -195,6 +200,21 @@ async def handle_oauth_callback(
     await discover_operations_for_new_account(service, auth_config)
 
     return account
+
+
+async def _refuse_a_different_browser(
+    service: OAuthCallbackSeam, state: str, browser_user_id: UUID | None
+) -> None:
+    """Refuse before the ``state`` is claimed or the code exchanged.
+
+    Before, not after: the provider's code is still unspent, so the right person
+    can sign in and open the same link again rather than start over.
+    """
+    pending = await service.connect_request_repository.get_by_state(state)
+    if pending is None:
+        return  # the claim below reports it, with its own error
+    if browser_user_id is None or browser_user_id != pending.user_id:
+        raise ConnectRequestBrowserMismatchError(signed_in=browser_user_id is not None)
 
 
 @dataclass(frozen=True)
@@ -210,6 +230,8 @@ class _ConnectedIdentity:
     email: str | None
     display_name: str | None
     external_ref: str | None
+    #: GitHub says this person controls `external_ref` (audit H4).
+    installation_administered: bool = False
 
 
 async def _exchange(
@@ -308,13 +330,16 @@ async def _resolve_identity(
     # another workspace or installation, and a stale key keeps sending it
     # someone else's events. A GitHub App install names it on the callback and
     # only then, so a reconnect asks GitHub which one the token is for.
-    external_ref = await bound_external_ref(connector.id, credentials, redirect_uri)
+    external_ref, administered = await proved_external_ref(
+        connector.id, credentials, redirect_uri
+    )
     return _ConnectedIdentity(
         credentials=credentials,
         provider_account_id=provider_account_id,
         email=email,
         display_name=display_name,
         external_ref=external_ref,
+        installation_administered=administered,
     )
 
 
@@ -389,6 +414,15 @@ async def _record_installation(
         # `_persist_account` exists to make.
         raise ConnectRequestNotFoundError()
 
+    # Audit H4: the installation this leg came back with is the account's
+    # organization's, or nobody's yet -- never another one's.
+    identity, needs_admin = await bind_or_leave_for_an_admin(
+        service.uow.session,
+        identity,
+        connector_id=account.connector_id,
+        organization_id=account.organization_id,
+        user_id=account.user_id,
+    )
     account.credentials = identity.credentials
     if identity.external_ref:
         account.external_ref = identity.external_ref
@@ -396,7 +430,9 @@ async def _record_installation(
     account = await service.account_repository.update(account)
 
     pending_request.status = ConnectRequestStatus.SUCCESS
-    pending_request.attributes = without_spent_secrets(pending_request)
+    pending_request.attributes = closed_attributes(
+        pending_request, needs_admin=needs_admin
+    )
     await service.connect_request_repository.update(pending_request)
     await service.uow.commit()
     logger.info(
@@ -454,7 +490,6 @@ async def _persist_account(
     auth_config: AuthConfigEntity,
     connector: ConnectorEntity,
     identity: _ConnectedIdentity,
-    browser_bound: bool = False,
 ) -> AccountEntity:
     """The second short unit of work: store the outcome and close the request.
 
@@ -463,6 +498,16 @@ async def _persist_account(
     """
     user_id = pending_request.user_id
     provider_account_id = identity.provider_account_id
+    # Audit H4. The organization and person are the connect request's -- the
+    # state this callback came back under -- so an installation another
+    # organization holds is refused here, before any account carries it.
+    identity, needs_admin = await bind_or_leave_for_an_admin(
+        service.uow.session,
+        identity,
+        connector_id=connector.id,
+        organization_id=pending_request.organization_id,
+        user_id=user_id,
+    )
 
     # Match the re-authing identity to an existing account:
     #  - provider account id known → the account with exactly that id. A new
@@ -531,10 +576,8 @@ async def _persist_account(
         renewed = False
 
     pending_request.status = ConnectRequestStatus.SUCCESS
-    pending_request.attributes = with_grant(
-        without_spent_secrets(pending_request),
-        account_id=account.id,
-        browser_bound=browser_bound,
+    pending_request.attributes = closed_attributes(
+        pending_request, needs_admin=needs_admin
     )
     await service.connect_request_repository.update(pending_request)
     await facts.emit(
@@ -546,7 +589,6 @@ async def _persist_account(
             organization_id=pending_request.organization_id,
             user_id=user_id,
             purpose=purpose_of(pending_request),
-            browser_bound=browser_bound,
             renewed=renewed,
         ),
     )

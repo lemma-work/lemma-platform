@@ -26,6 +26,7 @@ from app.modules.pod_bundle.domain.state import (
     PublishState,
     PublishStatus,
     StepStatus,
+    connect_url_of,
 )
 from app.modules.pod_bundle.infrastructure.ai_readme import (
     build_system_polish_fn,
@@ -63,14 +64,10 @@ def _now() -> datetime:
 
 
 async def _release_publish_lock(state: PublishState) -> None:
-    # ``account_id`` was optional in pre-0.6.8 job snapshots. New jobs always
-    # have one, while a rolling worker can still finish an older snapshot.
-    if state.account_id is None:
+    if state.publish_lock_key is None:
         return
     await get_publish_concurrency_lock().release(
-        account_id=state.account_id,
-        repo_name=state.repo_name,
-        owner=state.publish_id,
+        key=state.publish_lock_key, owner=state.publish_id
     )
 
 
@@ -83,6 +80,7 @@ async def _mark_exporting(store, state: PublishState) -> None:
     state.error = None
     state.error_type = None
     state.error_code = None
+    state.connect_url = None
     state.retryable = False
     state.completed_at = None
     if reopening:
@@ -165,13 +163,14 @@ def _operation_runner(
             )
             resolved = await resolve_operation(
                 uow,
-                connector_id="github",
+                ctx=actor,
+                pod_id=pod_id,
+                connector="github",
                 operation_name=operation_name,
                 payload=payload,
-                user_id=user_id,
-                actor=actor,
-                account_id=state.account_id,
             )
+            # A first per-member call adds the person's account to the pod.
+            await uow.commit()
 
         # Phase 2: the GitHub round trip, with NO pooled connection held. This
         # matters more here than at most call sites: ``_create_blobs`` runs up
@@ -480,6 +479,7 @@ async def _fail_publish(
     state.error = public_message or str(exc)
     state.error_type = type(exc).__name__
     state.error_code = str(getattr(exc, "code", None) or "POD_BUNDLE_PUBLISH_FAILED")
+    state.connect_url = connect_url_of(exc)
     state.retryable = False
     state.completed_at = _now()
     # The last-resort reporter for a publish: if it is silent, a failed publish

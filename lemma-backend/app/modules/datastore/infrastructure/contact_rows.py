@@ -4,8 +4,9 @@ A table marked contact-owned has a ``contact_id`` column and a row-level
 policy: a session reading as a member sees every row, a session reading as a
 contact sees that contact's rows, and a session that named nobody -- an
 outsider, or code that forgot to say -- sees nothing. The policy is enforced by
-the database, under the same NOBYPASSRLS query role that ad-hoc queries run as,
-so a contact's read is held to it even if the code asking forgot to filter.
+the database, under the same NOBYPASSRLS per-pod query role that ad-hoc queries
+run as, so a contact's read is held to it even if the code asking forgot to
+filter -- and cannot leave the pod's schema even if it named another.
 
 It is not per-user isolation (``enable_rls``), and a table cannot be both: one
 says each member sees their own rows, the other says every member sees every
@@ -40,6 +41,7 @@ from app.modules.datastore.domain.row_security import (
     RowAudience,
     RowPrincipal,
 )
+from app.modules.datastore.infrastructure.query_role import pod_query_role_name
 from app.modules.datastore.infrastructure.rls_context import verify_rls_context
 from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 
@@ -130,8 +132,8 @@ async def read_contact_rows(
     the contact to. Either alone would do; the second is what holds if the
     first is ever wrong.
     """
-    await schema.ensure_query_role()
     schema_name = schema.get_schema_name(pod_id)
+    await schema.ensure_query_role(schema_name)
     select_sql = _select_sql(schema_name, table_name, columns, primary_key)
     page = {
         "contact": contact_id,
@@ -139,11 +141,11 @@ async def read_contact_rows(
         "offset": max(0, offset),
     }
     try:
-        return await _read(schema, select_sql, contact_id, page)
+        return await _read(schema, schema_name, select_sql, contact_id, page)
     except DBAPIError:
         if not await schema.heal_query_role_access(schema_name):
             raise
-    return await _read(schema, select_sql, contact_id, page)
+    return await _read(schema, schema_name, select_sql, contact_id, page)
 
 
 def _select_sql(
@@ -161,11 +163,12 @@ def _select_sql(
 
 async def _read(
     schema: DatastoreSchemaPort,
+    schema_name: str,
     select_sql: str,
     contact_id: UUID,
     page: dict[str, object],
 ) -> list[dict[str, object]]:
-    query_role = sanitize_identifier(datastore_settings.datastore_query_role)
+    query_role = pod_query_role_name(schema_name)
     principal = RowPrincipal.contact(contact_id)
     async with schema.session_factory() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
@@ -254,8 +257,9 @@ async def read_rows_of_contact_after(
     paged through never moves one from a page already read into the next.
     The key is compared as text because a table's key may be of any type.
     """
-    await schema.ensure_query_role()
-    rows = _contact_table(schema.get_schema_name(pod_id), table_name, key_column)
+    schema_name = schema.get_schema_name(pod_id)
+    await schema.ensure_query_role(schema_name)
+    rows = _contact_table(schema_name, table_name, key_column)
     key = cast(rows.c[sanitize_identifier(key_column)], Text)
     page = (
         select(literal_column("*"))
@@ -266,7 +270,7 @@ async def read_rows_of_contact_after(
     )
     if after_key is not None:
         page = page.where(key > after_key)
-    query_role = sanitize_identifier(datastore_settings.datastore_query_role)
+    query_role = pod_query_role_name(schema_name)
     async with schema.session_factory() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
         principal = RowPrincipal.contact(contact_id)

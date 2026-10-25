@@ -7,7 +7,6 @@ from uuid import UUID
 
 from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.core.authorization.context import (
-    ActorType,
     Context,
     ResourceRef,
     ResourceType,
@@ -373,15 +372,9 @@ class AgentService:
     ) -> None:
         agent = await self.get_agent_by_name(pod_id=pod_id, name=name, ctx=ctx)
         _refuse_pod_default(agent, verb="deleted")
-        # A delegated workload must always route through authz — agent.delete is
-        # destructive and gated — so the owner shortcut (creator deletes their
-        # own agent) never lets a workload bypass it.
-        is_delegated = ctx is not None and (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-        )
-        if requester_user_id is not None and (
-            is_delegated or agent.user_id != requester_user_id
-        ):
+        # Always through the authorizer: its owner rule lets a creator delete
+        # their agent while they are still in the pod, and gates a workload.
+        if requester_user_id is not None:
             await self._require_action(
                 requester_user_id=requester_user_id,
                 action=Permissions.AGENT_DELETE,

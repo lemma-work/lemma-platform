@@ -584,10 +584,20 @@ async def stage_surface(
         db_session, agent_id=agent["id"], organization_id=fixed_test_org["id"]
     )
 
-    # How each platform's sender becomes the test's Lemma user. Slack and Teams
-    # resolve through the fetched profile's email, so nothing is seeded; the
+    # How each platform's sender becomes the test's Lemma user. Teams resolves
+    # through the UPN its profile carries, so nothing is seeded. A Slack
+    # profile email names nobody (an admin can set it), so the sender is
+    # already known in the workspace, as a proof would have left them; the
     # shared-bot platforms resolve by id or by number.
-    if platform is SurfacePlatform.TELEGRAM:
+    if platform is SurfacePlatform.SLACK:
+        await _seed_external_user(
+            db_session,
+            platform="SLACK",
+            tenant_id=slack_payloads.TEAM_ID,
+            external_user_id=sender_id,
+            resolved_user_id=UUID(fixed_test_user["id"]),
+        )
+    elif platform is SurfacePlatform.TELEGRAM:
         await _seed_external_user(
             db_session,
             platform="TELEGRAM",

@@ -300,6 +300,9 @@ class FakeSlackServer:
             "email": override.pop("email", self._test_user_email),
             "display_name": override.pop("display_name", "Surface Test User"),
         }
+        if "phone" in override:
+            # A field the profile's owner types, as Slack's own is.
+            profile["phone"] = override.pop("phone")
         return web.json_response(
             {
                 "ok": True,

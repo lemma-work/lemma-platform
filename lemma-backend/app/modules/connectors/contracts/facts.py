@@ -26,11 +26,6 @@ class ConnectorAccountConnected(Fact):
     #: What the connect request was started for, when its starter said
     #: (``start_authorization(purpose=...)``). ``None`` for an ordinary connect.
     purpose: str | None = None
-    #: The browser that came back from the provider carried the session of the
-    #: person who started the request. Without it the grant may be somebody
-    #: else's consent completed on a link they were sent, so anything that
-    #: treats the grant as proof of who the provider's user is requires it.
-    browser_bound: bool = False
     #: An account that already existed was granted again.
     renewed: bool = False
 

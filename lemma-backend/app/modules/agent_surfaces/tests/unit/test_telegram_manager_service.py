@@ -277,9 +277,11 @@ async def test_created_managed_bot_persists_surface_and_finishes_setup():
         setup_id=setup.setup_id,
         telegram_user_id=77,
     )
-    account_id = uuid4()
+    pod_connector_slug = "telegram-surface-bot"
     surface_id = uuid4()
-    service._persist_managed_bot = AsyncMock(return_value=(account_id, surface_id))
+    service._persist_managed_bot = AsyncMock(
+        return_value=(pod_connector_slug, surface_id)
+    )
     service._configure_managed_bot = AsyncMock()
 
     async def _call(method, payload):
@@ -303,7 +305,7 @@ async def test_created_managed_bot_persists_surface_and_finishes_setup():
     saved = await store.get(setup.setup_id)
     assert saved is not None
     assert saved.status is TelegramManagedBotSetupStatus.COMPLETE
-    assert saved.account_id == account_id
+    assert saved.pod_connector_slug == pod_connector_slug
     assert saved.surface_id == surface_id
     assert saved.bot_username == "surface_bot"
     service._persist_managed_bot.assert_awaited_once()
@@ -374,7 +376,7 @@ async def test_concurrent_created_updates_provision_once_and_finish_complete():
             }
         }
     )
-    account_id = uuid4()
+    pod_connector_slug = "telegram-surface-bot"
     surface_id = uuid4()
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -383,7 +385,7 @@ async def test_concurrent_created_updates_provision_once_and_finish_complete():
         del kwargs
         entered.set()
         await release.wait()
-        return account_id, surface_id
+        return pod_connector_slug, surface_id
 
     service._persist_managed_bot = AsyncMock(side_effect=_persist)
     service._configure_managed_bot = AsyncMock()
@@ -433,9 +435,11 @@ async def test_transient_failures_can_replay_same_bot():
             }
         }
     )
-    account_id = uuid4()
+    pod_connector_slug = "telegram-surface-bot"
     surface_id = uuid4()
-    service._persist_managed_bot = AsyncMock(return_value=(account_id, surface_id))
+    service._persist_managed_bot = AsyncMock(
+        return_value=(pod_connector_slug, surface_id)
+    )
     service._configure_managed_bot = AsyncMock()
     service._client.call = AsyncMock(
         side_effect=TelegramApiError(
@@ -481,7 +485,9 @@ async def test_transient_failures_can_replay_same_bot():
     assert interrupted.status is TelegramManagedBotSetupStatus.PROVISIONING
     assert 21 not in store.processed_updates
 
-    service._persist_managed_bot = AsyncMock(return_value=(account_id, surface_id))
+    service._persist_managed_bot = AsyncMock(
+        return_value=(pod_connector_slug, surface_id)
+    )
     await service.handle_update(update)
 
     completed = await store.get(setup.setup_id)
@@ -846,21 +852,35 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
         "app.modules.agent_surfaces.composition.build_surface_service",
         lambda _: surface_service,
     )
+    shared = AsyncMock(return_value="telegram-surface-bot")
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.managed_bot_persistence."
+        "share_own_account_as_pod_connector",
+        shared,
+    )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.managed_bot_identity."
         "ExternalSurfaceUserRepository",
         lambda _: external_users,
     )
 
-    persisted_account_id, persisted_surface_id = await service._persist_managed_bot(
+    persisted_slug, persisted_surface_id = await service._persist_managed_bot(
         setup=setup,
         bot_id=1234,
         bot_username="surface_bot",
         bot_token="child-token",
     )
 
-    assert persisted_account_id == account_id
+    assert persisted_slug == "telegram-surface-bot"
     assert persisted_surface_id == surface_id
+    # The bot is the setter-up's own account, shared into the pod by their
+    # own action, and the surface runs as that connector.
+    assert shared.await_args.kwargs["account_id"] == account_id
+    assert shared.await_args.kwargs["owner_user_id"] == setup.user_id
+    assert (
+        surface_service.create_surface.await_args.kwargs["pod_connector_slug"]
+        == "telegram-surface-bot"
+    )
     auth_config = auth_configs.create.await_args.args[0]
     assert auth_config.connector_id == "telegram"
     assert auth_config.organization_id == setup.organization_id
@@ -918,7 +938,9 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         id=surface_id,
         surface_type=SurfacePlatform.TELEGRAM,
         credential_mode=SurfaceCredentialMode.CUSTOM,
-        account_id=account_id if surface_account_matches else uuid4(),
+        pod_connector_slug=(
+            "telegram-surface-bot" if surface_account_matches else "another-bot"
+        ),
         is_active=False,
     )
     surface_service = SimpleNamespace(
@@ -947,6 +969,12 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         "app.modules.agent_surfaces.composition.build_surface_service",
         lambda _: surface_service,
     )
+    shared = AsyncMock(return_value="telegram-surface-bot")
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.managed_bot_persistence."
+        "share_own_account_as_pod_connector",
+        shared,
+    )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.managed_bot_identity."
         "ExternalSurfaceUserRepository",
@@ -971,7 +999,7 @@ async def test_persist_managed_bot_reuses_matching_account_and_surface(
         bot_username="surface_bot",
         bot_token="child-token",
     )
-    assert result == (account_id, surface_id)
+    assert result == ("telegram-surface-bot", surface_id)
     assert account.credentials.model_dump() == {"bot_token": "child-token"}
     assert account.display_name == "@surface_bot"
     accounts.update.assert_awaited_once_with(account)

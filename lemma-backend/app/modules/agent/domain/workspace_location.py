@@ -8,7 +8,7 @@ location is configurable per conversation via ``metadata``:
   of ``/workspace/c/{date}/{slug}``. Stamped into metadata at creation
   (``ConversationService._apply_inherited_cwd``) and read back thereafter.
 - ``repo`` — a GitHub repository this conversation works in, as
-  ``{owner, repo, ref?, account_id?}``. It *derives* the cwd
+  ``{owner, repo, ref?}``. It *derives* the cwd
   (``/workspace/repos/{owner}/{repo}``), so picking a project is the same act as
   picking a directory and there is no second source of truth to keep in step.
 - ``workspace_name`` / ``workspace_id`` — selects the workspace; defaults to the
@@ -66,11 +66,9 @@ class ProjectRepo:
     owner: str
     repo: str
     ref: str | None = None
-    # Which connected GitHub account to clone as. Optional, and when absent the
-    # credential bridge falls back to resolving the user's account -- which is
-    # ambiguous for a user with two connected accounts, so callers that know the
-    # account should say so.
-    account_id: UUID | None = None
+    # No account here: the credential bridge clones as whatever the pod's
+    # `github` connector resolves to for the person acting, never as an account
+    # a conversation names.
 
     @property
     def full_name(self) -> str:
@@ -84,8 +82,6 @@ class ProjectRepo:
         value = {"owner": self.owner, "repo": self.repo}
         if self.ref:
             value["ref"] = self.ref
-        if self.account_id:
-            value["account_id"] = str(self.account_id)
         return value
 
 
@@ -109,12 +105,7 @@ def parse_project_repo(value: object) -> ProjectRepo | None:
         return None
     raw_ref = str(value.get("ref") or "").strip()
     ref = raw_ref if _REF_PATTERN.match(raw_ref) else None
-    raw_account = value.get("account_id")
-    try:
-        account_id = UUID(str(raw_account)) if raw_account else None
-    except TypeError, ValueError:
-        account_id = None
-    return ProjectRepo(owner=owner, repo=repo, ref=ref, account_id=account_id)
+    return ProjectRepo(owner=owner, repo=repo, ref=ref)
 
 
 @dataclass(slots=True)

@@ -179,7 +179,7 @@ See `people-outside.md`.
 - **No in-place column mutation** via import or update — columns can be added/removed only. Type changes = add new column, backfill, remove old.
 - ENUM `options` changes are a column change; plan them like migrations if records exist.
 - System columns are stripped from bundles on import; exporting then re-importing is safe.
-- Functions/agents need explicit grants (`datastore.table.read`, `datastore.record.read`, `datastore.record.write`) per table — see `functions.md`.
+- Functions/agents need explicit grants (`datastore.table.read`, `datastore.record.read`, `datastore.record.write`) per table — see `functions.md`. Deleting rows is a separate, destructive `datastore.record.delete`: without it a workload's delete is refused (an agent asks for approval).
 
 ## Verify
 

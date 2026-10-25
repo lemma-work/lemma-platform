@@ -140,7 +140,7 @@ def routing_surfaces(
         )
     if system_credentials_only:
         statement = statement.where(
-            AgentSurface.account_id.is_(None),
+            AgentSurface.pod_connector_slug.is_(None),
             AgentSurface.credential_mode == SurfaceCredentialMode.SYSTEM.value,
         )
     if surface_identity_id:

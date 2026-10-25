@@ -29,7 +29,6 @@ class ScheduleDetailResponse:
     """Schedule detail response.
 
     Attributes:
-        account_id (None | UUID):
         agent_id (None | UUID):
         config (ScheduleDetailResponseConfig):
         connector_trigger_id (None | str):
@@ -48,6 +47,7 @@ class ScheduleDetailResponse:
         user_id (UUID):
         visibility (str):
         workflow_id (None | UUID):
+        account_id (None | Unset | UUID):
         agent_name (None | str | Unset):
         allowed_actions (list[str] | Unset):
         consecutive_failures (int | Unset):  Default: 0.
@@ -62,10 +62,10 @@ class ScheduleDetailResponse:
         paused_reason (None | str | Unset): Why the platform paused this schedule: `fire_cap` (it fired more than its
             daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system
             reason. Absent while it runs, or when a person paused it. Reactivating clears it.
+        pod_connector (None | str | Unset): The pod connector it listens through, by slug.
         workflow_name (None | str | Unset):
     """
 
-    account_id: None | UUID
     agent_id: None | UUID
     config: ScheduleDetailResponseConfig
     connector_trigger_id: None | str
@@ -83,6 +83,7 @@ class ScheduleDetailResponse:
     user_id: UUID
     visibility: str
     workflow_id: None | UUID
+    account_id: None | Unset | UUID = UNSET
     agent_name: None | str | Unset = UNSET
     allowed_actions: list[str] | Unset = UNSET
     consecutive_failures: int | Unset = 0
@@ -94,6 +95,7 @@ class ScheduleDetailResponse:
     last_run_id: None | str | Unset = UNSET
     listening: ListeningResponse | None | Unset = UNSET
     paused_reason: None | str | Unset = UNSET
+    pod_connector: None | str | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -102,12 +104,6 @@ class ScheduleDetailResponse:
         from ..models.schedule_detail_response_filter_output_schema_type_0 import (
             ScheduleDetailResponseFilterOutputSchemaType0,
         )
-
-        account_id: None | str
-        if isinstance(self.account_id, UUID):
-            account_id = str(self.account_id)
-        else:
-            account_id = self.account_id
 
         agent_id: None | str
         if isinstance(self.agent_id, UUID):
@@ -163,6 +159,14 @@ class ScheduleDetailResponse:
             workflow_id = str(self.workflow_id)
         else:
             workflow_id = self.workflow_id
+
+        account_id: None | str | Unset
+        if isinstance(self.account_id, Unset):
+            account_id = UNSET
+        elif isinstance(self.account_id, UUID):
+            account_id = str(self.account_id)
+        else:
+            account_id = self.account_id
 
         agent_name: None | str | Unset
         if isinstance(self.agent_name, Unset):
@@ -226,6 +230,12 @@ class ScheduleDetailResponse:
         else:
             paused_reason = self.paused_reason
 
+        pod_connector: None | str | Unset
+        if isinstance(self.pod_connector, Unset):
+            pod_connector = UNSET
+        else:
+            pod_connector = self.pod_connector
+
         workflow_name: None | str | Unset
         if isinstance(self.workflow_name, Unset):
             workflow_name = UNSET
@@ -236,7 +246,6 @@ class ScheduleDetailResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "account_id": account_id,
                 "agent_id": agent_id,
                 "config": config,
                 "connector_trigger_id": connector_trigger_id,
@@ -256,6 +265,8 @@ class ScheduleDetailResponse:
                 "workflow_id": workflow_id,
             }
         )
+        if account_id is not UNSET:
+            field_dict["account_id"] = account_id
         if agent_name is not UNSET:
             field_dict["agent_name"] = agent_name
         if allowed_actions is not UNSET:
@@ -278,6 +289,8 @@ class ScheduleDetailResponse:
             field_dict["listening"] = listening
         if paused_reason is not UNSET:
             field_dict["paused_reason"] = paused_reason
+        if pod_connector is not UNSET:
+            field_dict["pod_connector"] = pod_connector
         if workflow_name is not UNSET:
             field_dict["workflow_name"] = workflow_name
 
@@ -294,21 +307,6 @@ class ScheduleDetailResponse:
         )
 
         d = dict(src_dict)
-
-        def _parse_account_id(data: object) -> None | UUID:
-            if data is None:
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                account_id_type_0 = UUID(data)
-
-                return account_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | UUID, data)
-
-        account_id = _parse_account_id(d.pop("account_id"))
 
         def _parse_agent_id(data: object) -> None | UUID:
             if data is None:
@@ -419,6 +417,23 @@ class ScheduleDetailResponse:
 
         workflow_id = _parse_workflow_id(d.pop("workflow_id"))
 
+        def _parse_account_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                account_id_type_0 = UUID(data)
+
+                return account_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        account_id = _parse_account_id(d.pop("account_id", UNSET))
+
         def _parse_agent_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -521,6 +536,15 @@ class ScheduleDetailResponse:
 
         paused_reason = _parse_paused_reason(d.pop("paused_reason", UNSET))
 
+        def _parse_pod_connector(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pod_connector = _parse_pod_connector(d.pop("pod_connector", UNSET))
+
         def _parse_workflow_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -531,7 +555,6 @@ class ScheduleDetailResponse:
         workflow_name = _parse_workflow_name(d.pop("workflow_name", UNSET))
 
         schedule_detail_response = cls(
-            account_id=account_id,
             agent_id=agent_id,
             config=config,
             connector_trigger_id=connector_trigger_id,
@@ -549,6 +572,7 @@ class ScheduleDetailResponse:
             user_id=user_id,
             visibility=visibility,
             workflow_id=workflow_id,
+            account_id=account_id,
             agent_name=agent_name,
             allowed_actions=allowed_actions,
             consecutive_failures=consecutive_failures,
@@ -560,6 +584,7 @@ class ScheduleDetailResponse:
             last_run_id=last_run_id,
             listening=listening,
             paused_reason=paused_reason,
+            pod_connector=pod_connector,
             workflow_name=workflow_name,
         )
 

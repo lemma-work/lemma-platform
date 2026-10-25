@@ -338,6 +338,26 @@ async def test_non_rls_record_mutations_require_record_write_action():
     assert auth_context.require.await_args.args[0] == Permissions.DATASTORE_RECORD_WRITE
 
 
+async def test_a_record_delete_asks_for_record_delete_not_write():
+    """H14: deleting a row asked for ``record.write``, so a writer emptied tables."""
+    auth_context = AsyncMock()
+    ctx = _table_context()
+    ctx.enable_rls = False
+    service = RecordService(
+        record_repository=AsyncMock(), authorization_service=AsyncMock()
+    )
+    service.change_log.after_commit = AsyncMock()
+
+    token = set_current_context(auth_context)
+    try:
+        await service.delete_record(ctx, "row-1", uuid4())
+    finally:
+        reset_current_context(token)
+
+    asked = [call.args[0] for call in auth_context.require.await_args_list]
+    assert asked == [Permissions.DATASTORE_RECORD_DELETE]
+
+
 async def test_table_context_converts_user_reference_column_to_uuid():
     assignee_id = uuid4()
     table = DatastoreTableEntity(
@@ -967,7 +987,8 @@ async def test_bulk_delete_checks_permission_once_and_still_wakes(
     assert record_repository.delete_record.await_count == 0, (
         "the per-row path must not be reachable from a bulk call"
     )
-    assert authz.require_record_write.await_count == 1
+    assert authz.require_record_delete.await_count == 1
+    assert authz.require_record_write.await_count == 0, "a delete is not a write"
     assert authz.should_enforce_record_user_scope.await_count == 1
     assert service.change_log.after_commit.await_count == 1, (
         "the batch's changes never woke the live hubs"

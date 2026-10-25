@@ -13,6 +13,8 @@ checked against anything.
 
 from __future__ import annotations
 
+from app.core.authorization.permissions import Permissions
+
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -259,7 +261,15 @@ async def refresh_install_operations(
     the outcome rather than a count so the endpoint can say which of the three
     things happened; reporting a refused server as `0` made the recovery path
     claim success on the failure it exists to recover from.
+
+    An installation manager's act: refreshing replaces the operation set every
+    member of the org sees (audit M13).
     """
+    await service._require_org_member(
+        user_id=user_id,
+        organization_id=organization_id,
+        permission=Permissions.ORG_INSTALLATION_MANAGE,
+    )
     auth_config = await service.get_auth_config_by_name(
         user_id=user_id,
         organization_id=organization_id,

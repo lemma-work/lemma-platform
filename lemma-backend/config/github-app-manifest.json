@@ -17,7 +17,8 @@
     "checks": "read",
     "deployments": "write",
     "secrets": "read",
-    "actions_variables": "read"
+    "actions_variables": "read",
+    "members": "read"
   },
   "default_events": [
     "push",

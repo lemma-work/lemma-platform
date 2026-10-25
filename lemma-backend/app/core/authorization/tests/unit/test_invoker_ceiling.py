@@ -18,24 +18,33 @@ from uuid import uuid4
 from app.core.authorization.context import (
     ActorType,
     Context,
+    Person,
     PrincipalRef,
+    Workload,
+    WorkloadKind,
 )
-from app.core.authorization.workload_authority import _invoking_user_context
+from app.core.authorization.workload_authority import invoking_person_context
 
 POD_ID = uuid4()
 ORG_ID = uuid4()
 USER_ID = uuid4()
 
 INVOKER_REFS = frozenset({PrincipalRef("POD_MEMBER", uuid4())})
-WORKLOAD_REFS = frozenset({PrincipalRef("AGENT", uuid4())})
+AGENT_ID = uuid4()
+WORKLOAD_REFS = frozenset({PrincipalRef("AGENT", AGENT_ID)})
 
 
 def _delegated_ctx(*, user_id=USER_ID) -> Context:
     """A named workload's context, shaped as ``build_delegated_workload_context``
     leaves it: merged principals and role names, the person's half kept apart."""
     return Context(
-        actor_type=ActorType.DELEGATED_USER_WORKLOAD,
-        actor_id=f"agent:{uuid4()}",
+        actor=Workload(
+            kind=WorkloadKind.AGENT,
+            workload_id=AGENT_ID,
+            for_user_id=user_id,
+            principal_refs=WORKLOAD_REFS,
+        ),
+        actor_id=f"agent:{AGENT_ID}",
         user_id=user_id,
         organization_id=ORG_ID,
         pod_id=POD_ID,
@@ -43,10 +52,8 @@ def _delegated_ctx(*, user_id=USER_ID) -> Context:
         permission_ids=frozenset({"datastore.record.read"}),
         principal_refs=INVOKER_REFS | WORKLOAD_REFS,
         grant_principal_sets=(INVOKER_REFS, WORKLOAD_REFS),
-        workload_principal_refs=WORKLOAD_REFS,
         invoker_principal_refs=INVOKER_REFS,
         invoker_role_names=frozenset({"POD_VIEWER"}),
-        delegated_by_user_id=user_id,
         authorizer=object(),
     )
 
@@ -56,11 +63,11 @@ def test_a_run_with_no_invoker_has_no_ceiling():
     # context here would deny every schedule and webhook run instead.
     ctx = _delegated_ctx(user_id=None)
 
-    assert _invoking_user_context(object(), ctx) is None
+    assert invoking_person_context(object(), ctx) is None
 
 
 def test_the_ceiling_is_the_person_and_not_the_workload():
-    invoker = _invoking_user_context(object(), _delegated_ctx())
+    invoker = invoking_person_context(object(), _delegated_ctx())
 
     assert invoker is not None
     assert invoker.principal_refs == INVOKER_REFS
@@ -74,9 +81,10 @@ def test_the_ceiling_is_the_person_and_not_the_workload():
 def test_the_ceiling_cannot_re_enter_the_delegated_path():
     # Authorizing the mirror runs the ordinary USER evaluation. If it looked
     # like a workload it would recurse into the very check that built it.
-    invoker = _invoking_user_context(object(), _delegated_ctx())
+    invoker = invoking_person_context(object(), _delegated_ctx())
 
     assert invoker is not None
+    assert invoker.actor == Person(user_id=USER_ID)
     assert invoker.actor_type == ActorType.USER
     assert invoker.workload_principal_refs == frozenset()
-    assert invoker.delegated_by_user_id is None
+    assert invoker.delegating_user_id is None

@@ -32,6 +32,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.services.surface_connector import bound_account_ids
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedSurfaceLifecycleEvent,
@@ -98,7 +99,7 @@ async def retire_uninstalled_app(
     changed = await retire_accounts(
         uow.session,
         connector_id=binding.connector_id,
-        account_ids={s.account_id for s in retired if s.account_id is not None},
+        account_ids=set((await bound_account_ids(uow, retired)).values()),
     )
     archived = await SurfaceGroupRepository(uow.session).bots_removed_everywhere(
         [surface.id for surface in retired]

@@ -540,7 +540,7 @@ def approve(
     ),
     deny: bool = typer.Option(False, "--deny", help="Reject instead of approving."),
     session: bool = typer.Option(
-        False, "--session", help="Approve for the whole session (not just once)."
+        False, "--session", help="Allow this kind of action for the conversation."
     ),
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the confirmation when resolving all pending."
@@ -549,8 +549,8 @@ def approve(
 ) -> None:
     """Resolve a pending approval so a gated agent action proceeds from the CLI.
 
-    Approves once by default (`--session` to approve for the run, `--deny` to
-    reject). With no approval id, lists every pending approval in the
+    Approves once by default (`--session` to allow that kind of action for the
+    rest of the conversation, `--deny` to reject). With no approval id, lists every pending approval in the
     conversation and confirms before resolving them all — handy for driving a
     file-using agent or an AGENT-node workflow to completion without the
     frontend.

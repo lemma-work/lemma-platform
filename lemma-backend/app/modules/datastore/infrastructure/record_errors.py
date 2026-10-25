@@ -71,9 +71,9 @@ def raise_record_read_error(
 def _query_facility_is_absent(exc: Exception) -> Exception | None:
     """The deployment has no datastore query role, so no query can run.
 
-    `SET LOCAL ROLE "<datastore_query_role>"` is the first thing ad-hoc SQL
-    does, and on a deployment that never provisioned the role it is also the
-    last. Recognised here rather than in ``parse_db_error`` because the message
+    `SET LOCAL ROLE "<the pod's query role>"` is the first thing ad-hoc SQL
+    does, and on a deployment whose app role cannot create the role it is also
+    the last. Recognised here rather than in ``parse_db_error`` because the message
     names no table and no column: the generic path turned it into a 400 saying
     the person's SQL was wrong, when nothing they can write will help.
     See `PS-DATA-021`.

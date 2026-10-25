@@ -68,6 +68,10 @@ def caller_key(ctx: Context, *, walk_ancestors: bool) -> str:
         "principals": _refs(ctx.principal_refs),
         "groups": [_refs(group) for group in ctx.grant_principal_sets],
         "workload": _refs(ctx.workload_principal_refs),
+        # A named workload reads only what its person could too, and someone who
+        # left the pod reads Public rows only: both are inputs of the rule now.
+        "invoker": _refs(ctx.invoker_principal_refs),
+        "member": ctx.belongs_to_its_pod(),
         "walk": walk_ancestors,
     }
     digest = hashlib.sha256(

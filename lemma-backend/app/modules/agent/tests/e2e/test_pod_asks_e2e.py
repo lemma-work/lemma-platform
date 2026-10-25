@@ -47,6 +47,8 @@ from app.modules.agent.services.pod_ask_delivery import PodAskDelivery
 from app.modules.agent.services.pod_ask_service import PodAskService
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
+from app.modules.agent.tools.approval_denials import show_card
+from app.modules.agent.tools.authority import workload_actor_id
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.test_support.e2e.scripted_model import script_text, script_tool_call
 from app.modules.test_support.e2e.waiters import eventually
@@ -329,20 +331,48 @@ async def test_a_pod_cannot_ask_itself_and_names_what_it_can_ask(
 
 
 async def _approve_asks(
-    conversation: dict[str, object], *, pod_id: str, user_id: UUID
+    conversation: dict[str, object],
+    *,
+    request: AskTeammateRequest,
+    user_id: UUID,
+    org_id: UUID,
 ) -> None:
-    """What the person's "approve for this conversation" records, by the real path."""
+    """What the person's "approve for this conversation" records, by the real path.
+
+    An approval unlocks only what the server refused (H6), so the ask is made
+    and refused first -- as the conversation's own workload -- and the person
+    then approves that refused call.
+    """
     agent_id = conversation.get("agent_id")
-    await record_session_approvals(
-        conversation_id=UUID(str(conversation["id"])),
-        agent_id=UUID(str(agent_id)) if agent_id else None,
-        pod_id=UUID(str(conversation["pod_id"])),
-        tool_args={
-            "tool_name": "ask_teammate",
-            "args": {},
-            "permission_ids": [ask_permission_id(UUID(pod_id))],
-        },
+    pod_id = UUID(str(conversation["pod_id"]))
+    conversation_id = UUID(str(conversation["id"]))
+    deps = _deps(
         user_id=user_id,
+        org_id=org_id,
+        pod_id=str(pod_id),
+        conversation_id=conversation_id,
+    )
+    # The pod's assistant runs as the workload whose id is its pod's.
+    deps.workload_id = UUID(str(agent_id)) if agent_id else pod_id
+    refused = await ask_teammate(SimpleNamespace(deps=deps), request)
+    assert refused.needs_approval is True, refused
+    # The card going up, with what was refused written on it.
+    approval_id = f"call-{uuid4().hex[:12]}"
+    await show_card(
+        conversation_id=conversation_id,
+        approval_id=approval_id,
+        person_user_id=user_id,
+        workload_actor_id=workload_actor_id(deps),
+        tool_name=refused.approval["tool_name"],
+        args=refused.approval["args"],
+    )
+    await record_session_approvals(
+        conversation_id=conversation_id,
+        agent_id=UUID(str(agent_id)) if agent_id else None,
+        pod_id=pod_id,
+        tool_args=refused.approval,
+        user_id=user_id,
+        approval_id=approval_id,
     )
 
 
@@ -364,6 +394,9 @@ async def test_a_quick_answer_comes_back_in_the_same_call(
     """The asking model calls the tool; the worker runs the other pod; it waits."""
     del worker
     support, billing = await _two_pods(authenticated_client, fixed_test_org)
+    ask = AskTeammateRequest(
+        teammate=billing, request="What is on the billing calendar?", wait_seconds=40
+    )
     response = await authenticated_client.post(
         f"/pods/{support}/conversations",
         json={
@@ -379,11 +412,7 @@ async def test_a_quick_answer_comes_back_in_the_same_call(
                     ),
                     script_tool_call(
                         "ask_teammate",
-                        {
-                            "teammate": billing,
-                            "request": "What is on the billing calendar?",
-                            "wait_seconds": 40,
-                        },
+                        ask.model_dump(mode="json"),
                         tool_call_id="ask-1",
                     ),
                     script_text("Billing answered."),
@@ -394,7 +423,10 @@ async def test_a_quick_answer_comes_back_in_the_same_call(
     assert response.status_code == status.HTTP_201_CREATED, response.text
     asking = UUID(response.json()["id"])
     await _approve_asks(
-        response.json(), pod_id=billing, user_id=UUID(fixed_test_user["id"])
+        response.json(),
+        request=ask,
+        user_id=UUID(fixed_test_user["id"]),
+        org_id=UUID(fixed_test_org["id"]),
     )
 
     await _send(authenticated_client, support, asking, "Ask billing what's on.")

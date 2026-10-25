@@ -13,7 +13,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from app.modules.test_support.channel_lines_double import RecordingChannelLines
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
-from app.core.authorization.context import ActorType, Context
+from app.core.authorization.context import Context, Person
 from app.core.authorization.service import AuthorizationDataService
 from app.modules.agent_surfaces.tests.unit.surface_doubles import surface_conversation
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -145,6 +145,7 @@ def _build_service(*, surface, monkeypatch):
     credential_resolver = SimpleNamespace(
         for_surface=AsyncMock(return_value=slack_credentials),
         for_platform=AsyncMock(return_value=slack_credentials),
+        installation_identity=AsyncMock(side_effect=lambda surface: surface.id),
     )
     router = SurfaceRouter(
         uow=uow,
@@ -188,7 +189,7 @@ def _build_service(*, surface, monkeypatch):
         "build_user_context",
         AsyncMock(
             return_value=Context(
-                actor_type=ActorType.USER,
+                actor=Person(user_id=surface.agent_id),
                 actor_id=str(surface.agent_id),
                 user_id=surface.agent_id,
                 pod_id=surface.pod_id,
@@ -250,7 +251,7 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
         name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
-        account_id=uuid4(),
+        pod_connector_slug=None,
         external_workspace_id=payload["team_id"],
         surface_identity_id=payload["authorizations"][0]["user_id"],
         config=SurfaceConfig(),
@@ -340,7 +341,7 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
         name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
-        account_id=uuid4(),
+        pod_connector_slug=None,
         external_workspace_id=payload["team_id"],
         external_channel_id=event["channel"],
         surface_identity_id=payload["authorizations"][0]["user_id"],

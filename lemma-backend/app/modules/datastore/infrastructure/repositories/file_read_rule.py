@@ -51,7 +51,9 @@ from sqlalchemy.orm.util import AliasedClass
 from sqlalchemy.sql import ColumnElement
 
 from app.core.authorization.context import (
-    ActorType,
+    Assistant,
+    OtherPod,
+    Person,
     Context,
     PrincipalRef,
     ResourceType,
@@ -121,16 +123,13 @@ def grant_groups(ctx: Context) -> tuple[frozenset[PrincipalRef], ...]:
     """
     if ctx.is_superuser:
         return ()
-    if ctx.actor_type == ActorType.POD:
+    if isinstance(ctx.actor, OtherPod):
         if ctx.pod_id is None or not pod_principal_may_hold(_READ):
             return ()
         return ctx.grant_principal_sets or (ctx.principal_refs,)
     if ctx.is_outsider:
         return ()
-    if (
-        ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-        and ctx.workload_principal_refs
-    ):
+    if ctx.is_named_workload:
         return (ctx.workload_principal_refs,)
     return ctx.grant_principal_sets or (ctx.principal_refs,)
 
@@ -203,6 +202,9 @@ class FileReadRule:
 
     ctx: Context
     reaches: tuple[GrantReach, ...]
+    #: For a named workload: the rule of the person it acts for. A row is
+    #: readable only if both rules allow it (PS-ACCESS-020).
+    person: "FileReadRule | None" = None
 
     @property
     def reads_everything(self) -> bool:
@@ -220,18 +222,22 @@ class FileReadRule:
         ctx = self.ctx
         if ctx.is_superuser:
             return true()
-        if ctx.actor_type == ActorType.POD:
+        if isinstance(ctx.actor, OtherPod):
             return self._pod_readable(file)
         if ctx.is_outsider:
             is_public = file.visibility == "PUBLIC"
             if ctx.pod_id is not None:
                 is_public = and_(is_public, file.pod_id == ctx.pod_id)
             return case((is_public, true()), else_=false())
+        if _left_the_pod(ctx):
+            # Left the pod: Public rows only, owned ones included (as the
+            # authorizer's ``_outside_the_pod_decision``).
+            is_public = and_(file.visibility == "PUBLIC", file.pod_id == ctx.pod_id)
+            if isinstance(ctx.actor, Person) and ctx.user_id is not None:
+                return case((is_public, true()), else_=false())
+            return false()
         granted = self._granted(file)
-        if (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and ctx.workload_principal_refs
-        ):
+        if ctx.is_named_workload:
             if ctx.user_id is not None:
                 personal_denied = and_(
                     file.visibility == "PERSONAL",
@@ -242,22 +248,27 @@ class FileReadRule:
                 )
             else:
                 personal_denied = file.visibility == "PERSONAL"
-            return case((personal_denied, false()), else_=granted)
+            workload_readable = case((personal_denied, false()), else_=granted)
+            if self.person is None:
+                return false()
+            return and_(workload_readable, self.person.readable(file))
 
         role_read = ctx.has_permission(_READ)
         owner_read = role_read or _READ in owner_actions_for_resource(
             ResourceType.DOCUMENT
         )
         public_read = role_read or (
-            ctx.actor_type == ActorType.USER and ctx.user_id is not None
+            isinstance(ctx.actor, Person) and ctx.user_id is not None
         )
         whens: list[tuple[ColumnElement[bool], ColumnElement[bool]]] = []
         if ctx.user_id is not None:
             whens.append((file.owner_user_id == ctx.user_id, _bool(owner_read)))
+        # A grant reads anything but someone else's PERSONAL row, as the
+        # authorizer's grant decision does; a role reads POD and PUBLIC rows.
         whens.extend(
             [
-                (file.visibility == "POD", _bool(role_read)),
-                (file.visibility == "PUBLIC", _bool(public_read)),
+                (file.visibility == "POD", or_(_bool(role_read), granted)),
+                (file.visibility == "PUBLIC", or_(_bool(public_read), granted)),
                 (file.visibility == "RESTRICTED", granted),
                 (file.visibility == "PERSONAL", false()),
             ]
@@ -273,14 +284,9 @@ class FileReadRule:
         values = {"PERSONAL", "RESTRICTED"}
         if not ctx.has_permission(_READ):
             values.add("POD")
-            if not (ctx.actor_type == ActorType.USER and ctx.user_id is not None):
+            if not (isinstance(ctx.actor, Person) and ctx.user_id is not None):
                 values.add("PUBLIC")
-        if ctx.actor_type == ActorType.POD or ctx.is_outsider:
-            values.update(_KNOWN_VISIBILITIES)
-        if (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and ctx.workload_principal_refs
-        ):
+        if ctx.is_outsider or ctx.is_named_workload or _left_the_pod(ctx):
             values.update(_KNOWN_VISIBILITIES)
         return or_(
             file.visibility.in_(sorted(values)),
@@ -304,6 +310,15 @@ class FileReadRule:
         return and_(*(reach.covers(file.path) for reach in self.reaches))
 
 
+def _left_the_pod(ctx: Context) -> bool:
+    """Someone acting as a person -- themselves, their assistant or their
+    agent -- who holds no role in the pod. A person-less run is not one."""
+    acts_as_a_person = isinstance(ctx.actor, (Person, Assistant)) or (
+        ctx.is_named_workload
+    )
+    return acts_as_a_person and ctx.pod_id is not None and not ctx.belongs_to_its_pod()
+
+
 def _bool(value: bool) -> ColumnElement[bool]:
     return true() if value else false()
 
@@ -317,7 +332,16 @@ async def resolve_read_rule(
         if groups
         else ()
     )
-    return FileReadRule(ctx=ctx, reaches=reaches)
+    person = None
+    if ctx.is_named_workload:
+        from app.core.authorization.workload_authority import (
+            invoking_person_context,
+        )
+
+        invoker = invoking_person_context(ctx.authorizer, ctx)
+        if invoker is not None:
+            person = await resolve_read_rule(session, pod_id=pod_id, ctx=invoker)
+    return FileReadRule(ctx=ctx, reaches=reaches, person=person)
 
 
 @dataclass(frozen=True, slots=True)

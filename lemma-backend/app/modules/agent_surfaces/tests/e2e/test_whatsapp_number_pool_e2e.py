@@ -178,10 +178,10 @@ async def test_the_worker_acts_on_a_message_with_the_number_it_arrived_on(
     resolver = SurfaceCredentialResolver(uow=SqlAlchemyUnitOfWork(db_session))
 
     pooled = await resolver.for_platform(
-        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on="pool-w"
+        SurfacePlatform.WHATSAPP, surface=None, arrived_on="pool-w"
     )
     unpooled = await resolver.for_platform(
-        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on="deployment-pn"
+        SurfacePlatform.WHATSAPP, surface=None, arrived_on="deployment-pn"
     )
 
     assert pooled.access_token.get_secret_value() == "the-pools-token"

@@ -19,7 +19,7 @@ from app.modules.agent_surfaces.domain.surface_config import (
 
 def reengage_template_for(surface: AgentSurfaceEntity) -> ReengageTemplate | None:
     own = surface.config.whatsapp.template()
-    if own is not None or surface.account_id is not None:
+    if own is not None or surface.pod_connector_slug is not None:
         return own
     return SurfaceWhatsAppConfig(
         reengage_template=surface_settings.whatsapp_reengage_template,

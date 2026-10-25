@@ -20,6 +20,7 @@ import {
     type CatalogEntry, type Install,
 } from "@/connect/install";
 import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
+import { impactLines, usageLine } from "@/data/pod-accounts";
 import { oauthFormForConnector } from "@/desktop/this-mac";
 
 /** The organization's connected accounts.
@@ -67,10 +68,22 @@ function AccountRow({
     reconnecting?: boolean;
 }) {
     const [confirming, setConfirming] = useState(false);
+    const [showUse, setShowUse] = useState(false);
     const drop = useMutation({
         mutationFn: () => source.disconnectAccount(orgId, account.id),
         onSuccess: onGone,
     });
+    /* Where it is used, asked for when somebody asks — or when they are about
+       to remove it, which is when it matters most. */
+    const usage = useQuery({
+        queryKey: ["account-usage", account.id],
+        queryFn: () => source.accountUsage(account.id),
+        enabled: showUse || confirming,
+        staleTime: 60_000,
+        retry: false,
+    });
+    const pods = useQuery({ queryKey: ["pods", orgId], queryFn: () => source.listPods(orgId), enabled: showUse || confirming, staleTime: 5 * 60_000 });
+    const podName = (podId: string) => pods.data?.find((pod) => pod.id === podId)?.name ?? "";
     const trouble = accountTrouble(account);
     const dead = ["REAUTH_REQUIRED", "DISCONNECTED"].includes(account.status.toUpperCase());
     /* Connected and reaching nothing: a GitHub App authorised but not
@@ -127,6 +140,9 @@ function AccountRow({
                 </span>
             ) : confirming ? (
                 <span className="acct__confirm">
+                    {usage.data && usage.data.length > 0 && (
+                        <span className="acct__trouble">Used in {usage.data.length === 1 ? "1 teammate" : usage.data.length + " teammates"}</span>
+                    )}
                     <button className="btn reachrow__drop" disabled={drop.isPending} onClick={() => drop.mutate()}>
                         {drop.isPending ? "Removing…" : "Remove"}
                     </button>
@@ -153,10 +169,21 @@ function AccountRow({
                             Replace credential
                         </button>
                     )}
+                    <button className="linkish reachrow__quiet" aria-expanded={showUse} onClick={() => setShowUse((was) => !was)}>
+                        Used in
+                    </button>
                     <button className="linkish reachrow__quiet" onClick={() => setConfirming(true)}>
                         Remove
                     </button>
                 </span>
+            )}
+            {(showUse || (confirming && usage.data && usage.data.length > 0)) && (
+                <ul className="acct__usage" aria-label={"Where " + accountName(account, connector.title) + " is used"}>
+                    {usage.isPending && <li role="status">Looking…</li>}
+                    {usage.isError && <li role="alert">Couldn’t tell where it is used. <button className="linkish" onClick={() => void usage.refetch()}>Try again</button></li>}
+                    {usage.isSuccess && usage.data.length === 0 && <li>Not in use in any teammate yet.</li>}
+                    {usage.data?.map((one) => <li key={one.podAccountId}>{usageLine(one, podName)}</li>)}
+                </ul>
             )}
         </li>
     );
@@ -197,6 +224,16 @@ function InstallRow({ install, orgId, addressed, manage, needsSignIn, signingIn 
     const drop = useDeleteInstall(orgId);
     const promote = useMakeDefaultInstall(orgId);
     const off = install.status === "DISABLED";
+    /* What removing it stops, read before the button that does it is shown. */
+    const impact = useQuery({
+        queryKey: ["install-impact", orgId, install.id],
+        queryFn: () => source.installationImpact(orgId, install.id),
+        enabled: confirming,
+        staleTime: 0,
+        retry: false,
+    });
+    const pods = useQuery({ queryKey: ["pods", orgId], queryFn: () => source.listPods(orgId), enabled: confirming, staleTime: 5 * 60_000 });
+    const podName = (podId: string) => pods.data?.find((pod) => pod.id === podId)?.name ?? "";
 
     return (
         <li className="acct">
@@ -212,13 +249,26 @@ function InstallRow({ install, orgId, addressed, manage, needsSignIn, signingIn 
             {needsSignIn && !said && <span className="acct__trouble"><WarningIcon size={13} /> Nobody has signed in yet</span>}
             {said && <span className="acct__trouble acct__trouble--quiet" role="status">{said}</span>}
             {confirming ? (
-                <span className="acct__confirm">
-                    <button className="btn reachrow__drop" disabled={drop.isPending}
-                        onClick={() => drop.mutate(install, { onSuccess: onChanged })}>
-                        {drop.isPending ? "Removing…" : "Remove, with its accounts"}
-                    </button>
-                    <button className="linkish" onClick={() => setConfirming(false)}>Keep</button>
-                </span>
+                <div className="impact" role="group" aria-label={"Removing " + (install.name || install.id)}>
+                    {impact.isPending && <p role="status">Checking what uses it…</p>}
+                    {/* A preview that failed is said, not a lock: removing stays
+                        the manager's call, made knowing less. */}
+                    {impact.isError && (
+                        <p role="alert">Couldn’t load what this affects. Removing it still removes its accounts, and anything using them stops.{" "}
+                            <button className="linkish" onClick={() => void impact.refetch()}>Try again</button></p>
+                    )}
+                    {impact.isSuccess && <>
+                        <span>Removing it:</span>
+                        <ul>{impactLines(impact.data, podName).map((line) => <li key={line}>{line}</li>)}</ul>
+                    </>}
+                    <span className="acct__confirm">
+                        <button className="btn reachrow__drop" disabled={drop.isPending || impact.isPending}
+                            onClick={() => drop.mutate(install, { onSuccess: onChanged })}>
+                            {drop.isPending ? "Removing…" : "Remove, with its accounts"}
+                        </button>
+                        <button className="linkish" onClick={() => setConfirming(false)}>Keep</button>
+                    </span>
+                </div>
             ) : (
                 <span className="acct__acts">
                     {onConnect && !off && (

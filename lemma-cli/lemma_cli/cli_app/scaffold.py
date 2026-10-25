@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .enums import COLUMN_TYPES, SURFACE_PLATFORMS, TOOLSETS, VISIBILITY_VALUES
-from .pod_bundle import FORMAT_VERSION, loads_jsonc, strip_jsonc
+from .pod_bundle import FORMAT_VERSION_WITHOUT_CONNECTORS, loads_jsonc, strip_jsonc
 
 
 class ScaffoldError(Exception):
@@ -227,7 +227,9 @@ SCHEDULE_JSON = """{
   // DATASTORE: { "table_name": "<table>", "operations": ["INSERT"] }   <- table_name, NOT "datastore"
   // WEBHOOK:   { "source": "<composio|github>" }  // refused at create if the
   //            deployment does not register it; not read at all when the
-  //            schedule is bound to an account + connector_trigger_id
+  //            schedule listens through a pod connector + connector_trigger_id
+  // "pod_connector": "github",     // WEBHOOK only: the pod connector it listens
+  //                                // through (`lemma connectors pod-list`)
   // Exactly one target — the agent or workflow to start. It must already exist in the pod.
   "workflow_name": "__TARGET__",
   // "agent_name": "some-agent",   // ...or target an agent instead of a workflow
@@ -255,9 +257,9 @@ SURFACE_JSON = _fill_enums("""{
   "name": "__PLATFORM_LOWER__",
   "platform": "__PLATFORM__",          // __SURFACE_PLATFORMS__
   "default_agent_name": "__AGENT__",   // the pod agent that answers on this surface
-  "credential_mode": "CUSTOM",         // SYSTEM (Lemma-managed) | CUSTOM (your own connector account)
-  "account_id": "TODO-connector-account-uuid",  // required for CUSTOM; set up with `lemma connectors`
-  "is_enabled": false                  // flip to true once the agent + account exist
+  "credential_mode": "CUSTOM",         // SYSTEM (Lemma-managed) | CUSTOM (your own bot)
+  "pod_connector": "TODO-shared-connector-slug",  // required for CUSTOM: a SHARED pod connector (`lemma connectors pod-add`)
+  "is_enabled": false                  // flip to true once the agent + connector exist
 }
 """)
 
@@ -368,7 +370,11 @@ def init_pod(
     files.append(
         _write(
             directory / "pod.json",
-            _render(POD_JSON, NAME=slug, FORMAT_VERSION=str(FORMAT_VERSION)),
+            _render(
+                POD_JSON,
+                NAME=slug,
+                FORMAT_VERSION=str(FORMAT_VERSION_WITHOUT_CONNECTORS),
+            ),
             force=force,
         )
     )
@@ -578,7 +584,11 @@ def resource_example(resource_type: str, name: str = "example") -> str:
     exist' reference printed by `lemma <resource> schema`."""
     rt = resource_type.lower().rstrip("s")
     if rt == "pod":
-        return _render(POD_JSON, NAME=slugify(name), FORMAT_VERSION=str(FORMAT_VERSION))
+        return _render(
+            POD_JSON,
+            NAME=slugify(name),
+            FORMAT_VERSION=str(FORMAT_VERSION_WITHOUT_CONNECTORS),
+        )
     if rt == "table":
         return _render(TABLE_JSON, NAME=snakeify(name), RLS="true")
     if rt == "function":
@@ -606,9 +616,11 @@ def resource_example(resource_type: str, name: str = "example") -> str:
 PERMISSION_PRESETS: dict[str, dict[str, list[str]]] = {
     "datastore_table": {
         "read": ["datastore.table.read", "datastore.record.read"],
-        # record deletion rides on datastore.record.write; there is no
-        # datastore.record.delete permission in the backend registry.
         "write": ["datastore.record.write"],
+        # Deleting rows is its own permission, and DESTRUCTIVE: granting it
+        # gives the workload standing authority to delete (no approval prompt).
+        # Without it an agent asks before every delete.
+        "delete-rows": ["datastore.record.delete"],
         "alter": ["datastore.table.update"],
         # Structural table deletion — a DESTRUCTIVE action: granting it gives
         # the workload standing authority (no runtime approval prompt).
@@ -620,23 +632,21 @@ PERMISSION_PRESETS: dict[str, dict[str, list[str]]] = {
         "read": ["folder.read"],
         "write": ["folder.write"],
         "delete": ["folder.delete"],
+        # Make public links to files: anyone holding one opens the file.
+        "share": ["folder.share"],
     },
     "document": {
         "read": ["folder.read"],
         "write": ["folder.write"],
         "delete": ["folder.delete"],
+        # Make public links to files: anyone holding one opens the file.
+        "share": ["folder.share"],
     },
-    # A connector grant with no account grant is USER-RESOLVED mode: the call
-    # runs against whichever account the *invoking* user connected.
+    # A pod connector, by slug. The connector decides the account a call runs
+    # as -- the invoking member's own (PER_MEMBER) or the one its owner shared
+    # (SHARED) -- so a workload is never granted an account.
     "connector": {
         "use": ["connector.use"],
-    },
-    # FIXED-ACCOUNT (pinned) mode: `connector_account.use` on one account id, in
-    # addition to `connector.use` on the connector, makes every invoker share
-    # that one account. `manage` is destructive.
-    "connector_account": {
-        "use": ["connector_account.use"],
-        "manage": ["connector_account.manage"],
     },
     # Compose functions/agents as tools on an agent/function. Execute is
     # self-sufficient — granting it lets the parent both load and run the tool
@@ -681,8 +691,6 @@ _GRANT_TYPE_ALIASES = {
     "document": "document",
     "doc": "document",
     "connector": "connector",
-    "connector_account": "connector_account",
-    "account": "connector_account",
     "app": "app",
     "function": "function",
     "agent": "agent",
@@ -690,6 +698,7 @@ _GRANT_TYPE_ALIASES = {
     "schedule": "schedule",
 }
 GRANT_TYPE_TOKENS = tuple(sorted(_GRANT_TYPE_ALIASES))
+_ACCOUNT_TOKENS = frozenset({"account", "connector_account"})
 
 
 def _resolve_grant_type(type_token: str, perms: str) -> tuple[str, str | None]:
@@ -703,6 +712,13 @@ def _resolve_grant_type(type_token: str, perms: str) -> tuple[str, str | None]:
     app accepts it, so `app:gmail:use` still resolves to a connector grant, with
     a note naming the current spelling. Every other app verb means the app."""
     token = type_token.strip().lower()
+    if token in _ACCOUNT_TOKENS:
+        raise ScaffoldError(
+            "Agents and functions are granted a pod connector, never an "
+            "account: write `connector:<slug>:use`. Which account it runs as "
+            "is the connector's mode (each member's own, or one shared "
+            "account), and only an account's owner can share it."
+        )
     rtype = _GRANT_TYPE_ALIASES.get(token)
     if not rtype:
         raise ScaffoldError(
@@ -725,12 +741,10 @@ def parse_grant_spec(spec: str) -> dict:
 
     `name:perms`  — type inferred (a leading `/` means a folder, else a table).
     `type:name:perms` — explicit type; see GRANT_TYPE_TOKENS.
-    `perms` is comma-separated friendly verbs (read/write/execute/use/delete/…)
+    `perms` is comma-separated friendly verbs (read/write/delete-rows/execute/use/…)
     or raw permission ids (e.g. `datastore.record.write`).
 
-    A `connector_account` name is the account's **id**, not a human name — the
-    backend has no other identifier for it (see resource_names.py). That makes
-    the grant environment-specific; export tokenizes it into a `${var}`."""
+    A connector grant names the pod connector's slug (`connector:gmail:use`)."""
     note: str | None = None
     parts = spec.split(":")
     if len(parts) == 3:

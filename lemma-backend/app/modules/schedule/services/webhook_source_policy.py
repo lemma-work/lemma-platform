@@ -33,7 +33,7 @@ def validate_webhook_source(
     """Refuse a WEBHOOK schedule routed on a source that delivers to nobody.
 
     Scoped to the schedules whose stored config *is* the whole routing key --
-    the ones nothing will provision. A schedule bound to an account and a
+    the ones nothing will provision. A schedule bound to a pod connector and a
     connector trigger is routed by what provisioning writes instead (a provider
     trigger id for Composio, an installation id and event for a GitHub App,
     which also overwrites `source` with its own), and one that cannot be
@@ -51,16 +51,16 @@ def validate_webhook_source(
     something wrong, so that case passes rather than refuses.
     """
     named = (schedule.config or {}).get("source")
-    if named == MCP_EVENT_SOURCE and not schedule.account_id:
-        # Subscribed on an account or not at all: with none, nothing would
-        # ever be asked to deliver.
+    if named == MCP_EVENT_SOURCE and not schedule.pod_connector_slug:
+        # Subscribed through a connector or not at all: with none, nothing
+        # would ever be asked to deliver.
         raise ScheduleValidationError(
-            "An MCP server's events reach a schedule through a connected "
-            "account. Name the account it listens through."
+            "An MCP server's events reach a schedule through a pod connector. "
+            "Name the connector it listens through (pod_connector)."
         )
     if sources is None:
         return
-    if schedule.account_id and schedule.connector_trigger_id:
+    if schedule.pod_connector_slug and schedule.connector_trigger_id:
         return
     if named is None:
         return

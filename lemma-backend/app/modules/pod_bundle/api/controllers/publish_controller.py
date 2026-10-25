@@ -11,10 +11,13 @@ from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import StreamingResponse
 
+from app.core.api.actor_policy import refuse_named_workloads
 from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.api.deprecation import note_deprecated_use
+from app.modules.connectors.contracts.deprecations import ACCOUNT_ADDRESSING_SUNSET
 from app.core.authorization.scope import pod_context_scope
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
@@ -36,7 +39,14 @@ from app.modules.pod_bundle.infrastructure.state_store import (
     get_pod_bundle_state_store,
 )
 
-router = APIRouter(prefix="/pods", tags=["Pod Bundle"], redirect_slashes=False)
+# A bundle job runs as the person, not as a workload's grants: named agents
+# and functions stay out of every bundle route (the assistant keeps them).
+router = APIRouter(
+    prefix="/pods",
+    tags=["Pod Bundle"],
+    redirect_slashes=False,
+    dependencies=[refuse_named_workloads("export, import or publish a pod")],
+)
 
 ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 
@@ -51,8 +61,11 @@ _TERMINAL_EVENT_TYPES = {"completed", "error", "expired"}
     operation_id="pod.bundle.publish.start",
     summary="Publish Pod To GitHub",
     description=(
-        "Publish the pod as a bundle to a new GitHub repository. Returns 202 with "
-        "a publish_id; poll the status endpoint for the repo URL."
+        "Publish the pod as a bundle to a GitHub repository, as the account the "
+        "pod's `github` connector resolves to for the caller. Refused up front "
+        "with `CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with `connect_url`) or "
+        "`POD_CONNECTOR_NOT_FOUND` when there is none. Returns 202 with a "
+        "publish_id; poll the status endpoint for the repo URL."
     ),
     dependencies=[PodEditorDep],
 )
@@ -60,15 +73,26 @@ async def start_publish(
     pod_id: UUID,
     data: PublishStartRequest,
     user: CurrentUser,
+    request: Request,
+    response: Response,
     use_cases: PublishUseCasesDep,
 ) -> PublishStatusResponse:
+    if data.account_id is not None:
+        note_deprecated_use(
+            request,
+            response,
+            use="pod.bundle.publish.start.account_id",
+            replacement=(
+                "drop account_id; the pod's `github` connector decides the account"
+            ),
+            sunset=ACCOUNT_ADDRESSING_SUNSET,
+        )
     state = await use_cases.start_publish(
         pod_id=pod_id,
         user_id=user.id,
         repo_name=data.repo_name,
         mode=data.mode,
         private=data.private,
-        account_id=data.account_id,
         ai_readme=data.ai_readme,
     )
     return PublishStatusResponse.from_state(state)

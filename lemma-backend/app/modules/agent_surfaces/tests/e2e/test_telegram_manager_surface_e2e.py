@@ -138,7 +138,8 @@ async def test_telegram_managed_bot_full_lifecycle_completes_and_creates_surface
     body = completed.json()
     assert body["status"] == "COMPLETE"
     assert body["bot_username"] == "surface_e2e_bot"
-    assert body["account_id"]
+    # The bot is shared into the pod as a SHARED connector the surface runs as.
+    assert body["pod_connector"]
     assert body["surface_id"]
     assert body["bot_launch_url"] == "https://t.me/surface_e2e_bot?start=lemma"
     assert body["error"] is None
@@ -325,7 +326,7 @@ async def test_telegram_managed_bot_provisioning_failure_marks_setup_failed(
     body = failed.json()
     assert body["status"] == "FAILED"
     assert body["error"]
-    assert body["account_id"] is None
+    assert body["pod_connector"] is None
     assert body["surface_id"] is None
 
     failure_texts = [msg.get("text") for msg in message_store.get_all("TELEGRAM")]

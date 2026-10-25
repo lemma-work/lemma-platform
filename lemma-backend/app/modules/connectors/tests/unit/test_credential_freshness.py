@@ -73,7 +73,7 @@ class TestTheHotPath:
             connector_repository=AsyncMock(),
             operation_repository=AsyncMock(),
             operation_gateway=AsyncMock(),
-            account_resolution_service=AsyncMock(),
+            pod_connector_resolver=AsyncMock(),
             connector_service=connector_service,
         )
 

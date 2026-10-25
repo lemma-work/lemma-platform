@@ -48,6 +48,42 @@ def test_build_approval_render_plan_session_button_gated():
     ]
 
 
+def test_the_session_option_says_what_it_covers():
+    """A session approval is permission-wide; "Approve for session" never
+    said so, and a person agreed to more than they read."""
+    plan = build_approval_render_plan(
+        conversation_id=uuid4(),
+        tool_call_id="tc-approval",
+        title="Delete order 42",
+        reason="This permanently removes the record.",
+        tool_name="pod_write_record",
+        allow_session=True,
+        session_scope="Delete records in any table for the rest of this conversation",
+    )
+
+    assert plan.reason == (
+        "This permanently removes the record.\n"
+        "Allow for this conversation: "
+        "Delete records in any table for the rest of this conversation."
+    )
+    assert plan.buttons[-1].label == "Allow for this conversation"
+
+
+def test_no_scope_is_claimed_without_a_session_option():
+    plan = build_approval_render_plan(
+        conversation_id=uuid4(),
+        tool_call_id="tc-approval",
+        title="Let triage use gmail (your own account)?",
+        reason=None,
+        tool_name="run_connector_operation",
+        allow_session=False,
+        session_scope="Use any of the pod's connectors for the rest of this conversation",
+    )
+
+    assert plan.reason is None
+    assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
+
+
 # --- Slack ----------------------------------------------------------------
 
 

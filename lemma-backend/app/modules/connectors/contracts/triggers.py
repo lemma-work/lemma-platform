@@ -48,6 +48,7 @@ from app.modules.connectors.infrastructure.composio_triggers import (
     supports_provider_subscription,
     verify_webhook,
 )
+from app.modules.connectors.services.auth.github_bindings import routable_external_ref
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +101,9 @@ async def resolve_trigger_binding(
         connector_id=trigger.connector_id,
         event_type=trigger.event_type,
         config_defaults=_declared_defaults(trigger.config_schema),
-        installation_id=str(account.external_ref) if account.external_ref else None,
+        # Bound to this account's own organization, or none (audit H4): the
+        # routing key a schedule gets is never another tenant's installation.
+        installation_id=await routable_external_ref(uow.session, account),
         connection_id=getattr(account.credentials, "connection_id", None),
         subscribable=supports_provider_subscription(
             provider, service._resolve_auth_install(connector, auth_config)

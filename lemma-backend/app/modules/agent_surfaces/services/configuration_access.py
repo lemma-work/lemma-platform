@@ -44,6 +44,9 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
+from app.modules.agent_surfaces.services.customer_held_secrets import (
+    signed_with_a_customer_secret,
+)
 from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
 )
@@ -92,7 +95,11 @@ class ConfigurationAccess:
         if not self._can_resolve_configuration_actor(actor, candidates):
             return None
         first = candidates[0]
-        installation_id = first.account_id or first.id
+        installation_id = await self.credential_resolver.installation_identity(first)
+        # Who may configure a surface is the last place a forged actor should
+        # be believed: on an app whose secret a person holds, only a binding
+        # made through it names anybody.
+        customer_held_secret = await signed_with_a_customer_secret(self.uow, first)
         event = ParsedInboundSurfaceEvent(
             platform=first.surface_type,
             conversation_type=ConversationType.EXTERNAL_DM,
@@ -113,7 +120,9 @@ class ConfigurationAccess:
             # been revoked and the match did not rest on an unverified number.
             # The profile fetch is skipped because the cache needs none.
             resolved = await self.identity_service.resolve(
-                event=event, installation_id=installation_id
+                event=event,
+                installation_id=installation_id,
+                customer_held_secret=customer_held_secret,
             )
             if resolved.internal_user_id is not None:
                 return resolved.internal_user_id
@@ -130,7 +139,10 @@ class ConfigurationAccess:
         except slack_api_error(), ClientError:
             profile = None
         resolved = await self.identity_service.resolve(
-            event=event, sender_profile=profile, installation_id=installation_id
+            event=event,
+            sender_profile=profile,
+            installation_id=installation_id,
+            customer_held_secret=customer_held_secret,
         )
         return resolved.internal_user_id
 

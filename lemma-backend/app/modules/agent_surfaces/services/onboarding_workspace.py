@@ -240,6 +240,28 @@ async def _provision_and_bind(
     return OnboardingOutcome()
 
 
+async def bind_on_its_own_number(
+    uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
+) -> None:
+    """Know this sender through the org's own number, and nothing more.
+
+    The number belongs to its pod, so there is no workspace to provision or
+    offer: who is answered there is the pod's membership, which ordinary
+    routing asks of the binding written here. A person who is not a member is
+    refused there, as before. The pending row goes, so their next message is
+    an ordinary one.
+    """
+    from app.modules.agent_surfaces.infrastructure.repositories.onboarding_repository import (  # noqa: E501
+        ChatOnboardingRepository,
+    )
+
+    await record_verified_identity(uows, transport, state)
+    async with uows() as uow:
+        row = await uow.session.get(PendingChatOnboarding, state.id)
+        if row is not None:
+            await ChatOnboardingRepository(uow).discard_pending(row)
+
+
 async def record_verified_identity(
     uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
 ) -> UserEntity:
@@ -328,7 +350,7 @@ async def _ensure_shared_surface(
         (
             item
             for item in surfaces
-            if item.account_id is None
+            if item.pod_connector_slug is None
             and item.credential_mode == SurfaceCredentialMode.SYSTEM
             and item.agent_id == assistant_id
         ),

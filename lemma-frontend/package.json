@@ -24,7 +24,6 @@
     "test:auth-live": "node --test tests/browser/auth-live.test.mjs"
   },
   "dependencies": {
-    "@google/genai": "^2.22.0",
     "@novnc/novnc": "^1.7.0",
     "@phosphor-icons/react": "^2.1.10",
     "@shikijs/rehype": "^4.4.3",

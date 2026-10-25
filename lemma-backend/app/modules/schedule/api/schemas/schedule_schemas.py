@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, computed_field, model_validator
 
 from app.modules.schedule.config import schedule_settings
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
@@ -68,11 +68,22 @@ class CreateScheduleRequest(BaseModel):
             "Distinct from filter_instruction, which decides whether to fire."
         ),
     )
-    account_id: UUID | None = Field(
+    pod_connector: str | None = Field(
         default=None,
         description=(
-            "Connected connector account used to provision provider-backed webhook "
-            "schedules."
+            "The pod connector, by slug, a WEBHOOK schedule listens through -- "
+            "for a connector trigger or an MCP server's event. The account it "
+            "means is the connector's decision: your own for a per-member "
+            "connector, the shared one for a shared connector. It is resolved "
+            "again on every fire and renewal, as the schedule's owner."
+        ),
+    )
+    account_id: UUID | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated: name `pod_connector` instead. Still accepted, as the "
+            "pod connector that serves this account to you."
         ),
     )
     connector_trigger_id: str | None = Field(
@@ -198,7 +209,14 @@ class ScheduleResponse(BaseModel):
     workflow_name: str | None = None
     config: dict
     instruction: str | None = None
-    account_id: UUID | None
+    pod_connector: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("pod_connector", "pod_connector_slug"),
+        description="The pod connector it listens through, by slug.",
+    )
+    # Deprecated, and always null: a schedule names a pod connector now. Kept
+    # because clients generated before that read it as a required key.
+    account_id: UUID | None = Field(default=None, deprecated=True)
     connector_trigger_id: str | None
     filter_instruction: str | None
     filter_output_schema: dict | None

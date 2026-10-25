@@ -18,27 +18,29 @@ authConfigName }` — because auth configs are org-scoped, not pod-scoped. The p
 its org, so resolve it once:
 
 ```ts
-const pod = await client.pods.get(client.podId!);
-const scope = { organizationId: pod.organization_id, authConfigName: "my-gmail" };
+// A pod connector is addressed by its slug; the pod declares it (`lemma
+// connectors pod-list`). It decides whose account runs the call: the signed-in
+// person's own (PER_MEMBER) or the one the pod shares (SHARED).
+const slug = "gmail";
 
-// 1. operations available for this installed auth config (kind-specific):
-const ops = await client.connectors.operations.list(scope);           // → array
-//   ...or narrow by intent: operations.list(scope, { query: "send email", limit: 5 })
+// 1. operations this connector offers (kind-specific):
+const ops = await client.connectors.pod.operations(slug);           // → array
+//   ...or narrow by intent: pod.operations(slug, { query: "send email", limit: 5 })
 
 // 2. the operation's input schema (drive your form / validate the payload):
-const detail = await client.connectors.operations.get(scope, "gmail_send_email");
+const detail = await client.connectors.pod.operation(slug, "gmail_send_email");
 
-// 3. execute on the user's account (account auto-resolves; 4th arg pins one):
-const result = await client.connectors.operations.execute(
-  scope,
+// 3. execute — no account argument; the pod connector picks it:
+const result = await client.connectors.pod.execute(
+  slug,
   "gmail_send_email",
   { recipient_email: "bob@example.com", subject: "Update", body: "…" },
-  // accountId,   // optional — omit to use the signed-in user's own account
 );
 ```
 
-`operations.list` returns the items array directly; `discover` is the same call
-returning the full response. `details(scope, names?)` fetches several schemas at once.
+`pod.operations` returns the items array directly. Org-level discovery
+(`connectors.operations.list(scope)`) still browses an installation before a pod
+declares it, but cannot run anything.
 
 ## Make it a safe action
 
@@ -46,9 +48,11 @@ returning the full response. `details(scope, names?)` fetches several schemas at
   kind-specific (`package` and `composio` differ).
 - **Confirm side-effects.** An operation that sends/posts/charges is irreversible —
   gate it behind an explicit confirm and show what will happen.
-- **Handle the no-account case.** If the user hasn't connected an account, the call
-  fails — detect it and link them to connect (the app can't connect on their
-  behalf): surface `lemma connectors accounts create` / the connect flow.
+- **Handle the no-account case.** When the person has no account for a PER_MEMBER
+  connector, or the shared one is gone or expired, the call fails with a typed
+  error (`CONNECTION_REQUIRED`, `REAUTH_REQUIRED`, `CONNECTOR_NEEDS_ACCOUNT`)
+  whose body carries `connect_url`. Link them there; the app can't connect on
+  their behalf.
 - For server-side calls (a function/agent acting for the user), the same operation
   runs through the in-function SDK with a granted connector — see `functions.md`.
 

@@ -75,7 +75,7 @@ def surface_response(
         ),
         platform=surface.surface_type,
         credential_mode=surface.credential_mode,
-        account_id=surface.account_id,
+        pod_connector=surface.pod_connector_slug,
         connection=connection,
         surface_identity_id=surface.surface_identity_id,
         surface_identity_username=surface.surface_identity_username,
@@ -141,7 +141,7 @@ async def create_surface(
     name: str,
     config: SurfaceConfig,
     credential_mode: SurfaceCredentialMode | None,
-    account_id: UUID | None,
+    pod_connector_slug: str | None,
     ctx: Context,
 ) -> AgentSurfaceEntity:
     """Create a surface, minting the address a platform needs one for.
@@ -160,7 +160,7 @@ async def create_surface(
         name=name,
         config=config,
         credential_mode=credential_mode,
-        account_id=account_id,
+        pod_connector_slug=pod_connector_slug,
         ctx=ctx,
     )
 
@@ -173,7 +173,7 @@ async def update_surface(
     update_agent_id: bool = False,
     config: SurfaceConfig | None = None,
     credential_mode: SurfaceCredentialMode | None = None,
-    account_id: UUID | None = None,
+    pod_connector_slug: str | None = None,
     is_active: bool | None = None,
     ctx: Context,
 ) -> AgentSurfaceEntity:
@@ -184,7 +184,7 @@ async def update_surface(
         update_agent_id=update_agent_id,
         config=config,
         credential_mode=credential_mode,
-        account_id=account_id,
+        pod_connector_slug=pod_connector_slug,
         is_active=is_active,
         ctx=ctx,
     )

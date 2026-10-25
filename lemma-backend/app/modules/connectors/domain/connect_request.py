@@ -22,10 +22,6 @@ class ConnectRequestStatus(str, enum.Enum):
     ERROR = "ERROR"
 
 
-#: Where a spent request records the account its grant was stored on.
-GRANTED_ACCOUNT_ATTRIBUTE = "granted_account_id"
-
-
 class ConnectRequestEntity(Entity):
     """Entity for request to connect a user to a connector."""
 

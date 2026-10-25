@@ -22,7 +22,7 @@ def _telegram_surface() -> AgentSurfaceEntity:
         name="telegram",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.TELEGRAM,
-        account_id=None,
+        pod_connector_slug=None,
         config=SurfaceConfig(channels=[SurfaceChannelRoute(channel_id="G1")]),
         is_active=True,
     )
@@ -103,7 +103,7 @@ def _slack_surface(*, bot_user_id: str | None) -> AgentSurfaceEntity:
         name="slack",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.SLACK,
-        account_id=None,
+        pod_connector_slug=None,
         external_workspace_id="T1",
         config=SurfaceConfig(channels=[SurfaceChannelRoute(channel_id="C1")]),
         is_active=True,

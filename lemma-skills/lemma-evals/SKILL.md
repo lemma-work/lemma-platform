@@ -199,7 +199,8 @@ Exercise authorization as a first-class contract, not only as failure debugging:
   and `DELEGATION_EXCEEDS_INVOKER` (the workload *is* granted it and the person it
   acts for is not). Assert the exact code; a suite that accepts "denied" cannot
   tell a correct boundary from a misconfigured one;
-- confirm connector calls use the intended user-owned or explicitly pinned account;
+- confirm connector calls run as the account their pod connector's mode implies:
+  the invoking member's own (PER_MEMBER) or the owner-shared one (SHARED);
 - confirm called functions and agents use their own grants rather than inheriting
   the parent workload's grants.
 

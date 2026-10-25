@@ -251,7 +251,9 @@ async def test_a_chat_platform_is_never_asked_to_authenticate() -> None:
     resolving — the bypass below, asserted as correct behaviour.
     """
     known = uuid4()
-    resolved = await _service(known).resolve(event=_event(None, platform="SLACK"))
+    # Teams rather than Slack: a cached Slack answer also needs Slack's proof
+    # (``slack_cached_identity``), a question with no database to answer it.
+    resolved = await _service(known).resolve(event=_event(None, platform="TEAMS"))
     assert resolved.internal_user_id == known
 
 

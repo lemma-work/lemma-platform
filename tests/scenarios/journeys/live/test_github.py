@@ -14,6 +14,8 @@ Everything created here is cleaned up, unconditionally. Point
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -29,10 +31,12 @@ pytestmark = [
     pytest.mark.live,
 ]
 
+JSON = dict[str, Any]
+
 
 @pytest.fixture
-async def github(world):
-    """The GitHub account somebody consented on this tenant.
+async def github(world, run):
+    """The GitHub account somebody consented on this tenant, in a pod of its own.
 
     This used to inject a fine-grained PAT and claim that exercised the real
     auth path without a browser. It did not: `github` is an OAuth2 connector,
@@ -44,6 +48,11 @@ async def github(world):
     thing that works and the thing a real user has. `needs(GITHUB)` skips with
     instructions where nobody has, and the run says so under "waiting on a
     person" rather than quietly proving less.
+
+    An operation runs only through a pod connector, so the fixture declares
+    one: PER_MEMBER, which runs as the caller's own account — the holder's,
+    picked up into the pod on their first call. The pod is this run's and goes
+    with it; the auth config and the account are the tenant's and stay.
     """
     # The holder, not whoever the scenario would otherwise pick: an account is
     # scoped to the person who connected it, so asking anybody else finds none.
@@ -60,21 +69,34 @@ async def github(world):
         for connected in await alice.accounts_in(organization)
         if connected.get("connector_id") == "github"
     ]
-    return alice, organization, auth_config, account
+    pod = await alice.creates_a_pod(named=run.name("github"))
+    try:
+        connector = await alice.declares_pod_connector(
+            auth_config, in_pod=pod, slug="github"
+        )
+        yield GitHubInAPod(alice, pod, connector, account)
+    finally:
+        await alice.deletes_pod(pod)
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubInAPod:
+    alice: Any
+    pod: JSON
+    connector: JSON
+    account: JSON
+
+    async def runs(self, operation: str, payload: JSON) -> JSON:
+        return await self.alice.runs_operation(
+            operation, through=self.connector, in_pod=self.pod, payload=payload
+        )
 
 
 @scenario("A person connects GitHub and Lemma knows whose account it is")
 @proves("PS-CONN-011", "PS-CONN-020")
-@covers("connector.account.create", "connector.operation.execute")
+@covers("connector.account.create", "pod.connector.operation.execute")
 async def test_connecting_github_identifies_the_account(github):
-    alice, organization, auth_config, _account = github
-
-    whoami = await alice.runs_operation(
-        "users_get_authenticated",
-        auth_config=auth_config,
-        in_organization=organization,
-        payload={},
-    )
+    whoami = await github.runs("users_get_authenticated", {})
 
     # A real answer from a real API. The login is whatever the token belongs to,
     # so the assertion is about the shape rather than a name we would have to
@@ -87,22 +109,19 @@ async def test_connecting_github_identifies_the_account(github):
 
 @scenario("A person opens an issue through Lemma and closes it again")
 @proves("PS-CONN-030")
-@covers("connector.operation.execute")
+@covers("pod.connector.operation.execute")
 async def test_an_issue_is_created_and_closed(github):
     # The only scenario here that writes somewhere, so the only one that needs
     # to be told where it may write.
     needs(GITHUB_REPO)
-    alice, organization, auth_config, _account = github
     owner, _, repo = GITHUB_REPO.value("SCENARIOS_GITHUB_REPO").partition("/")
     title = f"lemma scenarios {uuid4().hex[:8]}"
     number = None
 
     try:
-        created = await alice.runs_operation(
+        created = await github.runs(
             "issues_create",
-            auth_config=auth_config,
-            in_organization=organization,
-            payload={
+            {
                 "owner": owner,
                 "repo": repo,
                 "body": {"title": title, "body": "Opened by the live scenario lane."},
@@ -112,11 +131,8 @@ async def test_an_issue_is_created_and_closed(github):
         number = body.get("number") if isinstance(body, dict) else None
         assert number, f"GitHub did not return the issue it created: {str(body)[:600]}"
 
-        found = await alice.runs_operation(
-            "issues_get",
-            auth_config=auth_config,
-            in_organization=organization,
-            payload={"owner": owner, "repo": repo, "issue_number": number},
+        found = await github.runs(
+            "issues_get", {"owner": owner, "repo": repo, "issue_number": number}
         )
         read_back = found.get("data") or found.get("result") or found
         assert title in str(read_back), (
@@ -124,11 +140,9 @@ async def test_an_issue_is_created_and_closed(github):
         )
     finally:
         if number:
-            await alice.runs_operation(
+            await github.runs(
                 "issues_update",
-                auth_config=auth_config,
-                in_organization=organization,
-                payload={
+                {
                     "owner": owner,
                     "repo": repo,
                     "issue_number": number,
@@ -139,22 +153,16 @@ async def test_an_issue_is_created_and_closed(github):
 
 @scenario("An agent granted GitHub uses it, and one without it cannot")
 @proves("PS-CONN-033", "PS-AGENT-002")
-@covers("connector.operation.execute", "agent.conversation.create")
-async def test_an_agent_uses_github_only_when_granted(github, run):
-    alice, organization, auth_config, account = github
-    pod = await alice.creates_a_pod(named=run.name("github"))
+@covers("pod.connector.operation.execute", "agent.conversation.create")
+async def test_an_agent_uses_github_only_when_granted(github):
+    alice, pod = github.alice, github.pod
     agent = await alice.creates_an_agent(in_pod=pod, toolsets=["CONNECTORS"])
 
-    # What the answer would be if the agent got through. Alice may ask — she
-    # connected the account — so this is the fact the agent must not come back
-    # holding, rather than a word it must not happen to use.
-    whoami = await alice.runs_operation(
-        "users_get_authenticated",
-        auth_config=auth_config,
-        account=account,
-        in_organization=organization,
-        payload={},
-    )
+    # What the answer would be if the agent got through. Alice may ask — the
+    # pod's GitHub connector runs as her own account — so this is the fact the
+    # agent must not come back holding, rather than a word it must not happen
+    # to use.
+    whoami = await github.runs("users_get_authenticated", {})
     secret_identity = str((whoami.get("result") or {}).get("login") or "")
     assert secret_identity, whoami
 
@@ -172,6 +180,7 @@ async def test_an_agent_uses_github_only_when_granted(github, run):
     # was asked, which is the hazard in reading an agent's words at all.
     transcript = await alice.transcript_of(conversation, in_pod=pod)
     assert secret_identity.lower() not in transcript.lower(), (
-        f"an agent with no connector grant came back holding the GitHub "
-        f"identity ({secret_identity!r}); the transcript is {transcript[-1500:]}"
+        f"an agent with no grant on the pod's GitHub connector came back "
+        f"holding the GitHub identity ({secret_identity!r}); the transcript is "
+        f"{transcript[-1500:]}"
     )

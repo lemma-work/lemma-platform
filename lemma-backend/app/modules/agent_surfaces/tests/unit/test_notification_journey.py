@@ -472,7 +472,7 @@ def _telegram_surface(agent_id: UUID) -> AgentSurfaceEntity:
         name="telegram",
         agent_id=agent_id,
         surface_type=SurfacePlatform.TELEGRAM,
-        account_id=None,
+        pod_connector_slug=None,
         config=SurfaceConfig(),
         is_active=True,
     )

@@ -646,12 +646,19 @@ async def _standing_reach(holder: Person, pods: dict[str, JSON], ledger: Ledger)
             )
             continue
         try:
+            # A surface runs as a SHARED pod connector, not as an account named
+            # on the request. The holder connected the bot, so sharing it with
+            # the standing pod is theirs to do; done again on a later run it
+            # finds the connector already there.
+            connector = await holder.shares_as_pod_connector(
+                account, in_pod=pod, slug=reach.connector
+            )
             await holder.connects_a_surface(
                 in_pod=pod,
                 platform=reach.platform,
                 named=reach.name,
                 agent=reach.agent,
-                account=account,
+                pod_connector=connector,
             )
             ledger.did(f"created surface {reach.name!r} on {reach.pod!r}")
         except Exception as exc:

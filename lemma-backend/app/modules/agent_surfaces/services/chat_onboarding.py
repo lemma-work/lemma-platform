@@ -28,6 +28,7 @@ from app.modules.agent_surfaces.services.onboarding_outcomes import (
     OnboardingOutcomes,
 )
 from app.modules.agent_surfaces.services.onboarding_replies import (
+    VERIFIED_HERE,
     initial_prompt_for,
     ready_message,
     room_notice,
@@ -336,9 +337,14 @@ class ChatOnboardingCoordinator:
     ) -> None:
         from app.modules.agent_surfaces.services.onboarding_workspace import (
             WorkspaceChoiceAsked,
+            bind_on_its_own_number,
             complete_onboarding_workspace,
         )
 
+        if transport.on_its_own_number:
+            await bind_on_its_own_number(self._uows, transport, state)
+            await self._reply(transport, destination, VERIFIED_HERE)
+            return
         try:
             outcome = await complete_onboarding_workspace(self._uows, transport, state)
         except WorkspaceChoiceAsked as parked:

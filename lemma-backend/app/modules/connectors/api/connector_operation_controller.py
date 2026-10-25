@@ -5,6 +5,8 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request
 
 from app.core.api.dependencies import CurrentUser
+from app.core.app_pin import app_pod_for
+from app.core.api.deprecation import deprecated_route
 from app.modules.connectors.api.dependencies import (
     ConnectorOperationServiceDep,
     ConnectorOperationUseCasesDep,
@@ -14,8 +16,12 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationDetailsBatchRequest,
     OperationDetailsBatchResponse,
     OperationDiscoverResponse,
-    OperationExecutionRequest,
     OperationExecutionResponse,
+    InstallationOperationExecutionRequest,
+)
+from app.modules.connectors.contracts.deprecations import (
+    ACCOUNT_ADDRESSING_SUNSET,
+    EXECUTE_REPLACEMENT,
 )
 
 router = APIRouter(
@@ -132,30 +138,41 @@ async def get_operation_details(
 @router.post(
     "/{operation_name}/execute",
     response_model=OperationExecutionResponse,
-    operation_id="connector.operation.execute",
-    summary="Execute Connector Operation",
+    summary="Execute Connector Operation (deprecated)",
+    description=(
+        "Deprecated: use `pod.connector.operation.execute`. Still served, "
+        "through the connectors the caller's pod declares for this "
+        "installation; a person outside any pod uses their own account."
+    ),
+    **deprecated_route(
+        operation_id="connector.operation.execute",
+        replacement=EXECUTE_REPLACEMENT,
+        sunset=ACCOUNT_ADDRESSING_SUNSET,
+    ),
 )
 async def execute_operation(
     organization_id: UUID,
     auth_config_name: str,
     operation_name: str,
-    body: OperationExecutionRequest,
+    body: InstallationOperationExecutionRequest,
     request: Request,
     user: CurrentUser,
     use_cases: ConnectorOperationUseCasesDep,
 ) -> OperationExecutionResponse:
-    # No request-scoped service/context dependency: the use-case authorizes +
-    # resolves inside a short DB scope and runs the (1-45s) external operation
-    # call with no pooled connection held. Authorization is preserved -- the
-    # org/delegation Context is built in-scope and threaded as the actor.
-    account_id = UUID(body.account_id) if body.account_id else None
-    return await use_cases.execute_operation_for_auth_config(
+    # No request-scoped service or context: the use case authorizes and
+    # resolves in a short scope and makes the external call holding no pooled
+    # connection, the same saga as the pod route.
+    #
+    # The pod comes from the body, which the app pin's path check cannot see:
+    # an app's page runs in its own pod, whether it names it or not.
+    pod_id = app_pod_for(request, body.pod_id)
+    return await use_cases.execute_installation_operation(
         organization_id=organization_id,
         auth_config_name=auth_config_name,
         operation_name=operation_name,
         payload=body.payload,
+        account_id=UUID(body.account_id) if body.account_id else None,
+        pod_id=pod_id,
         user_id=user.id,
         request=request,
-        account_id=account_id,
-        pod_id=body.pod_id,
     )

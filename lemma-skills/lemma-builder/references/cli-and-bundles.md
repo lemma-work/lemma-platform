@@ -46,6 +46,7 @@ Scripting conventions:
 ```text
 my-pod/
   pod.json
+  connectors/<slug>/<slug>.json   # a pod connector: catalog connector + mode, never an account
   tables/<TableName>/<TableName>.json
   functions/<name>/<name>.json    # includes permissions.grants (exported automatically)
   functions/<name>/code.py
@@ -73,7 +74,7 @@ Rules:
   - `"instruction": {"$file": "instruction.md"}`
   - `"config": {"$json_file": "config.json"}` — parsed as JSON
 - `visibility` (`PERSONAL|POD|RESTRICTED|PUBLIC`, default `POD`) is a first-class field on tables/functions/agents/workflows/schedules and round-trips through export/import.
-- `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 3, "variables": {...}}`.
+- `pod.json` is metadata plus the portability variables: `{"name": ..., "description": ..., "icon_url": ..., "format_version": 3, "variables": {...}}`; `4` when the bundle declares a pod connector under `connectors/`, which readers of 3 would skip. A bundle of a newer format than your CLI reads is refused up front: update the CLI.
 - `payloads/` and `README.md` are ignored by pod import, but they are part of a high-quality handoff: keep sample function/workflow inputs, account setup JSON, seed records, and the end-to-end smoke test there.
 
 ### Per-resource JSON shapes
@@ -86,7 +87,7 @@ Rules:
 // functions/score_ticket/score_ticket.json — schemas are DERIVED from code headers, never declared here.
 // permissions.grants is part of the bundle: export embeds the function's current grants,
 // import REPLACES the function's grants with this list (on both create and update).
-// Grants are NAME-based: table name, folder path, or connector app id — portable across pods.
+// Grants are NAME-based: table name, folder path, or pod connector slug — portable across pods.
 { "name": "score_ticket", "description": "Score a ticket.", "type": "API",
   "code": {"$file": "code.py"},
   "permissions": { "grants": [
@@ -112,10 +113,19 @@ Rules:
 // lowercased platform). `platform` is required; a bundle without it is rejected.
 { "name": "slack", "platform": "SLACK",
   "default_agent_name": "triage-agent",
-  "credential_mode": "CUSTOM", "account_id": "${slack_account}",
+  "credential_mode": "CUSTOM", "pod_connector": "slack-shared",
   "is_enabled": true,
   "config": { "channels": [{"channel_id": "C123", "channel_name": "support"}],
               "identity": {"allowed_domains": ["example.com"]} } }
+
+// connectors/support-inbox/support-inbox.json — the folder name is the pod connector's
+// slug, which schedules, surfaces and grants name it by. `connector` is the CATALOG id
+// (gmail, slack, github), never an installation; a SHARED one carries no account.
+// Only these keys are accepted; an id from the source org fails the import.
+{ "connector": "gmail", "mode": "SHARED",          // PER_MEMBER | SHARED
+  "required": false,                                // PER_MEMBER: members are asked to connect
+  "purpose": "The team mailbox the triage agent answers from." }
+// optional: "visibility": "RESTRICTED" (default POD)
 
 // apps/ops-app/ops-app.json
 { "name": "ops-app", "description": "...", "public_slug": "ops-app" }
@@ -169,8 +179,9 @@ demo/
   ] } }
 ```
 
-Grow it by adding a folder per new resource and re-importing. Connectors, file
-bytes, and seed records are added by CLI after import (and recorded in the README).
+Grow it by adding a folder per new resource and re-importing. File bytes and seed
+records are added by CLI after import (and recorded in the README); connected
+accounts are each member's own, connected in the pod (see *Pod connectors*).
 
 ## Import / Export Semantics
 
@@ -188,43 +199,75 @@ lemma pods export ./bundles --exclude apps
 - **Matching is by `name`** (schedules also match by id; surfaces by their own pod-unique name, which defaults to the lowercased platform — and the CLI importer keys them on the *platform*; files by path). Renaming a resource in the bundle creates a new one — it does not rename.
 - **Upsert behavior per resource:** tables → add/remove columns + update config; functions → update description/type/code **+ permissions replaced**; agents → full update except name **+ permissions replaced**; workflows → graph fully replaced; schedules → config/target update; surfaces → upserted by platform (one per platform); apps → metadata update + rebuild/redeploy if `source/` present; files → folders, then file bytes when `--with-files` was passed to *import*; table rows last, when `--with-data` was (and only into new tables).
 - **Permissions travel with the bundle.** Export always embeds each function's and agent's `permissions.grants`; import applies them with replace semantics on every upsert — the bundle is the source of truth for what a workload may access. **Present vs absent matters:** a `permissions` block (even `{"grants": []}`) replaces the grants with exactly that list, while omitting the key leaves the workload's existing grants alone. Grants apply in a deferred pass after every resource exists, so cross-references resolve.
-- **Import order is dependency order:** tables → functions → agents → workflows → schedules → surfaces → apps → file folders → file bytes → agent grants → table rows. Agent AND function grants are deliberately deferred to the end, after every resource a grant could name exists.
-- **Validation on import:** folder/JSON name match; Python syntax parse; required function headers (`#input_type_name`, `#output_type_name`, `#function_name`, plus `#config_type_name` when a config schema exists); surface `platform` must be present and one of SLACK/TEAMS/TELEGRAM/WHATSAPP/RESEND (Gmail and Outlook are connectors, not surfaces); a Vite app `source/` must build (`npm install && npm run build` → `dist/index.html`), while an HTML app (`source/index.html` with no `package.json`, or a single `html.html`) is uploaded as-is with no build. A grant that references a **table/function/agent/workflow/schedule/app/folder** the bundle neither creates nor finds in the pod is a **hard failure** (the import aborts before any writes), as is a `connector_account` grant naming an account this org can't reach.
-- **Advisories (`[yellow]advisory[/yellow]`, non-fatal):** import and `--dry-run` warn — without blocking — about grants that commonly bite: an agent/function **created with NO grants** (it has zero access and will 403 at runtime — the most common way a fresh pod arrives broken), **connector grants** being environment-specific (verify a connected account exists in the target pod), **destructive grants** (e.g. `datastore.table.delete`) giving standing authority with no runtime approval prompt, and a `SUBAGENTS` agent with no `agent` grants being able to spawn only copies of itself. `lemma pods doctor` re-checks all of these against the live pod.
+- **Import order is dependency order:** pod connectors → tables → functions → agents → workflows → schedules → surfaces → apps → file folders → file bytes → agent grants → table rows. Agent AND function grants are deliberately deferred to the end, after every resource a grant could name exists.
+- **Validation on import:** folder/JSON name match; Python syntax parse; required function headers (`#input_type_name`, `#output_type_name`, `#function_name`, plus `#config_type_name` when a config schema exists); surface `platform` must be present and one of SLACK/TEAMS/TELEGRAM/WHATSAPP/RESEND (Gmail and Outlook are connectors, not surfaces); a Vite app `source/` must build (`npm install && npm run build` → `dist/index.html`), while an HTML app (`source/index.html` with no `package.json`, or a single `html.html`) is uploaded as-is with no build. A grant that references a **table/function/agent/workflow/schedule/app/folder** the bundle neither creates nor finds in the pod is a **hard failure** (the import aborts before any writes), as is a `connector` grant naming a pod connector slug that neither the bundle's `connectors/` nor the target pod declares, and any `connector_account` grant (accounts are never part of a bundle). Grants are conferral: you may only import grants you could use yourself. The server's import plan refuses any you can't (`detail.refused` on its `AGENT_GRANTS`/`FUNCTION_GRANTS` step, and a plan warning), and applying that plan fails `403 CONFERRAL_EXCEEDS_HOLDER` before anything is written; the CLI's direct import sets them through the permissions routes, which refuse the same way.
+- **Advisories (`[yellow]advisory[/yellow]`, non-fatal):** import and `--dry-run` warn — without blocking — about grants that commonly bite: an agent/function **created with NO grants** (it has zero access and will 403 at runtime — the most common way a fresh pod arrives broken), **connector grants** (a per-member pod connector needs each member to connect their own account; a shared one needs its account shared in the target pod), **destructive grants** (e.g. `datastore.table.delete`) giving standing authority with no runtime approval prompt, and a `SUBAGENTS` agent with no `agent` grants being able to spawn only copies of itself. `lemma pods doctor` re-checks all of these against the live pod.
 - After import, verify grants landed with `lemma functions permissions get <name>` / `lemma agents permissions get <name>`, or `lemma pods doctor` for the whole pod at once.
 - **Unrecognized fields fail the import.** A key the API has no slot for (a typo, or a field that resource type doesn't accept) aborts with the offending name instead of being dropped silently. Outside a bundle the same check warns — `lemma <resource> schema` prints the accepted shape.
 
 ## Portability variables
 
-A bundle must not carry ids that mean nothing in another org, so export
+A bundle must not carry ids that mean nothing in another pod, so export
 **tokenizes** them into `${name}` placeholders and records them under
-`pod.json` → `variables`. Three things are tokenized: connector `account_id`
-(on any resource), `assignee_pod_member_id`, and an app's `public_slug`.
+`pod.json` → `variables`. Two things are tokenized: `assignee_pod_member_id`
+and an app's `public_slug`.
 
-Export **refuses** to write a bundle that still holds a literal connector account
-id, so you cannot accidentally ship one.
+Connected accounts are **not** variables. A surface or schedule names the pod
+connector it runs through by slug (`"pod_connector": "slack-shared"`), which is
+portable as it stands: the importing pod's connector decides the account. Export
+**refuses** a resource that still names an `account_id`, leaves grants on pod
+accounts out, and import **refuses** a bundle whose `pod.json` asks for an
+account variable — re-export it.
 
-Resolve them at import:
+Resolve variables at import:
 
 ```bash
-lemma pods import . --var gmail_account=<account-id>      # one at a time
+lemma pods import . --var region=eu                       # one at a time
 lemma pods import . --values ./vars.json                  # or a file
 lemma pods import . --pod-member <member-id>              # fills pod-member vars
 ```
 
 Pod-member variables default to the importing user's own membership, so a
-single-user import usually needs nothing. An **unresolved connector account
-variable is dropped** rather than failing the import — the resource lands without
-a pinned account and resolves the invoking user's own account at run time, which
-is what you want in most pods.
+single-user import usually needs nothing.
 
-So a surface bundle looks like this, not like a literal uuid:
+## Pod connectors in a bundle
 
-```jsonc
-// surfaces/slack/slack.json
-{ "name": "slack", "platform": "SLACK", "credential_mode": "CUSTOM",
-  "account_id": "${slack_account}" }
+A bundle declares the pod connectors its surfaces, schedules and grants name, in
+`connectors/<slug>/<slug>.json`: the catalog connector, the mode, `required` and
+`purpose`. Export writes every pod connector this way and never writes the
+installation it used or the account a SHARED one ran as — account and
+installation ids never leave an organization.
+
+Import declares them **first**, then everything that names their slug. For each:
+
+- **Installation.** It maps to the org's default installation of the catalog
+  connector; `--connector <slug>=<installation name or id>` picks another. With
+  none, the import stops before writing anything — unless you may manage
+  installations and pass `--create-installations`, which installs Lemma's own app
+  for it (only for connectors that need no config of the org's own).
+- **SHARED** runs as one account for everyone. `--share-account <slug>=<account
+  id>` shares one of **your own** accounts with the pod for it. Left out, it
+  imports needing an account — a warning, not a failure: somebody shares one
+  later from the pod's Connections page.
+- **PER_MEMBER + required**: members who have no account are asked to connect.
+- A slug the pod already declares for the same connector in the same mode is
+  kept as the pod has it; one declared for a different connector, or in the
+  other mode, stops the import.
+- Sharing is undone if the connector is then refused: an account you shared for
+  it goes back to how it was.
+
+```bash
+lemma pods import ./support --dry-run                      # shows connectors: created/kept
+lemma pods import ./support --share-account support-inbox=<my-account-id> \
+                            --connector crm=hubspot-eu --create-installations
 ```
+
+The web import and `POST /pods/{pod}/bundle/imports/{id}/apply` make the same
+choices: the plan's `connectors` lists each one's installations,
+`can_create_installation` and your `account_options`; the apply body's
+`connectors: {slug: {auth_config_id | create_installation, share_account_id}}`
+answers them. `NEEDS_INSTALLATION` and `CONFLICT` refuse the apply (422) until
+resolved.
 
 ## Limits And Gotchas
 
@@ -236,9 +279,9 @@ So a surface bundle looks like this, not like a literal uuid:
   single-file app comes back as `html.html` — re-importable as-is. An app deployed
   before its source was stored has only built output, and exports as `dist.zip`.
 - **File bytes and table rows travel only on request, and export and import ask differently.** On the way out you **name them**: `pods export --data-table tickets --folder /knowledge` (both repeatable). There is no flag for every table or the whole file tree — rows and bytes leave the pod only where you asked for them. On the way in it is a single switch each: `pods import --with-data --with-files`. `--with-data` seeds **new tables only**. Without any of this you get structure only, and you upload bytes with `lemma files upload` after import.
-- **Connectors are not bundle resources.** Auth configs, accounts, and connect state are org runtime state — script their setup (`lemma connectors ...`) in the pod README.
-- **Grants are name-based and portable.** `resource_name` is the table name (`tickets`), the stored folder path (a shared `/knowledge` or personal `/me/...` — there is **no** `/pod` prefix), or the connector id (`gmail`). Importing into a different pod resolves names against the target pod, so grants port cleanly as long as the named resources exist there (they do, when they're part of the same bundle). The **one exception is a pinned `connector_account` grant**, whose `resource_name` is an account id: export turns it into a `${…}` variable, and an import that doesn't supply it drops the grant with a warning (the workload falls back to the invoking user's own account). See `authorization-model.md` §4b.
-- **Surface bundles carry config, not credentials or platform state.** `account_id` is exported as a `${variable}`, not a literal id (see *Portability variables*); webhook secrets, resolved identities, setup status, and an email surface's provisioned address are server-managed and re-derived. Leave `mode`/`event_mode` out — they are derived per platform, and `event_mode` has only one value.
+- **Pod connectors are bundle resources; installations and accounts are not.** `connectors/` carries what the pod uses and how (catalog connector, mode); the org's installations, each member's accounts and connect state stay in the org they belong to. Note in the README which accounts a member has to connect.
+- **Grants are name-based and portable.** `resource_name` is the table name (`tickets`), the stored folder path (a shared `/knowledge` or personal `/me/...` — there is **no** `/pod` prefix), or the pod connector slug (`gmail`, `support-inbox`). Importing into a different pod resolves names against the target pod, so grants port cleanly as long as the named resources exist there. Grants on pod accounts are never exported: a shared account is used through a pod connector and only its owner shares it. See `authorization-model.md` §4b.
+- **Surface bundles carry config, not credentials or platform state.** `pod_connector` names the connector by slug, never an account (see *Portability variables*); webhook secrets, resolved identities, setup status, and an email surface's provisioned address are server-managed and re-derived. Leave `mode`/`event_mode` out — they are derived per platform, and `event_mode` has only one value.
 - **No transactions.** Import fails fast on the first error and leaves prior resources applied. Always `--dry-run` first.
 - App `public_slug` conflicts are auto-resolved by suffixing a pod-id fragment. The slug is also a portability variable, so you can pin it at import with `--var`.
 - System columns `created_at`, `updated_at`, and `user_id` are stripped on import — never declare them. Your primary key (`id`) is yours to declare via `primary_key_column`.

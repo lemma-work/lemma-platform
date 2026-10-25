@@ -9,6 +9,7 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.apply_import_request_connectors import ApplyImportRequestConnectors
     from ..models.apply_import_request_variables import ApplyImportRequestVariables
 
 
@@ -21,15 +22,23 @@ class ApplyImportRequest:
 
     Attributes:
         confirm_destructive (bool | Unset): Required to proceed when the plan has destructive steps. Default: False.
+        connectors (ApplyImportRequestConnectors | Unset): Choices for the plan's `connectors`, by slug: which
+            installation (default: the plan's `auth_config_id`), or to create one, and for a SHARED connector which of your
+            own accounts to share. Account ids are never in a bundle; they are chosen here, in your own org.
         variables (ApplyImportRequestVariables | Unset): Resolved values for the plan's ${var} placeholders.
     """
 
     confirm_destructive: bool | Unset = False
+    connectors: ApplyImportRequestConnectors | Unset = UNSET
     variables: ApplyImportRequestVariables | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         confirm_destructive = self.confirm_destructive
+
+        connectors: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.connectors, Unset):
+            connectors = self.connectors.to_dict()
 
         variables: dict[str, Any] | Unset = UNSET
         if not isinstance(self.variables, Unset):
@@ -40,6 +49,8 @@ class ApplyImportRequest:
         field_dict.update({})
         if confirm_destructive is not UNSET:
             field_dict["confirm_destructive"] = confirm_destructive
+        if connectors is not UNSET:
+            field_dict["connectors"] = connectors
         if variables is not UNSET:
             field_dict["variables"] = variables
 
@@ -47,10 +58,20 @@ class ApplyImportRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.apply_import_request_connectors import (
+            ApplyImportRequestConnectors,
+        )
         from ..models.apply_import_request_variables import ApplyImportRequestVariables
 
         d = dict(src_dict)
         confirm_destructive = d.pop("confirm_destructive", UNSET)
+
+        _connectors = d.pop("connectors", UNSET)
+        connectors: ApplyImportRequestConnectors | Unset
+        if isinstance(_connectors, Unset):
+            connectors = UNSET
+        else:
+            connectors = ApplyImportRequestConnectors.from_dict(_connectors)
 
         _variables = d.pop("variables", UNSET)
         variables: ApplyImportRequestVariables | Unset
@@ -61,6 +82,7 @@ class ApplyImportRequest:
 
         apply_import_request = cls(
             confirm_destructive=confirm_destructive,
+            connectors=connectors,
             variables=variables,
         )
 

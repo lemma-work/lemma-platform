@@ -38,12 +38,15 @@ from app.modules.datastore.infrastructure import pod_schema_memo
 from app.modules.datastore.infrastructure.pod_schema_catalog import (
     bootstrap_pod_schema,
 )
-from app.modules.datastore.infrastructure.query_role import POD_SCHEMA_RE
+from app.modules.datastore.infrastructure.query_role import (
+    POD_SCHEMA_RE,
+    withdraw_shared_role,
+)
 
 logger = get_logger(__name__)
 
 #: The version every pod schema is migrated to by this release.
-POD_SCHEMA_LATEST = 3
+POD_SCHEMA_LATEST = 4
 
 #: Version 1: ``reserved_chunks`` with its path, text and vector indexes.
 CHUNKS_VERSION = 1
@@ -53,6 +56,9 @@ SEARCH_FILES_VERSION = 2
 #: Version 3: the record change log (``reserved_changes``) and its durable
 #: subscribers (``reserved_change_subscribers``); see ``datastore.changes``.
 CHANGE_LOG_VERSION = 3
+#: Version 4: the query role every pod shared loses its grants on this schema;
+#: queries run as the pod's own role (``query_role``).
+POD_QUERY_ROLE_VERSION = 4
 
 VERSIONS_TABLE = "public.lemma_pod_schema_versions"
 
@@ -244,7 +250,10 @@ async def ensure_change_log(engine: AsyncEngine, schema_name: str) -> None:
         pod_schema_memo.remember_change_log(schema_name)
         return
     if not has_chunks:
-        await migrate_pod_schema(engine, schema_name, target=CHANGE_LOG_VERSION)
+        # All the way, not only to the change log: every step after the chunk
+        # rewrite is catalog-sized, so stopping short would only leave this
+        # schema for the backfill to come back to.
+        await migrate_pod_schema(engine, schema_name)
         return
     logger.info(
         "datastore.pod_schema_migrations.change_log_ahead_of_backfill.observed",
@@ -513,6 +522,7 @@ _STEPS: dict[int, _Step] = {
     CHUNKS_VERSION: _v1_chunks,
     SEARCH_FILES_VERSION: _v2_search_files,
     CHANGE_LOG_VERSION: create_change_log,
+    POD_QUERY_ROLE_VERSION: withdraw_shared_role,
 }
 if sorted(_STEPS) != list(range(1, POD_SCHEMA_LATEST + 1)):
     raise RuntimeError("pod schema steps must run 1..POD_SCHEMA_LATEST with no gap")

@@ -94,12 +94,14 @@ class SurfaceRouter:
         parsed: ParsedInboundSurfaceEvent,
         credentials: SurfaceCredentials,
         installation_id: UUID | None = None,
+        customer_held_secret: bool = False,
     ) -> ResolvedSurfaceUser:
         return await self.senders.resolve_sender(
             adapter=adapter,
             parsed=parsed,
             credentials=credentials,
             installation_id=installation_id,
+            customer_held_secret=customer_held_secret,
         )
 
     async def matches_user(

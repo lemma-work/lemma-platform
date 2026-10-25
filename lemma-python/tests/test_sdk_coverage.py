@@ -76,6 +76,11 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # Widget/app unification endpoints pending facade adoption
     "app.create_from_widget",
     "widget.embed_token",
+    # Which pods use one of your accounts, and what removing an installation
+    # would stop: views the frontend's connections pages read. A Python facade
+    # is a deliberate follow-up.
+    "connector.account.pods",
+    "connector.installation.impact",
 )
 
 

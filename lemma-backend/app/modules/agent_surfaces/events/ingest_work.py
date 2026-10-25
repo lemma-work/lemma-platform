@@ -72,6 +72,9 @@ from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repo
 from app.modules.agent_surfaces.services.message_claims import claims_owned_by
 from app.modules.agent_surfaces.services.surface_deliveries import stage_delivery
 from app.modules.agent_surfaces.services.turn_starter import PROCESSING_FAILED_REPLY
+from app.modules.connectors.contracts.pod_connectors import (
+    standing_resolutions_once,
+)
 
 logger = get_logger(__name__)
 
@@ -338,7 +341,10 @@ def make_ingest(uow_factory: UnitOfWorkFactory | None = None):
             await _replay_onboarding(ctx, payload.onboarding_pending_id, factory)
             return
         assert payload.inbound_message_id is not None
-        await _ingest_row(ctx, payload.inbound_message_id, factory)
+        # Verifying the sender, its credentials and the identity it binds to
+        # each ask what the surface's connector runs as: once per message.
+        with standing_resolutions_once():
+            await _ingest_row(ctx, payload.inbound_message_id, factory)
 
     return ingest
 

@@ -252,6 +252,14 @@ async def test_a_reply_written_in_lemma_goes_to_its_slack_thread(
         user_id=fixed_test_user["id"],
         fake_slack=fake_slack,
     )
+    # Known in the workspace already: a Slack profile email names nobody.
+    await _seed_external_user(
+        db_session,
+        platform="SLACK",
+        external_user_id=slack_payloads.SENDER_ID,
+        tenant_id=slack_payloads.TEAM_ID,
+        resolved_user_id=UUID(fixed_test_user["id"]),
+    )
     # A mention answered: the bot has a conversation in the channel.
     asked_ts = _ts()
     answer = f"Noted [{uuid4().hex[:6]}]"

@@ -402,10 +402,10 @@ test("a search with no query is not a card", () => {
 
 /* ── run_connector_operation ───────────────────────────────────────── */
 
-test("a connector call names the install and the operation", () => {
+test("a connector call names the pod connector and the operation", () => {
     const card = call(
         "run_connector_operation",
-        { auth_config: "gmail", operation: "GMAIL_SEND_EMAIL", arguments: { to: "a@b.co", body: { html: "…" } } },
+        { connector: "gmail", operation: "GMAIL_SEND_EMAIL", payload: { to: "a@b.co", body: { html: "…" } } },
         { result: { id: "m1" } },
     );
     assert.equal(card?.kind, "connector");
@@ -423,15 +423,35 @@ test("a connector call names the install and the operation", () => {
 test("a connector failure is a dictionary, not an exception", () => {
     const card = call(
         "run_connector_operation",
-        { auth_config: "outlook", operation: "OUTLOOK_SEND" },
+        { connector: "outlook", operation: "OUTLOOK_SEND" },
         { error: "invalid_arguments", message: "The arguments do not match this operation's input schema." },
     );
     assert.equal(card && card.kind === "connector" && card.failed, true);
     assert.match(card && card.kind === "connector" ? card.error : "", /input schema/);
+    assert.equal(card && card.kind === "connector" ? card.connectUrl : "x", "", "a failure with nowhere to fix it names nowhere");
+});
+
+test("a connector that needs your account carries the link to connect it", () => {
+    const card = call(
+        "run_connector_operation",
+        { connector: "github", operation: "GITHUB_LIST_ISSUES" },
+        {
+            success: false,
+            code: "CONNECTION_REQUIRED",
+            error: "Connect your github account to use 'github' in this pod.",
+            pod_connector: "github",
+            connect_url: "https://app.example.invalid/pods/p1/connections?connector=github",
+        },
+    );
+    const run = card && card.kind === "connector" ? card : null;
+    assert.equal(run?.failed, true);
+    assert.equal(run?.code, "CONNECTION_REQUIRED");
+    assert.equal(run?.connectUrl, "https://app.example.invalid/pods/p1/connections?connector=github");
+    assert.equal("account" in (run ?? {}), false, "the connector decided whose account; the card names none");
 });
 
 test("a connector call missing either name is not a card", () => {
-    assert.equal(call("run_connector_operation", { auth_config: "gmail" }), null);
+    assert.equal(call("run_connector_operation", { connector: "gmail" }), null);
 });
 
 /* ── view_image ────────────────────────────────────────────────────── */

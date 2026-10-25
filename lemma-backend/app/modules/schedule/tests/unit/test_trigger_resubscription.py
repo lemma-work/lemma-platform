@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.modules.schedule.domain.errors import (
-    ScheduleAccessDeniedError,
     ScheduleInfrastructureError,
     ScheduleValidationError,
 )
@@ -97,7 +96,7 @@ def _schedule(config: dict[str, object]) -> ScheduleEntity:
         user_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
         connector_trigger_id="github_issue_labeled",
-        account_id=uuid4(),
+        pod_connector_slug="github",
         config=config,
     )
 
@@ -213,33 +212,31 @@ async def test_other_schedule_types_are_left_alone() -> None:
 
 
 @pytest.mark.asyncio
-async def test_only_the_author_may_change_what_their_account_listens_for() -> None:
+async def test_a_new_owner_is_resubscribed_as_themselves_even_on_the_same_filter() -> (
+    None
+):
+    """Whoever takes a schedule over listens through the connector as
+    themselves: a per-member connector means *their* account from now on. The
+    old owner's subscription is dropped once the change is committed."""
     existing = _schedule({"label": "bug", "provider_trigger_id": "old"})
     writer = _Writer(ProvisionedTrigger(provider_trigger_id="new"))
     rows = _Rows(existing)
-
-    with pytest.raises(ScheduleAccessDeniedError):
-        await write_update_resubscribing(
-            existing,
-            {"config": {"label": "anything"}},
-            repository=rows,
-            writer=writer,
-            uow=_Uow(),
-            caller_id=uuid4(),
-        )
-
-    assert writer.created == [], "nothing is subscribed on the author's account"
-    assert rows.written is None
+    uow = _Uow()
+    new_owner = uuid4()
 
     await write_update_resubscribing(
         existing,
-        {"config": {"label": "urgent"}},
+        {"config": {"label": "bug"}, "user_id": new_owner},
         repository=rows,
         writer=writer,
-        uow=_Uow(),
-        caller_id=existing.user_id,
+        uow=uow,
     )
-    assert writer.created[0].config == {"label": "urgent"}
+
+    [made] = writer.created
+    assert made.user_id == new_owner
+    assert rows.written["config"] == {"label": "bug", "provider_trigger_id": "new"}
+    await uow.commit()
+    assert writer.deleted == ["old"]
 
 
 @pytest.mark.asyncio
@@ -270,7 +267,7 @@ async def test_an_mcp_schedule_cannot_stop_listening_through_its_account() -> No
         id=uuid4(),
         user_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
-        account_id=uuid4(),
+        pod_connector_slug="tracker",
         config={
             "source": "mcp",
             "event": "issue.created",

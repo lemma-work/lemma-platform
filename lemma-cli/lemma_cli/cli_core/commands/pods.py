@@ -728,8 +728,10 @@ def doctor_pod(
                 )
             if str(
                 surf.get("credential_mode") or ""
-            ).upper() == "CUSTOM" and not surf.get("account_id"):
-                warnings.append(f"surface '{plat}' is CUSTOM but has no account_id.")
+            ).upper() == "CUSTOM" and not surf.get("pod_connector"):
+                warnings.append(
+                    f"surface '{plat}' is CUSTOM but names no pod_connector."
+                )
 
         return {
             "errors": errors,
@@ -904,6 +906,17 @@ def _parse_import_variables(var: list[str], values: Path | None) -> dict[str, st
     return merged
 
 
+def _parse_slug_pairs(items: list[str], *, flag: str) -> dict[str, str]:
+    """Repeated SLUG=VALUE flags as one map."""
+    pairs: dict[str, str] = {}
+    for item in items:
+        slug, sep, value = item.partition("=")
+        if not sep or not slug.strip() or not value.strip():
+            raise typer.BadParameter(f"{flag} must be SLUG=VALUE, got: {item!r}")
+        pairs[slug.strip()] = value.strip()
+    return pairs
+
+
 @app.command("import")
 def import_pod(
     ctx: typer.Context,
@@ -953,19 +966,46 @@ def import_pod(
         help="Also apply the bundle's pod name/description/icon (off by default "
         "so importing never renames the target pod).",
     ),
+    connector: list[str] = typer.Option(
+        [],
+        "--connector",
+        help="Map a bundled connector to one of your org's installations: "
+        "SLUG=INSTALLATION (name or id). Default: the org's default "
+        "installation of its catalog connector.",
+    ),
+    share_account: list[str] = typer.Option(
+        [],
+        "--share-account",
+        help="Share one of your own accounts for a bundled SHARED connector: "
+        "SLUG=ACCOUNT_ID. Left out, it imports needing an account.",
+    ),
+    create_installations: bool = typer.Option(
+        False,
+        "--create-installations",
+        help="Install Lemma's own app for a bundled connector your org has no "
+        "installation of (needs permission to manage installations).",
+    ),
 ) -> None:
     """Import a local bundle into the pod.
 
-    Non-portable ids (workflow assignees, schedule/surface accounts) are exported
-    as ${name} variables listed under `variables` in pod.json. Resolve them with
+    Non-portable ids (workflow assignees, app slugs) are exported as ${name}
+    variables listed under `variables` in pod.json. Resolve them with
     `--var name=value` or a `--values file.json`; pod-member variables default to
-    your own membership, and any unresolved account variable simply drops its
-    field so the import still succeeds (wire the account up afterwards).
+    your own membership.
+
+    The bundle's pod connectors (`connectors/<slug>/`) are declared first. Each
+    maps to your org's default installation of its catalog connector unless
+    `--connector slug=installation` picks another; a SHARED one runs as an
+    account you share with `--share-account slug=account_id`, or imports
+    needing one. No installation at all stops the import before anything is
+    written, unless `--create-installations`.
     """
     state = state_from_ctx(ctx)
     from ...cli_app.pod_bundle import import_pod_bundle
 
     variables = _parse_import_variables(var, values)
+    connector_installations = _parse_slug_pairs(connector, flag="--connector")
+    share_accounts = _parse_slug_pairs(share_account, flag="--share-account")
 
     result = run_with_client(
         ctx,
@@ -980,6 +1020,9 @@ def import_pod(
             with_files=with_files,
             variables=variables,
             set_pod_meta=set_pod_meta,
+            connector_installations=connector_installations,
+            share_accounts=share_accounts,
+            create_installations=create_installations,
         ),
     )
     if result is not None:

@@ -59,7 +59,7 @@ def _surface(*, workspace: str = HOME, pod_id: UUID = POD) -> AgentSurfaceEntity
         surface_type=SurfacePlatform.SLACK,
         name="slack",
         agent_id=uuid4(),
-        account_id=uuid4(),
+        pod_connector_slug="slack-bot",
         external_workspace_id=workspace,
     )
 
@@ -163,25 +163,18 @@ async def test_a_bot_whose_pod_is_in_another_organization_answers_nobody_here():
 
 @pytest.fixture
 def may_look_after(monkeypatch):
-    """Who connected the bot, and who holds ``contact.read`` in the pod."""
+    """Who shared the bot's account, and who holds ``contact.read`` in the pod."""
     allowed: set[UUID] = set()
     connector = uuid4()
 
     async def holds(uow, pod_id, user_id, permission_id):
         return pod_id == POD and user_id in allowed
 
-    class _Accounts:
-        def __init__(self, uow):
-            pass
-
-        async def list_account_summaries(self, account_ids):
-            return {
-                account_id: SimpleNamespace(user_id=connector)
-                for account_id in account_ids
-            }
+    async def shared_by(uow, *, pod_id, slug, record_use=True):
+        return SimpleNamespace(owner_user_id=connector)
 
     monkeypatch.setattr(f"{_MODULE}.pod_member_holds", holds)
-    monkeypatch.setattr(f"{_MODULE}.SqlAlchemySurfaceAccountAdapter", _Accounts)
+    monkeypatch.setattr(f"{_MODULE}.resolve_standing_pod_connector", shared_by)
     return SimpleNamespace(allowed=allowed, connector=connector)
 
 

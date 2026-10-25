@@ -159,7 +159,8 @@ class TelegramManagedBotSetup(BaseModel):
     suggested_bot_username: str
     status: TelegramManagedBotSetupStatus = TelegramManagedBotSetupStatus.PENDING
     telegram_user_id: int | None = None
-    account_id: UUID | None = None
+    #: The SHARED pod connector the new bot was shared into the pod as.
+    pod_connector_slug: str | None = None
     surface_id: UUID | None = None
     bot_id: int | None = None
     bot_username: str | None = None

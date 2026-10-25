@@ -4,8 +4,9 @@ A surface meets users where they already chat — it exposes **one pod agent** o
 **Slack, Teams, Telegram, WhatsApp, or email**. A teammate DMs the bot or emails the
 agent's address, the agent answers (as a delegated pod user, with that user's grants
 and inside that user's ceiling), and the exchange becomes a pod conversation. The
-surface owns routing and behavior; platform credentials live in a **connector account**
-or in Lemma's own system credentials, never on the surface itself.
+surface owns routing and behavior; platform credentials come from a **SHARED pod
+connector** (an account its owner shared with the pod) or from Lemma's own system
+credentials, never from the surface itself.
 
 > Grounds in `pod-model.md` (surfaces are a human interface over the same data +
 > identity). The surface is often *the product* — design the agent and its grants
@@ -53,8 +54,15 @@ agent row like every other agent.
   mode.)
 - **`event_mode`** — `WEBHOOK`, and only `WEBHOOK`. Every surface now receives over a
   native webhook; the polled-mailbox mode went with Gmail/Outlook. Never set it.
-- **`credential_mode`** — `SYSTEM` (Lemma's own credentials, no account) or `CUSTOM`
-  (a connector account you connected). **Passing an `account_id` makes it `CUSTOM`.**
+- **`pod_connector`** — the slug of the **SHARED** pod connector the surface runs as.
+  A surface answers with nobody at the keyboard, so a per-member connector is refused
+  (422), and the connector must be the platform's own (a Slack surface needs a `slack`
+  connector). The account behind it is re-read on every use: when its owner withdraws
+  it, or the connector is removed, the surface stops at once and says why
+  (`CONNECTOR_NEEDS_ACCOUNT`, `POD_CONNECTOR_NOT_FOUND`, `REAUTH_REQUIRED`). Binding
+  needs the same `connector.use` and account access as running an operation through it.
+- **`credential_mode`** — `SYSTEM` (Lemma's own credentials, no connector) or `CUSTOM`
+  (your own bot). **Passing a `pod_connector` makes it `CUSTOM`.**
   Three shapes in practice:
   - **Provisioned, nothing to connect (`SYSTEM`)** — **email**. Every agent is minted a
     Resend mailbox *at creation*, `{agent}.{pod}@<RESEND_INBOUND_DOMAIN>` (pod fallback
@@ -67,11 +75,13 @@ agent row like every other agent.
   - **System bot (`SYSTEM`)** — **Telegram and WhatsApp**: create the surface with no
     account and it works once `ACTIVE`. For Telegram, `lemma surfaces telegram-setup`
     walks a *managed* bot creation and prints the link that creates it.
-  - **Custom app (`CUSTOM`, `account_id` required)** — **Slack and Teams** reject
-    creation without an `account_id`; Telegram and WhatsApp accept one if you want to
-    bring your own bot/number. Register the platform app, connect it as a connector
-    account, then finish the platform-side step: paste the webhook/redirect URL Lemma
-    gives you, and for Teams obtain tenant admin consent.
+  - **Custom app (`CUSTOM`, `pod_connector` required)** — **Slack and Teams** reject
+    creation without a `pod_connector`; Telegram and WhatsApp accept one if you want
+    to bring your own bot/number. Register the platform app, connect it as your
+    account, share it into the pod as a SHARED pod connector, then finish the
+    platform-side step: paste the webhook/redirect URL Lemma gives you, and for Teams
+    obtain tenant admin consent. A managed Telegram bot and a Slack teammate app Lemma
+    makes are shared into the pod for you by the person setting them up.
 - **`config`** — user-editable behavior:
   - `identity` — `allowed_domains` / `allowed_email_addresses`; empty means everyone.
   - `channels` — Slack/Teams allow-list of `{channel_id, channel_name}`. A route is a
@@ -140,14 +150,17 @@ The shape is: **(credentials, if the platform needs them) → surface upsert →
 platform-side setup**.
 
 ```bash
-# 1. Credentials live in a connector account — Slack/Teams only
-#    (Telegram/WhatsApp default to the system bot; email is already provisioned)
+# 1. Credentials: your own account, shared with the pod as a SHARED connector —
+#    Slack/Teams only (Telegram/WhatsApp default to the system bot; email is provisioned)
 lemma connectors auth-configs create slack --name workspace-slack
 lemma connectors connect-requests create slack --auth-config-id <auth-config-id>
 lemma connectors accounts list --app slack            # grab the <account-id>
+lemma connectors pod-share <account-id> --visibility POD     # -> <pod-account-id>
+lemma connectors pod-add support-slack <auth-config-id> --mode SHARED \
+  --shared-account <pod-account-id>
 
 # 2. Create/update the surface (one command per platform — covers create AND edits)
-lemma surfaces upsert slack --agent triage-agent --account <account-id>
+lemma surfaces upsert slack --agent triage-agent --connector support-slack
 
 # 3. Finish + inspect platform-side setup (webhook URL, admin consent, checklist)
 lemma surfaces setup slack
@@ -165,7 +178,7 @@ and handling inbound messages.
 
 ```bash
 # DM surface that only answers people from one domain
-lemma surfaces upsert slack --agent triage-agent --account <account-id> \
+lemma surfaces upsert slack --agent triage-agent --connector support-slack \
   --data '{"config": {"identity": {"allowed_domains": ["example.com"]}}}'
 
 # Email: the surface already exists, named after its agent. Find it, then configure it.
@@ -183,7 +196,7 @@ lemma surfaces available-channels slack                # list routable channels
 lemma surfaces channels slack --channel-id C123 --channel-name support
 ```
 
-First-class flags on `upsert`: `--agent/--agent-name`, `--account/--account-id`,
+First-class flags on `upsert`: `--agent/--agent-name`, `--connector/--pod-connector`,
 `--credential-mode SYSTEM|CUSTOM`, `--enabled/--disabled`, `--allowed-domain`,
 `--allowed-email`. Everything else (`config`, identity) goes in `--data`/`--file`.
 
@@ -195,7 +208,7 @@ lemma surfaces get slack
 lemma surfaces upsert slack --data '{"config": {"send_policy": {"allow_send": true}}}'
 lemma surfaces enable slack / lemma surfaces disable slack    # toggle without deleting
 lemma surfaces setup slack                                    # what's still missing?
-lemma surfaces delete slack --yes                             # frees the account for another pod
+lemma surfaces delete slack --yes                             # frees the bot for another surface
 ```
 
 ## Patterns
@@ -236,7 +249,7 @@ it one):
   "platform": "SLACK",
   "default_agent_name": "triage-agent",
   "credential_mode": "CUSTOM",
-  "account_id": "${slack_account}",
+  "pod_connector": "support-slack",
   "is_enabled": true,
   "config": {
     "channels": [{ "channel_id": "C123", "channel_name": "support" }],
@@ -248,10 +261,9 @@ it one):
 `platform` must be present and must be one of the five — a bundle without it is
 rejected rather than guessed at from the folder name. Import upserts the surface and
 resolves the agent by name. What does **not** travel and must be reconnected/re-derived
-per environment: the **connector account** itself (`account_id` exports as a
-`${variable}` you resolve at import with `--var`, or leave unresolved so the surface
-uses the invoking user's account — see `cli-and-bundles.md` → *Portability variables*),
-**webhook secrets**, **platform setup state**, the **provisioned email address**, and
+per environment: the **account** behind the pod connector (the bundle carries only the
+`pod_connector` slug; the importing pod declares that connector and an owner shares an
+account into it), **webhook secrets**, **platform setup state**, the **provisioned email address**, and
 resolved identities. After importing into a fresh environment, run
 `lemma surfaces setup <platform>`.
 
@@ -264,12 +276,15 @@ resolved identities. After importing into a fresh environment, run
 
 - **Email is RESEND only**, and `EMAIL` mode is rejected on any other platform.
   `COMPOSIO_TRIGGER` no longer exists as an `event_mode`.
-- **Account required.** SLACK and TEAMS reject creation without an `account_id`.
-  Connect the account first (`connectors.md`). TELEGRAM, WHATSAPP and RESEND do not.
+- **Connector required.** SLACK and TEAMS reject creation without a `pod_connector`.
+  Connect the account and share it into the pod first (`connectors.md`). TELEGRAM,
+  WHATSAPP and RESEND do not.
 - **One agent per surface.** Two agents on one platform means two surfaces (and, for
   Slack/Teams, two apps) — not one surface with routing rules.
-- **Account is referenced by id.** Reconnecting or rotating the account means
-  updating the surface's `account_id`.
+- **The connector is referenced by slug, the account never.** Reconnecting the same
+  account needs nothing; pointing the pod connector at another shared account (an
+  editor's `pod.connector.manage`) moves every surface on it, and rebinding one
+  surface is `upsert --connector <other-slug>`.
 - **The webhook is managed, not yours to wire.** Lemma registers and serves the inbound
   endpoint; for a custom Slack/Teams app you only ever *paste a URL it gives you*.
   Inbound still needs a publicly reachable backend, so local stacks may not receive

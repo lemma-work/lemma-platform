@@ -14,10 +14,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
-from app.modules.connectors.domain.connect_request import (
-    GRANTED_ACCOUNT_ATTRIBUTE,
-    ConnectRequestEntity,
-)
+from app.modules.connectors.domain.connect_request import ConnectRequestEntity
 
 # Long enough for a person to read a consent screen, find a password manager
 # and pass an MFA prompt; short enough that a leaked `state` is not a standing
@@ -40,10 +37,6 @@ _RETURN_TO_KEY = "return_to"
 # What another module started the request for (``start_authorization``), kept
 # after the exchange so the grant can say so.
 _PURPOSE_KEY = "purpose"
-# Recorded when the grant is stored: which account it made, and whether the
-# browser that came back carried the starter's own session.
-_GRANTED_ACCOUNT_KEY = GRANTED_ACCOUNT_ATTRIBUTE
-_BROWSER_BOUND_KEY = "browser_bound"
 #: A purpose is a short identifier another module chose, never free text.
 _PURPOSE_MAX = 64
 
@@ -218,19 +211,24 @@ def purpose_of(connect_request: ConnectRequestEntity) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def with_grant(
-    attributes: dict | None, *, account_id: object, browser_bound: bool
-) -> dict:
-    """What a spent request keeps about the grant it ended in."""
-    return {
-        **(attributes or {}),
-        _GRANTED_ACCOUNT_KEY: str(account_id),
-        _BROWSER_BOUND_KEY: browser_bound,
-    }
+# Set when the callback connected the account but could not bind the
+# installation it came back with: nobody holds it yet, and this person is not
+# its owner on GitHub (audit H4). The callback then reports PENDING_APPROVAL,
+# the state reconcile reports for the same account.
+_INSTALLATION_KEY = "installation"
+_NEEDS_ADMIN = "NEEDS_ADMIN"
 
 
-def was_browser_bound(connect_request: ConnectRequestEntity) -> bool:
-    return (connect_request.attributes or {}).get(_BROWSER_BOUND_KEY) is True
+def with_installation_needing_an_admin(
+    attributes: dict[str, object] | None,
+) -> dict[str, object]:
+    return {**(attributes or {}), _INSTALLATION_KEY: _NEEDS_ADMIN}
+
+
+def installation_needs_an_admin(connect_request: ConnectRequestEntity | None) -> bool:
+    if connect_request is None:
+        return False
+    return (connect_request.attributes or {}).get(_INSTALLATION_KEY) == _NEEDS_ADMIN
 
 
 def request_attributes(

@@ -8,7 +8,6 @@ from fastapi import APIRouter, Query
 from app.core.api.dependencies import CurrentUser
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.redaction import is_sensitive_key
-from app.core.authorization.dependencies import reject_delegated_workload
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.connector import ConnectorKind
@@ -292,7 +291,6 @@ async def get_auth_config(
         "them reinterprets every stored operation and credential, so that is a "
         "new install rather than an update."
     ),
-    dependencies=[reject_delegated_workload("update an auth config")],
 )
 async def update_auth_config(
     user: CurrentUser,
@@ -359,7 +357,6 @@ async def refresh_auth_config_operations(
 @router.delete(
     "/{auth_config_name}",
     operation_id="connector.auth_config.delete",
-    dependencies=[reject_delegated_workload("delete an auth config")],
 )
 async def delete_auth_config(
     user: CurrentUser,

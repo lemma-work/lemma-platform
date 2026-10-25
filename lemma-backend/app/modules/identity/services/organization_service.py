@@ -10,6 +10,7 @@ from app.modules.identity.domain.email_domains import work_domain_from_email
 from app.modules.identity.services.invitation_acceptance import (
     apply_accepted_invitation,
 )
+from app.modules.identity.services.pod_departure import leave_every_pod
 from app.modules.identity.services.membership_rules import (
     refuse_if_last_owner,
     refuse_reaching_over_org_member,
@@ -640,6 +641,7 @@ class OrganizationService:
         # strand an organization with no owner. See PS-ONB-041.
         await refuse_if_last_owner(self.organization_repository, member, verb="remove")
 
+        await leave_every_pod(self.pod_membership_port, member)
         deleted = await self.organization_repository.delete_member(member_id)
         if not deleted:
             raise OrganizationMemberNotFoundError()

@@ -201,6 +201,20 @@ class AgentPort(ABC):
         """
 
 
+class AgentAccessPort(Protocol):
+    """Whether a run's person may execute the agent a step names.
+
+    Not on `AgentPort`: starting the conversation is the agent module's, but
+    asking whether *this run* may is the workflow's -- the same question a
+    function step asks of ``function.execute`` before it dispatches.
+    """
+
+    async def require_execute(
+        self, *, agent_name: str, pod_id: UUID, user_id: UUID
+    ) -> None:
+        """Raise unless ``user_id`` may run ``agent_name`` in this pod, now."""
+
+
 class FunctionPort(ABC):
     """Port for interacting with the Function module.
 

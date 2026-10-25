@@ -4,23 +4,26 @@ from collections.abc import Sequence
 from functools import partial
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.api.dependencies import CurrentUser, UoWDep
-from app.core.api.pagination import parse_uuid_page_token
-from app.modules.connectors.contracts.surfaces import (
-    account,
-    require_account_owner,
+from app.core.api.deprecation import note_deprecated_use
+from app.modules.connectors.contracts.deprecations import (
+    ACCOUNT_ADDRESSING_SUNSET,
+    ACCOUNT_ID_REPLACEMENT,
 )
+from app.modules.connectors.contracts.pod_connectors import shared_connector_for
+from app.core.api.pagination import parse_uuid_page_token
 from app.modules.agent.contracts.agents import (
     agent_id_for_name,
     agent_name_for_id,
     agent_names_for_ids,
 )
+from app.modules.agent_surfaces.services.surface_connector import bound_account
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceConnectionResolverDep,
     MemberReachDep,
@@ -53,7 +56,6 @@ from app.modules.agent_surfaces.services.surface_config_input import (
     resolve_surface_config,
 )
 from app.modules.agent_surfaces.api.surface_config_resolver import (
-    require_own_account,
     require_surface_agent_action,
     surface_setup_for_reader,
 )
@@ -82,7 +84,7 @@ async def _resolve_surface_reaches(
     return await SurfaceReachResolver().resolve_many(
         surfaces,
         credential_resolver=service.credential_resolver,
-        find_account=partial(account, uow),
+        find_account=partial(bound_account, uow),
         surface_repository=service.surface_repository,
     )
 
@@ -212,6 +214,30 @@ async def list_surfaces(
     )
 
 
+async def _pod_connector_from_account(
+    request: SurfaceCreateRequest | SurfaceUpdateRequest,
+    *,
+    pod_id: UUID,
+    uow: UoWDep,
+    ctx: PodContextDep,
+    http_request: Request,
+    response: Response,
+) -> None:
+    """Translate a deprecated ``account_id`` into the SHARED connector it means."""
+    if request.account_id is None or request.pod_connector is not None:
+        return
+    request.pod_connector = await shared_connector_for(
+        uow, ctx, pod_id=pod_id, account_id=request.account_id
+    )
+    note_deprecated_use(
+        http_request,
+        response,
+        use="agent.surface.account_id",
+        replacement=ACCOUNT_ID_REPLACEMENT,
+        sunset=ACCOUNT_ADDRESSING_SUNSET,
+    )
+
+
 @router.post(
     "",
     operation_id="agent.surface.create",
@@ -224,18 +250,14 @@ async def create_surface(
     uow: UoWDep,
     ctx: PodContextDep,
     connection_resolver: SurfaceConnectionResolverDep,
+    http_request: Request,
+    response: Response,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     """Create a surface. ``name`` defaults to the lowercased platform and is the
     pod-unique handle the API addresses it by. A second surface of the same
     platform has to belong to a different agent: one agent reaches a platform in
     one place — one Slack app, one WhatsApp number, one Telegram bot."""
-    await require_own_account(
-        request.account_id,
-        user_id=user.id,
-        organization_id=ctx.organization_id,
-        assert_owner=partial(require_account_owner, uow),
-    )
     agent_name_id = (
         await agent_id_for_name(
             uow.session, pod_id=pod_id, name=request.default_agent_name
@@ -254,6 +276,14 @@ async def create_surface(
         agent_id=agent_id,
         action=Permissions.AGENT_UPDATE,
     )
+    await _pod_connector_from_account(
+        request,
+        pod_id=pod_id,
+        uow=uow,
+        ctx=ctx,
+        http_request=http_request,
+        response=response,
+    )
 
     config = await resolve_surface_config(
         uow=uow,
@@ -271,7 +301,7 @@ async def create_surface(
         name=request.name,
         config=config,
         credential_mode=request.credential_mode,
-        account_id=request.account_id,
+        pod_connector_slug=request.pod_connector,
         ctx=ctx,
         # Sent or not, which the resolved config cannot tell: "off" is also
         # what an omitted policy resolves to.
@@ -341,20 +371,16 @@ async def update_surface(
     uow: UoWDep,
     ctx: PodContextDep,
     connection_resolver: SurfaceConnectionResolverDep,
+    http_request: Request,
+    response: Response,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AgentSurfaceResponse:
     """Partially update a surface. Only fields present in the request are
     applied; the surface's platform and name are immutable.
 
-    Passing ``account_id`` rebinds the surface to a different connected account
-    — the repair when the account it runs on expires, or its owner leaves the
-    pod. It must be an account the caller owns."""
-    await require_own_account(
-        request.account_id,
-        user_id=user.id,
-        organization_id=ctx.organization_id,
-        assert_owner=partial(require_account_owner, uow),
-    )
+    Passing ``pod_connector`` rebinds the surface to a different SHARED pod
+    connector -- the repair when the account it runs as is withdrawn or
+    expires. The caller must be able to use that connector and its account."""
     update_agent_id = "default_agent_name" in request.model_fields_set
     agent_name_id = (
         await agent_id_for_name(
@@ -380,6 +406,14 @@ async def update_surface(
             agent_id=checked_agent_id,
             action=Permissions.AGENT_UPDATE,
         )
+    await _pod_connector_from_account(
+        request,
+        pod_id=pod_id,
+        uow=uow,
+        ctx=ctx,
+        http_request=http_request,
+        response=response,
+    )
     config = await merge_surface_config(
         uow=uow,
         existing=existing.config,
@@ -401,7 +435,7 @@ async def update_surface(
             if "credential_mode" in request.model_fields_set
             else None
         ),
-        account_id=request.account_id,
+        pod_connector_slug=request.pod_connector,
         is_active=(
             request.is_enabled if "is_enabled" in request.model_fields_set else None
         ),

@@ -377,7 +377,7 @@ def _whatsapp_surface() -> AgentSurfaceEntity:
         name="whatsapp",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.WHATSAPP,
-        account_id=None,
+        pod_connector_slug=None,
         config=SurfaceConfig(),
         is_active=True,
     )

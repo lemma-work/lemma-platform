@@ -1,21 +1,21 @@
 """Portable variables (pod.json manifest).
 
-Some resource fields hold ids that are only valid in the source pod/org and
-break a re-import elsewhere: a workflow's assignee_pod_member_id and a
-schedule/surface/etc account_id. On export we replace each with a ``${name}``
+Some resource fields hold ids that are only valid in the source pod and break a
+re-import elsewhere: a workflow's ``assignee_pod_member_id``, an app's
+platform-unique ``public_slug``. On export we replace each with a ``${name}``
 placeholder and record it under ``pod.json -> variables``; on import the
 placeholders are resolved (``--var``, ``--values``, or a per-type default) and
 any still-unresolved ones drop their field so the import still succeeds.
 
-An ``account_id`` reference is tokenized generically for *every* resource type
-(not a hardcoded per-type list): whatever JSON file under
-``<resource_type>/<name>/*.json`` holds an ``account_id`` key must also carry
-sibling ``connector_id``/``kind`` keys (stamped by the exporter from a real
-account lookup, never inferred from the resource's own name), so the recorded
-variable always tells the importer exactly which connector + kind it
-needs to reconnect. A resource that has an ``account_id`` but no
-``connector_id``/``connector_kind`` sibling is an exporter bug and fails the export
-immediately rather than producing a variable the importer can't resolve.
+Connected accounts are not among them. A surface or schedule names the pod
+connector it runs through by its slug (``pod_connector``), which means the same
+thing in every pod that declares it; which account that is, is the importing
+pod's connector's decision and its account owners'. So a resource that still
+names an ``account_id`` is an exporter bug and fails the export, and a grant on
+a pod account -- which decides nothing for a workload, and is never portable --
+is left out of the bundle. The pod connectors themselves travel as
+``connectors/<slug>/<slug>.json`` -- the catalog connector and the mode, never
+the installation or the shared account -- and a grant on one names its slug.
 """
 
 from __future__ import annotations
@@ -25,24 +25,23 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .apply_fields import GRANT_HOLDER_DIRS
 from .jsonc import loads_jsonc
 from .layout import POD_MEMBER_TOKEN, _read_json, _write_json
 
 _PLACEHOLDER_RE = re.compile(r"\$\{[A-Za-z0-9_]+\}")
 # Fields whose values are non-portable ids, by variable type.
 _MEMBER_REF_FIELDS = frozenset({"assignee_pod_member_id"})
+# A key no exported resource may carry: an org account is never portable.
 _ACCOUNT_REF_FIELDS = frozenset({"account_id"})
-# A grant on a pinned connector account is the one place an account id lives
-# under a *different* key: grants are name-addressed, and an account has no
-# human name, so its "name" IS the account id (see the backend's
-# resource_names.py). Tokenizing only `account_id` therefore leaked a source-org
-# id into every exported bundle that used fixed-account mode, and the import
-# then failed its whole permissions pass on an id the target org has never seen.
-_GRANT_ACCOUNT_RESOURCE_TYPES = frozenset({"connector_account"})
-# Export-only metadata the exporter stamps beside a tokenized grant so the
-# variable can record which connector + kind the importer must reconnect. Import
-# strips these before the grant reaches the API.
-GRANT_METADATA_KEYS = frozenset({"connector_id", "connector_kind", "provider"})
+# A bundled pod connector names its catalog connector and nothing of the org it
+# came from: neither the installation it was mapped to nor the account a SHARED
+# one ran as. Both are the importer's choice in their own org.
+_CONNECTOR_ORG_REF_FIELDS = _ACCOUNT_REF_FIELDS | frozenset(
+    {"auth_config_id", "shared_pod_account_id", "pod_account_id", "shared_account"}
+)
+# Grants on these resource types are never exported (see the module docstring).
+_UNPORTABLE_GRANT_RESOURCE_TYPES = frozenset({"connector_account"})
 # An app's public slug is unique platform-wide, so it cannot be reused verbatim in
 # another pod; tokenize it into a variable (with the original as the default) that
 # the importer can override, and the applier makes unique on collision.
@@ -67,7 +66,7 @@ def _tokenize_ref_fields(node: object, field_keys: frozenset[str], on_value) -> 
     """Recursively replace string values stored under ``field_keys`` with the
     placeholder returned by ``on_value(raw, container)`` — ``container`` is the
     dict the field was found on, so a caller can read sibling metadata (e.g.
-    ``connector_id``/``connector_kind`` next to ``account_id``). Skips values already
+    the owning resource). Skips values already
     templated."""
     changed = False
     if isinstance(node, dict):
@@ -90,121 +89,69 @@ def _tokenize_ref_fields(node: object, field_keys: frozenset[str], on_value) -> 
     return changed
 
 
-def _iter_account_grants(payload: object):
-    """Yield every ``connector_account`` grant dict in a resource manifest.
+def _drop_unportable_grants(payload: object) -> bool:
+    """Remove grants on pod accounts from a resource manifest, in place.
 
     Grants live under ``permissions.grants``; a bare top-level ``grants`` list is
     also accepted, matching what the backend applier reads."""
     if not isinstance(payload, dict):
-        return
+        return False
     permissions = payload.get("permissions")
-    raw = (
-        permissions.get("grants")
-        if isinstance(permissions, dict)
-        else payload.get("grants")
-    )
-    for grant in raw or []:
-        if (
+    holder = permissions if isinstance(permissions, dict) else payload
+    grants = holder.get("grants")
+    if not isinstance(grants, list):
+        return False
+    kept = [
+        grant
+        for grant in grants
+        if not (
             isinstance(grant, dict)
-            and str(grant.get("resource_type") or "") in _GRANT_ACCOUNT_RESOURCE_TYPES
-        ):
-            yield grant
+            and str(grant.get("resource_type") or "")
+            in _UNPORTABLE_GRANT_RESOURCE_TYPES
+        )
+    ]
+    if len(kept) == len(grants):
+        return False
+    holder["grants"] = kept
+    return True
 
 
-def _tokenize_grant_account_refs(payload: object, on_value) -> bool:
-    """Replace each ``connector_account`` grant's ``resource_name`` (a raw
-    account id) with a placeholder, the way ``_tokenize_ref_fields`` does for
-    ``account_id`` keys. ``on_value(raw, grant)`` reads the grant's sibling
-    connector metadata."""
-    changed = False
-    for grant in _iter_account_grants(payload):
-        raw = grant.get("resource_name")
-        if (
-            isinstance(raw, str)
-            and raw
-            and raw != POD_MEMBER_TOKEN
-            and not _PLACEHOLDER_RE.fullmatch(raw)
-        ):
-            grant["resource_name"] = on_value(raw, grant)
-            changed = True
-    return changed
-
-
-def _contains_literal_account_ref(node: object) -> bool:
-    """True if ``node`` still holds a raw (non-``${...}``) value under an
-    account-reference key anywhere in its tree."""
+def _contains_account_ref(
+    node: object, keys: frozenset[str] = _ACCOUNT_REF_FIELDS
+) -> bool:
+    """True if ``node`` holds a value under one of ``keys`` anywhere."""
     if isinstance(node, dict):
         for key, value in node.items():
-            if (
-                key in _ACCOUNT_REF_FIELDS
-                and isinstance(value, str)
-                and value
-                and not _PLACEHOLDER_RE.fullmatch(value)
-            ):
+            if key in keys and value:
                 return True
-            if _contains_literal_account_ref(value):
+            if _contains_account_ref(value, keys):
                 return True
         return False
     if isinstance(node, list):
-        return any(_contains_literal_account_ref(item) for item in node)
+        return any(_contains_account_ref(item, keys) for item in node)
     return False
 
 
-def _contains_literal_account_grant(payload: object) -> bool:
-    """True if a ``connector_account`` grant still names a raw account id."""
-    for grant in _iter_account_grants(payload):
-        raw = grant.get("resource_name")
-        if isinstance(raw, str) and raw and not _PLACEHOLDER_RE.fullmatch(raw):
-            return True
-    return False
-
-
-def _assert_no_literal_account_ids(bundle_root: Path) -> None:
-    """Defense in depth: after tokenization, no resource file may still hold a
-    literal account id. A source-org account id is meaningless (and often
-    inaccessible) to whoever imports the bundle, so leaking one instead of a
-    ``${var}`` placeholder would silently break re-import elsewhere."""
+def _assert_no_account_ids(bundle_root: Path) -> None:
     for resource_json in sorted(bundle_root.glob("*/*/*.json")):
         data = loads_jsonc(resource_json.read_text(encoding="utf-8"))
-        if _contains_literal_account_ref(data):
+        is_connector = resource_json.parent.parent.name == "connectors"
+        if is_connector and _contains_account_ref(data, _CONNECTOR_ORG_REF_FIELDS):
             raise ValueError(
-                f"{resource_json.relative_to(bundle_root)} still holds a literal "
-                "account_id after tokenization — refusing to export a bundle "
-                "that leaks a source-org account reference."
+                f"{resource_json.relative_to(bundle_root)} names an installation "
+                "or an account. A bundled connector names its catalog connector "
+                "and mode; the importer chooses both in their own organization."
             )
-        if _contains_literal_account_grant(data):
+        if _contains_account_ref(data):
             raise ValueError(
-                f"{resource_json.relative_to(bundle_root)} still holds a "
-                "connector_account grant naming a literal account id after "
-                "tokenization — refusing to export a bundle that leaks a "
-                "source-org account reference."
-            )
-
-
-def require_account_variable_metadata(variables: dict[str, Any] | None) -> None:
-    """Raise ``ValueError`` if any declared ``type="account"`` variable is
-    missing connector/connector_kind metadata.
-
-    An up-to-date exporter always populates both (enforced by
-    :func:`_extract_portable_variables`); this is the import-side backstop that
-    catches a bundle built before that guarantee existed, or a hand-edited one,
-    at plan/import time instead of importing an account the UI/CLI can't
-    resolve to the right connector.
-    """
-    for name, meta in (variables or {}).items():
-        if str((meta or {}).get("type") or "").lower() != "account":
-            continue
-        has_kind = (meta or {}).get("connector_kind") or (meta or {}).get("provider")
-        if not (meta or {}).get("connector") or not has_kind:
-            raise ValueError(
-                f"Variable '{name}' is a connector account reference but is "
-                "missing connector/connector_kind info. Re-export this bundle to "
-                "include it."
+                f"{resource_json.relative_to(bundle_root)} names an account_id. "
+                "Bundles name the pod connector a resource runs through "
+                "(`pod_connector: <slug>`), never an organization's account."
             )
 
 
 def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
-    """Replace non-portable ids in workflows/schedules/surfaces/etc with
+    """Replace non-portable ids in workflows and apps with
     ``${name}`` placeholders and record them under ``pod.json -> variables``.
     Returns the variables map (possibly empty)."""
     pod_path = bundle_root / "pod.json"
@@ -239,57 +186,10 @@ def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
                     json.dumps(data, indent=2) + "\n", encoding="utf-8"
                 )
 
-    def _account_ref_handler(
-        owner: str,
-        raw: str,
-        node: dict[str, Any],
-        resource_type: str,
-        *,
-        where: str = "account_id",
-    ) -> str:
-        connector_id = node.get("connector_id")
-        # `kind` is what an install actually is; `provider` is the two-value
-        # vocabulary it replaced, still read here so bundles exported before
-        # the rename keep importing.
-        kind = node.get("connector_kind") or node.get("provider")
-        if not connector_id or not kind:
-            raise ValueError(
-                f"Bundle resource '{resource_type}/{owner}' has a {where} "
-                "but no connector_id/connector_kind metadata — every exported "
-                "account reference must carry its connector_id and connector_kind "
-                "so the bundle stays portable and the importer can reconnect the "
-                "right connector."
-            )
-        return register(
-            "account",
-            raw,
-            f"{owner}_account",
-            {
-                "description": f"Connector account for {resource_type} '{owner}'",
-                "connector": str(connector_id),
-                "connector_kind": str(kind),
-            },
-        )
-
-    def rewrite_grants(resource_glob: str) -> None:
-        """Tokenize the account id a pinned-account grant carries in its
-        `resource_name` — the fixed-account half of the connector model."""
+    def drop_unportable_grants(resource_glob: str) -> None:
         for resource_json in sorted(bundle_root.glob(resource_glob)):
             data = loads_jsonc(resource_json.read_text(encoding="utf-8"))
-            owner = resource_json.parent.name
-            resource_type = resource_json.parent.parent.name
-            if _tokenize_grant_account_refs(
-                data,
-                lambda raw, grant, owner=owner, resource_type=resource_type: (
-                    _account_ref_handler(
-                        owner,
-                        raw,
-                        grant,
-                        resource_type,
-                        where="connector_account grant",
-                    )
-                ),
-            ):
+            if _drop_unportable_grants(data):
                 resource_json.write_text(
                     json.dumps(data, indent=2) + "\n", encoding="utf-8"
                 )
@@ -304,13 +204,8 @@ def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
             {"description": f"Pod member assigned in workflow '{owner}'"},
         ),
     )
-    # Generic, resource-type-agnostic: covers surfaces, schedules, and any
-    # future resource type that gains an account_id, with no per-type glue.
-    rewrite("*/*/*.json", _ACCOUNT_REF_FIELDS, _account_ref_handler)
-    # Grants are the exception the generic pass can't see: the account id sits
-    # in `resource_name`, a key that means something different everywhere else.
-    for grant_glob in ("agents/*/*.json", "functions/*/*.json"):
-        rewrite_grants(grant_glob)
+    for holder in GRANT_HOLDER_DIRS:
+        drop_unportable_grants(f"{holder}/*/*.json")
     rewrite(
         "apps/*/*.json",
         _APP_SLUG_FIELDS,
@@ -332,13 +227,13 @@ def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
         pod_data["variables"] = variables
         _write_json(pod_path, pod_data)
 
-    _assert_no_literal_account_ids(bundle_root)
+    _assert_no_account_ids(bundle_root)
     return variables
 
 
 def _strip_unresolved_placeholders(node: object) -> object:
     """Drop dict entries whose value is still an unresolved ``${...}`` token so
-    a literal placeholder never reaches the API (e.g. an unsupplied account)."""
+    a literal placeholder never reaches the API (e.g. an unsupplied member)."""
     if isinstance(node, dict):
         return {
             key: _strip_unresolved_placeholders(value)

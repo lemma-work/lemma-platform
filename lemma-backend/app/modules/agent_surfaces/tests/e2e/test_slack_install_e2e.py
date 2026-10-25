@@ -44,7 +44,6 @@ from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     scalar,
 )
 from app.modules.agent_surfaces.tests.e2e.test_slack_manager_e2e import (
-    _granted,
     _manager,
     _member,
     _registry,
@@ -409,7 +408,6 @@ async def test_an_ordinary_slack_connect_adopts_nothing_and_says_nothing(
                 connector_id="slack",
                 organization_id=UUID(org_id),
                 user_id=UUID(member["id"]),
-                browser_bound=True,
                 renewed=True,
             ),
         )
@@ -483,7 +481,6 @@ async def test_two_organizations_adding_one_workspace_get_one_binding_and_one_re
             fake_slack=fake_slack,
             token=f"xoxb-{installer.lower()}",
         )
-        await _granted(db_session, account)
         return ConnectorAccountConnected(
             account_id=account.id,
             auth_config_id=account.auth_config_id,
@@ -491,7 +488,6 @@ async def test_two_organizations_adding_one_workspace_get_one_binding_and_one_re
             organization_id=organization_id,
             user_id=UUID(user_id),
             purpose=SLACK_WORKSPACE_INSTALL_PURPOSE,
-            browser_bound=True,
         )
 
     ours = await grant(

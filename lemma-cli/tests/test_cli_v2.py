@@ -167,7 +167,7 @@ def test_schedule_create_agent_cron_dispatches_schedule_api(monkeypatch):
             "workflow_name": None,
             "config": {"cron": "*/5 * * * *"},
             "instruction": None,
-            "account_id": None,
+            "pod_connector": None,
             "connector_trigger_id": None,
             "filter_instruction": None,
             "filter_output_schema": None,
@@ -699,8 +699,8 @@ def test_schedule_create_forwards_connector_trigger_from_payload(monkeypatch):
             "gmail-email-ingest",
             "--webhook-source",
             "composio",
-            "--account",
-            "account-1",
+            "--connector",
+            "gmail",
             "--data",
             payload,
         ],
@@ -715,7 +715,7 @@ def test_schedule_create_forwards_connector_trigger_from_payload(monkeypatch):
         "workflow_name": "gmail-email-ingest",
         "config": {"source": "composio", "labelIds": "INBOX"},
         "instruction": None,
-        "account_id": "account-1",
+        "pod_connector": "gmail",
         "connector_trigger_id": "gmail:gmail_new_gmail_message",
         "filter_instruction": None,
         "filter_output_schema": None,
@@ -1093,8 +1093,8 @@ def test_schedule_create_agent_webhook_forwards_connector_trigger_option(monkeyp
             "slack",
             "--connector-trigger",
             "slack:message_created",
-            "--account",
-            "account-1",
+            "--connector",
+            "slack",
         ],
     )
 
@@ -1107,7 +1107,7 @@ def test_schedule_create_agent_webhook_forwards_connector_trigger_option(monkeyp
         "workflow_name": None,
         "config": {"source": "slack"},
         "instruction": None,
-        "account_id": "account-1",
+        "pod_connector": "slack",
         "connector_trigger_id": "slack:message_created",
         "filter_instruction": None,
         "filter_output_schema": None,
@@ -1948,55 +1948,54 @@ def test_connectors_operations_get_dispatches_single_detail(monkeypatch):
     }
 
 
-def test_connectors_operations_execute_unwraps_payload_and_account(monkeypatch):
+def test_connectors_operations_execute_unwraps_payload(monkeypatch):
     captured: dict[str, object] = {}
 
-    class FakeConnectors:
-        def execute_operation(
-            self,
-            auth_config,
-            operation,
-            *,
-            organization_id,
-            payload,
-            account_id,
-        ):
-            captured["auth_config"] = auth_config
-            captured["operation"] = operation
-            captured["organization_id"] = organization_id
-            captured["payload"] = payload
-            captured["account_id"] = account_id
+    class FakePodConnectors:
+        def execute(self, connector, operation, payload):
+            captured.update(connector=connector, operation=operation, payload=payload)
             return {"ok": True}
 
-    fake_client = SimpleNamespace(connectors=FakeConnectors())
+    fake_client = SimpleNamespace(
+        connectors=SimpleNamespace(),
+        pod=lambda pod_id: SimpleNamespace(
+            pod_id=pod_id, connectors=FakePodConnectors()
+        ),
+    )
 
     def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={"_runtime": {"org": "org-1"}}))
+        return fn(
+            fake_client,
+            SimpleNamespace(
+                config={
+                    "_runtime": {
+                        "org": "org-1",
+                        "pod": "11111111-1111-1111-1111-111111111111",
+                    }
+                }
+            ),
+        )
 
     monkeypatch.setattr(connectors, "run_with_client", fake_run_with_client)
 
     result = runner.invoke(
         app,
         [
-            "--org",
-            "org-1",
             "connectors",
             "operations",
             "execute",
             "gmail",
             "messages_send",
             "--data",
-            json.dumps({"payload": {"to": "a@example.com"}, "account_id": "acct-1"}),
+            json.dumps({"payload": {"to": "a@example.com"}}),
         ],
     )
 
     assert result.exit_code == 0, result.stdout
     assert captured == {
-        "auth_config": "gmail",
+        "connector": "gmail",
         "operation": "messages_send",
-        "organization_id": "org-1",
         "payload": {"to": "a@example.com"},
-        "account_id": "acct-1",
     }
 
 
@@ -2333,8 +2332,8 @@ def test_surfaces_upsert_uses_platform_ref(monkeypatch):
             "slack",
             "--credential-mode",
             "system",
-            "--account",
-            "account-1",
+            "--connector",
+            "support-slack",
             "--agent",
             "triage",
             "--allowed-domain",
@@ -2352,7 +2351,7 @@ def test_surfaces_upsert_uses_platform_ref(monkeypatch):
         "platform": "SLACK",
         "request": {
             "default_agent_name": "triage",
-            "account_id": "account-1",
+            "pod_connector": "support-slack",
             "credential_mode": "SYSTEM",
             "config": {
                 "identity": {

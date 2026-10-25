@@ -14,10 +14,10 @@ Slack for the bot alone: the installer's own messages are not what installing
 the manager needs, and Slack names the installer (``authed_user``) without
 any user scope. When the grant comes back, connectors announces it
 (``ConnectorAccountConnected``) and ``surface.slack_workspace_installed``
-adopts the workspace -- only for that purpose, and only when the browser that
-came back carried the starter's own Lemma session (``browser_bound``): a
-consent link somebody was sent adopts nothing and links no Slack user. An
-ordinary Slack connect for tools never adopts anything.
+adopts the workspace -- only for that purpose. A consent link somebody was
+sent never gets this far: the callback refuses a browser that is not the
+starter's before anything is stored. An ordinary Slack connect for tools never
+adopts anything.
 
 Adoption is ``bind_manager``, the same binding a pod's reach sheet makes, so
 one organization holds a workspace (a second is refused, conflict-tolerant),
@@ -129,15 +129,12 @@ async def start_slack_install(
 
 
 def adopts_workspace(fact: ConnectorAccountConnected) -> bool:
-    """A grant "Add to Slack" started, finished in its starter's own browser.
+    """A grant "Add to Slack" started.
 
-    Anything else -- an ordinary Slack connect, another flow's purpose, or a
-    consent link completed by somebody else -- is not one, and is not even
-    queued."""
+    Anything else -- an ordinary Slack connect, another flow's purpose -- is
+    not one, and is not even queued."""
     return (
-        fact.connector_id == "slack"
-        and fact.purpose == SLACK_WORKSPACE_INSTALL_PURPOSE
-        and fact.browser_bound
+        fact.connector_id == "slack" and fact.purpose == SLACK_WORKSPACE_INSTALL_PURPOSE
     )
 
 
@@ -147,7 +144,7 @@ async def adopt_workspace(
     """Make Lemma's app the manager of the workspace this grant names.
 
     ``bind_manager`` checks everything again (the person's right, Lemma's own
-    app, the browser) and stages the welcome for a new binding. A refusal
+    app) and stages the welcome for a new binding. A refusal
     leaves the account an ordinary account and is said to the installer in
     Slack, once per grant."""
     if not adopts_workspace(fact):

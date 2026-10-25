@@ -50,6 +50,7 @@ from app.modules.workflow.domain.ports import (
     FormQuestionPort,
 )
 from app.modules.workflow.execution.wait_failure import fail_run_for_wait
+from app.modules.workflow.infrastructure.agent_access import AgentExecuteCheck
 from app.modules.workflow.execution.underlying_work import (
     stop_underlying_work,
     stop_underlying_work_for_wait,
@@ -96,6 +97,9 @@ class WorkflowEngine(RunPublication):
         self.wait_repo = SqlAlchemyWorkflowRunWaitRepository(uow)
 
         self.agent_adapter = agent_adapter
+        # The workflow's own question, not another module's adapter: bound
+        # here so no build of the engine can leave agent steps unchecked.
+        self.agent_access = AgentExecuteCheck(uow)
         self.function_adapter = function_adapter
         self.form_questions = form_questions
 
@@ -105,6 +109,7 @@ class WorkflowEngine(RunPublication):
             function=self.function_adapter,
             work=self.work,
             authz_ctx=ctx,
+            agent_access=self.agent_access,
         )
 
     async def _require_action(
@@ -485,7 +490,7 @@ class WorkflowEngine(RunPublication):
         if await self.wait_repo.get_active_for_run(run.id) is not None:
             raise WorkflowConflictError("Workflow run is still waiting on a step")
 
-        run.reopen_at_failed_node()
+        run.reopen_at_failed_node(by_user_id=requester_user_id)
         result = await self._stepper(ctx).advance(run, flow)
         run = await self.run_repo.update(run)
         await self._persist_wait(run, result)

@@ -15,6 +15,8 @@ external scheduler service and proves the cleanup deletes internal schedules too
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.tests.e2e.helpers import share_account_as_connector
+
 from uuid import UUID, uuid4
 
 import pytest
@@ -150,7 +152,12 @@ async def test_pod_delete_cascades_schedule_and_surface_cleanup(
     )
     slack = await authenticated_client.post(
         f"/pods/{pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(account.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, pod_id, account.id
+            ),
+        },
     )
     assert slack.status_code == 200, slack.text
 
@@ -184,6 +191,11 @@ async def test_pod_delete_cascades_schedule_and_surface_cleanup(
     )
     reused = await authenticated_client.post(
         f"/pods/{sibling_pod_id}/surfaces",
-        json={"platform": "SLACK", "account_id": str(account.id)},
+        json={
+            "platform": "SLACK",
+            "pod_connector": await share_account_as_connector(
+                authenticated_client, sibling_pod_id, account.id
+            ),
+        },
     )
     assert reused.status_code == 200, reused.text

@@ -49,7 +49,7 @@ def _row(**overrides) -> AgentSurface:
     row.event_mode = "WEBHOOK"
     row.credential_mode = "SYSTEM"
     row.config = {}
-    row.account_id = None
+    row.pod_connector_slug = None
     row.external_workspace_id = None
     row.external_tenant_id = None
     row.external_channel_id = None

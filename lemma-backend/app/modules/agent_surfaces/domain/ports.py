@@ -55,6 +55,24 @@ class SurfaceAccountPort(Protocol):
         query for a whole page of surfaces. Missing ids are simply absent."""
         ...
 
+    async def account_for_binding(
+        self, *, pod_id: UUID, slug: str, platform: SurfacePlatform, ctx: object
+    ) -> UUID:
+        """The account binding a surface to ``slug`` would run as, checked
+        (SHARED, the platform's connector, usable by ``ctx`` when given)."""
+        ...
+
+    async def bound_account_id(self, surface: AgentSurfaceEntity) -> UUID | None:
+        """The account a surface runs as now; ``None`` on system credentials."""
+        ...
+
+    async def accounts_behind_connectors(
+        self, connectors: Sequence[tuple[UUID, str]]
+    ) -> dict[tuple[UUID, str], UUID]:
+        """The account each ``(pod_id, slug)`` SHARED pod connector runs as
+        now, for a page of surfaces. One that runs as none is absent."""
+        ...
+
 
 class SurfaceConnectionOwnerInfo(BaseModel):
     """Who owns a connected account, and whether they are still in the pod.
@@ -162,12 +180,16 @@ class SurfaceInstallationRepositoryPort(Protocol):
         platforms: set[SurfacePlatform],
     ) -> list[AgentSurfaceEntity]: ...
 
-    async def get_by_platform_and_account_id(
+    async def get_bound_to_account(
         self,
-        *,
-        platform: str,
         account_id: UUID,
+        *,
+        platform: str | None = None,
         exclude_surface_id: UUID | None = None,
+    ) -> AgentSurfaceEntity | None: ...
+
+    async def get_sharing_account_with(
+        self, surface: AgentSurfaceEntity, *, platform: str | None = None
     ) -> AgentSurfaceEntity | None: ...
 
     async def get_system_credential_conflict_in_org(
@@ -187,14 +209,6 @@ class SurfaceInstallationRepositoryPort(Protocol):
         surface_identity_id: str,
         exclude_surface_id: UUID | None = None,
     ) -> PlatformIdentityHolder | None: ...
-
-    async def get_account_conflict_in_org(
-        self,
-        *,
-        pod_id: UUID,
-        account_id: UUID,
-        exclude_surface_id: UUID | None = None,
-    ) -> AgentSurfaceEntity | None: ...
 
     async def create(self, entity: AgentSurfaceEntity) -> AgentSurfaceEntity: ...
 

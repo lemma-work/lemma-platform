@@ -68,7 +68,7 @@ def routing_surfaces_double(surfaces: Sequence):
             chosen = [
                 surface
                 for surface in chosen
-                if surface.account_id is None
+                if surface.pod_connector_slug is None
                 and str(surface.credential_mode) == "SYSTEM"
             ]
         if surface_identity_id:

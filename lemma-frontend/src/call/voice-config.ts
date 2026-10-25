@@ -1,23 +1,31 @@
 import { useQuery } from "@tanstack/react-query";
+import { lemma } from "@/session/client";
 
-/** Whether this install can place a voice call.
+/** Whether this pod's server can place a voice call.
  *
  *  Asked before the button is offered, not after it is pressed: the button
  *  used to be live everywhere and answer a press with a message about a
  *  server setting the person could not see. A probe that fails says "no" —
  *  a call that cannot be checked is not one to offer. */
-export async function voiceConfigured(fetcher: typeof fetch = fetch): Promise<boolean> {
+export async function voiceConfigured(
+    podId: string,
+    config: () => Promise<{ engines?: unknown }> = () => lemma(podId).calls.config(),
+): Promise<boolean> {
     try {
-        const response = await fetcher("/api/call/config", { cache: "no-store" });
-        if (!response.ok) return false;
-        const body: unknown = await response.json();
-        return Boolean(body && typeof body === "object" && (body as { configured?: unknown }).configured === true);
+        const engines = (await config()).engines;
+        return Array.isArray(engines) && engines.length > 0;
     } catch {
         return false;
     }
 }
 
 /** `undefined` while the probe is out. */
-export function useVoiceConfigured(): boolean | undefined {
-    return useQuery({ queryKey: ["voice-configured"], queryFn: () => voiceConfigured(), staleTime: 5 * 60_000, retry: 0 }).data;
+export function useVoiceConfigured(podId: string | null): boolean | undefined {
+    return useQuery({
+        queryKey: ["voice-configured", podId],
+        queryFn: () => voiceConfigured(podId as string),
+        enabled: Boolean(podId),
+        staleTime: 5 * 60_000,
+        retry: 0,
+    }).data;
 }

@@ -178,6 +178,45 @@ async def test_get_import_expired_returns_410(authenticated_client, test_pod, wo
     assert res.json()["code"] == "POD_BUNDLE_EXPIRED"
 
 
+async def test_an_import_is_its_starters_alone(scenario, worker, tmp_path):
+    """Another editor of the pod who has the import id may not read its plan
+    -- which lists the starter's own accounts -- nor apply, re-plan or cancel
+    it with the authority it was planned with. Each is 404, and the import is
+    left for its starter."""
+    from app.modules.test_support.e2e_authz import auth_headers
+
+    await scenario.create_org_with_pod(name_prefix="Import Owner")
+    pod_id = scenario.pod_id
+    zip_bytes = _make_bundle(
+        tmp_path, tables={"leads": [{"name": "id", "type": "UUID", "required": True}]}
+    )
+    import_id = await _upload_import(scenario.owner_client, pod_id, zip_bytes)
+    planned = await _wait_for_plan(scenario.owner_client, pod_id, import_id)
+    assert planned["status"] == "AWAITING_CONFIRMATION", planned
+
+    editor = await scenario.create_user("other-editor")
+    await scenario.add_user_to_pod(user=editor, role="POD_EDITOR")
+    as_editor = auth_headers(editor)
+    base = f"/pods/{pod_id}/bundle/imports/{import_id}"
+    for method, path, body in (
+        ("GET", base, None),
+        ("POST", f"{base}/apply", {}),
+        ("POST", f"{base}/replan", None),
+        ("DELETE", base, None),
+    ):
+        res = await scenario.async_client.request(
+            method, path, json=body, headers=as_editor
+        )
+        assert res.status_code == status.HTTP_404_NOT_FOUND, (method, path, res.text)
+        assert res.json()["code"] == "POD_BUNDLE_IMPORT_NOT_FOUND"
+
+    mine = await scenario.owner_client.get(base)
+    assert mine.status_code == status.HTTP_200_OK, mine.text
+    assert mine.json()["status"] == "AWAITING_CONFIRMATION"
+    applied = await scenario.owner_client.post(f"{base}/apply", json={})
+    assert applied.status_code == status.HTTP_202_ACCEPTED, applied.text
+
+
 async def test_upload_rejects_non_zip(authenticated_client, test_pod, worker):
     pod_id = test_pod["id"]
     res = await authenticated_client.post(

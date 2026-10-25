@@ -23,6 +23,11 @@ class _Fired:
         return FireOutcome.STARTED
 
 
+async def _bound(_uow, _schedule):
+    """Every schedule's pod connector still resolves, to some account."""
+    return uuid4()
+
+
 def _null_uow_factory():
     """A unit of work that opens nothing.
 
@@ -53,6 +58,7 @@ async def test_handle_webhook_composio_success(composio_gmail_event):
         matcher_factory=lambda _uow: matcher,
         uow_factory=_null_uow_factory,
         fire=fired,
+        bound_account=_bound,
     )
 
     schedule_id = uuid4()
@@ -63,7 +69,8 @@ async def test_handle_webhook_composio_success(composio_gmail_event):
         user_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
         connector_trigger_id=composio_gmail_event["type"],
-        account_id=uuid4(),
+        pod_id=uuid4(),
+        pod_connector_slug="gmail",
         config={"provider_trigger_id": provider_id},
         is_active=True,
     )
@@ -114,6 +121,7 @@ async def test_handle_webhook_composio_v3_success():
         matcher_factory=lambda _uow: matcher,
         uow_factory=_null_uow_factory,
         fire=fired,
+        bound_account=_bound,
     )
 
     schedule_id = uuid4()
@@ -137,7 +145,8 @@ async def test_handle_webhook_composio_v3_success():
         user_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
         connector_trigger_id=payload["type"],
-        account_id=uuid4(),
+        pod_id=uuid4(),
+        pod_connector_slug="gmail",
         config={"provider_trigger_id": provider_id},
         is_active=True,
     )

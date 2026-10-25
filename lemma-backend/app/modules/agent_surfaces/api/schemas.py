@@ -38,7 +38,22 @@ class SurfaceUpdateRequest(BaseModel):
     """
 
     default_agent_name: str | None = None
-    account_id: UUID | None = None
+    pod_connector: str | None = Field(
+        default=None,
+        description=(
+            "Slug of the SHARED pod connector to run this surface as instead: "
+            "the repair when the account it runs as is withdrawn or expires. "
+            "Omit to keep the one it has."
+        ),
+    )
+    account_id: UUID | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "Deprecated: name `pod_connector` instead. Still accepted, as the "
+            "pod connector that serves this account to you."
+        ),
+    )
     credential_mode: SurfaceCredentialMode | None = None
     config: SurfaceBehaviorConfigInput = Field(
         default_factory=SurfaceBehaviorConfigInput
@@ -68,7 +83,7 @@ class TelegramManagedBotSetupResponse(BaseModel):
     launch_url: str
     manager_bot_username: str
     expires_at: str
-    account_id: UUID | None = None
+    pod_connector: str | None = None
     surface_id: UUID | None = None
     bot_username: str | None = None
     bot_launch_url: str | None = None

@@ -12,7 +12,7 @@ from app.core.infrastructure.work import WorkWriter
 from app.modules.workflow.domain.context import LoopScope, RunContextReader
 from app.modules.workflow.domain.errors import WorkflowDomainError
 from app.modules.workflow.domain.workflow import WorkflowEntity
-from app.modules.workflow.domain.ports import AgentPort, FunctionPort
+from app.modules.workflow.domain.ports import AgentAccessPort, AgentPort, FunctionPort
 from app.modules.workflow.domain.run import (
     WorkflowRunEntity,
     WorkflowRunStatus,
@@ -56,8 +56,10 @@ class RunStepper:
         work: WorkWriter,
         authz_ctx: Context | None = None,
         registry: dict[NodeType, NodeExecutor] | None = None,
+        agent_access: AgentAccessPort | None = None,
     ):
         self._agent = agent
+        self._agent_access = agent_access
         self._function = function
         self._work = work
         self._authz_ctx = authz_ctx
@@ -269,6 +271,7 @@ class RunStepper:
             function=self._function,
             work=self._work,
             authz_ctx=self._authz_ctx,
+            agent_access=self._agent_access,
         )
 
     def _log_outcome(self, run: WorkflowRunEntity) -> None:

@@ -58,7 +58,7 @@ def _surface(
         pod_id=POD,
         name="support",
         surface_type=platform,
-        account_id=uuid4() if own else None,
+        pod_connector_slug="own-bot" if own else None,
         credential_mode=SurfaceCredentialMode.SYSTEM,
         surface_identity_email="help@acme.example",
         config=config,
@@ -160,7 +160,7 @@ async def test_nobody_is_a_contact_where_the_bot_does_not_answer_contacts(
 
 def test_an_email_address_always_belongs_to_the_pod_that_receives_on_it():
     surface = _surface(platform=SurfacePlatform.RESEND, own=False)
-    surface.account_id = None
+    surface.pod_connector_slug = None
 
     assert is_pods_own_bot(surface)
 

@@ -6,6 +6,8 @@ from .account import Account
 from .connect_request import ConnectRequest
 from .connector_trigger import ConnectorTrigger
 from .mcp_event import AuthConfigEvent, ConnectorEventSubscription
+from .pod_connector import PodAccount, PodConnector
+from .connector_installation import ConnectorInstallation
 
 __all__ = [
     "Connector",
@@ -17,4 +19,7 @@ __all__ = [
     "ConnectorTrigger",
     "AuthConfigEvent",
     "ConnectorEventSubscription",
+    "PodAccount",
+    "PodConnector",
+    "ConnectorInstallation",
 ]

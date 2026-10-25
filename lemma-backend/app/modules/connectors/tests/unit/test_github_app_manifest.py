@@ -61,3 +61,10 @@ def test_it_requests_oauth_during_install():
     """This is what makes the install redirect carry `code` alongside
     `installation_id`; without it the connect flow gets no user token."""
     assert _manifest()["request_oauth_on_install"] is True
+
+
+def test_it_can_ask_whether_a_claimant_administers_an_organization():
+    """Binding an installation nobody holds needs proof the claimant is an
+    admin of the GitHub organization it is on (audit H4), and a user token
+    reads `GET /user/memberships/orgs/{org}` only with `members: read`."""
+    assert _manifest()["default_permissions"].get("members") == "read"

@@ -77,6 +77,7 @@ import { History } from "@/thread/history";
 import { AllConversations } from "@/thread/all-conversations";
 import { refreshConversationLists } from "@/thread/conversation-list";
 import { ComputerView } from "@/computer/computer-view";
+import { ConnectBanner } from "@/connect/pod-connect";
 import { FileView } from "@/thread/file-view";
 import { acknowledge, readComposeRequest, registerFrame } from "@/thread/compose-bridge";
 import { identityGenes } from "@/identity/seeded-identity";
@@ -539,10 +540,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         void openCall();
     }, [pod, openCall]);
     const endCall = useCallback(() => { closeCall(); setCallPod(null); }, [closeCall]);
-    /* Offered only once the install says it can place one. Nothing to link
-       to otherwise: calls run on the web app's own voice gateway, which no
-       settings page configures. */
-    const voiceReady = useVoiceConfigured() === true;
+    /* Offered only once the server says it can place one: a voice engine is
+       a server setting, which no settings page here configures. */
+    const voiceReady = useVoiceConfigured(pod?.id ?? null) === true;
 
     const podTabs = useQuery({
         queryKey: ["tabs", pod?.id],
@@ -1569,18 +1569,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         <CallScreen
                             teammate={callIn.teammate}
                             podId={callIn.id}
-                            conversationId={huddle.callConversationId}
                             status={huddle.status}
                             error={huddle.error}
                             muted={huddle.muted}
                             thinking={huddle.thinking}
                             level={huddle.level}
-                            resources={huddle.resources}
+                            canvas={huddle.canvas}
                             transcript={huddle.transcript}
-                            plan={huddle.plan}
                             onMute={huddle.toggleMute}
                             onEnd={endCall}
                             onCollapse={huddle.collapse}
+                            onLooking={huddle.looking}
+                            onRenderFailed={huddle.renderFailed}
                             /* Opening lands on the stage, which is behind the
                                call screen — so step back to the bar first, or
                                the tab opens somewhere nobody can see it. */
@@ -1597,7 +1597,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         error={huddle.error}
                         muted={huddle.muted}
                         thinking={huddle.thinking}
-                        plan={huddle.plan}
                         level={huddle.level}
                         onMute={huddle.toggleMute}
                         onEnd={endCall}
@@ -1815,6 +1814,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             {!preview && <WaitingInbox pods={pods.data ?? []} />}
                         </div>
 
+                        {/* Over the pod and every app in it: a connector this pod
+                            asks everyone to connect that I have not. */}
+                        {!preview && !stranger && <ConnectBanner key={pod.id} pod={pod} />}
                         <div ref={bodyRef} className={"body" + (rightTab ? " body--dual" : "") + (sheetLowered ? " body--peek" : "") + (chat.open && chatResource ? " body--chat" : "")} style={{ ["--split-position" as string]: paneWidth + "%" }}>
                             {rightTab && <PaneDivider value={paneWidth} onChange={setPaneWidth} />}
                             {/* Not over a channel: it has a box of its own, and its
@@ -2036,10 +2038,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                             {allTabs.filter((tab): tab is Extract<Tab, {kind: "workflow"}> => tab.kind === "workflow").map(tab => (
                                 <Pane className="pane run-pane" key={pod.id + tab.id} {...paneProps(tab.id)}>
                                     <div className="run-page">
-                                        <WorkflowPage pod={pod} orgId={activeOrgId} name={tab.name}
+                                        <WorkflowPage pod={pod} name={tab.name}
                                             onBack={() => pickTab("space:workflows")}
                                             onOpenRun={openRun}
-                                            onConnect={() => setSettings("connectors")}
                                             onDiscuss={(name) => {
                                                 void (async () => {
                                                     const id = await discussion.open("workflow", name);

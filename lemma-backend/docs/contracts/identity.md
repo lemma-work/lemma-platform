@@ -26,6 +26,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `org.member.remove` | DELETE | `/organizations/{organization_id}/members/{member_id}` | Remove Member |
 | `org.member.update_role` | PATCH | `/organizations/{organization_id}/members/{member_id}/role` | Update Member Role |
 | `org.navigation` | GET | `/organizations/navigation` | List Organizations And Their Pods |
+| `org.permissions.me` | GET | `/organizations/{organization_id}/permissions/me` | My Permissions In An Organization |
 | `org.slug_availability` | GET | `/organizations/slug-availability` | Check Organization Slug Availability |
 | `org.suggested` | GET | `/organizations/suggested` | Get Suggested Organizations |
 | `org.update` | PATCH | `/organizations/{organization_id}` | Update Organization |

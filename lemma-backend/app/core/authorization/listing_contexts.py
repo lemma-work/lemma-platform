@@ -32,7 +32,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.authorizer import Authorizer
-from app.core.authorization.context import ActorType, Context, PrincipalRef
+from app.core.authorization.context import Context, Person, PrincipalRef
 from app.core.authorization.role_queries import (
     ANY_POD,
     RoleRow,
@@ -115,7 +115,7 @@ async def build_listing_contexts_for_pods(
 
         frozen = frozenset(principal_refs)
         contexts[pod_id] = Context(
-            actor_type=ActorType.USER,
+            actor=Person(user_id=user_id),
             actor_id=str(user_id),
             user_id=user_id,
             organization_id=organization_id,

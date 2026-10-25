@@ -46,9 +46,6 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfacePlatformError,
     AgentSurfaceValidationError,
 )
-from app.modules.agent_surfaces.services.credential_uniqueness import (
-    ensure_unique_telegram_account,
-)
 from app.modules.agent_surfaces.services.surface_problems import (
     clear_problem,
     note_problem,
@@ -83,9 +80,9 @@ def _telegram_transition(
 ) -> _TelegramWebhookTransition:
     was_enabled = previous.is_active and telegram_requires_webhook_setup(previous)
     is_enabled = current.is_active and telegram_requires_webhook_setup(current)
-    # The account, and only the account. This also compared `event_mode`, which
-    # had one member -- so the second half of the `or` was always False.
-    binding_changed = previous.account_id != current.account_id
+    # The connector, and only the connector. This also compared `event_mode`,
+    # which had one member -- so the second half of the `or` was always False.
+    binding_changed = previous.pod_connector_slug != current.pod_connector_slug
     # A registration that never completed is retried by the next save, which
     # is how the person who was told it failed puts it right.
     never_registered = previous.status is AgentSurfaceStatus.ERROR
@@ -105,6 +102,7 @@ def _telegram_transition(
 if TYPE_CHECKING:
     from app.modules.agent_surfaces.domain.ports import (
         SurfaceAccountInfo,
+        SurfaceAccountPort,
         SurfaceInstallationRepositoryPort,
     )
 
@@ -119,14 +117,7 @@ class SurfaceTelegramWebhookMixin:
 
     surface_repository: SurfaceInstallationRepositoryPort
     _get_connected_account: Callable[[UUID], Awaitable[SurfaceAccountInfo]]
-
-    async def _ensure_unique_telegram_account(
-        self,
-        surface: AgentSurfaceEntity,
-    ) -> None:
-        await ensure_unique_telegram_account(
-            surface, surface_repository=self.surface_repository
-        )
+    _accounts: Callable[[], SurfaceAccountPort]
 
     async def _prepare_telegram_webhook(
         self,
@@ -145,11 +136,12 @@ class SurfaceTelegramWebhookMixin:
     async def _telegram_credentials(
         self, surface: AgentSurfaceEntity
     ) -> TelegramCredentials:
-        if surface.account_id is None:
+        account_id = await self._accounts().bound_account_id(surface)
+        if account_id is None:
             raise AgentSurfaceValidationError(
-                "Telegram WEBHOOK surfaces require account_id"
+                "Telegram WEBHOOK surfaces run as a pod connector"
             )
-        account = await self._get_connected_account(surface.account_id)
+        account = await self._get_connected_account(account_id)
         if account.connector_id.lower() != "telegram":
             raise AgentSurfaceValidationError(
                 "Telegram surfaces require a connected telegram account"

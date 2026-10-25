@@ -13,7 +13,17 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from app.core.authorization.context import ActorType, Context, PrincipalRef
+from app.core.authorization.context import (
+    Actor,
+    Context,
+    OtherPod,
+    Outsider,
+    OutsiderKind,
+    Person,
+    PrincipalRef,
+    Workload,
+    WorkloadKind,
+)
 from app.core.authorization.permissions import Permissions
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.search_scope import (
@@ -45,27 +55,33 @@ def _sql(expression) -> str:
     )
 
 
-def _ctx(actor_type: ActorType, **kwargs) -> Context:
+def _ctx(actor: Actor, **kwargs) -> Context:
     kwargs.setdefault("pod_id", _POD)
-    return Context(actor_type=actor_type, actor_id="t", authorizer=None, **kwargs)
+    return Context(actor=actor, actor_id="t", authorizer=None, **kwargs)
 
 
+_MEMBER_ID = uuid4()
+_INVOKER_ID = uuid4()
 _CONTEXTS = {
     "member": _ctx(
-        ActorType.USER,
-        user_id=uuid4(),
+        Person(user_id=_MEMBER_ID),
+        user_id=_MEMBER_ID,
         permission_ids=frozenset({Permissions.FOLDER_READ}),
         principal_refs=frozenset({_ROLE}),
     ),
     "delegated": _ctx(
-        ActorType.DELEGATED_USER_WORKLOAD,
-        user_id=uuid4(),
+        Workload(
+            kind=WorkloadKind.AGENT,
+            workload_id=_AGENT.id,
+            for_user_id=_INVOKER_ID,
+            principal_refs=frozenset({_AGENT}),
+        ),
+        user_id=_INVOKER_ID,
         principal_refs=frozenset({_ROLE, _AGENT}),
-        workload_principal_refs=frozenset({_AGENT}),
     ),
-    "pod": _ctx(ActorType.POD, principal_refs=frozenset({_OTHER_POD})),
-    "anonymous": _ctx(ActorType.ANONYMOUS),
-    "superuser": _ctx(ActorType.USER, is_superuser=True),
+    "pod": _ctx(OtherPod(pod_id=_OTHER_POD.id), principal_refs=frozenset({_OTHER_POD})),
+    "anonymous": _ctx(Outsider(kind=OutsiderKind.ANONYMOUS)),
+    "superuser": _ctx(Person(user_id=uuid4()), is_superuser=True),
 }
 
 
@@ -107,7 +123,11 @@ def test_which_groups_decide_grants() -> None:
     assert grant_groups(_CONTEXTS["delegated"]) == (frozenset({_AGENT}),)
     assert grant_groups(_CONTEXTS["member"]) == (frozenset({_ROLE}),)
     assert grant_groups(_CONTEXTS["pod"]) == (frozenset({_OTHER_POD}),)
-    unpinned = _ctx(ActorType.POD, pod_id=None, principal_refs=frozenset({_OTHER_POD}))
+    unpinned = _ctx(
+        OtherPod(pod_id=_OTHER_POD.id),
+        pod_id=None,
+        principal_refs=frozenset({_OTHER_POD}),
+    )
     assert grant_groups(unpinned) == ()
 
 

@@ -733,7 +733,7 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
     from sqlalchemy import text
 
     from app.modules.datastore.api.dependencies import get_schema_manager
-    from app.modules.datastore.config import datastore_settings
+    from app.modules.datastore.infrastructure.query_role import pod_query_role_name
 
     pod_id = test_pod["id"]
     created = await authenticated_client.post(
@@ -760,8 +760,8 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
         assert response.status_code == 201, response.text
 
     schema = get_schema_manager()
-    await schema.ensure_query_role()
     schema_name = schema.get_schema_name(UUID(pod_id))
+    await schema.ensure_query_role(schema_name)
 
     async def subjects(**settings: str) -> list[str]:
         async with schema.session_factory() as session:
@@ -771,7 +771,7 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
                     {"name": f"app.{name}", "value": value},
                 )
             await session.execute(
-                text(f'SET LOCAL ROLE "{datastore_settings.datastore_query_role}"')
+                text(f'SET LOCAL ROLE "{pod_query_role_name(schema_name)}"')
             )
             rows = (
                 await session.execute(

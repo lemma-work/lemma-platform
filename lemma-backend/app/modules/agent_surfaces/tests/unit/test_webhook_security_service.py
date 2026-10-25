@@ -494,7 +494,7 @@ async def test_an_org_whatsapp_account_that_cannot_be_read_is_a_warning(caplog):
             return False
 
     class _BrokenResolver:
-        async def for_account(self, account_id, *, platform):
+        async def for_surface(self, surface):
             raise ConnectionError("vault unreachable")
 
     service = SurfaceWebhookSecurityService(
@@ -507,7 +507,7 @@ async def test_an_org_whatsapp_account_that_cannot_be_read_is_a_warning(caplog):
         name="whatsapp",
         surface_type=SurfacePlatform.WHATSAPP,
         config=SurfaceConfig(type="WHATSAPP"),
-        account_id=uuid4(),
+        pod_connector_slug="whatsapp-business",
     )
 
     with caplog.at_level(logging.WARNING):
@@ -520,4 +520,4 @@ async def test_an_org_whatsapp_account_that_cannot_be_read_is_a_warning(caplog):
     )
     assert record.levelno == logging.WARNING
     assert "ConnectionError" in caplog.text
-    assert str(surface.account_id) in caplog.text
+    assert str(surface.id) in caplog.text

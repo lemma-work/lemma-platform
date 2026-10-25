@@ -48,16 +48,24 @@ name: Backend E2E
 on:
   workflow_dispatch:
   # Main warms the image and model caches and runs the unit lane; the e2e
-  # shards are gated to pull_request/dispatch. A run can only restore caches from its own
-  # branch or from the default branch, and this workflow never ran on main --
-  # so no PR could ever inherit a warm sandbox-image cache, and every branch
-  # paid a cold build. Warming it here is what makes the cache actually cache.
+  # shards are gated to pull_request/merge_group/dispatch. A run can only
+  # restore caches from its own branch or from the default branch, and this
+  # workflow never ran on main -- so no PR could ever inherit a warm
+  # sandbox-image cache, and every branch paid a cold build. Warming it here
+  # is what makes the cache actually cache.
   push:
     branches: [main]
   pull_request:
     # opened/synchronize/reopened: the direct trigger every normal PR push
     # takes. labeled: surface-live-smoke's own on-demand "surface-live" label.
     types: [opened, synchronize, reopened, labeled]
+  # The merge queue. Everything a pull request push runs -- the unit lane,
+  # every shard and the coverage floor -- runs again here, on the queued pull
+  # request merged on top of the latest main. That is also the first time this
+  # suite sees the merge: on a pull request the jobs below check out the head
+  # commit, not the merge with main.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -95,6 +103,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.ref }}
+      # On a merge group this diffs the group's own base_sha..head_sha; the
+      # note on the same step in ci.yml says why that is the right diff, and
+      # why the queue has to use ALLGREEN grouping because of it.
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -415,14 +426,20 @@ jobs:
   backend-e2e:
     name: lemma-backend e2e (${{ matrix.shard.name }})
     needs: [changes, service-images]
-    # Manual dispatch, or directly on every PR push that can affect the
-    # backend. Independent of "CI"'s outcome and of any label.
+    # Manual dispatch, directly on every PR push that can affect the backend,
+    # and in the merge queue. Independent of "CI"'s outcome and of any label.
+    #
+    # The event list is an allowlist, so `merge_group` is named rather than
+    # implied: left out, every shard would skip in the queue and "Backend E2E
+    # passed" would go green there having run none of them. The same list is
+    # repeated on `backend-e2e-sandbox` below, and has to name it there too.
     if: >-
       !cancelled() &&
       needs.service-images.result == 'success' &&
       needs.changes.outputs.backend == 'true' &&
       needs.changes.outputs.packed_shards != '[]' &&
       (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'merge_group' ||
        (github.event_name == 'pull_request' &&
         contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action)))
     runs-on: ubuntu-latest
@@ -635,6 +652,7 @@ jobs:
       needs.changes.outputs.backend == 'true' &&
       needs.changes.outputs.sandbox_shards != '[]' &&
       (github.event_name == 'workflow_dispatch' ||
+       github.event_name == 'merge_group' ||
        (github.event_name == 'pull_request' &&
         contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action)))
     runs-on: ubuntu-latest
@@ -685,7 +703,8 @@ jobs:
     # Skipped entirely on a push to main: that event exists to warm the image
     # caches (and run the unit lane), `backend-e2e` does not run there, and a required
     # check reporting green for a run that tested nothing is worse than no
-    # check at all.
+    # check at all. It does run for a merge group, which is a gate like a pull
+    # request and runs everything a pull request does.
     if: ${{ !cancelled() && github.event_name != 'push' }}
     needs: [changes, sandbox-images, service-images, backend-unit, backend-e2e, backend-e2e-sandbox]
     runs-on: ubuntu-latest
@@ -699,6 +718,27 @@ jobs:
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: |
           echo "::error::The backend unit lane or an e2e shard failed or was cancelled."
+          exit 1
+      # The step above cannot tell a suite that was correctly skipped from one
+      # whose `if:` stopped matching. In the merge queue -- the last run before
+      # main -- there is no correct reason to skip once the filter says the
+      # backend changed: no label, no event the jobs above leave out. So there
+      # a skip is a failure, not a pass. (On a pull request a `labeled` run
+      # legitimately skips everything, which is why this is not asked there.)
+      #
+      # `backend-e2e` is held to success unconditionally because the coverage
+      # floor below runs only after it does; the sandbox shards may skip only
+      # when the layout has none. With these three, the floor runs too.
+      - name: In the merge queue, every backend suite ran
+        if: >-
+          github.event_name == 'merge_group' &&
+          needs.changes.outputs.backend == 'true' &&
+          (needs.backend-unit.result != 'success' ||
+           needs.backend-e2e.result != 'success' ||
+           (needs.changes.outputs.sandbox_shards != '[]' &&
+            needs.backend-e2e-sandbox.result != 'success'))
+        run: |
+          echo "::error::The backend changed, but the unit lane or an e2e shard did not run for this merge group, so neither did the coverage floor."
           exit 1
       # Coverage is combined here rather than in a job of its own: one fewer
       # job under the 20-job cap and one fewer queue hop on the critical path.

@@ -5,9 +5,9 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 from app.core.authorization.context import (
-    ActorType,
     AuthorizationDecision,
     Context,
+    Person,
     PrincipalRef,
     ResourceRef,
     ResourceType,
@@ -67,7 +67,7 @@ def allow_all_context(
     """
     resolved_user_id = user_id or uuid4()
     return Context(
-        actor_type=ActorType.USER,
+        actor=Person(user_id=resolved_user_id),
         actor_id=str(resolved_user_id),
         user_id=resolved_user_id,
         pod_id=pod_id,
@@ -84,7 +84,7 @@ def deny_all_context(
     """A user context whose authorizer denies every action. Unit tests only."""
     resolved_user_id = user_id or uuid4()
     return Context(
-        actor_type=ActorType.USER,
+        actor=Person(user_id=resolved_user_id),
         actor_id=str(resolved_user_id),
         user_id=resolved_user_id,
         pod_id=pod_id,

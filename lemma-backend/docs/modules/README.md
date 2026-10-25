@@ -31,7 +31,7 @@ flowchart LR
 
 The canonical registration order is identity, pod, pod bundle, datastore,
 schedule, connectors, agent, function, apps, workflow, agent surfaces,
-contacts, channels, icon, usage, workspace, web login, MCP access, decisions, and analytics. Order affects router and lifespan registration, but
+contacts, channels, icon, usage, workspace, web login, MCP access, decisions, calls, and analytics. Order affects router and lifespan registration, but
 modules should communicate through explicit ports or domain events rather than
 depending on import order.
 
@@ -61,6 +61,7 @@ protocol and how a module adds a topic.
 | [contacts](contacts.md) | People a pod's bots answer who are not members, and the handles they are known by | `contacts`, `contact_identities` |
 | [channels](channels.md) | The places members, contacts and agents talk: one timeline per place, fed by outside sources | `external_accounts`, `channels`, `channel_members`, `channel_read_state`, `channel_sources`, `channel_messages`, `channel_mentions`, `channel_questions`, `channel_message_deliveries` |
 | [decisions](decisions.md) | Stateless closed-question decisions over pluggable providers | None; the per-organization rate window is a short-lived Redis counter |
+| [calls](calls.md) | Live voice calls: the socket, voice engines, the gate, relays and the call canvas | None; a call is a conversation, its slots a short-lived Redis set |
 
 ## Tables owned by core
 

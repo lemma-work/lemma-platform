@@ -53,7 +53,7 @@ def events():
 @pytest.fixture(autouse=True)
 def _fake_scopes(monkeypatch, events):
     @contextlib.asynccontextmanager
-    async def fake_current_context_scope(uow_factory, *, request, user_id):
+    async def fake_pod_context_scope(uow_factory, *, request, user_id, pod_id):
         events.append("p1_open")
         try:
             yield _FakeUowCtx(uow="uow1", ctx="ctx-actor")
@@ -68,7 +68,7 @@ def _fake_scopes(monkeypatch, events):
         finally:
             events.append("p2_close")
 
-    monkeypatch.setattr(ucmod, "current_context_scope", fake_current_context_scope)
+    monkeypatch.setattr(ucmod, "pod_context_scope", fake_pod_context_scope)
     monkeypatch.setattr(ucmod, "uow_scope", fake_uow_scope)
 
 
@@ -88,8 +88,8 @@ async def test_resolve_runs_in_phase1_and_execute_runs_after_release(events):
         def __init__(self, uow):
             self.uow = uow
 
-        async def resolve_execution_for_auth_config(self, **kwargs):
-            events.append(("resolve", self.uow, kwargs["actor"]))
+        async def resolve_pod_connector_execution(self, ctx, **kwargs):
+            events.append(("resolve", self.uow, ctx))
             return resolved_sentinel
 
         async def execute_resolved(self, resolved):
@@ -98,14 +98,13 @@ async def test_resolve_runs_in_phase1_and_execute_runs_after_release(events):
 
     uc = ConnectorOperationUseCases(uow_factory=object(), service_builder=_FakeService)
 
-    result = await uc.execute_operation_for_auth_config(
-        organization_id=uuid4(),
-        auth_config_name="outlook",
+    result = await uc.execute_pod_connector_operation(
+        pod_id=uuid4(),
+        slug="outlook",
         operation_name="OUTLOOK_CREATE_DRAFT_REPLY",
         payload={"x": 1},
         user_id=uuid4(),
         request=object(),
-        account_id=None,
     )
 
     assert result is response_sentinel
@@ -150,7 +149,7 @@ async def test_unauthorized_execution_flags_account_for_reauth(events):
             self.uow = uow
             self.connector_service = connector_service
 
-        async def resolve_execution_for_auth_config(self, **kwargs):
+        async def resolve_pod_connector_execution(self, ctx, **kwargs):
             return resolved
 
         async def execute_resolved(self, resolved):
@@ -159,19 +158,19 @@ async def test_unauthorized_execution_flags_account_for_reauth(events):
     uc = ConnectorOperationUseCases(uow_factory=object(), service_builder=_FakeService)
 
     with pytest.raises(OperationExecutionUnauthorizedError):
-        await uc.execute_operation_for_auth_config(
-            organization_id=org_id,
-            auth_config_name="airtable",
+        await uc.execute_pod_connector_operation(
+            pod_id=uuid4(),
+            slug="airtable",
             operation_name="AIRTABLE_LIST_BASES",
             payload={},
             user_id=user_id,
             request=object(),
-            account_id=account_id,
         )
 
-    # Three phase-2 scopes: the original call, the one retry after refreshing
-    # the credential, and the flagging write once that retry is rejected too.
-    assert events.count("p2_open") == 3
+    # Four bare scopes: the original call, the credential refresh (done as the
+    # account's owner, so it needs no caller context), the one retry, and the
+    # flagging write once that retry is rejected too.
+    assert events.count("p2_open") == 4
     # The refresh was attempted before giving up -- that is what makes it safe
     # to stop refreshing before every call.
     connector_service.get_account_credentials.assert_awaited()
@@ -229,7 +228,7 @@ async def test_a_provider_failure_on_the_credential_retry_still_trips_the_breake
         def __init__(self, uow):
             self.connector_service = connector_service
 
-        async def resolve_execution_for_auth_config(self, **kwargs):
+        async def resolve_pod_connector_execution(self, ctx, **kwargs):
             return resolved
 
         async def execute_resolved(self, _resolved):
@@ -242,14 +241,13 @@ async def test_a_provider_failure_on_the_credential_retry_still_trips_the_breake
     uc = ConnectorOperationUseCases(uow_factory=object(), service_builder=_FakeService)
 
     with pytest.raises(type(failure)):
-        await uc.execute_operation_for_auth_config(
-            organization_id=resolved.organization_id,
-            auth_config_name="airtable",
+        await uc.execute_pod_connector_operation(
+            pod_id=uuid4(),
+            slug="airtable",
             operation_name="AIRTABLE_LIST_BASES",
             payload={},
             user_id=resolved.account_user_id,
             request=object(),
-            account_id=resolved.account_id,
         )
 
     assert len(attempts) == 2, "the credential refresh retry ran"
@@ -292,7 +290,7 @@ async def test_a_rejected_credential_alone_never_trips_the_breaker(monkeypatch):
         def __init__(self, uow):
             self.connector_service = AsyncMock()
 
-        async def resolve_execution_for_auth_config(self, **kwargs):
+        async def resolve_pod_connector_execution(self, ctx, **kwargs):
             return resolved
 
         async def execute_resolved(self, _resolved):
@@ -301,14 +299,13 @@ async def test_a_rejected_credential_alone_never_trips_the_breaker(monkeypatch):
     uc = ConnectorOperationUseCases(uow_factory=object(), service_builder=_FakeService)
 
     with pytest.raises(OperationExecutionUnauthorizedError):
-        await uc.execute_operation_for_auth_config(
-            organization_id=resolved.organization_id,
-            auth_config_name="airtable",
+        await uc.execute_pod_connector_operation(
+            pod_id=uuid4(),
+            slug="airtable",
             operation_name="AIRTABLE_LIST_BASES",
             payload={},
             user_id=resolved.account_user_id,
             request=object(),
-            account_id=resolved.account_id,
         )
 
     assert recorded == []

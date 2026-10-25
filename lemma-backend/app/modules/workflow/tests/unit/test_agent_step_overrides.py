@@ -29,8 +29,14 @@ class _RecordingAgentPort:
         return self.conversation_id
 
 
+class _AllowsEveryAgent:
+    async def require_execute(self, **_: object) -> None:
+        return None
+
+
 def _step(agent: _RecordingAgentPort) -> SimpleNamespace:
     return SimpleNamespace(
+        agent_access=_AllowsEveryAgent(),
         context=SimpleNamespace(resolve_inputs=lambda mapping: {"ticket": 7}),
         agent=agent,
         pod_id=uuid4(),

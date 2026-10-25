@@ -57,7 +57,7 @@ def _surface(identity: str | None):
         id=uuid4(),
         surface_type=SurfacePlatform.WHATSAPP,
         surface_identity_id=identity,
-        account_id=None,
+        pod_connector_slug=None,
     )
 
 
@@ -176,7 +176,7 @@ async def test_the_platform_lookup_answers_from_the_number_the_message_arrived_o
     resolver, seen = _resolver({_POOLED: _pooled_row()})
 
     credentials = await resolver.for_platform(
-        SurfacePlatform.WHATSAPP, None, surface=None, arrived_on=_POOLED
+        SurfacePlatform.WHATSAPP, surface=None, arrived_on=_POOLED
     )
 
     assert credentials.access_token.get_secret_value() == "token-for-b"
@@ -188,7 +188,7 @@ async def test_the_platform_lookup_reads_no_pool_for_another_platform():
     resolver, seen = _resolver({_POOLED: _pooled_row()})
 
     await resolver.for_platform(
-        SurfacePlatform.TELEGRAM, None, surface=None, arrived_on=_POOLED
+        SurfacePlatform.TELEGRAM, surface=None, arrived_on=_POOLED
     )
 
     assert seen == []

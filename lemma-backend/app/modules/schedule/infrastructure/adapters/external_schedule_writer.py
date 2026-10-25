@@ -6,6 +6,13 @@ which declared defaults survive is a schedule policy. What it needed from
 `connectors` -- a trigger bound to an account, and the two calls that create and
 drop a remote subscription -- is four operations on `connectors/contracts/triggers`.
 
+A schedule names a pod connector, never an account. The account a subscription
+is made on is what that connector resolves to *now*, for the schedule's owner
+(`resolve_standing_pod_connector`): the owner's own for a per-member connector,
+the shared one for a shared connector. The pod connector's typed refusals
+(CONNECTION_REQUIRED, CONNECTOR_NEEDS_ACCOUNT, ...) pass through untranslated:
+they name their own remedy, which a schedule error would lose.
+
 The connector errors are translated rather than allowed through. A caller
 creating a schedule gets told what is wrong with *its* schedule; a
 `CONNECTOR_VALIDATION_ERROR` surfacing from a `POST /schedules` says the fault
@@ -32,6 +39,7 @@ from app.modules.connectors.contracts.mcp_events import (
     subscribe_to_mcp_event,
     unsubscribe_from_mcp_event,
 )
+from app.modules.connectors.contracts.pod_connectors import PodConnectorAccount
 from app.modules.schedule.domain.errors import (
     ScheduleInfrastructureError,
     ScheduleValidationError,
@@ -42,6 +50,7 @@ from app.modules.schedule.domain.interfaces import (
     ScheduleConfig,
 )
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
+from app.modules.schedule.services.schedule_connector_policy import resolve_as_owner
 
 #: The three connector operations this adapter drives, as injectable seams.
 #: Named so a test can stand a binding up without a database, rather than
@@ -52,6 +61,10 @@ TriggerUnsubscriber = Callable[..., Awaitable[None]]
 #: Which organization owns a pod, read in a session of its own: provisioning
 #: runs with the request's connection handed back.
 PodOrganization = Callable[[UUID], Awaitable[UUID | None]]
+#: The account a schedule's pod connector means right now, for its owner.
+ConnectorResolver = Callable[
+    [SqlAlchemyUnitOfWork, ScheduleEntity], Awaitable[PodConnectorAccount]
+]
 
 
 async def _pod_organization(pod_id: UUID) -> UUID | None:
@@ -130,8 +143,10 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         listen_to_mcp: TriggerSubscriber = subscribe_to_mcp_event,
         stop_listening_to_mcp: TriggerUnsubscriber = unsubscribe_from_mcp_event,
         pod_organization: PodOrganization = _pod_organization,
+        resolve_connector: ConnectorResolver = resolve_as_owner,
     ) -> None:
         self.uow = uow
+        self._resolve_connector = resolve_connector
         self._resolve_binding = resolve_binding
         self._subscribe = subscribe
         self._unsubscribe = unsubscribe
@@ -145,14 +160,15 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         A schedule with no connector trigger is routed by whatever its author
         put in `config`, and there is nothing to provision on anyone's behalf.
         """
-        if not schedule.connector_trigger_id or not schedule.account_id:
+        if not schedule.connector_trigger_id or not schedule.pod_connector_slug:
             return None
+        resolved = await self._resolve_connector(self.uow, schedule)
         try:
             return await self._resolve_binding(
                 self.uow,
                 trigger_id=schedule.connector_trigger_id,
-                account_id=schedule.account_id,
-                user_id=schedule.user_id,
+                account_id=resolved.account_id,
+                user_id=resolved.owner_user_id,
             )
         except (ConnectorValidationError, ConnectorTriggerNotFoundError) as exc:
             raise ScheduleValidationError(str(exc)) from exc
@@ -192,9 +208,11 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         if schedule.listens_to_mcp:
             await self._stop_listening_to_mcp(str(provider_id))
             return
-        binding = await self._binding(schedule)
-        if binding is None or not binding.subscribable:
-            return
+        # Only a remote subscription ever stored a provider id -- a local
+        # routing key is written under its own keys -- and dropping one needs
+        # nothing but its id. Resolving the connector first would leave the
+        # subscription running at the provider whenever the connector no
+        # longer resolves, which is exactly when it most needs to stop.
         try:
             await self._unsubscribe(str(provider_id))
         except ConnectorInfrastructureError as exc:
@@ -203,7 +221,8 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
     async def _provision_mcp_event(
         self, schedule: ScheduleEntity
     ) -> ProvisionedTrigger:
-        """Subscribe on the author's account to the event the config names.
+        """Subscribe, on the account the schedule's pod connector resolves to,
+        to the event the config names.
 
         Our subscription id is the routing key its deliveries carry, stored
         where a Composio trigger keeps its own, so the edit and delete paths
@@ -222,10 +241,11 @@ class ExternalScheduleWriterAdapter(ExternalScheduleWriter):
         )
         if schedule.pod_id and organization_id is None:
             raise ScheduleValidationError("This schedule's pod no longer exists.")
+        resolved = await self._resolve_connector(self.uow, schedule)
         try:
             provider_id = await self._listen_to_mcp(
-                account_id=schedule.account_id,
-                user_id=schedule.user_id,
+                account_id=resolved.account_id,
+                user_id=resolved.owner_user_id,
                 event=event.strip(),
                 arguments=arguments,
                 organization_id=organization_id,

@@ -45,7 +45,7 @@ def _surface(pod_id, platform=SurfacePlatform.WHATSAPP, *, created_offset=0):
 def _own_bot_surface(pod_id, platform=SurfacePlatform.TELEGRAM, *, created_offset=0):
     """A surface on a bot the pod brought itself — its own handle, its own address."""
     surface = _surface(pod_id, platform, created_offset=created_offset)
-    surface.account_id = uuid4()
+    surface.pod_connector_slug = "own-bot"
     surface.credential_mode = SurfaceCredentialMode.CUSTOM
     return surface
 

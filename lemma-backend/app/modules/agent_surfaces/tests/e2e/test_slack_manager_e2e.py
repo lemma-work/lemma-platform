@@ -13,6 +13,8 @@ Each test has a workspace of its own: a binding is one per workspace.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.tests.e2e.helpers import share_account_as_connector
+
 import json
 import time
 from dataclasses import dataclass, field
@@ -82,9 +84,6 @@ from app.modules.connectors.contracts.facts import ConnectorAccountConnected
 from app.modules.connectors.contracts.own_apps import LemmaAppClient
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
-from app.modules.connectors.infrastructure.models.connect_request import (
-    ConnectRequest,
-)
 from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationMember,
 )
@@ -177,27 +176,6 @@ async def _slack_account(
     return account
 
 
-async def _granted(
-    db_session: AsyncSession, account: Account, *, browser_bound: bool = True
-) -> None:
-    """The connect request Slack's Allow finished, as the callback records it."""
-    db_session.add(
-        ConnectRequest(
-            user_id=account.user_id,
-            organization_id=account.organization_id,
-            auth_config_id=account.auth_config_id,
-            connector_id="slack",
-            status="SUCCESS",
-            attributes={
-                "state": uuid4().hex,
-                "granted_account_id": str(account.id),
-                "browser_bound": browser_bound,
-            },
-        )
-    )
-    await db_session.commit()
-
-
 async def _manager(
     client: AsyncClient,
     db_session: AsyncSession,
@@ -206,7 +184,6 @@ async def _manager(
     user: dict,
     workspace: _Workspace,
     fake_slack: Any,
-    browser_bound: bool = True,
 ):
     account = await _slack_account(
         db_session,
@@ -222,7 +199,6 @@ async def _manager(
         fake_slack=fake_slack,
         token=f"xoxb-{workspace.manager_bot.lower()}",
     )
-    await _granted(db_session, account, browser_bound=browser_bound)
     response = await client.put(
         f"/pods/{pod['id']}/surface-setup/slack/manager",
         json={"account_id": str(account.id)},
@@ -255,7 +231,9 @@ async def _teammate(
         f"/pods/{pod['id']}/surfaces",
         json={
             "platform": "SLACK",
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                client, pod["id"], account.id
+            ),
             "name": f"slack-{bot.lower()}",
             "default_agent_name": agent["name"],
         },
@@ -398,35 +376,6 @@ async def test_binding_makes_the_workspace_the_organizations_and_proves_the_inst
         user=workspace.installer,
     )
     assert str(cached) == fixed_test_user["id"]
-
-
-async def test_a_grant_finished_in_somebody_elses_browser_binds_nothing(
-    authenticated_client, db_session, test_pod, fixed_test_user, fake_slack
-):
-    """A consent link sent to someone: their Allow, the sender's account."""
-    workspace = _Workspace()
-    _, response = await _manager(
-        authenticated_client,
-        db_session,
-        pod=test_pod,
-        user=fixed_test_user,
-        workspace=workspace,
-        fake_slack=fake_slack,
-        browser_bound=False,
-    )
-    assert response.status_code == 422, response.text
-    assert "browser" in response.text
-    async with async_session_maker() as session:
-        assert (
-            await SlackManagerRepository(session).install_for_team(workspace.team)
-            is None
-        )
-        assert (
-            await SlackManagerRepository(session).person(
-                workspace.team, workspace.installer
-            )
-            is None
-        )
 
 
 async def test_without_an_app_of_its_own_this_lemma_manages_nothing(
@@ -1086,7 +1035,11 @@ async def test_the_allow_coming_back_makes_the_surface_once_and_says_so(
     await drain(_registry())
 
     surfaces = await scalar(
-        "SELECT count(*) FROM agent_surfaces WHERE account_id = :account",
+        # Shared into the pod as a SHARED connector, and the surface bound to it.
+        "SELECT count(*) FROM agent_surfaces s JOIN pod_connectors pc "
+        "ON pc.pod_id = s.pod_id AND pc.slug = s.pod_connector_slug "
+        "JOIN pod_accounts pa ON pa.id = pc.shared_pod_account_id "
+        "WHERE pa.account_id = :account",
         account=account.id,
     )
     assert surfaces == 1
