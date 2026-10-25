@@ -89,6 +89,7 @@ def _workspace(
             "LEMMA_BROWSER_PROXY_FILE": str(tmp_path / "proxy-decision"),
             "LEMMA_BROWSER_VNC_PORT": str(vnc_port),
             "LEMMA_BROWSER_VNC_WS_PORT": str(vnc_port),
+            "TMPDIR": str(tmp_path),
         },
         opened,
     )
@@ -253,6 +254,46 @@ class TestAStaleDaemonIsRestartedOnce:
         calls = (opened.read_text() if opened.exists() else "").splitlines()
         assert any(c.startswith("close --all") for c in calls), calls
         assert len([c for c in calls if c.startswith("open")]) == 2, calls
+
+    def test_another_run_overlapping_cannot_hide_the_stale_session(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        """The log the retry reads is this run's own.
+
+        It was one fixed `/tmp/agent-browser-open.log` for every run. A second
+        run truncating it between this run's failed open and its grep left
+        nothing to match: no retry, exit 1, and no message -- which is how this
+        class failed on parallel CI workers. The stub plays the other run.
+        """
+        environment, opened = _workspace(
+            tmp_path, browser_live=False, vnc_port=vnc_port
+        )
+        attempts = tmp_path / "attempts"
+        _stub(
+            tmp_path / "bin",
+            "agent-browser",
+            f'echo "$*" >> "{opened}"\n'
+            f'case "$1" in\n'
+            f"  open)\n"
+            f'    n=$(wc -l < "{attempts}" 2>/dev/null || echo 0)\n'
+            f'    echo x >> "{attempts}"\n'
+            f'    if [ "$n" -eq 0 ]; then\n'
+            f'      echo "Failed to install browser network controls: CDP error'
+            f' (Fetch.enable): Session with given id not found." >&2\n'
+            f"      : > /tmp/agent-browser-open.log 2>/dev/null\n"
+            f"      exit 1\n"
+            f"    fi\n"
+            f"    exit 0 ;;\n"
+            f"  *) exit 0 ;;\n"
+            f"esac",
+        )
+
+        result = _run(environment)
+
+        assert result.returncode == 0, result.stderr
+        calls = opened.read_text().splitlines()
+        assert len([c for c in calls if c.startswith("open")]) == 2, calls
+        assert not list(tmp_path.glob("agent-browser-open.*")), "log left behind"
 
     def test_a_network_control_failure_that_is_not_stale_is_not_retried(
         self, tmp_path: Path, vnc_port: int
