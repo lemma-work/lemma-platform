@@ -258,7 +258,7 @@ export function LiveConversation({
                 }
                 /* Only after the transcript is on screen: reattaching first
                    means a live run writes into a view that has no history. */
-                await resumeIfRunningRef.current(openId, { knownConversation: record ?? undefined });
+                await resumeIfRunningRef.current(openId, { knownConversation: record });
             } catch {
                 if (!cancelled && !historyReady) {
                     setLoadError("Could not load this conversation. Please try again.");

@@ -153,7 +153,13 @@ def _fake_client(captured: dict):
             self.pod_id = pod_id
 
         def pod_connectors(self):
-            return {"items": [{"slug": slug} for slug in _POD_CONNECTORS]}
+            captured.setdefault("listed_pods", []).append(self.pod_id)
+            return {
+                "items": [
+                    {"slug": slug, "mode": "PER_MEMBER", "status": "READY", "id": "x"}
+                    for slug in _POD_CONNECTORS
+                ]
+            }
 
         def pod_operation(self, connector, operation):
             captured.setdefault("op_gets", []).append((connector, operation))
@@ -586,6 +592,22 @@ def test_pod_list_and_pod_operations_read_the_selected_pods_connectors(monkeypat
     )
     assert found.exit_code == 0, found.output
     assert captured["pod_searches"] == [("gmail", "send", 3)]
+
+
+def test_pod_list_shows_slugs_and_takes_another_pod(monkeypatch):
+    """Its help promised slug, mode and status; the generic table showed
+    status and id. And it was the one pod command without `--pod`."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+    other = "22222222-2222-2222-2222-222222222222"
+
+    listed = runner.invoke(app, ["connectors", "pod-list", "--pod", other])
+
+    assert listed.exit_code == 0, listed.output
+    for slug in _POD_CONNECTORS:
+        assert slug in listed.stdout
+    assert "PER_MEMBER" in listed.stdout
+    assert captured["listed_pods"] == [other]
 
 
 def test_pod_add_declares_an_installation_under_a_slug(monkeypatch):

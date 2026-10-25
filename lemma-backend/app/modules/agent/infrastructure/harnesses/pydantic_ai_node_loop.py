@@ -27,6 +27,7 @@ crashes the worker.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import Protocol
 from collections.abc import Callable
@@ -55,6 +56,7 @@ from app.modules.agent.tools.tool_errors import (
 
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.tool_call_ids import first_per_call_id
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -73,6 +75,19 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
 from app.modules.agent.services.run_input_settings import shorter_answer_settings
 
 logger = get_logger(__name__)
+
+
+def _tool_call_id_of(event: AgentEvent) -> str | None:
+    draft = event.data
+    if not isinstance(draft, MessageDraft) or draft.kind is not MessageKind.TOOL_CALL:
+        return None
+    return draft.tool_call_id
+
+
+def _canonical(value: object) -> str:
+    """One spelling per value, so equal arguments and results compare equal."""
+    return json.dumps(value, sort_keys=True, default=str)
+
 
 #: Fraction of the run's wall-clock budget past which an answer that ran out of
 #: time is not tried again.
@@ -168,6 +183,9 @@ class NodeLoop[DepsT]:
         # already reported must not be reported again after a retry.
         self.malformed_tool_call_ids: set[str] = set()
         self.emitted_tool_response_ids: set[str] = set()
+        #: Each call's arguments as canonical JSON, by call id, until its return
+        #: arrives: what tells a repeated call from a different one.
+        self._call_args: dict[str, str] = {}
         # The run's own clock, not the attempt's: a retry that re-enters the
         # graph is the same run to the person waiting for it.
         self._started_at = time.monotonic()
@@ -373,8 +391,12 @@ class NodeLoop[DepsT]:
                 await self.queue.put(("event", event))
                 return True
             await self.queue.put(("event", event))
+        # The stored half of `UniqueToolCallIdsCapability`: a call the
+        # provider repeated under one id is stored once, as it runs once.
+        buffered, _repeats = first_per_call_id(buffered, _tool_call_id_of)
         settled, self._undecided = settle_response_answers(buffered)
         for held in settled:
+            self._remember_tool_call(held)
             await self.queue.put(("event", held))
         return False
 
@@ -403,6 +425,16 @@ class NodeLoop[DepsT]:
                 return True
         return False
 
+    def _remember_tool_call(self, event: AgentEvent) -> None:
+        draft = event.data
+        if event.type is not AgentEventType.MESSAGE:
+            return
+        if getattr(draft, "kind", None) is not MessageKind.TOOL_CALL:
+            return
+        call_id = getattr(draft, "tool_call_id", None)
+        if call_id:
+            self._call_args[call_id] = _canonical(getattr(draft, "tool_args", None))
+
     def _record_tool_outcome(self, event: AgentEvent) -> None:
         """Track the failing streak, from the returns the run is already emitting.
 
@@ -420,8 +452,12 @@ class NodeLoop[DepsT]:
             return
         if getattr(draft, "kind", None) is not MessageKind.TOOL_RETURN:
             return
-        spend.record_tool_outcome(
-            failed=result_is_failure(getattr(draft, "tool_result", None))
+        result = getattr(draft, "tool_result", None)
+        spend.record_tool_outcome(failed=result_is_failure(result))
+        spend.record_tool_call(
+            tool=str(getattr(draft, "tool_name", None) or ""),
+            args=self._call_args.pop(str(getattr(draft, "tool_call_id", "")), ""),
+            result=_canonical(result),
         )
 
     async def _pump_end_node(self, node: End[FinalResult[object]]) -> bool:
