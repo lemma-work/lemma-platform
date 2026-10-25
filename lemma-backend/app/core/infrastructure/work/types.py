@@ -121,6 +121,8 @@ class UnavailableEvidence(StrEnum):
     HEALTH_CHECK_FAILING = "health_check_failing"
     CIRCUIT_OPEN = "circuit_open"
     RATE_LIMITED = "rate_limited"
+    #: The schema is not the one this code expects, mid-rollout.
+    SCHEMA_SKEW = "schema_skew"
 
 
 class Unavailable(Exception):
