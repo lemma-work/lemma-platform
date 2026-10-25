@@ -216,6 +216,28 @@ def unattached_message_window(
     return after, first_sequence_of_run(runs, run_id)
 
 
+def _unattached_cut_notice(oldest_kept: Message) -> Message:
+    """Say that run-less messages before ``oldest_kept`` are not shown.
+
+    It takes the sequence of the message it precedes, which is that message's
+    alone, and sits before it in the list, so the harness's stable sort keeps
+    it in front.
+    """
+    return Message(
+        conversation_id=oldest_kept.conversation_id,
+        sequence=oldest_kept.sequence,
+        agent_run_id=None,
+        role=MessageRole.USER,
+        kind=MessageKind.NOTIFICATION,
+        text=(
+            f"{SYNTHETIC_NOTICE_PREFIX} Earlier messages written outside a run "
+            "in this conversation are older than what is carried here and are "
+            "not shown."
+        ),
+        metadata={"synthetic": True, "summary_kind": "unattached_messages_cut"},
+    )
+
+
 class ChannelReader(Protocol):
     """Reads the channel a history's messages refer to into them
     (``channel_background``): the background of the runs named, and every
@@ -276,14 +298,20 @@ async def assemble_runtime_history(
     after_sequence, before_sequence = unattached_message_window(
         bounded, run_id, dropped_runs=dropped_runs
     )
-    messages.extend(
-        await source.load_unattached_messages(
-            conversation_id,
-            after_sequence=after_sequence,
-            before_sequence=before_sequence,
-            limit=MAX_UNATTACHED_MESSAGES,
-        )
+    # One more than is carried, so a cut can be told to the model rather than
+    # made silently: an agent taking a conversation back from a member who
+    # answered by hand for a while would otherwise answer a thread whose start
+    # it never saw.
+    unattached = await source.load_unattached_messages(
+        conversation_id,
+        after_sequence=after_sequence,
+        before_sequence=before_sequence,
+        limit=MAX_UNATTACHED_MESSAGES + 1,
     )
+    if len(unattached) > MAX_UNATTACHED_MESSAGES:
+        unattached = unattached[1:]
+        unattached.insert(0, _unattached_cut_notice(unattached[0]))
+    messages.extend(unattached)
     if read_channel is None:
         return messages
     # A run cut to its requests keeps none of what it was shown around them.

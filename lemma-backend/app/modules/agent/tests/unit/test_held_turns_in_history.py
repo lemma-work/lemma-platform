@@ -46,6 +46,7 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
 )
 from app.modules.agent.services.runtime_history import (
     MAX_HISTORY_AGENT_RUNS,
+    MAX_UNATTACHED_MESSAGES,
     assemble_runtime_history,
     without_private_runs,
 )
@@ -282,6 +283,47 @@ async def test_held_lines_are_bounded_as_notifications_are():
     # After the turn being answered: never placed after the message it answers.
     assert "Written while this turn was being answered" not in texts
     assert texts[-1] == "And now?"
+
+
+async def test_held_lines_past_the_bound_are_cut_and_the_cut_is_said():
+    """A member who answered by hand for a while leaves more run-less lines than
+    are carried. The newest are kept, and the agent is told the thread starts
+    earlier than what it reads, rather than answering as if it did not."""
+    chat = _Conversation()
+    chat.turn("Hello", "Hi, how can I help?")
+    for index in range(MAX_UNATTACHED_MESSAGES + 3):
+        chat.held(f"held {index}")
+    current = chat.turn("Are you back?")
+
+    history = await chat.history_for(current)
+
+    texts = [text for _, text in _lines(history)]
+    held = [text for text in texts if text and text.startswith("held ")]
+    assert held == [f"held {index}" for index in range(3, MAX_UNATTACHED_MESSAGES + 3)]
+    notices = [
+        message
+        for message in history
+        if (message.metadata or {}).get("summary_kind") == "unattached_messages_cut"
+    ]
+    assert len(notices) == 1
+    # Read immediately before the oldest line it stands in front of.
+    at = history.index(notices[0])
+    assert history[at + 1].text == "held 3"
+
+
+async def test_nothing_is_said_to_be_cut_when_nothing_was():
+    chat = _Conversation()
+    chat.turn("Hello", "Hi")
+    for index in range(MAX_UNATTACHED_MESSAGES):
+        chat.held(f"held {index}")
+    current = chat.turn("Back?")
+
+    history = await chat.history_for(current)
+
+    assert not any(
+        (message.metadata or {}).get("summary_kind") == "unattached_messages_cut"
+        for message in history
+    )
 
 
 async def test_a_stranger_reads_their_own_held_words_and_never_a_members_note():
