@@ -165,6 +165,17 @@ class AgentSettings(BaseSettings):
             "saves memory in the turn again and no pass is queued."
         ),
     )
+    agent_memory_pass_model: str | None = Field(
+        default=None,
+        description=(
+            "Optional model, on the system provider, for the memory pass that "
+            "follows a turn. Defaults to the run's own model, so the turn goes "
+            "to no provider it had not already gone to -- and the pass, which "
+            "reads the whole turn plus the memory brief to usually conclude "
+            "nothing, costs a multiple of a short turn on an expensive model. "
+            "A small model is cheaper; it may also keep less."
+        ),
+    )
     function_run_poll_interval_seconds: float = Field(
         default=0.5,
         description="Interval an agent tool waits between function-run status polls.",
