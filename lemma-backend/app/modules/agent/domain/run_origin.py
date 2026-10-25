@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from app.core.origin import Origin, OriginKind
 from app.modules.agent.domain.conversation_metadata import ConversationMetadataFields
 from app.modules.agent.domain.pod_asks import ASK_KEY, ASKS_OUT_KEY
 from app.modules.agent.domain.subagent_results import (
@@ -99,4 +100,47 @@ def run_origin(
     return RunOrigin(origin="chat", **common)
 
 
-__all__ = ["RunOrigin", "SCHEDULE_SOURCE", "run_origin"]
+#: What fired a schedule, as the platform's origin. A schedule stamps its type
+#: on the conversation it opens (``schedule.services.target_start``).
+_SCHEDULE_TYPE_ORIGINS: dict[str, OriginKind] = {
+    "TIME": OriginKind.SCHEDULE,
+    "DATASTORE": OriginKind.DATA_TRIGGER,
+    "WEBHOOK": OriginKind.CONNECTOR,
+}
+
+
+def conversation_origin(
+    *,
+    metadata: Mapping[str, object] | None,
+    parent_id: object | None,
+    conversation_id: object,
+) -> Origin | None:
+    """How a turn's work arrived (``app.core.origin``), as far as its row can say.
+
+    A turn runs as a work item, which starts with no origin bound: the request
+    that queued it -- or the webhook behind the surface message that did -- is
+    gone by then. The conversation still records what started it, and for
+    automation and surfaces that is the answer. A person's chat, a sub-agent and
+    a pod's ask say nothing about which client was used, so they answer
+    ``None`` rather than a guess.
+    """
+    stored: Mapping[str, object] = metadata or {}
+    kind = run_origin(
+        metadata=stored, parent_id=parent_id, conversation_id=conversation_id
+    ).origin
+    if kind == "workflow":
+        return Origin(OriginKind.WORKFLOW)
+    if kind == "schedule":
+        schedule_type = str(stored.get("schedule_type") or "").upper()
+        return Origin(_SCHEDULE_TYPE_ORIGINS.get(schedule_type, OriginKind.SCHEDULE))
+    if kind == "surface":
+        platform = stored.get("surface_platform")
+        # Stored uppercase (`SurfacePlatform`); the origin allowlist is lowercase.
+        return Origin(
+            OriginKind.SURFACE,
+            platform=platform.lower() if isinstance(platform, str) else None,
+        )
+    return None
+
+
+__all__ = ["RunOrigin", "SCHEDULE_SOURCE", "conversation_origin", "run_origin"]

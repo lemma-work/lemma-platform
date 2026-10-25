@@ -189,14 +189,11 @@ class AgentRunnerService:
             pod_id=pod_id,
             agent_name=agent_name,
         )
-        run = RunIdentity(
-            conversation_id=conversation.id,
+        run = RunIdentity.of_turn(
+            conversation,
+            agent_run,
             agent_run_id=agent_run_id,
-            organization_id=conversation.organization_id,
-            pod_id=conversation.pod_id,
             user_id=user_id,
-            agent_id=conversation.agent_id,
-            started_at=agent_run.started_at,
             usage_source=usage_source_for(Audience.of(conversation)),
         )
         if agent_run.status != AgentRunStatus.RUNNING:

@@ -43,6 +43,9 @@ export function callSocketUrl(apiUrl: string, podId: string, callId: string, tok
     return url.toString();
 }
 
+/** How long ending a call waits for the server to save it and close. */
+const END_TIMEOUT_MS = 4000;
+
 /** Close codes the server ends a call with, as the person should read them. */
 const CLOSE_REASONS: Record<number, string> = {
     4401: "Your session expired. Sign in again to call.",
@@ -100,8 +103,27 @@ export class CallConnection {
         if (this.open()) this.socket.send(JSON.stringify(control));
     }
 
-    close(): void {
-        this.send({ type: "end" });
-        this.socket.close(1000);
+    /** Ask the server to end the call. Resolves true once the server has
+     *  closed it, which it does only after saving the call's transcript, so
+     *  whoever reloads the conversation on that sees it; false when the
+     *  server did not answer in time and this side closed instead. */
+    close(): Promise<boolean> {
+        const socket = this.socket;
+        return new Promise((resolve) => {
+            if (socket.readyState === WebSocket.CLOSED) { resolve(false); return; }
+            // Normal closes only: an error close is not the server saying it saved.
+            const done = (event: CloseEvent) => {
+                window.clearTimeout(timer);
+                resolve(event.code === 1000 || event.code === 1005);
+            };
+            const timer = window.setTimeout(() => {
+                socket.removeEventListener("close", done);
+                socket.close(1000);
+                resolve(false);
+            }, END_TIMEOUT_MS);
+            socket.addEventListener("close", done, { once: true });
+            if (this.open()) this.send({ type: "end" });
+            else socket.close(1000);
+        });
     }
 }

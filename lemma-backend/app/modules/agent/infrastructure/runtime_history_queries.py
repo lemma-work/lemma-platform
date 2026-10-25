@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, and_, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.domain.entities import (
@@ -19,6 +19,7 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
+from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY
 from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON
 from app.modules.agent.infrastructure.models import AgentRunModel, MessageModel
 from app.modules.agent.infrastructure.runtime_history_window import (
@@ -216,44 +217,93 @@ class RuntimeHistoryQueries:
         after_sequence: int | None,
         before_sequence: int | None,
         limit: int,
+        folded_limit: int,
     ) -> list[MessageEntity]:
         """What was written into the conversation outside any run, and is carried.
 
-        Reading messages by run id never finds these, and two kinds are owed to
-        the model. A notification -- a reminder, a report delivered to the
+        Reading messages by run id never finds these, and three kinds are owed
+        to the model. A notification -- a reminder, a report delivered to the
         person's chat -- without which the person's "yes" to it reached an agent
-        that could not see what was asked. And what somebody outside the pod
-        said while a person had them (``held_turns``), without which the agent
+        that could not see what was asked. What somebody outside the pod said
+        while a person had them (``held_turns``), without which the agent
         answering them next read their newest message as if there were no
-        earlier thread. A queued turn is not run-less: it joins the run it
-        waits on. A copy a contact merge folded in (``folded_history``) keeps
-        the kind and marks of what it copies, so only copies of these two are
-        carried.
+        earlier thread. And what a contact merge copied in from the person's
+        conversation that lost its seat (``folded_turns``), without which the
+        agent answering the one that kept it read nothing of the other. A
+        queued turn is not run-less: it joins the run it waits on.
+
+        Oldest first: the newest ``limit`` of the first two kinds, and apart
+        from them the newest ``folded_limit`` copies, so a long chat folded in
+        cannot crowd the notifications out. A copy keeps the kind and marks of
+        what it copies, and is counted as a copy whatever those are.
 
         ``after_sequence`` is the oldest message the prompt carries; one older
         than that is older than the history and stays out. ``before_sequence``
         is the turn being answered: one written after it arrived mid-run and
         must not end up after the user turn the model is replying to.
         """
-        query = select(MessageModel).where(
-            MessageModel.conversation_id == conversation_id,
-            MessageModel.agent_run_id.is_(None),
+        newest = union_all(
+            _newest_unattached_ids(
+                conversation_id,
+                folded=False,
+                limit=limit,
+                after_sequence=after_sequence,
+                before_sequence=before_sequence,
+            ),
+            _newest_unattached_ids(
+                conversation_id,
+                folded=True,
+                limit=folded_limit,
+                after_sequence=after_sequence,
+                before_sequence=before_sequence,
+            ),
+        )
+        rows = (
+            await self.session.scalars(
+                select(MessageModel)
+                .where(MessageModel.id.in_(newest))
+                .order_by(MessageModel.sequence)
+                .limit(limit + folded_limit)
+            )
+        ).all()
+        return [row.to_entity() for row in rows]
+
+
+def _newest_unattached_ids(
+    conversation_id: UUID,
+    *,
+    folded: bool,
+    limit: int,
+    after_sequence: int | None,
+    before_sequence: int | None,
+) -> Select:
+    """The ids of the newest ``limit`` run-less messages of one side: copies a
+    merge folded in, or the rest of the kinds carried.
+
+    Each side is its own ``ORDER BY sequence DESC LIMIT`` so Postgres walks the
+    conversation's sequence index backwards and stops at the bound. Numbering
+    every candidate with a window function instead read and sorted all of a
+    conversation's run-less rows, full text included, on every run.
+    """
+    is_copy = MessageModel.message_metadata[FOLDED_FROM_KEY].astext.is_not(None)
+    side = (
+        is_copy
+        if folded
+        else and_(
+            ~is_copy,
             or_(
                 MessageModel.kind == MessageKind.NOTIFICATION.value,
                 MessageModel.message_metadata[HELD_FOR_A_PERSON].astext == "true",
             ),
         )
-        if after_sequence is not None:
-            query = query.where(MessageModel.sequence > after_sequence)
-        if before_sequence is not None:
-            query = query.where(MessageModel.sequence < before_sequence)
-        rows = (
-            (
-                await self.session.execute(
-                    query.order_by(MessageModel.sequence.desc()).limit(limit)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return [row.to_entity() for row in reversed(rows)]
+    )
+    query = select(MessageModel.id).where(
+        MessageModel.conversation_id == conversation_id,
+        MessageModel.agent_run_id.is_(None),
+        side,
+    )
+    if after_sequence is not None:
+        query = query.where(MessageModel.sequence > after_sequence)
+    if before_sequence is not None:
+        query = query.where(MessageModel.sequence < before_sequence)
+    return query.order_by(MessageModel.sequence.desc()).limit(limit)
