@@ -58,12 +58,13 @@ async def hold_call(
                 reason=f"At most {calls_settings.calls_per_user} calls at once.",
             )
             return
-        try:
-            await _hold_call(
-                websocket, call_id=call_id, party=party, organization_id=organization_id
-            )
-        finally:
-            await _retire_if_empty(party, call_id)
+        await _hold_call(
+            websocket, call_id=call_id, party=party, organization_id=organization_id
+        )
+        # After a normal end only. A call that raised -- its transcript not
+        # saved -- may still have a turn on its way to the agents, and
+        # archiving it under that turn would hide a call something happened in.
+        await _retire_if_empty(party, call_id)
 
 
 async def _hold_call(
