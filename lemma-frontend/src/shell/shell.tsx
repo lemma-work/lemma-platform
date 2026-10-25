@@ -534,11 +534,15 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     }, [callConversationId, queryClient, pod?.id, callIn.id, openConversationId]);
 
     const { start: openCall, end: closeCall } = huddle;
+    const { inCall, expand: openCallScreen } = huddle;
     const startCall = useCallback(() => {
         if (!pod) return;
+        /* A call already on belongs to the pod it was placed in, wherever the
+           button was pressed: reopened, never re-labelled with this pod. */
+        if (inCall) { openCallScreen(); return; }
         setCallPod({ id: pod.id, name: pod.name, teammate: pod.teammate.name });
         void openCall();
-    }, [pod, openCall]);
+    }, [pod, openCall, inCall, openCallScreen]);
     const endCall = useCallback(() => { closeCall(); setCallPod(null); }, [closeCall]);
     /* Offered only once the server says it can place one: a voice engine is
        a server setting, which no settings page here configures. The sample

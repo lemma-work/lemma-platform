@@ -111,7 +111,11 @@ export class CallConnection {
         const socket = this.socket;
         return new Promise((resolve) => {
             if (socket.readyState === WebSocket.CLOSED) { resolve(false); return; }
-            const done = () => { window.clearTimeout(timer); resolve(true); };
+            // Normal closes only: an error close is not the server saying it saved.
+            const done = (event: CloseEvent) => {
+                window.clearTimeout(timer);
+                resolve(event.code === 1000 || event.code === 1005);
+            };
             const timer = window.setTimeout(() => {
                 socket.removeEventListener("close", done);
                 socket.close(1000);

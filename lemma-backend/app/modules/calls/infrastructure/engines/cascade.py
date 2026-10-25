@@ -243,6 +243,14 @@ class CascadeEngine:
                 # The talker or the speaker failed for this reply. The call
                 # survives it: the caller can say it again.
                 logger.warning("calls.cascade.reply.failed", exc_info=True)
+                if not reply.committed.is_set():
+                    # A draft written before the caller finished: nothing was
+                    # said, so nothing to apologise for. Dropped, so the
+                    # confirmed end of turn starts a reply of its own rather
+                    # than committing this failed one.
+                    if self._reply is reply:
+                        self._reply = None
+                    return
                 self._record(reply, interrupted=True)
                 await self._apologise()
                 return

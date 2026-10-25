@@ -106,7 +106,7 @@ export function useCall({ podId }: { podId: string }) {
                     if (attempt !== attemptRef.current) return;
                     ++attemptRef.current;
                     teardown();
-                    settle(callId);
+                    if (!reason) settle(callId);
                     if (reason) { setError(reason); setStatus("error"); } else setStatus("ended");
                 },
             });

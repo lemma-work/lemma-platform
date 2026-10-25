@@ -263,7 +263,8 @@ class TestAStaleDaemonIsRestartedOnce:
         It was one fixed `/tmp/agent-browser-open.log` for every run. A second
         run truncating it between this run's failed open and its grep left
         nothing to match: no retry, exit 1, and no message -- which is how this
-        class failed on parallel CI workers. The stub plays the other run.
+        class failed on parallel CI workers. The stub starts the other run, for
+        real, between this run's failed open and its check.
         """
         environment, opened = _workspace(
             tmp_path, browser_live=False, vnc_port=vnc_port
@@ -280,7 +281,8 @@ class TestAStaleDaemonIsRestartedOnce:
             f'    if [ "$n" -eq 0 ]; then\n'
             f'      echo "Failed to install browser network controls: CDP error'
             f' (Fetch.enable): Session with given id not found." >&2\n'
-            f"      : > /tmp/agent-browser-open.log 2>/dev/null\n"
+            # A real second run, overlapping this one's failed open.
+            f'      /bin/bash "{SCRIPT}" about:blank >/dev/null 2>&1\n'
             f"      exit 1\n"
             f"    fi\n"
             f"    exit 0 ;;\n"
@@ -292,7 +294,9 @@ class TestAStaleDaemonIsRestartedOnce:
 
         assert result.returncode == 0, result.stderr
         calls = opened.read_text().splitlines()
-        assert len([c for c in calls if c.startswith("open")]) == 2, calls
+        # This run's failed open, the overlapping run's, and this run's retry.
+        assert len([c for c in calls if c.startswith("open")]) == 3, calls
+        assert "close --all" in calls, calls
         assert not list(tmp_path.glob("agent-browser-open.*")), "log left behind"
 
     def test_a_network_control_failure_that_is_not_stale_is_not_retried(

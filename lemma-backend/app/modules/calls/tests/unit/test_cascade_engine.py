@@ -287,3 +287,35 @@ async def test_a_reply_that_fails_is_said_out_loud_not_left_as_silence() -> None
     assert "say it again" in said.text
     assert speaker.spoken == [said.text]
     await engine.close()
+
+
+class FailsOnceTalker(ScriptedTalker):
+    """Fails the first reply it is asked for, then answers."""
+
+    async def reply(self, history: Sequence[Line], prompt: str) -> AsyncIterator[str]:
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            raise OSError("model unreachable")
+        yield "Here you go."
+
+
+async def test_a_draft_that_fails_is_not_apologised_for_and_the_turn_still_answers() -> (
+    None
+):
+    talker = FailsOnceTalker({})
+    engine, listener, speaker = _engine(talker)
+    await engine.open()
+    listener.turns_in.put_nowait(TurnInfo("StartOfTurn", ""))
+    listener.turns_in.put_nowait(TurnInfo("EagerEndOfTurn", "find a flight"))
+    # The draft has been asked for, has failed, and has been dropped.
+    async with asyncio.timeout(2):
+        while not talker.prompts or engine._reply is not None:
+            await asyncio.sleep(0)
+    listener.turns_in.put_nowait(TurnInfo("EndOfTurn", "find a flight"))
+    seen: list[VoiceEvent] = []
+    await _until(engine, TurnDone, seen)
+    said = [e.text for e in seen if isinstance(e, Said) and e.final]
+    assert said == ["Here you go."]
+    assert talker.prompts == ["find a flight", "find a flight"]
+    assert speaker.spoken == ["Here you go."]
+    await engine.close()
