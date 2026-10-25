@@ -19836,6 +19836,70 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/CallsService.ts
+  var CallsService = class {
+    /**
+     * Open a call
+     * Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.
+     * @param podId
+     * @param requestBody
+     * @returns CallResponse Successful Response
+     * @throws ApiError
+     */
+    static callOpen(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/calls",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          403: `The caller may not run this agent.`,
+          404: `The agent was not found.`,
+          422: `Validation Error`,
+          503: `No voice engine is configured.`
+        }
+      });
+    }
+    /**
+     * Call configuration
+     * Which voice engines this server can open a call with.
+     * @param podId
+     * @returns CallConfigResponse Successful Response
+     * @throws ApiError
+     */
+    static callConfig(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/calls/config",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/calls.ts
+  var CallsNamespace = class {
+    constructor(client, podId) {
+      __publicField(this, "client", client);
+      __publicField(this, "podId", podId);
+    }
+    /** The voice engines this server can open a call with, the default first. */
+    config() {
+      return this.client.request(() => CallsService.callConfig(this.podId()));
+    }
+    /** Open a call with `agent_name`, or the pod's default agent. */
+    open(payload = {}) {
+      return this.client.request(() => CallsService.callOpen(this.podId(), payload));
+    }
+  };
+
   // src/openapi_client/services/DecisionsService.ts
   var DecisionsService = class {
     /**
@@ -21894,6 +21958,7 @@ var LemmaClient = (() => {
       __publicField(this, "connectors");
       __publicField(this, "resourceAccess");
       __publicField(this, "schedules");
+      __publicField(this, "calls");
       __publicField(this, "decisions");
       __publicField(this, "datastore");
       /** Alias of {@link datastore}, matching the Python SDK's `pod.queries`. */
@@ -21954,6 +22019,7 @@ var LemmaClient = (() => {
       this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
       this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
       this.schedules = new SchedulesNamespace(this._generated, podIdFn);
+      this.calls = new CallsNamespace(this._generated, podIdFn);
       this.decisions = new DecisionsNamespace(this._generated, podIdFn);
       this.datastore = new DatastoreNamespace(
         this._generated,

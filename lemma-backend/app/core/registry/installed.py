@@ -18,6 +18,7 @@ from app.modules.channels.module import module as channels_module
 from app.modules.agent_surfaces.module import module as agent_surfaces_module
 from app.modules.datastore.module import module as datastore_module
 from app.modules.decisions.module import module as decisions_module
+from app.modules.calls.module import module as calls_module
 from app.modules.apps.module import module as app_module
 from app.modules.function.module import module as function_module
 from app.modules.icon.module import module as icon_module
@@ -56,6 +57,7 @@ OSS_MODULES: tuple[LemmaModule, ...] = (
     web_login_module,
     mcp_access_module,
     decisions_module,
+    calls_module,
     # Last: it only observes. Its consumers must never be the reason another
     # module's handlers are late.
     analytics_module,

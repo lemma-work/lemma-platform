@@ -3547,6 +3547,57 @@
         "title": "BundleSourceKind",
         "type": "string"
       },
+      "CallConfigResponse": {
+        "properties": {
+          "engines": {
+            "description": "The voice engines this server can open, the default first.",
+            "items": {
+              "enum": [
+                "gemini_live",
+                "openai_realtime",
+                "cascade"
+              ],
+              "type": "string"
+            },
+            "title": "Engines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "engines"
+        ],
+        "title": "CallConfigResponse",
+        "type": "object"
+      },
+      "CallResponse": {
+        "properties": {
+          "call_id": {
+            "description": "The call, which is also its conversation.",
+            "format": "uuid",
+            "title": "Call Id",
+            "type": "string"
+          },
+          "engines": {
+            "description": "The voice engines this server can open, the default first.",
+            "items": {
+              "enum": [
+                "gemini_live",
+                "openai_realtime",
+                "cascade"
+              ],
+              "type": "string"
+            },
+            "title": "Engines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "call_id",
+          "engines"
+        ],
+        "title": "CallResponse",
+        "type": "object"
+      },
       "CaseEventResponse": {
         "properties": {
           "actor": {
@@ -14066,6 +14117,46 @@
           "authorization_url"
         ],
         "title": "OAuth2DefaultsResponseSchema",
+        "type": "object"
+      },
+      "OpenCallRequest": {
+        "properties": {
+          "agent_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The pod agent to call; empty calls the pod's default agent.",
+            "title": "Agent Name"
+          },
+          "display_name": {
+            "default": "your teammate",
+            "description": "What the agent is called on the call.",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The call conversation's title.",
+            "title": "Title"
+          }
+        },
+        "title": "OpenCallRequest",
         "type": "object"
       },
       "OpenTableRequest": {
@@ -33249,6 +33340,151 @@
           "resource": "pod.bundle",
           "result": "entity",
           "verb": "upload"
+        }
+      }
+    },
+    "/pods/{pod_id}/calls": {
+      "post": {
+        "description": "Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.",
+        "operationId": "call.open",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may not run this agent."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The agent was not found."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No voice engine is configured."
+          }
+        },
+        "summary": "Open a call",
+        "tags": [
+          "Calls"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "call"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "call",
+          "result": "entity",
+          "verb": "open"
+        }
+      }
+    },
+    "/pods/{pod_id}/calls/config": {
+      "get": {
+        "description": "Which voice engines this server can open a call with.",
+        "operationId": "call.config",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Call configuration",
+        "tags": [
+          "Calls"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "call",
+          "result": "entity",
+          "verb": "config"
         }
       }
     },

@@ -540,10 +540,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         void openCall();
     }, [pod, openCall]);
     const endCall = useCallback(() => { closeCall(); setCallPod(null); }, [closeCall]);
-    /* Offered only once the install says it can place one. Nothing to link
-       to otherwise: calls run on the web app's own voice gateway, which no
-       settings page configures. */
-    const voiceReady = useVoiceConfigured() === true;
+    /* Offered only once the server says it can place one: a voice engine is
+       a server setting, which no settings page here configures. */
+    const voiceReady = useVoiceConfigured(pod?.id ?? null) === true;
 
     const podTabs = useQuery({
         queryKey: ["tabs", pod?.id],
@@ -1570,18 +1569,18 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         <CallScreen
                             teammate={callIn.teammate}
                             podId={callIn.id}
-                            conversationId={huddle.callConversationId}
                             status={huddle.status}
                             error={huddle.error}
                             muted={huddle.muted}
                             thinking={huddle.thinking}
                             level={huddle.level}
-                            resources={huddle.resources}
+                            canvas={huddle.canvas}
                             transcript={huddle.transcript}
-                            plan={huddle.plan}
                             onMute={huddle.toggleMute}
                             onEnd={endCall}
                             onCollapse={huddle.collapse}
+                            onLooking={huddle.looking}
+                            onRenderFailed={huddle.renderFailed}
                             /* Opening lands on the stage, which is behind the
                                call screen — so step back to the bar first, or
                                the tab opens somewhere nobody can see it. */
@@ -1598,7 +1597,6 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         error={huddle.error}
                         muted={huddle.muted}
                         thinking={huddle.thinking}
-                        plan={huddle.plan}
                         level={huddle.level}
                         onMute={huddle.toggleMute}
                         onEnd={endCall}

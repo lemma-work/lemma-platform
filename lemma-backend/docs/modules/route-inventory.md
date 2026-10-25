@@ -125,6 +125,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/apps/{app_name}/bundle` | `app.bundle.upload` | Upload App Bundle |
 | POST | `/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote` | `app.release.promote` | Promote App Release |
 
+## calls
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| GET | `/pods/{pod_id}/calls/config` | `call.config` | Call configuration |
+| POST | `/pods/{pod_id}/calls` | `call.open` | Open a call |
+
 ## channels
 
 | Method | Path | Operation ID | Summary |

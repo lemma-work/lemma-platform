@@ -120,6 +120,10 @@ _NAME_TO_MODULE = {
     'BulkUpdateRecordsRequest': 'bulk_update_records_request',
     'BulkUpdateRecordsRequestRecordsItem': 'bulk_update_records_request_records_item',
     'BundleSourceKind': 'bundle_source_kind',
+    'CallConfigResponse': 'call_config_response',
+    'CallConfigResponseEnginesItem': 'call_config_response_engines_item',
+    'CallResponse': 'call_response',
+    'CallResponseEnginesItem': 'call_response_engines_item',
     'CaseEventResponse': 'case_event_response',
     'CaseEventResponseValue': 'case_event_response_value',
     'CaseResponse': 'case_response',
@@ -405,6 +409,7 @@ _NAME_TO_MODULE = {
     'NotifyLevel': 'notify_level',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
+    'OpenCallRequest': 'open_call_request',
     'OpenTableRequest': 'open_table_request',
     'OpenTableSummary': 'open_table_summary',
     'OpenTablesResponse': 'open_tables_response',
@@ -865,6 +870,10 @@ if TYPE_CHECKING:
     from .bulk_update_records_request import BulkUpdateRecordsRequest
     from .bulk_update_records_request_records_item import BulkUpdateRecordsRequestRecordsItem
     from .bundle_source_kind import BundleSourceKind
+    from .call_config_response import CallConfigResponse
+    from .call_config_response_engines_item import CallConfigResponseEnginesItem
+    from .call_response import CallResponse
+    from .call_response_engines_item import CallResponseEnginesItem
     from .case_event_response import CaseEventResponse
     from .case_event_response_value import CaseEventResponseValue
     from .case_response import CaseResponse
@@ -1150,6 +1159,7 @@ if TYPE_CHECKING:
     from .notify_level import NotifyLevel
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
+    from .open_call_request import OpenCallRequest
     from .open_table_request import OpenTableRequest
     from .open_table_summary import OpenTableSummary
     from .open_tables_response import OpenTablesResponse
@@ -1623,6 +1633,10 @@ __all__ = [
     'BulkUpdateRecordsRequest',
     'BulkUpdateRecordsRequestRecordsItem',
     'BundleSourceKind',
+    'CallConfigResponse',
+    'CallConfigResponseEnginesItem',
+    'CallResponse',
+    'CallResponseEnginesItem',
     'CaseEventResponse',
     'CaseEventResponseValue',
     'CaseResponse',
@@ -1908,6 +1922,7 @@ __all__ = [
     'NotifyLevel',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
+    'OpenCallRequest',
     'OpenTableRequest',
     'OpenTableSummary',
     'OpenTablesResponse',

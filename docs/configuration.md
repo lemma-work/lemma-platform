@@ -796,13 +796,54 @@ DECISION_RATE_LIMIT_PER_MINUTE=600   # per organization and priority; 0 for none
 Choosing `typesafe` sends the evidence of every decision to Typesafe, so list it
 wherever your deployment names the processors its users' data reaches.
 
-Live voice calls route everything the caller says through this API, with
-`priority: interactive`: whether it is conversation, a question about work
-already running, or new work, and for which conversation. Someone is waiting
-on every one of those, so `typesafe` is the recommended provider for a
-deployment with calls: it answers in about a third of a second, a language
-model in several. With no provider able to answer, a call carries on with the
-voice alone and dispatches nothing.
+Live voice calls ask one decision of this API per finished turn, with
+`priority: interactive`: whether it is conversation for the voice alone or
+work for the agents. Anything short of a confident "conversation" is treated
+as work, so a slow or unavailable provider costs a call an extra agent step,
+never a dropped request.
+
+### Calls
+
+A voice call talks through one of three engines; a server offers the ones it
+has keys for. The agents behind every call are the pod's own, on the models
+configured above.
+
+```dotenv
+CALL_VOICE_ENGINE=gemini_live      # gemini_live | openai_realtime | cascade
+
+# gemini_live: one native-audio session.
+GEMINI_API_KEY=
+GEMINI_LIVE_MODEL=gemini-3.8-live
+GEMINI_LIVE_VOICE=
+
+# openai_realtime: OpenAI's realtime model; the mini one, because the voice
+# only talks and the agents do the thinking.
+OPENAI_API_KEY=
+OPENAI_REALTIME_MODEL=gpt-realtime-2.1-mini
+OPENAI_REALTIME_VOICE=marin
+
+# cascade: Deepgram listens and speaks, a Lemma model answers.
+DEEPGRAM_API_KEY=
+CASCADE_STT_MODEL=flux-general-en        # flux-general-multi for other languages
+CASCADE_EAGER_EOT_THRESHOLD=0.5          # empty waits for the confirmed end of turn
+CASCADE_TTS_VOICE=aura-2-thalia-en
+CASCADE_TALKER_MODEL=                    # public name; empty: the default model
+CASCADE_TALKER_REASONING_EFFORT=none
+
+# The model a call's coordinator and its sub-agents run on, by public name.
+# Empty: the agent's own. Their turns are many and short, so a fast one fits.
+CALL_COORDINATOR_MODEL=
+
+CALL_MAX_MINUTES=60
+CALLS_PER_USER=2
+CALL_QUIET_WINDOW_MS=700
+```
+
+The cascade talker answers every turn, so pick a model that can answer without
+reasoning first: a thinking-only model spends the caller's silence on tokens
+nobody hears. Every engine sends the caller's audio to its provider, and the
+cascade sends the transcript to the talker's; list them wherever your
+deployment names the processors its users' data reaches.
 
 ## Spend limits
 
