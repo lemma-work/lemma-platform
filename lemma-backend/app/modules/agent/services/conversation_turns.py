@@ -21,6 +21,7 @@ from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.usage_preflight import assert_usage_preflight_allowed
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.private_notes import (
     PRIVATE_NOTE_KEY,
     run_metadata_for,
@@ -296,9 +297,7 @@ class TurnCoordinator:
             user_id=user_id,
         )
         await self.assert_usage_preflight_allowed(
-            organization_id=conversation.organization_id,
-            user_id=user_id,
-            agent_runtime=selected_agent_runtime,
+            conversation, user_id=user_id, agent_runtime=selected_agent_runtime
         )
         return await self.conversation_repository.create_agent_run(
             conversation_id=conversation.id,
@@ -403,9 +402,7 @@ class TurnCoordinator:
         )
         # Continuing an unanswered message is still a run someone pays for.
         await self.assert_usage_preflight_allowed(
-            organization_id=conversation.organization_id,
-            user_id=conversation.user_id,
-            agent_runtime=agent_runtime,
+            conversation, user_id=conversation.user_id, agent_runtime=agent_runtime
         )
         followup_run = await self.conversation_repository.create_agent_run(
             conversation_id=conversation.id,
@@ -496,12 +493,12 @@ class TurnCoordinator:
 
     async def assert_usage_preflight_allowed(
         self,
+        conversation: Conversation,
         *,
-        organization_id: UUID | None,
         user_id: UUID,
         agent_runtime: AgentRuntimeConfig,
     ) -> None:
-        """Refuse to start a run the account has no headroom for.
+        """Refuse to start a run in ``conversation`` the account has no headroom for.
 
         Public because starting a turn is not the only way a run begins:
         `ConversationRetryService.retry_failed_run` starts one too, and reaches
@@ -509,7 +506,8 @@ class TurnCoordinator:
         """
         await assert_usage_preflight_allowed(
             self.usage_service,
-            organization_id=organization_id,
+            organization_id=conversation.organization_id,
             user_id=user_id,
             agent_runtime=agent_runtime,
+            outside_audience=Audience.of(conversation).answers_outsiders,
         )

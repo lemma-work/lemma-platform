@@ -364,6 +364,25 @@ test("the provider's tab comes back to the completion page, carrying where it st
     assert.equal(failed.text, "access_denied");
 });
 
+test("a round trip the phone app started goes back to the app, and no other does", async () => {
+    const { phoneAppReturn } = await import("../src/connect/round-trip.ts");
+    // What the backend lands on for the phone's `return_to` of
+    // `/oauth/complete?client=mobile`: the outcome added to its query.
+    const landed = new URLSearchParams("client=mobile&connect=error&connector=gmail&code=OAUTH_PROVIDER_ERROR&reason=The+provider+ended+it%3F+Yes");
+    const back = phoneAppReturn(landed);
+    assert.equal(back, "lemma://connect/done?connect=error&connector=gmail&code=OAUTH_PROVIDER_ERROR&reason=The+provider+ended+it%3F+Yes");
+    // Read the way the app reads it: everything after the first `?`.
+    const read = new URLSearchParams(back!.split("?")[1]);
+    assert.equal(read.get("reason"), "The provider ended it? Yes");
+    assert.equal(read.get("client"), null);
+    assert.equal(phoneAppReturn(new URLSearchParams("client=mobile&connect=connected&connector=gmail&account=a1")),
+        "lemma://connect/done?connect=connected&connector=gmail&account=a1");
+
+    // The web's own and the desktop app's round trips are left as they were.
+    assert.equal(phoneAppReturn(new URLSearchParams("from=%2Ft&connect=connected&connector=gmail&account=a1")), null);
+    assert.equal(phoneAppReturn(new URLSearchParams("client=desktop&connect=connected")), null);
+});
+
 test("the provider's tab is given a face before it is pointed anywhere", async () => {
     const { openAuthorization } = await import("../src/connect/round-trip.ts");
     const body = { children: [] as { tag: string; textContent: string }[] };

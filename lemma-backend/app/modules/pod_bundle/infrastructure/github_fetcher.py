@@ -19,6 +19,31 @@ _REPO_URL_RE = re.compile(
 
 OperationRunner = Callable[[str, dict], Awaitable[dict]]
 
+#: What the pod's `github` connector answers when it cannot run for this
+#: person. Not a GitHub failure: the import falls back to anonymous access,
+#: which is all a public repository needs, and reports the refusal only when
+#: anonymous access did not reach the repository either.
+_CONNECTOR_REFUSALS = frozenset(
+    {
+        "CONNECTION_REQUIRED",
+        "CONNECTION_REQUIRES_PERSON",
+        "CONNECTOR_NEEDS_ACCOUNT",
+        "CONNECTOR_UNAVAILABLE",
+        "POD_CONNECTOR_NOT_FOUND",
+        "REAUTH_REQUIRED",
+    }
+)
+#: Anonymous failures an account would have avoided: GitHub answers 404 for a
+#: private repository asked for anonymously. A rate limit is not among them --
+#: it is retried as one, and replacing it would lose that.
+_NEEDS_AN_ACCOUNT = frozenset(
+    {"GITHUB_REPOSITORY_NOT_FOUND", "GITHUB_IMPORT_UNAUTHORIZED"}
+)
+
+
+def _is_connector_refusal(error: DomainError) -> bool:
+    return getattr(error, "code", None) in _CONNECTOR_REFUSALS
+
 
 def parse_repo_ref(
     *,
@@ -44,6 +69,8 @@ class GithubBundleFetcher:
     ):
         self._client = client
         self._run = operation_runner
+        #: Whether the archive came without an account, for the job's warning.
+        self.used_anonymous_access = False
 
     async def fetch_zipball(
         self,
@@ -52,13 +79,27 @@ class GithubBundleFetcher:
         repo: str,
         ref: str | None = None,
     ) -> bytes:
+        refusal: DomainError | None = None
         if self._run is not None:
-            return await self._fetch_authenticated(
-                owner=owner,
-                repo=repo,
-                ref=ref,
-            )
+            try:
+                return await self._fetch_authenticated(owner=owner, repo=repo, ref=ref)
+            except DomainError as exc:
+                if not _is_connector_refusal(exc):
+                    raise
+                refusal = exc
+        self.used_anonymous_access = True
+        try:
+            return await self._fetch_anonymous(owner=owner, repo=repo, ref=ref)
+        except GithubImportError as anonymous:
+            if refusal is not None and anonymous.code in _NEEDS_AN_ACCOUNT:
+                # Connecting (or declaring the connector) is the remedy, and
+                # the refusal is what carries the link to it.
+                raise refusal from anonymous
+            raise
 
+    async def _fetch_anonymous(
+        self, *, owner: str, repo: str, ref: str | None
+    ) -> bytes:
         base = pod_bundle_settings.pod_bundle_github_api_base.rstrip("/")
         path = f"/repos/{owner}/{repo}/zipball"
         if ref:
@@ -97,6 +138,8 @@ class GithubBundleFetcher:
                 )
             )
         except DomainError as exc:
+            if _is_connector_refusal(exc):
+                raise
             raise _map_connector_error(exc, owner=owner, repo=repo) from exc
 
         # The archive endpoint answers with a redirect to a short-lived signed

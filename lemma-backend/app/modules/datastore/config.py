@@ -88,9 +88,13 @@ class DatastoreSettings(DocumentWorkSettings):
     datastore_query_role: str = Field(
         default="lemma_datastore_query",
         description=(
-            "Non-superuser, NOBYPASSRLS database role that ad-hoc datastore SQL "
-            "queries run under (via SET LOCAL ROLE) so row-level security is "
-            "enforced. Must be a plain SQL identifier."
+            "Base name of the non-superuser, NOBYPASSRLS database roles that "
+            "ad-hoc datastore SQL queries run under (via SET LOCAL ROLE) so "
+            "row-level security is enforced. Each pod schema has its own role, "
+            "this name followed by the pod's id, holding privileges on that "
+            "schema alone; a role by exactly this name is the one every pod "
+            "shared before, and holds nothing on pod schemas once they are "
+            "migrated. Must be a plain SQL identifier."
         ),
     )
     datastore_query_statement_timeout_ms: int = Field(

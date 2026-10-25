@@ -7,11 +7,15 @@ import hashlib
 from collections.abc import Collection
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, tuple_
 from sqlalchemy.orm import Session
 
 from app.core.crypto import get_secret_cipher
 from app.core.domain.uow import IUnitOfWork
+from app.modules.connectors.contracts.pod_connectors import (
+    resolve_standing_pod_connector,
+    shared_connectors_running_as,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     AgentSurfaceStatus,
@@ -212,23 +216,54 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
 
-    async def get_by_platform_and_account_id(
+    async def get_bound_to_account(
         self,
-        *,
-        platform: str,
         account_id: UUID,
+        *,
+        platform: str | None = None,
         exclude_surface_id: UUID | None = None,
     ) -> AgentSurfaceEntity | None:
-        stmt = select(AgentSurface).where(
-            AgentSurface.surface_type == platform,
-            AgentSurface.account_id == account_id,
+        """A surface running as this account, through any pod connector.
+
+        Surfaces know only their connector, so this asks connectors for every
+        SHARED connector that runs as the account and then for a surface bound
+        to one of them. An account belongs to one organization, so the answer
+        is org-wide without saying so.
+        """
+        connectors = (await shared_connectors_running_as(self.uow, [account_id])).get(
+            account_id, []
         )
+        if not connectors:
+            return None
+        stmt = select(AgentSurface).where(
+            tuple_(AgentSurface.pod_id, AgentSurface.pod_connector_slug).in_(connectors)
+        )
+        if platform is not None:
+            stmt = stmt.where(AgentSurface.surface_type == platform)
         if exclude_surface_id is not None:
             stmt = stmt.where(AgentSurface.id != exclude_surface_id)
-        stmt = stmt.limit(1)
-        result = await self.session.execute(stmt)
+        result = await self.session.execute(stmt.limit(1))
         model = result.scalar_one_or_none()
-        return model.to_entity() if model else None
+        # Platform-blind when no platform is named, so a retired row on this
+        # account would otherwise 500 the creation of an unrelated surface.
+        return model.to_entity_or_none() if model else None
+
+    async def get_sharing_account_with(
+        self, surface: AgentSurfaceEntity, *, platform: str | None = None
+    ) -> AgentSurfaceEntity | None:
+        """Another surface running as the account ``surface``'s connector runs
+        as now, or ``None`` -- also when it runs on system credentials."""
+        if surface.pod_connector_slug is None:
+            return None
+        connected = await resolve_standing_pod_connector(
+            self.uow,
+            pod_id=surface.pod_id,
+            slug=surface.pod_connector_slug,
+            record_use=False,
+        )
+        return await self.get_bound_to_account(
+            connected.account_id, platform=platform, exclude_surface_id=surface.id
+        )
 
     async def get_system_credential_conflict_in_org(
         self,
@@ -247,7 +282,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
                 Pod.organization_id == target_org_id,
                 AgentSurface.surface_type == str(platform).upper(),
                 AgentSurface.credential_mode == "SYSTEM",
-                AgentSurface.account_id.is_(None),
+                AgentSurface.pod_connector_slug.is_(None),
             )
             .limit(1)
         )
@@ -272,7 +307,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         Slack routes an event to the *app*, so two surfaces naming one bot are
         two rows the platform cannot tell apart -- wherever they sit. That is
         why this one read is not scoped to the organization the way
-        `get_account_conflict_in_org` above it is.
+        `get_bound_to_account` is.
 
         Selects ``same_org`` alongside the row rather than filtering on it,
         because the caller needs the distinction rather than one side of it: a
@@ -336,33 +371,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             return None
         return PlatformIdentityHolder(surface=entity, same_org=same_org)
 
-    async def get_account_conflict_in_org(
-        self,
-        *,
-        pod_id: UUID,
-        account_id: UUID,
-        exclude_surface_id: UUID | None = None,
-    ) -> AgentSurfaceEntity | None:
-        target_org_id = (
-            select(Pod.organization_id).where(Pod.id == pod_id).scalar_subquery()
-        )
-        stmt = (
-            select(AgentSurface)
-            .join(Pod, Pod.id == AgentSurface.pod_id)
-            .where(
-                Pod.organization_id == target_org_id,
-                AgentSurface.account_id == account_id,
-            )
-            .limit(1)
-        )
-        if exclude_surface_id is not None:
-            stmt = stmt.where(AgentSurface.id != exclude_surface_id)
-        result = await self.session.execute(stmt)
-        model = result.scalar_one_or_none()
-        # Org-wide and platform-blind, so a retired row sharing this account
-        # would otherwise 500 the creation of an unrelated surface.
-        return model.to_entity_or_none() if model else None
-
     async def organization_for_pod(self, pod_id: UUID) -> UUID:
         """The organisation this surface is in, read from the pod that defines it.
 
@@ -407,7 +415,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
                 else str(entity.credential_mode)
             ),
             config=entity.config.model_dump(mode="json"),
-            account_id=entity.account_id,
+            pod_connector_slug=entity.pod_connector_slug,
             external_workspace_id=entity.external_workspace_id,
             external_tenant_id=entity.external_tenant_id,
             external_channel_id=entity.external_channel_id,
@@ -437,7 +445,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             else str(entity.credential_mode)
         )
         model.config = entity.config.model_dump(mode="json")
-        model.account_id = entity.account_id
+        model.pod_connector_slug = entity.pod_connector_slug
         model.external_workspace_id = entity.external_workspace_id
         model.external_tenant_id = entity.external_tenant_id
         model.external_channel_id = entity.external_channel_id

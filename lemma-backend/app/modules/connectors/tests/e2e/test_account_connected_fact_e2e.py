@@ -2,8 +2,8 @@
 
 Through the real connect-request route and callback, with the provider faked:
 a new grant and a renewed one each announce the fact in the callback's own
-transaction; it carries the purpose its starter recorded; and it says whether
-the browser that came back carried the starter's own session.
+transaction; it carries the purpose its starter recorded; and only the
+starter's own browser completes it.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from sqlalchemy import select
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.contracts.facts import ConnectorAccountConnected
 from app.modules.connectors.contracts.own_apps import (
-    grant_is_browser_bound,
     start_authorization,
 )
 from app.modules.connectors.infrastructure.models.account import Account
@@ -105,13 +104,9 @@ async def test_a_new_and_a_renewed_grant_each_announce_the_account(
     assert fact.connector_id == connector_id
     assert str(fact.organization_id) == org_id
     assert fact.purpose is None
-    # The person who started it came back with their own session.
-    assert fact.browser_bound is True
-    uow = SqlAlchemyUnitOfWork(db_session)
-    assert await grant_is_browser_bound(uow, account_id=UUID(first["id"]))
 
 
-async def test_a_purpose_is_carried_and_another_browser_is_not_bound(
+async def test_a_purpose_is_carried_and_another_browser_is_refused(
     authenticated_client,
     async_client,
     fixed_test_user,
@@ -120,7 +115,11 @@ async def test_a_purpose_is_carried_and_another_browser_is_not_bound(
     monkeypatch,
     announced,
 ):
-    """The consent link sent to someone else: their browser, the starter's state."""
+    """The consent link sent to someone else: their browser, the starter's state.
+
+    It used to complete there, unbound, landing the other person's provider
+    account on the starter (audit H2). Now it is refused before anything is
+    claimed, and the starter's own browser still completes it."""
     org_id = fixed_test_org["id"]
     connector_id = await _oauth_install(authenticated_client, db_session, org_id)
     _install_fake_auth_provider(monkeypatch, FakeAuthProvider())
@@ -141,16 +140,21 @@ async def test_a_purpose_is_carried_and_another_browser_is_not_bound(
     )
     someone_else = await _sign_up_verified_user(async_client)
 
-    back = await async_client.get(
+    params = {"state": state, "code": f"c-{uuid4().hex}", "format": "json"}
+
+    elsewhere = await async_client.get(
         "/connectors/connect-requests/oauth/callback",
-        params={"state": state, "code": f"c-{uuid4().hex}", "format": "json"},
+        params=params,
         headers={"Authorization": f"Bearer {someone_else['token']}"},
     )
+    assert elsewhere.status_code == 403, elsewhere.text
+    assert elsewhere.json()["code"] == "CONNECT_REQUEST_BROWSER_MISMATCH"
+    assert announced.facts == []
 
+    back = await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback", params=params
+    )
     assert back.status_code == 200, back.text
     (fact,) = announced.facts
     assert fact.purpose == "slack_teammate_app"
     assert str(fact.user_id) == fixed_test_user["id"]
-    assert fact.browser_bound is False
-    uow = SqlAlchemyUnitOfWork(db_session)
-    assert not await grant_is_browser_bound(uow, account_id=fact.account_id)

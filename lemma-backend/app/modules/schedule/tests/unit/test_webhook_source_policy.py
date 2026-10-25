@@ -98,18 +98,18 @@ def test_every_source_this_deployment_accepts_may_be_named_by_a_schedule():
 
     assert registry.sources, "a deployment that accepts no webhook source"
     for accepted in registry.sources:
-        # Named with an account, which is how an MCP server's events are
+        # Named with a pod connector, which is how an MCP server's events are
         # listened to; the sources that need none do not mind one.
         validate_webhook_source(
-            _webhook_create(config={"source": accepted}, account_id=uuid4()),
+            _webhook_create(config={"source": accepted}, pod_connector_slug="tracker"),
             registry,
         )
 
 
-def test_an_mcp_event_schedule_with_no_account_is_refused():
-    """It is subscribed on an account or not at all, so with none it could
-    never be delivered to."""
-    with pytest.raises(ScheduleValidationError, match="account"):
+def test_an_mcp_event_schedule_with_no_connector_is_refused():
+    """It is subscribed through a pod connector or not at all, so with none it
+    could never be delivered to."""
+    with pytest.raises(ScheduleValidationError, match="pod connector"):
         validate_webhook_source(
             _webhook_create(config={"source": "mcp", "event": "issue.created"}),
             default_webhook_sources(),
@@ -146,7 +146,7 @@ def test_a_schedule_that_provisioning_will_route_is_not_judged_on_its_source():
     validate_webhook_source(
         _webhook_create(
             config={"source": "gmail"},
-            account_id=uuid4(),
+            pod_connector_slug="tracker",
             connector_trigger_id="gmail:new_message",
         ),
         registry,

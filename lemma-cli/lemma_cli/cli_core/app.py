@@ -286,10 +286,12 @@ def main() -> None:
     import os
     import sys
 
+    from .deprecation import show_sdk_deprecations
     from .errors import report_cli_error
     from .versions import declare_client
 
     declare_client(os.environ)
+    show_sdk_deprecations()
 
     command = _invoked_command(sys.argv[1:])
     exit_status = "ok"

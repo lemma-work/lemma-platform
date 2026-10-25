@@ -1,15 +1,15 @@
 """A triggered agent wakes up standing in the repository the event came from.
 
 This is what separates "webhooks that start a chat" from a GitHub integration.
-The delivery says which repository and which branch; the schedule says which
-connected account to clone as; `parse_project_repo` downstream turns the pair
-into a checkout the agent's first `gh pr diff` runs inside.
+The delivery says which repository and which branch; `parse_project_repo`
+downstream turns that into a checkout the agent's first `gh pr diff` runs
+inside. Which account it clones as is the pod's `github` connector's decision,
+for the person the run acts for -- never an account the run's metadata names.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 
@@ -62,36 +62,24 @@ class TestWhatTheDeliverySays:
         assert _repo_context({"installation": {"id": 1}}, "push") == {}
 
 
-def _schedule(*, account_id, name: str | None = None):
-    """The two fields `_conversation_metadata` reads off a schedule row."""
-    return SimpleNamespace(account_id=account_id, name=name, schedule_type="TIME")
+def _schedule(*, pod_connector_slug: str | None = None, name: str | None = None):
+    """The fields `_conversation_metadata` reads off a schedule row."""
+    return SimpleNamespace(
+        pod_connector_slug=pod_connector_slug, name=name, schedule_type="TIME"
+    )
 
 
 class TestWhatTheScheduleAdds:
-    def test_the_schedules_account_becomes_the_clone_identity(self):
-        """Deliberately the person's account, not the App installation.
-
-        The sandbox's `git` and `gh` act as the user, so what an agent pushes is
-        attributed to whoever owns the repository rather than to a bot.
+    def test_the_repository_is_bound_and_no_account_rides_along(self):
+        """The clone identity is not the schedule's to name: the credential
+        bridge resolves the pod's `github` connector for whoever the run acts
+        for, so an account id in the metadata would be one more thing to trust.
         """
-        account_id = uuid4()
         metadata = _conversation_metadata(
-            _schedule(account_id=account_id),
+            _schedule(pod_connector_slug="github"),
             {"repo": {"owner": "octo", "repo": "api", "ref": "topic"}},
         )
-        assert metadata["repo"] == {
-            "owner": "octo",
-            "repo": "api",
-            "ref": "topic",
-            "account_id": str(account_id),
-        }
-
-    def test_a_schedule_with_no_account_still_binds_the_repository(self):
-        """The credential bridge falls back to resolving the user's account."""
-        metadata = _conversation_metadata(
-            _schedule(account_id=None), {"repo": {"owner": "octo", "repo": "api"}}
-        )
-        assert metadata["repo"] == {"owner": "octo", "repo": "api"}
+        assert metadata["repo"] == {"owner": "octo", "repo": "api", "ref": "topic"}
 
     def test_a_firing_that_names_no_repository_binds_no_repository(self):
         """No repo key at all -- but the metadata itself is no longer empty.
@@ -100,13 +88,13 @@ class TestWhatTheScheduleAdds:
         that is the only way the agent can tell that nobody is waiting on it.
         """
         for value in ({}, None, {"repo": {}}, {"repo": "octo/api"}):
-            metadata = _conversation_metadata(_schedule(account_id=uuid4()), value)
+            metadata = _conversation_metadata(
+                _schedule(pod_connector_slug="github"), value
+            )
             assert "repo" not in metadata
 
     def test_every_schedule_started_run_says_a_schedule_started_it(self):
-        metadata = _conversation_metadata(
-            _schedule(account_id=None, name="daily-invoices"), None
-        )
+        metadata = _conversation_metadata(_schedule(name="daily-invoices"), None)
         assert metadata["started_by"] == "SCHEDULE"
         assert metadata["schedule_name"] == "daily-invoices"
         assert metadata["schedule_type"] == "TIME"
@@ -121,7 +109,6 @@ class TestTheTwoHalvesAgree:
         mismatch here would not raise, it would quietly put the agent in an
         empty scratchpad.
         """
-        account_id = uuid4()
         context = _repo_context(
             {
                 "repository": REPOSITORY,
@@ -129,12 +116,13 @@ class TestTheTwoHalvesAgree:
             },
             "pull_request",
         )
-        metadata = _conversation_metadata(_schedule(account_id=account_id), context)
+        metadata = _conversation_metadata(
+            _schedule(pod_connector_slug="github"), context
+        )
         assert metadata is not None
 
         parsed = parse_project_repo(metadata["repo"])
         assert parsed is not None
         assert parsed.full_name == "octo/api"
         assert parsed.ref == "feature/commas"
-        assert parsed.account_id == account_id
         assert parsed.cwd.endswith("/octo/api")

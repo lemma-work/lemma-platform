@@ -30,6 +30,9 @@ from app.modules.agent_surfaces.services.surface_candidates import (
     fan_in_candidates,
 )
 from app.modules.agent_surfaces.services.created_groups import created_group_surfaces
+from app.modules.agent_surfaces.services.customer_held_secrets import (
+    signed_with_a_customer_secret,
+)
 from app.modules.agent_surfaces.services.group_ingress import (
     logged_and_addressed,
     own_bot_group_message,
@@ -228,7 +231,14 @@ class SurfaceInboundMixin:
                 credentials=await self.credential_resolver.for_surface(
                     identity_surface, arrived_on=arrival_number(parsed)
                 ),
-                installation_id=identity_surface.account_id or identity_surface.id,
+                installation_id=await self.credential_resolver.installation_identity(
+                    identity_surface
+                ),
+                # Every candidate verified against one app's secret, so the
+                # first speaks for all of them.
+                customer_held_secret=await signed_with_a_customer_secret(
+                    self.uow, identity_surface
+                ),
             )
         )
         matched_surface = await self.router.select_surface(
@@ -323,14 +333,21 @@ class SurfaceInboundMixin:
                 if surface is not None
                 # No surface on this path by definition: the event matched none.
                 else await self.credential_resolver.for_platform(
-                    platform, None, surface=None, arrived_on=arrival_number(parsed)
+                    platform, surface=None, arrived_on=arrival_number(parsed)
                 )
             )
             resolved_user = await self.router.resolve_sender(
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
-                installation_id=(surface.account_id or surface.id) if surface else None,
+                installation_id=(
+                    await self.credential_resolver.installation_identity(surface)
+                    if surface
+                    else None
+                ),
+                customer_held_secret=await signed_with_a_customer_secret(
+                    self.uow, surface
+                ),
             )
         display_name = agent_display_name(
             (await agent_name_for_surface(self.uow, surface)) if surface else None
@@ -446,7 +463,12 @@ class SurfaceInboundMixin:
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
-                installation_id=surface.account_id or surface.id,
+                installation_id=await self.credential_resolver.installation_identity(
+                    surface
+                ),
+                customer_held_secret=await signed_with_a_customer_secret(
+                    self.uow, surface
+                ),
             )
         outside = await answer_outside_the_pod(
             uow=self.uow,

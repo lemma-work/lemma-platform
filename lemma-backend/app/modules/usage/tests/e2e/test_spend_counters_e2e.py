@@ -388,8 +388,9 @@ async def test_a_limit_lifted_and_restored_counts_what_was_spent_meanwhile(
     assert counter.used_usd == await _ledger_total(db_manager, user_id)
 
 
+@pytest.mark.parametrize("already_marked", [False, True])
 async def test_an_insert_marking_a_counter_never_lands_inside_a_recount(
-    db_manager: DatabaseManager,
+    db_manager: DatabaseManager, already_marked: bool
 ) -> None:
     factory = SessionUnitOfWorkFactory(db_manager.session_factory)
     user_id = uuid4()
@@ -398,6 +399,17 @@ async def test_an_insert_marking_a_counter_never_lands_inside_a_recount(
     recounting = counted.model_copy(update={"excluded_source_types": ("elsewhere",)})
     async with factory() as uow:
         await request_accounting.check(uow.session, [counted])
+    if already_marked:
+        # A counter already waiting for a recount gets no new mark, but the
+        # insert must still hold its recount lock: a recount racing it would
+        # otherwise sum without the row and set the counter trusted.
+        async with db_manager.session_factory() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE usage_limit_counters SET basis = NULL WHERE user_id = :user"
+                ),
+                {"user": user_id},
+            )
 
     async with db_manager.session_factory() as inserting, inserting.begin():
         # The aggregate recorder's row, inserted and its counter marked, not

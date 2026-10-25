@@ -80,7 +80,7 @@ def test_slack_candidate_uses_app_token_and_account_scoped_key():
     account_id = UUID("019eadff-0000-7000-8000-000000000001")
     surface = _surface_entity(
         surface_type=SurfacePlatform.SLACK,
-        account_id=account_id,
+        pod_connector_slug="slack-bot",
         credential_mode=SurfaceCredentialMode.CUSTOM,
     )
     candidate = _candidate_from_surface(
@@ -89,6 +89,7 @@ def test_slack_candidate_uses_app_token_and_account_scoped_key():
             "app_token": "xapp-custom",
             "bot_token": "xoxb-workspace",
         },
+        account_id=account_id,
     )
 
     assert isinstance(candidate, NativeReceiverCandidate)
@@ -235,7 +236,9 @@ class _FakeResendService:
 
 
 def test_resend_candidate_is_keyed_by_the_system_key():
-    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+    surface = _surface_entity(
+        surface_type=SurfacePlatform.RESEND, pod_connector_slug=None
+    )
 
     candidate = _candidate_from_surface(surface, {"api_key": "re_live_x"})
 
@@ -279,7 +282,9 @@ async def test_resend_poll_collects_only_emails_newer_than_cursor():
 
 @pytest.mark.asyncio
 async def test_resend_ingest_resolves_surface_by_address_and_stores_it(monkeypatch):
-    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+    surface = _surface_entity(
+        surface_type=SurfacePlatform.RESEND, pod_connector_slug=None
+    )
 
     class _FakeRepo:
         def __init__(self, uow):

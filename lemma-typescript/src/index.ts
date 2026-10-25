@@ -35,8 +35,12 @@ export {
   RateLimitError,
   ServerError,
   NetworkError,
+  ConnectionRequiredError,
+  CONNECTION_ERROR_CODES,
+  isConnectionRequiredError,
   apiErrorFromStatus,
 } from "./http.js";
+export type { ConnectionErrorCode } from "./http.js";
 export * from "./types.js";
 export { readSSE, parseSSEJson } from "./streams.js";
 export type { SseRawEvent } from "./streams.js";

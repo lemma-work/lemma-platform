@@ -10,7 +10,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from app.core.authorization.context import Context
+from app.core.authorization.context import Context, ResourceRef
+from app.core.authorization.permissions import Permissions
 from app.modules.datastore.domain.datastore_entities import DatastoreTableEntity
 from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
 from app.modules.datastore.services.authorization import DatastoreAuthorization
@@ -52,6 +53,20 @@ async def resolve_query_row_scope(
         # there is nothing here to look up, index or scope.
         return False
     tables = await table_service.get_tables(pod_id, sorted(table_names), ctx=ctx)
+    # Reading a table's schema is not reading its rows. A query returns rows,
+    # so it needs what the records API needs: a grant of ``table.update`` alone
+    # (which implies ``table.read``) let an agent read every row by SQL.
+    for table in tables.values():
+        hydration = TableHydration.of(table)
+        await ctx.require(
+            Permissions.DATASTORE_RECORD_READ,
+            ResourceRef.hydrated_table(
+                pod_id,
+                table.id,
+                visibility=hydration.visibility,
+                owner_user_id=hydration.owner_user_id,
+            ),
+        )
     if ensure_index is not None:
         for table in tables.values():
             await ensure_index(table)

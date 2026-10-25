@@ -41,7 +41,7 @@ async def _wants_a_pooled_number(
     *,
     platform: SurfacePlatform,
     credential_mode: SurfaceCredentialMode | None,
-    account_id: UUID | None,
+    pod_connector_slug: str | None,
 ) -> bool:
     """Is this a WhatsApp surface that should be given a number of its own?
 
@@ -51,7 +51,7 @@ async def _wants_a_pooled_number(
     deployment with no pool, which keeps the shared line and the behaviour it
     had before any of this existed.
     """
-    if platform is not SurfacePlatform.WHATSAPP or account_id is not None:
+    if platform is not SurfacePlatform.WHATSAPP or pod_connector_slug is not None:
         return False
     mode = credential_mode or SurfaceCredentialMode.SYSTEM
     if mode is not SurfaceCredentialMode.SYSTEM:
@@ -69,7 +69,7 @@ async def create_surface_claiming_identity(
     name: str | None = None,
     config: SurfaceConfig | None = None,
     credential_mode: SurfaceCredentialMode | None = None,
-    account_id: UUID | None = None,
+    pod_connector_slug: str | None = None,
     ctx: Context | None = None,
     contacts_chosen: bool | None = None,
 ) -> AgentSurfaceEntity:
@@ -104,8 +104,21 @@ async def create_surface_claiming_identity(
     # `_ensure_shared_surface` does not come through here, deliberately, so
     # every personal pod keeps riding the shared line rather than each
     # consuming a number out of the pool.
+    if pod_connector_slug is not None and ctx is not None:
+        # The person binding it must be able to use the connector, checked
+        # once and here: an address is minted inside savepoints, and an
+        # authorization check releases the connection between statements,
+        # which a savepoint cannot survive. Below, the binding only has to
+        # still stand.
+        await service.account_port.account_for_binding(
+            pod_id=pod_id, slug=pod_connector_slug, platform=platform, ctx=ctx
+        )
+        ctx = None
     if await _wants_a_pooled_number(
-        uow, platform=platform, credential_mode=credential_mode, account_id=account_id
+        uow,
+        platform=platform,
+        credential_mode=credential_mode,
+        pod_connector_slug=pod_connector_slug,
     ):
         return await provision_pooled_whatsapp_surface(
             uow,
@@ -135,7 +148,7 @@ async def create_surface_claiming_identity(
         name=name,
         config=config or SurfaceConfig(),
         credential_mode=credential_mode,
-        account_id=account_id,
+        pod_connector_slug=pod_connector_slug,
         ctx=ctx,
         contacts_chosen=contacts_chosen,
     )

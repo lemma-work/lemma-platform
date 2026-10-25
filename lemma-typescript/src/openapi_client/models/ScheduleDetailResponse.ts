@@ -9,7 +9,10 @@ import type { ScheduleType } from './ScheduleType.js';
  * Schedule detail response.
  */
 export type ScheduleDetailResponse = {
-    account_id: (string | null);
+    /**
+     * @deprecated
+     */
+    account_id?: (string | null);
     agent_id: (string | null);
     agent_name?: (string | null);
     allowed_actions?: Array<string>;
@@ -41,6 +44,10 @@ export type ScheduleDetailResponse = {
      * Why the platform paused this schedule: `fire_cap` (it fired more than its daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system reason. Absent while it runs, or when a person paused it. Reactivating clears it.
      */
     paused_reason?: (string | null);
+    /**
+     * The pod connector it listens through, by slug.
+     */
+    pod_connector?: (string | null);
     pod_id: (string | null);
     schedule_type: ScheduleType;
     updated_at: string;

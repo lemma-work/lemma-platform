@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
-from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -33,9 +32,8 @@ class EventDescriptorResponse:
         payload_schema (EventDescriptorResponsePayloadSchema):
         schedule_type (ScheduleType): Type of schedule source.
         title (str):
-        account_id (None | Unset | UUID):
-        account_label (None | str | Unset):
         event (None | str | Unset):
+        pod_connector (None | str | Unset):
         server (None | str | Unset):
     """
 
@@ -45,9 +43,8 @@ class EventDescriptorResponse:
     payload_schema: EventDescriptorResponsePayloadSchema
     schedule_type: ScheduleType
     title: str
-    account_id: None | Unset | UUID = UNSET
-    account_label: None | str | Unset = UNSET
     event: None | str | Unset = UNSET
+    pod_connector: None | str | Unset = UNSET
     server: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -64,25 +61,17 @@ class EventDescriptorResponse:
 
         title = self.title
 
-        account_id: None | str | Unset
-        if isinstance(self.account_id, Unset):
-            account_id = UNSET
-        elif isinstance(self.account_id, UUID):
-            account_id = str(self.account_id)
-        else:
-            account_id = self.account_id
-
-        account_label: None | str | Unset
-        if isinstance(self.account_label, Unset):
-            account_label = UNSET
-        else:
-            account_label = self.account_label
-
         event: None | str | Unset
         if isinstance(self.event, Unset):
             event = UNSET
         else:
             event = self.event
+
+        pod_connector: None | str | Unset
+        if isinstance(self.pod_connector, Unset):
+            pod_connector = UNSET
+        else:
+            pod_connector = self.pod_connector
 
         server: None | str | Unset
         if isinstance(self.server, Unset):
@@ -102,12 +91,10 @@ class EventDescriptorResponse:
                 "title": title,
             }
         )
-        if account_id is not UNSET:
-            field_dict["account_id"] = account_id
-        if account_label is not UNSET:
-            field_dict["account_label"] = account_label
         if event is not UNSET:
             field_dict["event"] = event
+        if pod_connector is not UNSET:
+            field_dict["pod_connector"] = pod_connector
         if server is not UNSET:
             field_dict["server"] = server
 
@@ -139,32 +126,6 @@ class EventDescriptorResponse:
 
         title = d.pop("title")
 
-        def _parse_account_id(data: object) -> None | Unset | UUID:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                account_id_type_0 = UUID(data)
-
-                return account_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | Unset | UUID, data)
-
-        account_id = _parse_account_id(d.pop("account_id", UNSET))
-
-        def _parse_account_label(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        account_label = _parse_account_label(d.pop("account_label", UNSET))
-
         def _parse_event(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -173,6 +134,15 @@ class EventDescriptorResponse:
             return cast(None | str | Unset, data)
 
         event = _parse_event(d.pop("event", UNSET))
+
+        def _parse_pod_connector(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pod_connector = _parse_pod_connector(d.pop("pod_connector", UNSET))
 
         def _parse_server(data: object) -> None | str | Unset:
             if data is None:
@@ -190,9 +160,8 @@ class EventDescriptorResponse:
             payload_schema=payload_schema,
             schedule_type=schedule_type,
             title=title,
-            account_id=account_id,
-            account_label=account_label,
             event=event,
+            pod_connector=pod_connector,
             server=server,
         )
 

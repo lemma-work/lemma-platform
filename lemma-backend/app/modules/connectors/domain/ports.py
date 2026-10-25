@@ -119,10 +119,6 @@ class ConnectRequestRepositoryPort(Protocol):
         self, state: str, *, not_before: datetime
     ) -> Optional[ConnectRequestEntity]: ...
 
-    async def latest_grant(
-        self, *, account_id: UUID, user_id: UUID, auth_config_id: UUID
-    ) -> Optional[ConnectRequestEntity]: ...
-
 
 class ConnectorTriggerRepositoryPort(Protocol):
     async def get(self, id: str) -> Optional[ConnectorTriggerEntity]: ...
@@ -311,11 +307,16 @@ class OrganizationAccessPort(Protocol):
     async def organization_exists(self, organization_id: UUID) -> bool: ...
 
     async def user_has_organization_role(
-        self,
-        user_id: UUID,
-        organization_id: UUID,
-        allowed_roles: Sequence[str] | None = None,
-    ) -> bool: ...
+        self, user_id: UUID, organization_id: UUID
+    ) -> bool:
+        """Whether the person is a member of the organization at all."""
+        ...
+
+    async def user_holds_organization_permission(
+        self, user_id: UUID, organization_id: UUID, permission_id: str
+    ) -> bool:
+        """Whether their organization role carries ``permission_id``."""
+        ...
 
 
 class OperationDetailsPort(Protocol):

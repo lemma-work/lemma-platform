@@ -16,8 +16,9 @@ from another module is a lie about its scope.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import status
 from sqlalchemy import select
@@ -28,6 +29,7 @@ from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_operation import (
     ConnectorOperation,
 )
+from app.modules.connectors.infrastructure.models.pod_connector import PodAccount
 from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationMember,
 )
@@ -186,6 +188,14 @@ async def replace_function_resource_grants(
     return response.json()
 
 
+@dataclass(frozen=True)
+class SeededConnector:
+    """An installation with one mock operation, and its owner's account if any."""
+
+    auth_config_id: UUID
+    account: Account | None
+
+
 async def seed_connector_operation(
     db_session,
     *,
@@ -193,7 +203,7 @@ async def seed_connector_operation(
     organization_id: str,
     user_id=None,
     api_key: str | None = None,
-):
+) -> SeededConnector:
     app = await db_session.get(Connector, connector_id)
     if app is None:
         app = Connector(
@@ -288,7 +298,47 @@ async def seed_connector_operation(
         )
         db_session.add(account)
     await db_session.commit()
-    return account
+    return SeededConnector(auth_config_id=auth_config.id, account=account)
+
+
+async def declare_pod_connector(
+    authenticated_client,
+    pod_id: str,
+    *,
+    slug: str,
+    auth_config_id: UUID,
+    mode: str = "PER_MEMBER",
+    shared_pod_account_id: UUID | None = None,
+) -> dict:
+    """Declare a pod connector through the API, as a pod editor would."""
+    body: dict = {"slug": slug, "auth_config_id": str(auth_config_id), "mode": mode}
+    if shared_pod_account_id is not None:
+        body["shared_pod_account_id"] = str(shared_pod_account_id)
+    response = await authenticated_client.post(f"/pods/{pod_id}/connectors", json=body)
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+    return response.json()
+
+
+async def seed_pod_shared_account(db_session, *, pod_id: str, account: Account) -> UUID:
+    """``account`` in the pod, shared with the whole pod by its owner.
+
+    Written as the row the owner's own "share with pod" leaves, rather than
+    through the route: that route is the owner's, and these tests are about
+    what a function does with a shared account, not how it got shared.
+    """
+    pod_account = PodAccount(
+        id=uuid4(),
+        pod_id=UUID(str(pod_id)),
+        account_id=account.id,
+        auth_config_id=account.auth_config_id,
+        owner_user_id=account.user_id,
+        visibility="POD",
+        is_member_default=True,
+        source="MANUAL",
+    )
+    db_session.add(pod_account)
+    await db_session.commit()
+    return pod_account.id
 
 
 async def seed_user(db_session):
@@ -303,13 +353,12 @@ async def seed_user(db_session):
     return user
 
 
-def connector_function_code(
-    function_name: str,
-    connector_id: str,
-    *,
-    account_id: str | None = None,
-) -> str:
-    account_id_argument = f',\n        account_id="{account_id}"' if account_id else ""
+def connector_function_code(function_name: str, connector: str) -> str:
+    """A function that runs ``send_payload`` through the pod connector ``connector``.
+
+    Named by the pod connector's slug and nothing else: which account it runs
+    as is the connector's decision.
+    """
     return f"""#input_type_name: SendPayloadInput
 #output_type_name: SendPayloadResult
 #function_name: {function_name}
@@ -328,12 +377,12 @@ class SendPayloadResult(BaseModel):
 async def {function_name}(ctx: FunctionContext, data: SendPayloadInput) -> SendPayloadResult:
     pod = Pod.from_env()
     response = pod.connectors.execute(
-        "{connector_id}",
+        "{connector}",
         "send_payload",
         {{
             "message": data.message,
             "caller_user_id": str(ctx.user_id),
-        }}{account_id_argument},
+        }},
     )
     result = response.result
     return SendPayloadResult(
@@ -484,7 +533,7 @@ async def {function_name}(ctx: FunctionContext, data: BulkInput) -> BulkResult:
     )"""
 
 
-def mcp_function_code(function_name: str, auth_config_name: str) -> str:
+def mcp_function_code(function_name: str, pod_connector: str) -> str:
     return f"""#input_type_name: AddInput
 #output_type_name: AddResult
 #function_name: {function_name}
@@ -502,7 +551,7 @@ class AddResult(BaseModel):
 async def {function_name}(ctx: FunctionContext, data: AddInput) -> AddResult:
     pod = Pod.from_env()
     response = pod.connectors.execute(
-        "{auth_config_name}",
+        "{pod_connector}",
         "add",
         {{"a": data.a, "b": data.b}},
     )

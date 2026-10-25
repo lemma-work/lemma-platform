@@ -12,7 +12,6 @@ from supertokens_python.recipe.session.asyncio import (
     get_session,
 )
 
-from app.core.authorization.dependencies import reject_delegated_workload_anywhere
 from app.core.config import settings
 from app.modules.identity.config import identity_settings
 from app.core.helpers.identifiers import normalize_mobile_e164
@@ -478,7 +477,6 @@ async def create_desktop_auth_request(
     "/desktop/requests/{request_id}/complete",
     include_in_schema=False,
     operation_id="auth.desktop.request.complete",
-    dependencies=[reject_delegated_workload_anywhere("complete a desktop sign-in")],
     response_model=DesktopAuthCompleteResponse,
 )
 async def complete_desktop_auth_request(

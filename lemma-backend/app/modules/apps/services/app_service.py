@@ -15,6 +15,7 @@ from app.core.authorization.context import (
     ResourceRef,
     ResourceType,
 )
+from app.core.app_pin import forget_app_host_after_commit
 from app.core.html_document import wrap_html_fragment
 from app.core.ports.widget_content import WidgetArtifact
 from app.core.widget_html_validation import lint_app_html
@@ -333,6 +334,7 @@ class AppService:
                 public_slug=public_slug,
                 current_app_id=app.id,
             )
+            forget_app_host_after_commit(self.repository, app.public_slug)
             app.public_slug = public_slug
         if update_entity.visibility is not None:
             app.visibility = app_visibility_value(update_entity.visibility).value
@@ -350,9 +352,7 @@ class AppService:
         user_id: UUID,
         ctx: Context | None = None,
     ) -> _AppDeletionCleanup:
-        """Authorize + delete the app row (DB only). Returns the storage paths to
-        purge so the caller can clean up AFTER this UoW commits — the storage
-        cleanup (potentially many objects) must not hold a connection."""
+        """Authorize and delete the row; returns the storage to purge after commit."""
         app = await self.repository.get_by_name(pod_id, name)
         if not app:
             raise AppNotFoundError(f"App {name} not found")
@@ -371,6 +371,7 @@ class AppService:
             )
         releases = await self.repository.list_releases(app.id)
         await self.repository.delete(app.id)
+        forget_app_host_after_commit(self.repository, app.public_slug)
         return _AppDeletionCleanup(
             app_id=app.id,
             source_archive_path=app.source_archive_path,
@@ -600,8 +601,7 @@ class AppService:
         user_id: UUID,
         ctx: Context | None = None,
     ) -> tuple[UUID, str]:
-        """Resolve + authorize the dist archive's storage location (DB access).
-        Pair with ``read_archive`` (see ``resolve_source_archive``)."""
+        """Authorize the dist archive's location; read it with ``read_archive``."""
         app = await self.get_app_by_name(
             pod_id,
             name,

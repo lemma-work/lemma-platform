@@ -10,6 +10,10 @@ import { readSkills, skillsKey, SKILLS_FRESH } from "@/skills/read-skills";
 import { changedLately } from "@/thread/memory-notes";
 import { useMemoryNotes } from "./what-it-remembers";
 import type { AboutSection } from "./about-sections";
+import { missingForMe } from "@/data/pod-connectors";
+import { asMine, usePodMay } from "@/connect/pod-connect";
+import { CONNECTOR_USE } from "@/data/agents";
+import { useMe } from "@/session/use-me";
 
 /** One line under a part of About on the overview: what is true there now.
  *
@@ -53,8 +57,11 @@ export function useAboutLines(pod: Pod): Record<AboutSection, AboutLine> {
     const schedules = useSchedules(pod.id);
     const agents = useQuery({ queryKey: ["agents", pod.id], queryFn: () => source.listAgents(pod.id), staleTime: 60_000 });
     const runsOn = useRunsOn(pod.id, pod.orgId);
-    const connectors = useQuery({ queryKey: ["connectors"], queryFn: () => source.listConnectors() });
-    const accounts = useQuery({ queryKey: ["accounts", pod.orgId], queryFn: () => source.listAccounts(pod.orgId) });
+    const podConnectors = useQuery({ queryKey: ["pod-connectors", pod.id], queryFn: () => source.listPodConnectors(pod.id), staleTime: 30_000 });
+    const accounts = useQuery({ queryKey: ["accounts", pod.orgId], queryFn: () => source.listAccounts(pod.orgId), staleTime: 30_000 });
+    const me = useMe() ?? "";
+    /* Asked only of a server that does not say `can_use` on each connector. */
+    const podUse = usePodMay(pod.id, CONNECTOR_USE, (podConnectors.data ?? []).some((one) => one.canUse === null));
 
     const asking = knocking.data?.length ?? 0;
     const people: AboutLine = {
@@ -109,23 +116,24 @@ export function useAboutLines(pod: Pod): Record<AboutSection, AboutLine> {
         needs: Boolean(runsOn.setup),
     };
 
-    const titles = new Map((connectors.data ?? []).map((one) => [one.id, one.title]));
-    const reaches = [...new Set((accounts.data ?? []).map((one) => titles.get(one.connectorId) ?? one.connectorId))];
-    /* An account that cannot be used — not installed, or signed out — is
-       one somebody has to fix, the same count Connectors leads with. */
-    const ailing = (accounts.data ?? []).filter((one) => !one.usable).length;
+    /* The pod's own connectors, by the slug it calls them, and whether any
+       waits on somebody: one with no account shared, or one this pod asks
+       everyone to connect that I have not. */
+    const declared = podConnectors.data ?? [];
+    const stuck = declared.filter((one) => one.status !== "READY").length
+        + (accounts.isSuccess ? missingForMe(declared, asMine(accounts.data), me, podUse.answered ? podUse.allowed : null).length : 0);
     const connected: AboutLine = {
-        text: accounts.isSuccess
-            ? reaches.length
-                ? ailing ? count(ailing, "account needs", "accounts need") + " attention" : firstFew(reaches, 3)
+        text: podConnectors.isSuccess
+            ? declared.length
+                ? stuck ? count(stuck, "connection needs", "connections need") + " attention" : firstFew(declared.map((one) => one.slug), 3)
                 : "Nothing connected yet"
             : null,
-        needs: ailing > 0,
+        needs: stuck > 0,
     };
 
     return {
         people,
-        connectors: connected,
+        connections: connected,
         channels,
         "works-with": worksWith,
         skills: taught,

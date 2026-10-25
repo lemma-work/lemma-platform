@@ -34,6 +34,7 @@ from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent_surfaces.services.surface_connector import bound_account
 from app.modules.agent_surfaces.api import group_public as public_api
 from app.modules.agent_surfaces.api.dependencies import get_surface_service
 from app.modules.agent_surfaces.api.group_access import GroupAccess
@@ -84,7 +85,6 @@ from app.modules.channels.contracts.source_settings import (
     SourceSettingsResponse,
     lists_source_settings,
 )
-from app.modules.connectors.contracts.surfaces import account
 
 router = APIRouter(prefix="/pods/{pod_id}/channels", tags=["Channel Sources"])
 
@@ -135,7 +135,7 @@ async def _bot_username(
     reach = await SurfaceReachResolver().resolve(
         surface,
         credential_resolver=service.credential_resolver,
-        find_account=partial(account, uow),
+        find_account=partial(bound_account, uow),
         surface_repository=service.surface_repository,
     )
     return reach.handle

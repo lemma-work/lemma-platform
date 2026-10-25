@@ -50,8 +50,8 @@ always reaches a conclusion a person can see.
   function, the system shall allow exactly that and refuse everything else.
 - While a function runs on a person's behalf, the system shall give it no more
   access than that person has, even where its own grants would allow more.
-- If a function performs a destructive act — dropping a table, deleting records
-  in bulk — then the system shall require either a standing grant for that act
+- If a function performs a destructive act — dropping a table, deleting
+  records — then the system shall require either a standing grant for that act
   or a person's approval at the time.
 - When a person changes a function's grants, the system shall apply the change
   to the next run and not to one already in flight.

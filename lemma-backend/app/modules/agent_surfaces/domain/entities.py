@@ -310,8 +310,13 @@ class AgentSurfaceEntity(AggregateRoot):
     surface_type: SurfacePlatform
     credential_mode: SurfaceCredentialMode = SurfaceCredentialMode.SYSTEM
     config: SurfaceConfig
+    #: The pod connector this surface runs as, by slug: a SHARED connector
+    #: whose account its owner shared with the pod. ``None`` runs on the
+    #: deployment's own credentials. The account is never stored here; it is
+    #: resolved through the connector on every use, so an owner withdrawing it
+    #: stops the surface at once.
+    pod_connector_slug: str | None = None
     # Entity-level routing/derived fields (stored as dedicated DB columns)
-    account_id: UUID | None = None
     external_workspace_id: str | None = None
     external_tenant_id: str | None = None
     external_channel_id: str | None = None
@@ -342,7 +347,7 @@ class AgentSurfaceEntity(AggregateRoot):
         config: SurfaceConfig | None = None,
         agent_id: UUID,
         credential_mode: SurfaceCredentialMode | None = None,
-        account_id: UUID | None = None,
+        pod_connector_slug: str | None = None,
         external_workspace_id: str | None = None,
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
@@ -351,7 +356,9 @@ class AgentSurfaceEntity(AggregateRoot):
         resolved = SurfacePlatform(str(surface_type).upper())
         resolved_name = (name or "").strip() or cls.default_name_for(resolved)
         config = config if config is not None else SurfaceConfig()
-        cls._validate_binding(surface_type=resolved, account_id=account_id)
+        cls._validate_binding(
+            surface_type=resolved, pod_connector_slug=pod_connector_slug
+        )
 
         initial_status = (
             AgentSurfaceStatus.PENDING_ADMIN_CONSENT
@@ -367,11 +374,11 @@ class AgentSurfaceEntity(AggregateRoot):
             credential_mode=credential_mode
             or (
                 SurfaceCredentialMode.CUSTOM
-                if account_id is not None
+                if pod_connector_slug is not None
                 else SurfaceCredentialMode.SYSTEM
             ),
             config=config,
-            account_id=account_id,
+            pod_connector_slug=pod_connector_slug,
             external_workspace_id=external_workspace_id,
             external_tenant_id=external_tenant_id,
             external_channel_id=external_channel_id,
@@ -399,14 +406,15 @@ class AgentSurfaceEntity(AggregateRoot):
     def _validate_binding(
         *,
         surface_type: SurfacePlatform,
-        account_id: UUID | None,
+        pod_connector_slug: str | None,
     ) -> None:
         if (
             surface_type in {SurfacePlatform.SLACK, SurfacePlatform.TEAMS}
-            and account_id is None
+            and pod_connector_slug is None
         ):
             raise AgentSurfaceValidationError(
-                f"{surface_type.value} surfaces require account_id"
+                f"{surface_type.value} surfaces run as a pod connector: name "
+                "one in pod_connector"
             )
 
     def activate(self) -> None:
@@ -426,21 +434,25 @@ class AgentSurfaceEntity(AggregateRoot):
         self,
         config: SurfaceConfig,
         *,
-        account_id: UUID | None = None,
+        pod_connector_slug: str | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
         external_workspace_id: str | None = None,
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
         surface_identity_id: str | None = None,
     ) -> None:
-        next_account_id = account_id if account_id is not None else self.account_id
+        next_slug = (
+            pod_connector_slug
+            if pod_connector_slug is not None
+            else self.pod_connector_slug
+        )
         self._validate_binding(
-            surface_type=self.surface_type, account_id=next_account_id
+            surface_type=self.surface_type, pod_connector_slug=next_slug
         )
         self.config = config
         if credential_mode is not None:
             self.credential_mode = credential_mode
-        self.account_id = next_account_id
+        self.pod_connector_slug = next_slug
         if external_workspace_id is not None:
             self.external_workspace_id = external_workspace_id
         if external_tenant_id is not None:

@@ -234,9 +234,9 @@ class PodRoleService:
         was custom -- while the request had already been admitted by the
         ``pod.member.manage`` dependency that says both may.
 
-        An organization owner is exempt from 2 and 3: they already hold every
-        authority the organization can express, so there is nothing for the
-        bound to protect -- the same exemption ``assert_can_confer`` makes.
+        An organization owner is exempt from 2 and 3: their org role already
+        carries every pod's admin permissions, so there is nothing for the bound
+        to protect.
         """
         if requester_is_org_owner:
             return

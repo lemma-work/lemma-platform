@@ -45,7 +45,12 @@ async def resolve_shared_verified_identity(
         identity.revoked_at is not None
         or user is None
         or (
+            # A shared bot's binding stands on the number the platform
+            # attested. One made through an org's own app stands on the mailbox
+            # code alone: that app's numbers are its secret holder's word, so
+            # none was recorded.
             has_shared_system_bot(event.platform)
+            and installation_id is None
             and (
                 not identity.verified_phone
                 or identity.verified_phone != user.mobile_number

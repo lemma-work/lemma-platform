@@ -67,7 +67,7 @@ def _surface() -> AgentSurfaceEntity:
         name="teams",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.TEAMS,
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         external_tenant_id=TENANT,
         surface_identity_id="28:bot",
         config=SurfaceConfig(),

@@ -28,6 +28,7 @@ from app.modules.agent_surfaces.services.onboarding_inputs import (
 from app.modules.agent_surfaces.services.onboarding_private_delivery import (
     PrivateDeliveryUnavailable,
 )
+from app.modules.agent_surfaces.services.surface_connector import bound_account_ids
 from app.modules.connectors.contracts.surfaces import account_with_secrets
 from app.modules.pod.contracts.agent_access import live_pod_organization_id
 
@@ -138,10 +139,16 @@ async def _installation_credentials(
             or not surface.is_active
             or not surface.status.accepts_inbound_events()
             or not surface.matches_tenant(tenant)
-            or surface.account_id is None
+            or surface.pod_connector_slug is None
         ):
             raise PrivateDeliveryUnavailable("The Slack installation is unavailable")
-        found = await account_with_secrets(uow, surface.account_id)
+        # Read with no side effect: this answers inside Slack's three seconds.
+        account_id = (await bound_account_ids(uow, [surface])).get(surface.id)
+        found = (
+            await account_with_secrets(uow, account_id)
+            if account_id is not None
+            else None
+        )
         organization_id = await live_pod_organization_id(uow, surface.pod_id)
         if (
             found is None

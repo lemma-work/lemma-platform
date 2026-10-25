@@ -196,14 +196,13 @@ Grant each folder the agent reads (`folder.read`; add `folder.write` for uploads
 
 ## Using connectors (delegated account)
 
-An agent calls a third-party app through a **granted connector** exercised on the
-**invoking user's connected account** — it never holds raw credentials. Grant the
-connector (`resource_type: "connector"`, `resource_name: "<connector-id>"`,
+An agent calls a third-party app through one of the **pod's connectors** — it
+never holds raw credentials. Grant the pod connector by slug
+(`resource_type: "connector"`, `resource_name: "<slug>"`,
 `permission_ids: ["connector.use"]`), and either give the agent `POD`-level connector
-tools or `WORKSPACE_CLI` so it can run `lemma connectors operations …`. The backend
-resolves the configured fixed account or the invoking user's account from the
-workload token; if that user has no connected account the call fails with an
-account-resolution error. Discover operation ids/payloads before relying on them —
+tools or `WORKSPACE_CLI` so it can run `lemma connectors …`. A PER_MEMBER connector
+runs as the invoking member's own account (`CONNECTION_REQUIRED`, with a connect
+link, when they have none); a SHARED one as the account its owner shared. Discover operation ids/payloads before relying on them —
 see `connectors.md`.
 
 ## Writing instructions
@@ -245,14 +244,13 @@ Grants are **name-based** and **portable**:
 | --- | --- | --- |
 | `datastore_table` | the table name | `tickets` |
 | `folder` | the **stored folder path, no prefix** | `/knowledge` |
-| `connector` | the connector id | `gmail` |
-| `connector_account` | a specific connected account | pin a shared account |
+| `connector` | the pod connector's slug | `gmail`, `support-inbox` |
 | `function` | a function name (exposes it as a tool) | `save_expense` |
 | `agent` | another agent's name (exposes it as a tool) | `triage-agent` |
 
-`connector` resolves the *invoking user's* own account and is what you want
-almost always; `connector_account` pins one shared account (a team inbox, a bot
-token) for every caller. See `authorization-model.md` §8.
+An agent is granted a pod connector, never an account: for a team inbox, the pod
+declares a SHARED connector (`support-inbox`) and the agent is granted that. See
+`authorization-model.md` §8.
 
 They round-trip in bundles: export embeds the agent's current grants under
 `permissions.grants`, and import **replaces** the agent's grants with that list on

@@ -18,6 +18,7 @@ from uuid import UUID
 
 from pydantic import JsonValue
 
+from app.core.authorization.context import Context
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -45,10 +46,10 @@ from app.modules.connectors.services.mcp_event_subscriptions import (
 
 @dataclass(frozen=True, slots=True)
 class McpEventOffer:
-    """One event a person could start standing work on."""
+    """One event standing work in a pod could start on: an event the MCP
+    server behind one of the pod's connectors lists, through that connector."""
 
-    account_id: UUID
-    account_label: str | None
+    pod_connector: str
     server: str
     name: str
     description: str | None
@@ -72,6 +73,10 @@ class McpListening:
     refresh_before: datetime | None
     #: The server it listens to, by the name its install was given.
     server: str | None = None
+    #: The account it was made on. A schedule names a pod connector, not an
+    #: account, so whether this is still the account that connector means is
+    #: the schedule's question (`schedule/services/mcp_listening_reconciler`).
+    account_id: UUID | None = None
 
 
 def _listening(
@@ -87,6 +92,7 @@ def _listening(
         last_event_at=stored.last_event_at,
         refresh_before=stored.refresh_before,
         server=server,
+        account_id=stored.account_id,
     )
 
 
@@ -198,22 +204,41 @@ async def mcp_listening_states(
 
 
 async def mcp_event_offers(
-    uow: SqlAlchemyUnitOfWork, *, user_id: UUID, organization_id: UUID
+    uow: SqlAlchemyUnitOfWork, ctx: Context, *, pod_id: UUID
 ) -> list[McpEventOffer]:
-    offers = await McpEventRepository(uow.session).offers_for(
-        user_id=user_id, organization_id=organization_id
+    """The events on the pod's MCP connectors this person may listen through.
+
+    By pod connector, never by account: which account a schedule on one
+    listens through is that connector's decision, made when it subscribes.
+    """
+    from app.core.authorization.context import ResourceRef
+    from app.core.authorization.permissions import Permissions
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodConnectorRepository,
+    )
+
+    usable = [
+        connector
+        for connector in await PodConnectorRepository(uow).list_by_pod(pod_id)
+        if await ctx.can(
+            Permissions.CONNECTOR_USE, ResourceRef.connector(pod_id, connector.id)
+        )
+    ]
+    offers = await McpEventRepository(uow.session).offers_for_installs(
+        list({connector.auth_config_id for connector in usable})
     )
     return [
         McpEventOffer(
-            account_id=offer.account_id,
-            account_label=offer.account_label,
+            pod_connector=connector.slug,
             server=offer.install_name,
             name=offer.event.name,
             description=offer.event.description,
             input_schema=offer.event.input_schema,
             payload_schema=offer.event.payload_schema,
         )
+        for connector in usable
         for offer in offers
+        if offer.auth_config_id == connector.auth_config_id
     ]
 
 

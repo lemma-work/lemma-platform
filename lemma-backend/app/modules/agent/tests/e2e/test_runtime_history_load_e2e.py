@@ -435,6 +435,72 @@ async def test_what_a_merge_folded_in_is_loaded_under_a_bound_of_its_own(
     ]
 
 
+async def test_the_run_less_read_stops_at_its_bounds(db_session, scenario):
+    """Each side is walked newest first and stops at its bound. Numbering every
+    run-less row with a window function read and sorted all of them, full text
+    included, on every run of a long-lived conversation."""
+    from sqlalchemy import text, union_all
+
+    from app.modules.agent.infrastructure.runtime_history_queries import (
+        _newest_unattached_ids,
+    )
+
+    await scenario.create_org_with_pod(name_prefix="HistoryPlan")
+    [run_id] = await _seed(db_session, scenario, runs=1, messages_per_run=2)
+    conversation_id = (await db_session.get(AgentRunModel, run_id)).conversation_id
+    for index in range(200):
+        db_session.add(
+            MessageModel(
+                id=uuid4(),
+                conversation_id=conversation_id,
+                agent_run_id=None,
+                sequence=1_000 + index,
+                role="assistant",
+                kind="NOTIFICATION",
+                text=f"daily report {index} " + "x" * 2_000,
+                created_at=_BASE + timedelta(minutes=index),
+            )
+        )
+    await db_session.flush()
+
+    loaded = await _repo(db_session).load_unattached_messages(
+        conversation_id,
+        after_sequence=None,
+        before_sequence=None,
+        limit=21,
+        folded_limit=41,
+    )
+    assert [message.sequence for message in loaded] == list(range(1_179, 1_200))
+
+    union = union_all(
+        *(
+            _newest_unattached_ids(
+                conversation_id,
+                folded=folded,
+                limit=bound,
+                after_sequence=None,
+                before_sequence=None,
+            )
+            for folded, bound in ((False, 21), (True, 41))
+        )
+    )
+    compiled = union.compile(
+        dialect=db_session.bind.dialect, compile_kwargs={"literal_binds": True}
+    )
+    plan = (
+        await db_session.execute(text(f"EXPLAIN (FORMAT JSON) {compiled}"))
+    ).scalar_one()
+
+    def nodes(node):
+        yield node
+        for child in node.get("Plans", []):
+            yield from nodes(child)
+
+    kinds = [node["Node Type"] for node in nodes(plan[0]["Plan"])]
+    assert "WindowAgg" not in kinds
+    assert kinds.count("Limit") == 2
+
+
 async def test_the_first_reply_to_a_notification_is_read_against_it(
     db_session, scenario
 ):

@@ -21,13 +21,15 @@ def _provisioned_only(
     schedules: List[ScheduleEntity], criteria: Mapping[str, object]
 ) -> List[ScheduleEntity]:
     """A routing key only provisioning writes matches only schedules that were
-    provisioned -- those bound to an account. Create and update already drop
-    such keys from what an author sends; this holds for any row that got one
-    another way, so a typed-in trigger or installation id never routes another
-    tenant's events into it."""
+    provisioned -- those bound to a pod connector. Create and update already
+    drop such keys from what an author sends; this holds for any row that got
+    one another way, so a typed-in trigger or installation id never routes
+    another tenant's events into it."""
     if not PROVISIONED_CONFIG_KEYS & set(criteria):
         return schedules
-    return [schedule for schedule in schedules if schedule.account_id is not None]
+    return [
+        schedule for schedule in schedules if schedule.pod_connector_slug is not None
+    ]
 
 
 class WebhookScheduleMatcher:

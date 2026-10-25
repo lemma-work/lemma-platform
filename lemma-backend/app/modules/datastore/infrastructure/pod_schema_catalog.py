@@ -3,6 +3,11 @@
 Pod schemas live in the datastore database, which Alembic does not manage and
 which is not the database that says whether a pod still exists. Creation and
 removal are therefore both done here, by name, against ``pg_namespace``.
+
+Each schema has a query role of its own (``query_role``) that lives and dies
+with it: made in the transaction that creates the schema, dropped in the one
+that drops it. Roles are cluster-wide, so one left behind by a dropped schema
+would outlive its pod for good.
 """
 
 from __future__ import annotations
@@ -12,7 +17,8 @@ from sqlalchemy import text
 from app.modules.datastore.infrastructure import pod_schema_memo
 from app.modules.datastore.infrastructure.query_role import (
     POD_SCHEMA_RE,
-    schema_access_statements,
+    drop_pod_role,
+    grant_at_birth,
 )
 
 
@@ -32,13 +38,14 @@ async def lock_schema_bootstrap(conn, schema_name: str) -> None:
 
 
 async def bootstrap_pod_schema(conn, schema_name: str, *, grant: bool) -> None:
-    """Create the schema if absent, readable by the query role from birth.
+    """Create the schema if absent, readable by its own query role from birth.
 
-    The access statements ride the creating transaction, so a schema never
-    exists without them. Only on creation: the existence check is race-free
-    under the lock, and re-issuing them for every table would write the catalog
-    each time. ``grant`` is false when the role could not be ensured; such a
-    schema heals on its first query instead.
+    The role and its access ride the creating transaction, so a schema never
+    exists without them unless the deployment cannot create roles at all
+    (``grant_at_birth`` is best-effort). Only on creation: the existence check
+    is race-free under the lock, and re-issuing them for every table would
+    write the catalog each time. ``grant`` is false for a caller that leaves the
+    access to a heal on the schema's first query.
     """
     await lock_schema_bootstrap(conn, schema_name)
     exists = await conn.scalar(
@@ -49,8 +56,15 @@ async def bootstrap_pod_schema(conn, schema_name: str, *, grant: bool) -> None:
         return
     await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
     if grant:
-        for statement in schema_access_statements(schema_name):
-            await conn.execute(text(statement))
+        await grant_at_birth(conn, schema_name)
+
+
+async def drop_pod_schema(conn, schema_name: str) -> None:
+    """Drop one pod schema, everything in it, and its query role."""
+    if not POD_SCHEMA_RE.fullmatch(schema_name):
+        raise ValueError(f"not a pod schema: {schema_name!r}")
+    await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
+    await drop_pod_role(conn, schema_name)
 
 
 class PodSchemaCatalog:
@@ -78,9 +92,9 @@ class PodSchemaCatalog:
             return [str(name) for name in result.scalars()]
 
     async def drop_schema(self, schema_name: str) -> None:
-        """Drop one pod schema and everything in it, in its own transaction."""
+        """Drop one pod schema and its role, in its own transaction."""
         if not POD_SCHEMA_RE.fullmatch(schema_name):
             raise ValueError(f"not a pod schema: {schema_name!r}")
         async with self._engine.begin() as conn:
-            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
+            await drop_pod_schema(conn, schema_name)
         pod_schema_memo.forget(schema_name)

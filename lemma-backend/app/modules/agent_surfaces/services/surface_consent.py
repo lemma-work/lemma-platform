@@ -8,6 +8,8 @@ surface once it has.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.services.surface_connector import bound_account_id
+from app.modules.connectors.contracts.pod_connectors import PodConnectorRefusal
 from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 
 from app.modules.agent_surfaces.domain.credentials import WhatsAppCredentials
@@ -120,14 +122,22 @@ class SurfaceConsentMixin:
         back to: any connected account is the org's own WhatsApp Business app
         and always needs its webhook configured.
         """
-        if surface.account_id is None:
+        if surface.pod_connector_slug is None:
             return False
         if surface.surface_type is SurfacePlatform.WHATSAPP:
             return True
 
         if self._account_port is None or self._auth_config_port is None:
             return False
-        account = await self._account_port.get_account(surface.account_id)
+        try:
+            account_id = await bound_account_id(self.surface_repository.uow, surface)
+        except PodConnectorRefusal:
+            return False
+        account = (
+            await self._account_port.get_account(account_id)
+            if account_id is not None
+            else None
+        )
         if account is None or account.auth_config_id is None:
             return False
         auth_config = await self._auth_config_port.get_auth_config(
@@ -158,17 +168,18 @@ class SurfaceConsentMixin:
         """
         if surface.surface_type is not SurfacePlatform.WHATSAPP:
             return reveal_secret(surface_settings.whatsapp_verify_token)
-        if surface.account_id is not None and self._credential_resolver is not None:
+        if (
+            surface.pod_connector_slug is not None
+            and self._credential_resolver is not None
+        ):
             try:
                 credentials = WhatsAppCredentials.of(
-                    await self._credential_resolver.for_account(
-                        surface.account_id, platform=SurfacePlatform.WHATSAPP
-                    )
+                    await self._credential_resolver.for_surface(surface)
                 )
             except Exception:
                 logger.warning(
                     "agent_surfaces.surface_service.whatsapp_verify_token_unavailable.degraded",
-                    account_id=str(surface.account_id),
+                    surface_id=str(surface.id),
                     exc_info=True,
                 )
                 return None

@@ -249,6 +249,7 @@ class AgentRunnerService:
                 runtime_profile_snapshot=runtime_profile_snapshot,
                 resolve_configured_accounts=self._resolve_configured_accounts,
             )
+            run = run.with_memory_after_turn(ctx.memory_after_turn)
             full_toolsets = await self.tool_assembler.assemble(
                 agent=agent,
                 conversation=conversation,

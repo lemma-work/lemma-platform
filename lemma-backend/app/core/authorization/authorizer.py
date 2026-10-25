@@ -18,13 +18,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.context import (
-    ActorType,
+    RESOURCE_NOT_IN_POD,
+    Assistant,
     AuthorizationDecision,
     Context,
+    OtherPod,
+    Person,
     PrincipalRef,
     ResourceRef,
     ResourceType,
     ResourceVisibility,
+    WorkloadKind,
 )
 from app.core.authorization.delegation import (
     DESTRUCTIVE_ACTIONS,
@@ -79,6 +83,10 @@ async def _session_approval(
         return cached
     approved = await has_session_approval(
         session_id=session_id,
+        # The person the software acts for: an approval covers only the runs
+        # of the person who gave it, never another member's in the same
+        # conversation (M5).
+        person_user_id=ctx.delegating_user_id,
         workload_actor_id=workload_actor_id,
         permission_id=permission_id,
     )
@@ -147,14 +155,24 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         # layer and must go through the user-approval-gated tools instead. Named
         # agent/function workloads are not user-equivalent and take the
         # stricter intersection path in ``workload_authority`` below.
-        clamp_to_pod = (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and ctx.is_user_equivalent
-        )
+        clamp_to_pod = ctx.is_assistant
         if clamp_to_pod and not self._is_pod_scoped_permission(permission_id):
             return AuthorizationDecision(
                 False, "DELEGATED_POD_SCOPE_ONLY", permission_id, resource
             )
+
+        if resource is None and ctx.is_named_workload:
+            # A check that names no resource still has a workload half. Deciding
+            # it on the person's permissions alone gave every named agent the
+            # whole of its invoker's capability -- their saved site logins, say
+            # -- with no grant at all. Asked of the pod instead, it needs a grant
+            # on the pod like any other workload check, intersected with the
+            # person's own access.
+            if ctx.pod_id is None:
+                return AuthorizationDecision(
+                    False, "WORKLOAD_NEEDS_A_RESOURCE", permission_id, None
+                )
+            resource = ResourceRef.pod(ctx.pod_id, ctx.organization_id)
 
         if resource is None:
             # Destructive capability checks (no specific resource) must still be
@@ -198,6 +216,9 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         # returns None (proceed) only when the user approved the action for the
         # session or a named workload holds an explicit grant (standing
         # authority); otherwise it denies.
+        outside = self._outside_the_pod_decision(ctx, permission_id, hydrated)
+        if outside is not None:
+            return outside
         destructive = await self._destructive_delegated_decision(
             ctx, permission_id, hydrated
         )
@@ -207,12 +228,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             return AuthorizationDecision(
                 True, "FUNCTION_SELF_READ", permission_id, hydrated
             )
-        if self._is_org_owner_of_pod(ctx, permission_id, hydrated):
-            return AuthorizationDecision(True, "ORG_OWNER_POD", permission_id, hydrated)
-        if (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and ctx.workload_principal_refs
-        ):
+        if ctx.is_named_workload:
             return await authorize_delegated_workload(
                 self,
                 ctx,
@@ -302,7 +318,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         read what is Public and nothing more; another pod, asking over a link,
         may also use what this pod granted it.
         """
-        if ctx.actor_type == ActorType.POD:
+        if isinstance(ctx.actor, OtherPod):
             return await self._pod_decision(ctx, permission_id, resource)
         if resource and await self._is_public_read(
             permission_id, resource, pod_id=ctx.pod_id
@@ -381,14 +397,11 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         approval unlocks a destructive action without conferring authority the
         approving person does not have.
         """
-        if (
-            ctx.actor_type != ActorType.DELEGATED_USER_WORKLOAD
-            or permission_id not in DESTRUCTIVE_ACTIONS
-        ):
+        if ctx.delegation is None or permission_id not in DESTRUCTIVE_ACTIONS:
             return None
         if await _session_approval(
             ctx,
-            session_id=ctx.delegation_session_id,
+            session_id=ctx.delegation.session_id,
             workload_actor_id=ctx.actor_id,
             permission_id=permission_id,
         ):
@@ -428,7 +441,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         flipping a resource to PUBLIC can never widen what an agent or function
         may do, nor let anyone edit what they can now read.
         """
-        if ctx.actor_type != ActorType.USER or ctx.user_id is None:
+        if not isinstance(ctx.actor, Person) or ctx.user_id is None:
             return None
         if not self._is_read_permission(permission_id):
             return None
@@ -447,28 +460,47 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         definition = PERMISSION_BY_ID.get(permission_id)
         return definition is not None and definition.scope == PermissionScope.POD
 
-    @staticmethod
-    def _is_org_owner_of_pod(
-        ctx: Context, permission_id: str, resource: ResourceRef
-    ) -> bool:
-        """Org owners have full authority over a pod and everything inside it.
+    def _outside_the_pod_decision(
+        self, ctx: Context, permission_id: str, resource: ResourceRef
+    ) -> AuthorizationDecision | None:
+        """Refuse a person -- or their software -- who no longer belongs to the pod.
 
-        The pod read/list/delete services already treat the organization owner as
-        able to manage any pod in their organization. This mirrors that intent at
-        the authorization layer for the pod entity AND its pod-scoped child
-        resources (apps, agents, functions, ...), so an org owner whose pod
-        authority comes only from the org-owner shortcut can create/deploy/update
-        them instead of hitting a 403 the service would have allowed (e.g. the
-        app bundle upload that follows app.create). Org-level actions are not
-        covered: they still require the org permission itself.
+        Membership is the first layer (PS-ACCESS): a person removed from a pod
+        loses it on their next request. Ownership used to outlive it -- the
+        owner branch below has no membership check -- so a removed member, or a
+        schedule or agent running as them, could still read, change and delete
+        what they had created. Checked before any of that, for every actor that
+        acts as a person.
+
+        A member is someone holding a role here: a pod role, or an org role
+        that reaches every pod (an org owner's). Outside the pod a person still
+        reads what is Public, as before.
         """
-        if ctx.actor_type != ActorType.USER and not ctx.is_user_equivalent:
-            return False
-        if not Authorizer._is_pod_scoped_permission(permission_id):
-            return False
-        if ctx.pod_id is None or resource.pod_id != ctx.pod_id:
-            return False
-        return "ORG_OWNER" in ctx.role_names
+        if (
+            ctx.pod_is_deleted
+            and resource.pod_id == ctx.pod_id
+            and permission_id != Permissions.POD_DELETE
+        ):
+            # A soft-deleted pod keeps its rows and memberships, so nothing
+            # else would refuse it. Every actor, not only those a route checked.
+            # Deleting it again stays allowed: an idempotent no-op.
+            return AuthorizationDecision(False, "POD_DELETED", permission_id, resource)
+        if not (isinstance(ctx.actor, (Person, Assistant)) or ctx.is_named_workload):
+            return None
+        if resource.pod_id is None or ctx.pod_id is None:
+            return None
+        if resource.pod_id != ctx.pod_id:
+            # The row lives in another pod than the one the request is in: to
+            # this pod it does not exist (PS-ACCESS-031).
+            return AuthorizationDecision(
+                False, RESOURCE_NOT_IN_POD, permission_id, resource
+            )
+        if ctx.belongs_to_its_pod():
+            return None
+        visibility = self._visibility_read_decision(ctx, permission_id, resource)
+        if visibility is not None and visibility.allowed:
+            return visibility
+        return AuthorizationDecision(False, "NOT_A_POD_MEMBER", permission_id, resource)
 
     @staticmethod
     def _is_function_self_read(
@@ -483,11 +515,14 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
             or resource.resource_id is None
         ):
             return False
-        if ctx.actor_type == ActorType.FUNCTION and ctx.actor_id == str(
+        workload = ctx.workload
+        if workload is None or workload.kind != WorkloadKind.FUNCTION:
+            return False
+        if workload.for_user_id is None and workload.workload_id == (
             resource.resource_id
         ):
             return True
-        if ctx.actor_type != ActorType.DELEGATED_USER_WORKLOAD:
+        if workload.for_user_id is None:
             return False
         return PrincipalRef(
             WorkloadPrincipalType.FUNCTION.value.upper(), resource.resource_id
@@ -501,10 +536,7 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         pod_id: UUID,
     ) -> frozenset[UUID]:
         principal_sets = ctx.grant_principal_sets or (ctx.principal_refs,)
-        if (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and ctx.workload_principal_refs
-        ):
+        if ctx.is_named_workload:
             # The workload's own grants: the FIRST half of the intersection
             # ``workload_authority`` applies. The second half — could
             # the invoking person reach it themselves — is not expressible as a

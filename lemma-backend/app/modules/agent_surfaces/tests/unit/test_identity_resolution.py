@@ -61,6 +61,12 @@ class _FakeExternalRepo:
             display_name=kwargs.get("display_name"),
         )
 
+    async def forget_resolution(self, **kwargs):
+        self.calls.append({"forget": kwargs})
+        if kwargs["resolved_user_id"] == self._cached:
+            self._cached = None
+        return 1
+
 
 class _FakeUsers:
     """The directory port: an email lookup and a phone lookup, nothing else.
@@ -243,12 +249,14 @@ async def test_a_handle_taken_over_by_a_stranger_resolves_nobody():
     assert shared_a_number_nobody_verified.internal_user_id is None
 
 
-async def test_resolves_by_email():
+async def test_a_teams_upn_on_a_verified_domain_resolves_by_email():
+    """The Teams adapter hands over the UPN only on a domain the tenant
+    verified, so it is the tenant's word rather than the sender's."""
     user_id = uuid4()
     users = _FakeUsers(by_email=user_id)
     external = _FakeExternalRepo()
     resolved = await _service(users, external).resolve(
-        event=_event(platform=SurfacePlatform.SLACK, email="a@b.test")
+        event=_event(platform=SurfacePlatform.TEAMS, email="a@b.test")
     )
     assert resolved.internal_user_id == user_id
 
@@ -547,18 +555,19 @@ async def test_phone_candidates_handle_provider_and_profile_formatting():
 
 
 async def test_proven_path_accepts_a_cache_the_profile_email_still_names():
-    """A known Slack sender stays known when the binding path asks.
+    """A known Teams sender stays known when the binding path asks.
 
-    `_match_proven_sender` answers WhatsApp and nothing else, so on Slack and
-    Teams this cache entry is the only thing standing between an already-known
-    person and being sent back through signup. Refusing every cache hit on this
-    path did exactly that, to everybody, on their next message.
+    `_match_proven_sender` answers WhatsApp and nothing else, so on Teams this
+    cache entry is the only thing standing between an already-known person and
+    being sent back through signup. Refusing every cache hit on this path did
+    exactly that, to everybody, on their next message. (Slack's entry stands on
+    Slack's own proof instead; its profile email is not the platform's word.)
     """
     cached = uuid4()
     users = _FakeUsers(by_email=cached)
     external = _FakeExternalRepo(cached_user_id=cached)
     resolved = await _service(users, external).resolve(
-        event=_event(platform=SurfacePlatform.SLACK, email="known@example.com"),
+        event=_event(platform=SurfacePlatform.TEAMS, email="known@example.com"),
         require_proven_identity=True,
     )
     assert resolved.internal_user_id == cached
@@ -592,7 +601,7 @@ async def test_proven_path_refuses_a_cache_the_email_now_names_somebody_else():
     users = _FakeUsers(by_email=uuid4())
     external = _FakeExternalRepo(cached_user_id=cached)
     resolved = await _service(users, external).resolve(
-        event=_event(platform=SurfacePlatform.SLACK, email="moved@example.com"),
+        event=_event(platform=SurfacePlatform.TEAMS, email="moved@example.com"),
         require_proven_identity=True,
     )
     assert resolved.internal_user_id is None

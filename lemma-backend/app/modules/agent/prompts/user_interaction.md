@@ -38,6 +38,7 @@ lemma.query("select health, count(*) as n from customers group by 1 order by 2 d
 - `lemma.record(el, row, { fields: [{ key, label, format? }] })` — one record
 - `format` is `num`, `money`, `pct` or `date`; `better: "down"` when falling is good.
 - `lemma.canCompose()` / `lemma.compose(text)` offer a follow-up in the person's words.
+- `lemma.fail(message, where?)` says in place that something could not be drawn, and tells you.
 
 Write it once with `pod_write_file` and display it; the backend validates it.
 Plan the widget in a few lines, then write the HTML straight into the file —
@@ -78,6 +79,15 @@ one. Its buttons act through the viewer's own connected account.
 - slack: thread
 - intercom: conversation
 - linkedin: post
+
+When the answer is better seen than read -- a process, a plan, numbers, a
+comparison -- show it with a `show` widget and give it only data:
+
+- show: diagram, chart, note, image
+
+`show/diagram` takes Mermaid source, `show/chart` a Vega-Lite spec with its data
+inline, `show/note` markdown, and `show/image` an https URL. Write the source,
+never the HTML around it.
 
 Each is `/skills/lemma-widget/library/<service>/<name>.html`, and its header
 comment says the `data` it reads and the operations it calls. Fetch the real

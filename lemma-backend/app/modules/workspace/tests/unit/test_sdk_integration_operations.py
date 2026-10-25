@@ -21,8 +21,8 @@ from lemma_sdk.resources.connectors import BoundConnectors  # noqa: E402
 
 
 class _RecordingConnectors(BoundConnectors):
-    def __init__(self, organization_id: str) -> None:
-        super().__init__(None, org_id=organization_id)  # type: ignore[arg-type]
+    def __init__(self, organization_id: str, pod_id: str) -> None:
+        super().__init__(None, org_id=organization_id, pod_id=pod_id)  # type: ignore[arg-type]
         self.calls: list[dict[str, Any]] = []
 
     def _call(self, endpoint: Any, *path_args: Any, **kwargs: Any) -> Any:
@@ -55,16 +55,20 @@ def test_generated_sdk_spec_includes_connector_lifecycle_operations() -> None:
 
     assert {
         "connector.list",
-        "connector.operation.execute",
+        "pod.connector.operation.execute",
         "connector.connect_request.create",
         "connector.account.list",
     }.issubset(operation_ids)
     assert "connector.account.credentials.get" not in operation_ids
+    # Operations run through a pod connector; the org route is still served,
+    # deprecated, for code written before pod connectors.
+    assert "connector.operation.execute" in operation_ids
 
 
 def test_connectors_resource_builds_connect_account_and_execute_calls() -> None:
     organization_id = "019e7f61-8796-72ab-8c0e-4017dd1ad858"
-    api = _RecordingConnectors(organization_id)
+    pod_id = "019e7f61-8796-72ab-8c0e-4017dd1ad859"
+    api = _RecordingConnectors(organization_id, pod_id)
 
     api.connect_request("gmail")
     connect_call = api.calls[-1]
@@ -82,23 +86,13 @@ def test_connectors_resource_builds_connect_account_and_execute_calls() -> None:
     assert account_list_call["kwargs"]["connector_id"] == "gmail"
     assert account_list_call["kwargs"]["limit"] == 25
 
-    api.execute(
-        "workspace-gmail",
-        "send_email",
-        {"to": "hello@example.com"},
-        account_id="acc_123",
-    )
+    # Through the pod connector `gmail`: no account argument, the connector
+    # decides whose account the call runs as.
+    api.execute("gmail", "send_email", {"to": "hello@example.com"})
     execute_call = api.calls[-1]
-    assert execute_call["endpoint"].endswith("connector_operation_execute")
-    assert execute_call["path_args"] == (
-        UUID(organization_id),
-        "workspace-gmail",
-        "send_email",
-    )
-    assert execute_call["kwargs"]["body"] == {
-        "payload": {"to": "hello@example.com"},
-        "account_id": "acc_123",
-    }
+    assert execute_call["endpoint"].endswith("pod_connector_operation_execute")
+    assert execute_call["path_args"] == (UUID(pod_id), "gmail", "send_email")
+    assert execute_call["kwargs"]["body"] == {"payload": {"to": "hello@example.com"}}
 
 
 def test_cli_exposes_current_connector_command_groups() -> None:

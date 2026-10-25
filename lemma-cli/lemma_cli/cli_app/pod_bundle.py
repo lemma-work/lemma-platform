@@ -5,9 +5,11 @@ import json
 import subprocess
 import shutil
 import tempfile
+from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
 # The pure bundle-format vocabulary (constants, JSONC parsing, table diffing,
@@ -39,6 +41,7 @@ from lemma_pod_bundle.layout import (
     normalize_file_folders,
     FILES_MANIFEST,
     FORMAT_VERSION as FORMAT_VERSION,
+    FORMAT_VERSION_WITHOUT_CONNECTORS as FORMAT_VERSION_WITHOUT_CONNECTORS,
     JSON_FILE_REF_KEY as JSON_FILE_REF_KEY,
     POD_MEMBER_TOKEN,
     RESOURCE_DIR_ALIASES as RESOURCE_DIR_ALIASES,
@@ -56,8 +59,10 @@ from lemma_pod_bundle.layout import (
     _record_export_contents,
     _resolve_file_refs as _resolve_file_refs,
     _resource_manifest_path,
+    check_format_version,
     _sanitize_resource_name,
     _write_json,
+    bundle_format_version,
     load_resource_payload,
     normalize_resource_dir_name,
 )
@@ -87,7 +92,6 @@ from lemma_pod_bundle.normalize import (
     _validate_function_payload,
 )
 from lemma_pod_bundle.portability import (
-    _ACCOUNT_REF_FIELDS as _ACCOUNT_REF_FIELDS,
     _MEMBER_REF_FIELDS as _MEMBER_REF_FIELDS,
     _PLACEHOLDER_RE,
     _extract_portable_variables,
@@ -95,10 +99,9 @@ from lemma_pod_bundle.portability import (
     _slug_var_name as _slug_var_name,
     _strip_unresolved_placeholders,
     _tokenize_ref_fields as _tokenize_ref_fields,
-    GRANT_METADATA_KEYS,
-    require_account_variable_metadata,
 )
 from lemma_pod_bundle.apply_fields import (
+    GRANT_HOLDER_DIRS,
     SCHEDULE_APPLY_FIELDS,
     SURFACE_APPLY_FIELDS,
     is_past_one_time_schedule,
@@ -106,6 +109,12 @@ from lemma_pod_bundle.apply_fields import (
 )
 
 from lemma_sdk import Lemma
+
+from .pod_bundle_connectors import (
+    declare_pod_connectors,
+    export_pod_connectors,
+    plan_pod_connectors,
+)
 from lemma_sdk.errors import LemmaAPIError
 from lemma_sdk.openapi_client.models.add_column_request import AddColumnRequest
 from lemma_sdk.openapi_client.models.agent_permissions_replace_request import (
@@ -171,13 +180,13 @@ DESTRUCTIVE_PERMISSION_IDS = frozenset(
         "pod.role.manage",
         "pod.member.manage",
         "datastore.table.delete",
+        "datastore.record.delete",
         "folder.delete",
         "function.delete",
         "agent.delete",
         "workflow.delete",
         "app.delete",
         "schedule.delete",
-        "connector_account.manage",
     }
 )
 
@@ -487,87 +496,6 @@ def _surface_upsert_body(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: payload[key] for key in SURFACE_APPLY_FIELDS if key in payload}
 
 
-def _resolve_account_connector_info(client: Lemma, account_id: str) -> tuple[str, str]:
-    """Ground-truth ``(connector_id, kind)`` for an account, resolved via the
-    connectors API — never inferred from a resource's own name, since that
-    guess is wrong for any resource type with no platform concept of its own
-    (e.g. a schedule). Raises if the account (or its kind) can't be resolved,
-    since a bundle can't be tokenized without this metadata."""
-    try:
-        account = to_plain(client.connectors.accounts.get(account_id))
-    except LemmaAPIError as exc:
-        raise ValueError(
-            f"Could not resolve connector info for account {account_id}: {exc}"
-        ) from exc
-    connector_id = account.get("connector_id")
-    kind = account.get("kind")
-    if not connector_id or not kind:
-        raise ValueError(
-            f"Account {account_id} is missing connector_id/kind info — "
-            "upgrade the backend or lemma-sdk before exporting connector-bound "
-            "resources."
-        )
-    return str(connector_id), str(kind)
-
-
-def _stamp_account_grant_metadata(
-    client: Lemma, permissions: dict[str, Any]
-) -> dict[str, Any]:
-    """Attach ``connector_id``/``connector_kind`` to every ``connector_account``
-    grant, resolved from the account itself.
-
-    A pinned-account grant names the account by its raw id (the backend has no
-    other identifier for one), which is meaningless in any other org. The
-    portable-variable pass turns that id into a ``${var}`` — but only if the
-    grant carries the connector metadata the variable must record, and grants
-    come back from the permissions API without it. Stamping it here is the
-    exact mirror of what the exporter already does beside a surface's or
-    schedule's ``account_id``.
-    """
-    grants = permissions.get("grants")
-    if not isinstance(grants, list):
-        return permissions
-    stamped: list[Any] = []
-    for grant in grants:
-        if (
-            not isinstance(grant, dict)
-            or str(grant.get("resource_type") or "") != "connector_account"
-            or not grant.get("resource_name")
-        ):
-            stamped.append(grant)
-            continue
-        connector_id, connector_kind = _resolve_account_connector_info(
-            client, str(grant["resource_name"])
-        )
-        stamped.append(
-            {
-                **grant,
-                "connector_id": connector_id,
-                "connector_kind": connector_kind,
-            }
-        )
-    return {**permissions, "grants": stamped}
-
-
-def _stamp_cli_account_defaults(bundle_root: Path, variables: dict[str, Any]) -> None:
-    """CLI-only convenience: record each account variable's source account id
-    as its ``default``, so re-importing into the same org (a common local dev
-    loop — export, tweak, reimport) doesn't require ``--var`` every time. A
-    backend/UI-triggered export never does this — the importer there must
-    always be prompted to supply their own account."""
-    changed = False
-    for meta in variables.values():
-        if str((meta or {}).get("type") or "") == "account" and not meta.get("default"):
-            meta["default"] = meta["source_value"]
-            changed = True
-    if not changed:
-        return
-    pod_path = bundle_root / "pod.json"
-    pod_data = _read_json(pod_path)
-    pod_data["variables"] = variables
-    _write_json(pod_path, pod_data)
-
-
 def _app_payload_with_unique_public_slug(
     payload: dict[str, Any],
     *,
@@ -592,11 +520,15 @@ def _build_variable_applier(
 ):
     """Return ``apply(payload) -> payload`` that resolves the bundle's ``${name}``
     variables (and the legacy ``$POD_MEMBER`` token) and drops any that stay
-    unresolved. ``pod_member`` variables default to the importing user; an
-    account variable falls back to its recorded ``default`` (the source
-    account id, stamped by this CLI's own export for same-org re-import
-    convenience) once that account is verified reachable, otherwise it must be
-    supplied via ``--var``/``--values`` or is left unresolved.
+    unresolved. ``pod_member`` variables default to the importing user.
+
+    An ``account`` variable is deprecated: surfaces and schedules name the pod
+    connector they run through by slug, and the importing pod's connector
+    decides the account. A bundle exported before that still imports, as the
+    server's importer takes it: the variable is an optional free one, resolved
+    only by ``--var`` (never by a recorded default -- that is the exporting
+    org's account), and a schedule given one listens through the pod connector
+    serving it (see ``_deprecated_schedule_account``).
     """
     from .scaffold import substitute_placeholders
 
@@ -604,12 +536,19 @@ def _build_variable_applier(
     declared = (
         (_read_json(pod_path).get("variables") or {}) if pod_path.is_file() else {}
     )
-    try:
-        require_account_variable_metadata(declared)
-    except ValueError as exc:
-        raise ValueError(
-            f"{exc} Re-export this bundle with a newer lemma-cli."
-        ) from exc
+    accounts = sorted(
+        name
+        for name, spec in declared.items()
+        if str((spec or {}).get("type") or "").lower() == "account"
+    )
+    if accounts:
+        console.print(
+            f"[yellow]warning[/yellow] variable(s) {', '.join(accounts)} ask for "
+            "a connected account, which is deprecated: bundles name the pod "
+            "connector a resource runs through. Pass --var NAME=<account id> to "
+            "use the pod connector serving that account, or leave it out and "
+            "choose the connector after import; re-export to drop the variable."
+        )
     overrides = dict(var_overrides or {})
     unknown = sorted(set(overrides) - set(declared))
     if unknown:
@@ -618,7 +557,6 @@ def _build_variable_applier(
             f"This bundle declares: {', '.join(sorted(declared)) or '(none)'}."
         )
     member_cache: list[str] = []
-    account_default_cache: dict[str, str | None] = {}
 
     def member_default() -> str:
         if not member_cache:
@@ -626,32 +564,6 @@ def _build_variable_applier(
                 _resolve_import_pod_member_id(client, pod_sdk, member_override)
             )
         return member_cache[0]
-
-    def verified_account_default(name: str, spec: dict[str, Any]) -> str | None:
-        """Never blindly reuse a bundle's recorded source account id: confirm
-        it still exists (and is reachable to the current session) before
-        treating it as resolved, since a stale/foreign id would otherwise
-        silently bind the wrong account."""
-        if name not in account_default_cache:
-            default_id = spec.get("default")
-            resolved: str | None = None
-            if default_id:
-                try:
-                    client.connectors.accounts.get(str(default_id))
-                except LemmaAPIError as exc:
-                    # A 404/403 means the recorded source account isn't ours to
-                    # reuse — leave the variable unresolved. But a 429 (rate
-                    # limited) or 5xx is transient/systemic: treating it as
-                    # "account gone" would silently drop the binding and import a
-                    # half-wired resource, so surface it instead.
-                    if getattr(exc, "status_code", None) in (403, 404):
-                        resolved = None
-                    else:
-                        raise
-                else:
-                    resolved = str(default_id)
-            account_default_cache[name] = resolved
-        return account_default_cache[name]
 
     def apply(
         payload: dict[str, Any], *, strip_unresolved: bool = True
@@ -661,7 +573,7 @@ def _build_variable_applier(
         ``strip_unresolved`` drops the fields still holding a ``${...}`` token so
         a literal placeholder never reaches the API — right for a resource body,
         wrong for a grant, where dropping the ``resource_name`` key would turn an
-        unresolved account into a confusing "grants must reference resources by
+        unresolved name into a confusing "grants must reference resources by
         resource_name" failure instead of a skipped grant. Grants therefore ask
         for the un-stripped form and decide for themselves (see
         ``_resolve_grant_permissions``).
@@ -679,10 +591,6 @@ def _build_variable_applier(
                 replacements[token] = overrides[name]
             elif vtype == "pod_member":
                 replacements[token] = member_default()
-            elif vtype == "account":
-                default_value = verified_account_default(name, spec or {})
-                if default_value is not None:
-                    replacements[token] = default_value
         if replacements:
             payload = substitute_placeholders(payload, replacements)
         return _strip_unresolved_placeholders(payload) if strip_unresolved else payload
@@ -703,12 +611,9 @@ def _resolve_grant_permissions(
 
     * ``${var}`` placeholders resolve (grants never saw the variable applier at
       all, because it was built after the agent/function loops).
-    * A ``connector_account`` grant whose account variable stayed unresolved is
-      DROPPED with a warning. Sending it would 400 the whole permissions pass —
-      at the very end of an import that has already written everything else,
-      leaving a half-wired pod. A missing pinned account is a
-      reconnect-after-import chore, not a reason to fail.
-    * Export-only connector metadata is stripped back off.
+    * A grant whose resource name stayed an unresolved ``${var}`` is DROPPED
+      with a warning. Sending it would 400 the whole permissions pass — at the
+      very end of an import that has already written everything else.
     """
     if permissions_payload is None:
         return None
@@ -723,13 +628,12 @@ def _resolve_grant_permissions(
         if isinstance(resource_name, str) and _PLACEHOLDER_RE.fullmatch(resource_name):
             dropped.append(f"{grant.get('resource_type')} {resource_name}")
             continue
-        kept.append(_strip_keys(grant, set(GRANT_METADATA_KEYS)))
+        kept.append(grant)
     if dropped:
         console.print(
             f"[yellow]warning[/yellow] {kind} '{name}': dropped "
-            f"{len(dropped)} grant(s) whose account variable was not supplied "
-            f"({', '.join(dropped)}). Connect the account in this pod, then run "
-            f"`lemma {kind}s permissions add {name} account:<id>:use`."
+            f"{len(dropped)} grant(s) whose variable was not supplied "
+            f"({', '.join(dropped)})."
         )
     return {"grants": kept}
 
@@ -1080,7 +984,20 @@ def export_pod_bundle(
     bundle_root = output_dir / pod_name
     _ensure_clean_dir(bundle_root, force=force)
     _ensure_resource_dirs(bundle_root)
-    _write_json(bundle_root / "pod.json", _normalize_pod_payload(pod))
+
+    # Connectors first: everything below may name one by slug. Each is the
+    # catalog connector and the mode -- never the installation or the account.
+    connectors: list[dict[str, Any]] = []
+    if should_export("connectors"):
+        connectors = export_pod_connectors(
+            pod_sdk, bundle_root, should_export_name=should_export_name
+        )
+    # Written once the connectors are: a bundle with none stays the format a
+    # reader of 3 reads whole.
+    _write_json(
+        bundle_root / "pod.json",
+        _normalize_pod_payload(pod, format_version=bundle_format_version(bundle_root)),
+    )
 
     tables: list[dict[str, Any]] = []
     if should_export("tables"):
@@ -1126,8 +1043,8 @@ def export_pod_bundle(
             resource_dir = bundle_root / "functions" / function_name
             resource_dir.mkdir(parents=True, exist_ok=True)
             full_function = to_plain(pod_sdk.functions.get(function_name))
-            function_permissions = _stamp_account_grant_metadata(
-                client, to_plain(pod_sdk.functions.permissions(function_name))
+            function_permissions = to_plain(
+                pod_sdk.functions.permissions(function_name)
             )
             function_payload = extract_large_text(
                 _attach_permissions_payload(
@@ -1159,9 +1076,7 @@ def export_pod_bundle(
             resource_dir = bundle_root / "agents" / agent_name
             resource_dir.mkdir(parents=True, exist_ok=True)
             full_agent = to_plain(pod_sdk.agents.get(agent_name))
-            agent_permissions = _stamp_account_grant_metadata(
-                client, to_plain(pod_sdk.agents.permissions(agent_name))
-            )
+            agent_permissions = to_plain(pod_sdk.agents.permissions(agent_name))
             agent_payload = extract_large_text(
                 _attach_permissions_payload(
                     _normalize_agent_payload(full_agent),
@@ -1207,13 +1122,6 @@ def export_pod_bundle(
                 if schedule_id
                 else schedule
             )
-            account_id = full_schedule.get("account_id")
-            if account_id:
-                connector_id, connector_kind = _resolve_account_connector_info(
-                    client, str(account_id)
-                )
-                full_schedule["connector_id"] = connector_id
-                full_schedule["connector_kind"] = connector_kind
             _write_json(
                 resource_dir / f"{schedule_name}.json",
                 _normalize_schedule_payload(full_schedule),
@@ -1226,13 +1134,6 @@ def export_pod_bundle(
         seen_names: set[str] = set()
         for surface in list_items(pod_sdk.surfaces.list(limit=100)):
             raw_surface = to_plain(surface)
-            account_id = raw_surface.get("account_id")
-            if account_id:
-                connector_id, connector_kind = _resolve_account_connector_info(
-                    client, str(account_id)
-                )
-                raw_surface["connector_id"] = connector_id
-                raw_surface["connector_kind"] = connector_kind
             payload = _normalize_surface_payload(raw_surface)
             platform = str(payload.get("platform") or "")
             surface_key = str(payload["name"]).lower()
@@ -1277,10 +1178,9 @@ def export_pod_bundle(
             data_budget=data_budget,
         )
 
-    # Replace non-portable member/account ids with ${name} variables recorded in
-    # pod.json, so the bundle can be re-imported into another pod/org.
+    # Replace non-portable member ids and app slugs with ${name} variables
+    # recorded in pod.json, so the bundle can be re-imported into another pod.
     variables = _extract_portable_variables(bundle_root)
-    _stamp_cli_account_defaults(bundle_root, variables)
 
     # Record what this bundle carries (selective scope + whether row data / file
     # bytes were captured) so a re-import seeds them automatically and a re-export
@@ -1314,6 +1214,7 @@ def export_pod_bundle(
         "warnings": data_table_warnings,
         "variables": sorted(variables.keys()),
         "counts": {
+            "connectors": len(connectors),
             "tables": len(tables),
             "functions": len(functions),
             "agents": len(agents),
@@ -1850,13 +1751,12 @@ def _validate_grant_references(
     resource that neither the bundle creates nor the pod already has — so a
     dangling grant never leaves a half-imported pod (grants apply last).
 
-    A ``connector_account`` grant names a raw account id, so it can only be
-    checked against the live API; an id the session can't reach is an error
-    here rather than a 400 from the final permissions pass, after every other
-    resource has already been written. A grant still holding a ``${var}``
-    placeholder is left alone — the apply step resolves or drops it.
-    ``connector`` grants name an org-global connector and are not pod-scoped, so
-    they stay advisory."""
+    A ``connector`` grant names a pod connector by slug: the bundle declares
+    it (``connectors/<slug>/``, applied first) or the pod already does. A
+    ``connector_account`` grant is never part of a bundle: a shared account is
+    used through a pod connector, and only its owner shares it. A grant still
+    holding a ``${var}`` placeholder is left alone — the apply step resolves or
+    drops it."""
     # resource_type -> (bundle dir, how to list the pod's existing names). The
     # listing is deferred: a bundle whose grants never mention workflows must
     # not pay for a workflows.list, and the plan builder only fetched the ones
@@ -1888,38 +1788,51 @@ def _validate_grant_references(
             }
         return resolved_targets[rtype]
 
-    account_cache: dict[str, bool] = {}
+    declared_connectors: list[set[str] | None] = []
 
-    def account_reachable(account_id: str) -> bool:
-        if account_id not in account_cache:
+    def pod_connector_declared(slug: str) -> bool:
+        if not declared_connectors:
             try:
-                client.connectors.accounts.get(account_id)
-            except LemmaAPIError as exc:
-                # 403/404 means "not ours / not here" — a real plan error. A 429
-                # or 5xx is transient; don't fail the plan on infrastructure.
-                account_cache[account_id] = getattr(exc, "status_code", None) not in (
-                    403,
-                    404,
+                declared_connectors.append(
+                    {
+                        str(item.get("slug"))
+                        for item in list_items(pod_sdk.connectors.pod_connectors())
+                        if isinstance(item, dict) and item.get("slug")
+                    }
                 )
+            except LemmaAPIError as exc:
+                # 403/404 is an answer; a 429 or 5xx is infrastructure.
+                if getattr(exc, "status_code", None) not in (403, 404):
+                    declared_connectors.append(None)
+                else:
+                    declared_connectors.append(set())
             except Exception:  # noqa: BLE001 — a check we can't run isn't a finding
-                # No accounts API on this client, or the lookup itself broke.
-                # Treat as reachable: the apply step still surfaces a real
-                # failure, and a validator that can't validate must not block.
-                account_cache[account_id] = True
-            else:
-                account_cache[account_id] = True
-        return account_cache[account_id]
+                declared_connectors.append(None)
+        known_slugs = declared_connectors[0]
+        return known_slugs is None or slug in known_slugs
 
-    for kind in ("agents", "functions"):
+    bundled_connectors = {d.name for d in _resource_dirs(source_dir, "connectors")}
+
+    for kind in GRANT_HOLDER_DIRS:
         for resource_dir in _resource_dirs(source_dir, kind):
             try:
-                _, permissions = _split_resource_permissions_payload(
-                    load_resource_payload(
-                        resource_dir, resource_dir.name, resource_type=kind
-                    )
+                payload = load_resource_payload(
+                    resource_dir, resource_dir.name, resource_type=kind
                 )
             except Exception:
                 continue  # payload errors are already reported elsewhere
+            try:
+                _, permissions = _split_resource_permissions_payload(payload)
+            except ValueError as exc:
+                # A malformed grant is reported nowhere else, and would fail
+                # the apply.
+                issues.append(
+                    BundleValidationIssue(
+                        path=str(resource_dir / f"{resource_dir.name}.json"),
+                        message=str(exc),
+                    )
+                )
+                continue
             for grant in (permissions or {}).get("grants", []):
                 if not isinstance(grant, dict):
                     continue
@@ -1937,18 +1850,24 @@ def _validate_grant_references(
                         "or drop the grant."
                     )
                 elif rtype == "connector_account":
-                    found = account_reachable(rname)
+                    found = False
                     detail = (
-                        "A pinned-account grant names a connector account id, which "
-                        "is specific to the org that exported it. Connect an account "
-                        "in this org and pass its id via --var, or drop the grant to "
-                        "use the invoking user's own account."
+                        "A grant on an account is not part of a bundle: a shared "
+                        "account is used through a pod connector. Grant "
+                        "`connector:<slug>:use` instead."
+                    )
+                elif rtype == "connector":
+                    found = rname in bundled_connectors or pod_connector_declared(rname)
+                    detail = (
+                        f"Add `connectors/{rname}/{rname}.json` to the bundle, or "
+                        "declare it in the pod first (`lemma connectors pod-add "
+                        f"{rname} <installation> --mode PER_MEMBER|SHARED`)."
                     )
                 elif rtype in _LISTERS:
                     found = rname in targets_for(rtype)
                     detail = "Add the resource to the bundle or drop the grant."
                 else:
-                    continue  # e.g. connector — org-global, not validatable here
+                    continue
                 if not found:
                     issues.append(
                         BundleValidationIssue(
@@ -2011,16 +1930,15 @@ def _collect_grant_advisories(
                 {
                     str(grant.get("resource_name") or "?")
                     for grant in grants
-                    if str(grant.get("resource_type") or "")
-                    in ("connector", "connector_account")
+                    if str(grant.get("resource_type") or "") == "connector"
                 }
             )
             if connector_targets:
                 advisories.append(
                     f"{kind[:-1]} '{name}' has connector grant(s) on "
-                    f"{', '.join(connector_targets)} — connector accounts are "
-                    "environment-specific; verify a connected account exists in "
-                    "the target pod after import."
+                    f"{', '.join(connector_targets)} — a per-member pod connector "
+                    "runs as each person's own account, so members connect theirs; "
+                    "a shared one needs its account shared in the target pod."
                 )
             destructive = sorted(
                 {
@@ -2337,6 +2255,72 @@ def _schedule_update_fields(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _deprecated_schedule_account(
+    raw: dict[str, Any], payload: dict[str, Any], schedule_name: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """A schedule exported before pod connectors, which named an account.
+
+    Returns ``(payload, warning)``. The account, when the importer supplied
+    one, is sent as the deprecated ``account_id`` -- the server answers it with
+    the pod connector serving that account to them. Without one the schedule
+    cannot listen, so it is left out (``None``) and said so rather than failing
+    the import; the server's importer does the same.
+    """
+    if "account_id" not in raw or payload.get("pod_connector"):
+        return payload, None
+    account = payload.get("account_id")
+    if not account:
+        return None, (
+            f"schedule '{schedule_name}' named a connected account, which "
+            "bundles no longer carry; it was not imported. Create it with the "
+            "pod connector it should listen through (`lemma schedules create "
+            "--connector <slug>`)."
+        )
+    return payload, (
+        f"schedule '{schedule_name}' names an account (deprecated); it listens "
+        "through the pod connector serving that account instead."
+    )
+
+
+def _deprecated_surface_account(
+    raw: Mapping[str, object],
+    payload: Mapping[str, object],
+    body: dict[str, object],
+    surface_name: str,
+    surface_key: str,
+) -> str | None:
+    """A surface exported before pod connectors, which named an account.
+
+    Returns the warning to print, if any. An account the importer supplied is
+    sent as the deprecated ``account_id`` (added to ``body``), which the server
+    answers with the pod connector serving it to them; without one the surface
+    runs on the platform's own bot. The server's importer translates it the
+    same way and says the same thing, so the two importers agree.
+    """
+    if "account_id" not in raw or payload.get("pod_connector"):
+        return None
+    if not _is_uuid(payload.get("account_id")):
+        return (
+            f"surface '{surface_name}' named a connected account, which bundles "
+            "no longer carry; it runs on the platform's own bot until you name "
+            "the pod connector it should run as (`lemma surfaces upsert "
+            f"{surface_key} --connector <slug>`)."
+        )
+    body["account_id"] = payload["account_id"]
+    return (
+        f"surface '{surface_name}' names an account (deprecated); it runs as "
+        "the pod connector serving that account instead."
+    )
+
+
+def _is_uuid(value: object) -> bool:
+    try:
+        UUID(str(value))
+    except ValueError:
+        return False
+    return bool(value)
+
+
 def _create_schedule_from_payload(
     client: Lemma,
     *,
@@ -2345,6 +2329,10 @@ def _create_schedule_from_payload(
 ) -> dict[str, Any]:
     pod_sdk = client.pod(pod_id)
     create_fields = _schedule_create_fields(payload)
+    if payload.get("account_id") and not create_fields.get("pod_connector"):
+        # Deprecated, and outside the shared allow-list on purpose: only an
+        # account the importer supplied (see _deprecated_schedule_account).
+        create_fields["account_id"] = payload["account_id"]
     if not create_fields.get("name"):
         raise ValueError("Schedule import requires name.")
     if not create_fields.get("schedule_type") or not create_fields.get("config"):
@@ -2412,6 +2400,9 @@ def import_pod_bundle(
     with_files: bool = False,
     variables: dict[str, str] | None = None,
     set_pod_meta: bool = False,
+    connector_installations: dict[str, str] | None = None,
+    share_accounts: dict[str, str] | None = None,
+    create_installations: bool = False,
 ) -> dict[str, Any]:
     if not source_dir.exists():
         raise ValueError(f"Source directory does not exist: {source_dir}")
@@ -2430,9 +2421,17 @@ def import_pod_bundle(
                 with_files=with_files,
                 variables=variables,
                 set_pod_meta=set_pod_meta,
+                connector_installations=connector_installations,
+                share_accounts=share_accounts,
+                create_installations=create_installations,
             )
             result["source_dir"] = str(source_dir)
             return result
+
+    # A newer format than this CLI reads is refused before anything is asked
+    # of the server: reading it as this one would skip what it added.
+    if (source_dir / "pod.json").is_file():
+        check_format_version(_read_json(source_dir / "pod.json"))
 
     # A manifest-aware bundle records whether it carries table rows / file bytes;
     # honor that so re-importing it seeds them without re-passing the flags.
@@ -2446,6 +2445,28 @@ def import_pod_bundle(
         source_dir=source_dir,
         upsert=upsert,
     )
+    # Every bundled connector, and every choice made for one, is checked before
+    # anything is written: a connector that cannot be declared would leave
+    # whatever names its slug bound to nothing.
+    connector_plan: tuple[Any, list[Any], list[str]] | None = None
+    try:
+        connector_plan = plan_pod_connectors(
+            client,
+            pod_id=pod_id,
+            source_dir=source_dir,
+            installations=connector_installations,
+            share_accounts=share_accounts,
+            create_installations=create_installations,
+        )
+    except ValueError as exc:
+        issues.append(
+            BundleValidationIssue(path=str(source_dir / "connectors"), message=str(exc))
+        )
+    else:
+        _, planned_connectors, kept_connectors = connector_plan
+        summary["connectors"] = [
+            f"created:{item.connector.slug}" for item in planned_connectors
+        ] + [f"kept:{slug}" for slug in kept_connectors]
     if dry_run:
         return {
             "ok": len(issues) == 0,
@@ -2481,6 +2502,17 @@ def import_pod_bundle(
             _progress_done("pod", pod_id, "updated metadata")
 
     summary = {key: [] for key in RESOURCE_DIRS}
+
+    assert connector_plan is not None, "a failed connector plan is an issue above"
+    connector_sdk, planned_connectors, kept_connectors = connector_plan
+    summary["connectors"].extend(
+        declare_pod_connectors(
+            connector_sdk,
+            planned_connectors,
+            on_notice=lambda note: console.print(f"[yellow]connector[/yellow] {note}"),
+        )
+    )
+    summary["connectors"].extend(f"kept:{slug}" for slug in kept_connectors)
 
     existing_tables = _build_existing_map(list_items(pod_sdk.tables.list(limit=1000)))
     for resource_dir in _order_table_dirs_by_dependency(
@@ -2576,7 +2608,7 @@ def import_pod_bundle(
     # once: member resolution costs a members.list call we skip for bundles that
     # carry no placeholders. Built HERE, before the first resource that can hold
     # a placeholder — agents and functions used to import ahead of this and so
-    # never had theirs resolved, sending a literal "${gmail_account}" to the API.
+    # never had theirs resolved, sending a literal "${...}" token to the API.
     apply_variables = _build_variable_applier(
         client,
         pod_sdk,
@@ -2811,8 +2843,9 @@ def import_pod_bundle(
     )
     for resource_dir in schedule_dirs:
         schedule_name = resource_dir.name
+        raw_schedule = load_resource_payload(resource_dir, schedule_name)
         payload, dropped_filter = without_time_schedule_filter(
-            apply_variables(load_resource_payload(resource_dir, schedule_name))
+            apply_variables(raw_schedule)
         )
         if dropped_filter:
             console.print(
@@ -2827,6 +2860,15 @@ def import_pod_bundle(
             continue
         payload.setdefault("name", schedule_name)
         existing = existing_schedules.get(schedule_name)
+        if not existing:
+            listening, account_note = _deprecated_schedule_account(
+                raw_schedule, payload, schedule_name
+            )
+            if account_note:
+                console.print(f"[yellow]warning[/yellow] {account_note}")
+            if listening is None:
+                summary["schedules"].append(f"skipped:{schedule_name}")
+                continue
         existing_id = str(existing.get("id") or "") if existing else ""
         if existing and existing_id:
             if not upsert:
@@ -2871,7 +2913,8 @@ def import_pod_bundle(
     )
     for resource_dir in surface_dirs:
         surface_name = resource_dir.name
-        payload = apply_variables(load_resource_payload(resource_dir, surface_name))
+        raw_surface = load_resource_payload(resource_dir, surface_name)
+        payload = apply_variables(raw_surface)
         platform = _surface_platform_from_payload(payload, surface_name)
         surface_key = _surface_name_from_payload(payload, surface_name)
         exists = surface_key in existing_surface_names
@@ -2881,9 +2924,13 @@ def import_pod_bundle(
             )
         action = "updated" if exists else "created"
         _progress_start("surface", surface_name, "upserting")
-        pod_sdk.surfaces.upsert(
-            surface_key, {**_surface_upsert_body(payload), "platform": platform}
+        body = _surface_upsert_body(payload)
+        account_warning = _deprecated_surface_account(
+            raw_surface, payload, body, surface_name, surface_key
         )
+        if account_warning:
+            console.print(f"[yellow]warning[/yellow] {account_warning}")
+        pod_sdk.surfaces.upsert(surface_key, {**body, "platform": platform})
         summary["surfaces"].append(f"{action}:{surface_name}")
         _progress_done("surface", surface_name, action)
 

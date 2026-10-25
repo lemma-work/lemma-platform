@@ -113,9 +113,7 @@ class RetryCoordinator:
             user_id=user_id,
         )
         await self.turns.assert_usage_preflight_allowed(
-            organization_id=conversation.organization_id,
-            user_id=user_id,
-            agent_runtime=runtime,
+            conversation, user_id=user_id, agent_runtime=runtime
         )
         retry_run = await self.conversation_repository.create_agent_run(
             conversation_id=conversation.id,

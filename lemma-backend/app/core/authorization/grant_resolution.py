@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import exists, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.context import (
@@ -24,13 +24,7 @@ from app.core.authorization.context import (
     ResourceVisibility,
     normalize_resource_visibility,
 )
-from app.core.authorization.session_approvals import has_session_approval
-
-
-from app.core.authorization.grants import (
-    HUMAN_GRANTEE_TYPES,
-    grant_resource_type_values,
-)
+from app.core.authorization.grants import grant_resource_type_values
 from app.core.authorization.models import (
     ResourcePermissionGrantModel,
 )
@@ -42,37 +36,6 @@ from app.core.authorization.resource_tables import (
 )
 
 
-async def _session_approval(
-    ctx: "Context",
-    *,
-    session_id: str | None,
-    workload_actor_id: str | None,
-    permission_id: str,
-) -> bool:
-    """``has_session_approval``, asked at most once per permission per request.
-
-    The lookup is a Redis round trip made while the request's pooled database
-    connection is checked out, so repeating it per check is the expensive part.
-
-    Caching it means an approval granted *during* a request is not seen by that
-    request. That is correct for an ordinary request, which is short; for a
-    long-lived streamed one it means the approval takes effect on the next call
-    rather than mid-stream. Acceptable because approvals are awaited through the
-    approval flow rather than polled here -- but it is a staleness window, not
-    an invariant.
-    """
-    cached = ctx._session_approval_cache.get(permission_id)  # noqa: SLF001
-    if cached is not None:
-        return cached
-    approved = await has_session_approval(
-        session_id=session_id,
-        workload_actor_id=workload_actor_id,
-        permission_id=permission_id,
-    )
-    ctx._session_approval_cache[permission_id] = approved  # noqa: SLF001
-    return approved
-
-
 class GrantResolutionMixin:
     """Grant-resolution half of `Authorizer`."""
 
@@ -82,35 +45,6 @@ class GrantResolutionMixin:
         list[tuple[UUID, str]],
     ]
     _folder_ids_by_paths: dict[tuple[UUID, tuple[str, ...]], list[UUID]]
-
-    async def _visibility_from_optional_grants(
-        self,
-        *,
-        pod_id: UUID,
-        resource_type: ResourceType,
-        resource_id: UUID,
-    ) -> ResourceVisibility:
-        conditions = [
-            ResourcePermissionGrantModel.pod_id == pod_id,
-            ResourcePermissionGrantModel.resource_type.in_(
-                grant_resource_type_values(resource_type)
-            ),
-            ResourcePermissionGrantModel.resource_id == resource_id,
-            # Human sharing grants only. A grant to an agent is a workload
-            # capability grant and says nothing about whether people may see the
-            # resource -- which is why `clear_human_sharing_grants` deletes the
-            # human ones and preserves these when a resource leaves RESTRICTED.
-            # Counting them here contradicted that: pinning a shared account on
-            # an agent was itself what made the account RESTRICTED, so the act of
-            # configuring the agent locked every pod member out of the very
-            # account it was configured to use.
-            ResourcePermissionGrantModel.grantee_type.in_(HUMAN_GRANTEE_TYPES),
-        ]
-        grant_exists_stmt = select(exists().where(*conditions))
-        has_grants = (await self.session.execute(grant_exists_stmt)).scalar_one()
-        if has_grants:
-            return ResourceVisibility.RESTRICTED
-        return ResourceVisibility.POD
 
     async def _resource_grant_decision(
         self,
@@ -321,7 +255,10 @@ class GrantResolutionMixin:
 
     @staticmethod
     def _normalize_visibility(value: str | None) -> ResourceVisibility:
-        # An unreadable value falls back to POD here (rather than raising) so a
-        # malformed row degrades to pod-scoped — the safe direction — instead of
-        # 500ing the whole request.
-        return normalize_resource_visibility(value) or ResourceVisibility.POD
+        # An unreadable value degrades rather than 500ing the request -- to
+        # PERSONAL, its owner alone. POD was called the safe direction, but it is
+        # the wide one: every member of the pod could read a row whose real
+        # level nobody could tell. A missing value is still POD, the default.
+        if value is None:
+            return ResourceVisibility.POD
+        return normalize_resource_visibility(value) or ResourceVisibility.PERSONAL

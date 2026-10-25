@@ -83,6 +83,11 @@ from app.modules.contacts.infrastructure.visitor_sessions import (
 )
 from app.modules.test_support.e2e.scripted_model import script_thinking
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+from app.modules.test_support.query_counting import (
+    counted_queries,
+    format_statements,
+    statements_touching,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -1997,3 +2002,50 @@ async def test_a_visitor_a_member_had_is_answered_with_all_they_said_meanwhile(
         *held,
         "Hello? Is that a yes?",
     )
+
+
+async def test_past_the_contacts_cap_a_visitors_message_is_held_without_a_ledger_sum(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_org,
+):
+    """Every message asks the cap, and reads it from the running total the
+    visitor's run would be admitted on: once the month is counted, being held
+    costs no sum over the month's spend."""
+    from app.modules.agent.infrastructure.models import AgentRunModel
+
+    widget = await _widget(authenticated_client, test_pod["id"])
+    key = widget["public_key"]
+    capped = await authenticated_client.put(
+        f"/usage/organizations/{fixed_test_org['id']}/contacts-cap",
+        json={"monthly_limit_usd": 0},
+    )
+    assert capped.status_code == 200, capped.text
+    visitor = await _session(authenticated_client, key)
+
+    async def send(text: str) -> None:
+        with suppress_agent_run_enqueue():
+            sent = await authenticated_client.post(
+                f"/public/web/{key}/messages", json={"text": text}, headers=_as(visitor)
+            )
+        assert sent.status_code == 202, sent.text
+
+    # The first asks a new window, and counts it from the ledger.
+    await send("Is the shop open?")
+    with counted_queries() as held:
+        await send("Hello?")
+
+    sums = [
+        statement
+        for statement in held
+        if "sum(" in statement.lower()
+        and ("usage_records" in statement or "usage_limit_counters" in statement)
+    ]
+    assert not sums, format_statements(sums)
+    assert statements_touching(held, "usage_limit_counters"), format_statements(held)
+    conversation_id = await _conversation_of(db_session, visitor)
+    runs = await db_session.scalars(
+        select(AgentRunModel.id).where(AgentRunModel.conversation_id == conversation_id)
+    )
+    assert runs.all() == []

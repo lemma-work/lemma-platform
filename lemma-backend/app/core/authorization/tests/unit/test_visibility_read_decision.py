@@ -11,11 +11,14 @@ from __future__ import annotations
 from uuid import uuid4
 
 from app.core.authorization.context import (
-    ActorType,
+    Actor,
     Context,
+    Person,
     ResourceRef,
     ResourceType,
     ResourceVisibility,
+    Workload,
+    WorkloadKind,
 )
 from app.core.authorization.authorizer import Authorizer
 
@@ -26,13 +29,13 @@ USER_ID = uuid4()
 
 def _ctx(
     *,
-    actor_type: ActorType = ActorType.USER,
+    actor: Actor = Person(user_id=USER_ID),
     pod_id=POD_ID,
     permission_ids: frozenset[str] = frozenset(),
 ) -> Context:
     """A viewer holding no pod permissions unless told otherwise."""
     return Context(
-        actor_type=actor_type,
+        actor=actor,
         actor_id=str(USER_ID),
         user_id=USER_ID,
         organization_id=ORG_ID,
@@ -114,7 +117,13 @@ class TestActorScope:
         # widened it, sharing a doc would silently widen every agent in the pod.
         assert (
             _decide(
-                _ctx(actor_type=ActorType.DELEGATED_USER_WORKLOAD),
+                _ctx(
+                    actor=Workload(
+                        kind=WorkloadKind.AGENT,
+                        workload_id=uuid4(),
+                        for_user_id=USER_ID,
+                    )
+                ),
                 "folder.read",
                 _resource(ResourceVisibility.PUBLIC),
             )
@@ -124,7 +133,7 @@ class TestActorScope:
     def test_agent_actor_gains_nothing(self):
         assert (
             _decide(
-                _ctx(actor_type=ActorType.AGENT),
+                _ctx(actor=Workload(kind=WorkloadKind.AGENT, workload_id=uuid4())),
                 "folder.read",
                 _resource(ResourceVisibility.PUBLIC),
             )

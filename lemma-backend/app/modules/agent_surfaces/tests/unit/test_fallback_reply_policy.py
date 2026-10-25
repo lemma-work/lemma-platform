@@ -60,7 +60,7 @@ def _email_surface() -> AgentSurfaceEntity:
         name="mailbox",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.RESEND,
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         config=SurfaceConfig(),
         is_active=True,
     )
@@ -228,7 +228,7 @@ def _slack_surface() -> AgentSurfaceEntity:
         name="slack",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.SLACK,
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         config=SurfaceConfig(),
         is_active=True,
     )

@@ -34,35 +34,70 @@ async def test_record_then_has_session_approval_roundtrip(monkeypatch):
     monkeypatch.setattr(session_approvals, "_get_approval_cache", lambda: cache)
     session_id = str(uuid4())
     actor = f"agent:{uuid4()}"
+    person = uuid4()
 
     await session_approvals.record_session_approval(
         session_id=session_id,
+        person_user_id=person,
         workload_actor_id=actor,
         permission_id="datastore.table.delete",
-        resolved_by_user_id=uuid4(),
     )
 
     assert await session_approvals.has_session_approval(
         session_id=session_id,
+        person_user_id=person,
         workload_actor_id=actor,
         permission_id="datastore.table.delete",
     )
     # Key includes the permission: a different action type stays unapproved.
     assert not await session_approvals.has_session_approval(
         session_id=session_id,
+        person_user_id=person,
         workload_actor_id=actor,
         permission_id="folder.delete",
     )
     # Key includes the session: a different conversation stays unapproved.
     assert not await session_approvals.has_session_approval(
         session_id=str(uuid4()),
+        person_user_id=person,
         workload_actor_id=actor,
         permission_id="datastore.table.delete",
     )
     # Key includes the workload: a different agent stays unapproved.
     assert not await session_approvals.has_session_approval(
         session_id=session_id,
+        person_user_id=person,
         workload_actor_id=f"agent:{uuid4()}",
+        permission_id="datastore.table.delete",
+    )
+
+
+@pytest.mark.asyncio
+async def test_one_member_s_approval_does_not_cover_another_member_s_run(monkeypatch):
+    """M5: in a group conversation the same agent runs for whoever spoke last.
+    A's "allow for this conversation" is A's; the run B triggers asks again."""
+    cache = _FakeCache()
+    monkeypatch.setattr(session_approvals, "_get_approval_cache", lambda: cache)
+    session_id, actor = str(uuid4()), f"agent:{uuid4()}"
+    alice, bob = uuid4(), uuid4()
+
+    await session_approvals.record_session_approval(
+        session_id=session_id,
+        person_user_id=alice,
+        workload_actor_id=actor,
+        permission_id="datastore.table.delete",
+    )
+
+    assert await session_approvals.has_session_approval(
+        session_id=session_id,
+        person_user_id=alice,
+        workload_actor_id=actor,
+        permission_id="datastore.table.delete",
+    )
+    assert not await session_approvals.has_session_approval(
+        session_id=session_id,
+        person_user_id=bob,
+        workload_actor_id=actor,
         permission_id="datastore.table.delete",
     )
 
@@ -74,10 +109,23 @@ async def test_missing_session_or_actor_short_circuits(monkeypatch):
 
     monkeypatch.setattr(session_approvals, "_get_approval_cache", fail)
     assert not await session_approvals.has_session_approval(
-        session_id=None, workload_actor_id="agent:x", permission_id="pod.delete"
+        session_id=None,
+        person_user_id=uuid4(),
+        workload_actor_id="agent:x",
+        permission_id="pod.delete",
     )
     assert not await session_approvals.has_session_approval(
-        session_id="s", workload_actor_id=None, permission_id="pod.delete"
+        session_id="s",
+        person_user_id=uuid4(),
+        workload_actor_id=None,
+        permission_id="pod.delete",
+    )
+    # A run with nobody behind it: nobody could have approved anything.
+    assert not await session_approvals.has_session_approval(
+        session_id="s",
+        person_user_id=None,
+        workload_actor_id="agent:x",
+        permission_id="pod.delete",
     )
 
 
@@ -97,17 +145,19 @@ async def test_redis_down_degrades_to_unapproved_with_one_incident(monkeypatch, 
     with caplog.at_level("WARNING"):
         assert not await session_approvals.has_session_approval(
             session_id=str(uuid4()),
+            person_user_id=uuid4(),
             workload_actor_id=f"agent:{uuid4()}",
             permission_id="datastore.table.delete",
         )
         await session_approvals.record_session_approval(
             session_id=str(uuid4()),
+            person_user_id=uuid4(),
             workload_actor_id=f"agent:{uuid4()}",
             permission_id="datastore.table.delete",
-            resolved_by_user_id=uuid4(),
         )
         assert not await session_approvals.has_session_approval(
             session_id=str(uuid4()),
+            person_user_id=uuid4(),
             workload_actor_id=f"agent:{uuid4()}",
             permission_id="datastore.table.delete",
         )
@@ -128,7 +178,10 @@ async def test_ttl_zero_disables_session_approvals(monkeypatch):
     monkeypatch.setattr(session_approvals, "_approval_cache", None)
     assert session_approvals._get_approval_cache() is None
     assert not await session_approvals.has_session_approval(
-        session_id="s", workload_actor_id="agent:x", permission_id="pod.delete"
+        session_id="s",
+        person_user_id=uuid4(),
+        workload_actor_id="agent:x",
+        permission_id="pod.delete",
     )
 
 

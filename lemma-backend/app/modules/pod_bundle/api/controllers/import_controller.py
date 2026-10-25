@@ -17,10 +17,13 @@ from collections.abc import AsyncGenerator
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import StreamingResponse
 
+from app.core.api.actor_policy import refuse_named_workloads
 from app.core.api.dependencies import CurrentUser, get_uow_factory
+from app.core.api.deprecation import note_deprecated_use
+from app.modules.connectors.contracts.deprecations import ACCOUNT_ADDRESSING_SUNSET
 from app.core.api.streaming_multipart import (
     MultipartFileLimit,
     stream_multipart_form,
@@ -50,7 +53,14 @@ from app.modules.pod_bundle.infrastructure.state_store import (
     get_pod_bundle_state_store,
 )
 
-router = APIRouter(prefix="/pods", tags=["Pod Bundle"], redirect_slashes=False)
+# A bundle job runs as the person, not as a workload's grants: named agents
+# and functions stay out of every bundle route (the assistant keeps them).
+router = APIRouter(
+    prefix="/pods",
+    tags=["Pod Bundle"],
+    redirect_slashes=False,
+    dependencies=[refuse_named_workloads("export, import or publish a pod")],
+)
 
 ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 
@@ -66,7 +76,8 @@ _TERMINAL_EVENT_TYPES = {"completed", "error", "expired"}
     description=(
         "Import a pod bundle from a URL. kind=URL takes a lemma signed download "
         "URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a "
-        "public repo (repo_url or owner+repo, with account_id for private repos). "
+        "repo (repo_url or owner+repo), fetched through the pod's `github` "
+        "connector as the importer, or anonymously for a public repo. "
         "Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, "
         "review the plan, then apply."
     ),
@@ -76,8 +87,20 @@ async def start_import(
     pod_id: UUID,
     data: ImportStartRequest,
     user: CurrentUser,
+    request: Request,
+    response: Response,
     use_cases: ImportUseCasesDep,
 ) -> ImportStatusResponse:
+    if data.account_id is not None:
+        note_deprecated_use(
+            request,
+            response,
+            use="pod.bundle.import.start.account_id",
+            replacement=(
+                "drop account_id; the pod's `github` connector decides the account"
+            ),
+            sunset=ACCOUNT_ADDRESSING_SUNSET,
+        )
     state = await use_cases.start_import(
         pod_id=pod_id,
         user_id=user.id,
@@ -86,7 +109,6 @@ async def start_import(
         owner=data.owner,
         repo=data.repo,
         ref=data.ref,
-        account_id=data.account_id,
     )
     return ImportStatusResponse.from_state(state)
 
@@ -190,6 +212,7 @@ async def apply_import(
         user_id=user.id,
         variables=data.variables,
         confirm_destructive=data.confirm_destructive,
+        connectors=data.connectors,
     )
     return ImportStatusResponse.from_state(state)
 
@@ -264,7 +287,7 @@ async def stream_import_events(
 
     store = get_pod_bundle_state_store()
     return StreamingResponse(
-        import_event_stream(store, channel_service, pod_id, import_id),
+        import_event_stream(store, channel_service, pod_id, import_id, user_id=user.id),
         media_type="text/event-stream",
     )
 
@@ -274,15 +297,20 @@ async def import_event_stream(
     channel_service: RealtimeChannel,
     pod_id: UUID,
     import_id: UUID,
+    *,
+    user_id: UUID,
 ) -> AsyncGenerator[str, None]:
     """SSE frames for an import: a full ``snapshot`` first (so a late/reconnecting
     client sees the whole plan), then live frames with ``seq <= snapshot`` dropped,
     closing on a terminal event/status. Module-level and dependency-injected so it
-    is unit-testable without the FastAPI request machinery."""
+    is unit-testable without the FastAPI request machinery.
+
+    Only its starter's: anyone else gets ``expired``, as for an id that names
+    no import, because the plan lists the starter's own accounts."""
     # Subscribe BEFORE reading the snapshot so an event fired in between is not lost.
     async with channel_service.subscribe([bundle_job_channel(import_id)]) as iterator:
         state = await store.get_import(import_id)
-        if state is None or state.pod_id != pod_id:
+        if state is None or state.pod_id != pod_id or state.user_id != user_id:
             yield _frame({"type": "expired"})
             return
         snapshot_seq = state.seq

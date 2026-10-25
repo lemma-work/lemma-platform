@@ -14,16 +14,13 @@ from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import UsageService
 
-
-def _scope_allows(scope: object) -> bool:
-    """Whether one usage window still has headroom.
-
-    `get_usage_limits` answers with a `dict[str, object]`, so each window
-    arrives untyped. Anything unreadable counts as allowed: this list only
-    names the limits to report, and the decision to block was already made by
-    the `allowed` flag above.
-    """
-    return not isinstance(scope, dict) or bool(scope.get("allowed", True))
+#: What each limit window is called when it is the one that refused a run.
+_LIMIT_NAMES = (
+    ("org_month", "organization monthly"),
+    ("user_week", "user weekly"),
+    ("user_month", "user monthly"),
+    ("contacts_month", "contacts monthly"),
+)
 
 
 async def assert_usage_preflight_allowed(
@@ -32,31 +29,31 @@ async def assert_usage_preflight_allowed(
     organization_id: UUID | None,
     user_id: UUID,
     agent_runtime: AgentRuntimeConfig,
+    outside_audience: bool,
 ) -> None:
-    """Raise ``UsageLimitExceededError`` when the run must not start."""
+    """Raise ``UsageLimitExceededError`` when the run must not start.
+
+    ``outside_audience``: the run answers somebody outside the organization
+    (``Audience.answers_outsiders``), so it is held to the organization's
+    limits and its contacts cap, not to the personal limits of ``user_id``.
+    """
     if usage_service is None:
         return
     if not agent_runtime.profile_id.startswith("system:"):
         return
-    limits = await usage_service.get_usage_limits(
+    spent = await usage_service.spent_windows(
         organization_id=organization_id,
         user_id=user_id,
+        outside_audience=outside_audience,
     )
-    if limits["allowed"]:
+    if not spent:
         return
     # Say which limit was reached, not just that one was: a person told
     # only "limit exceeded" cannot tell whether to wait for the month to
     # turn or to ask an admin for headroom. See PS-OPS-012.
-    reached = [
-        name
-        for name, key in (
-            ("organization monthly", "org_monthly"),
-            ("user weekly", "user_weekly"),
-            ("user monthly", "user_monthly"),
-        )
-        if not _scope_allows(limits[key])
-    ]
     raise UsageLimitExceededError(
         "LLM usage limit exceeded: "
-        + ", ".join(f"{name} limit reached" for name in reached)
+        + ", ".join(
+            f"{name} limit reached" for kind, name in _LIMIT_NAMES if kind in spent
+        )
     )

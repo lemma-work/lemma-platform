@@ -5,9 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from fastapi import HTTPException
 
-from app.modules.agent_surfaces.api.surface_config_resolver import require_own_account
 from app.modules.agent_surfaces.services.surface_config_input import (
     resolve_slack_config,
     resolve_telegram_config,
@@ -17,7 +15,6 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.apps.contracts import ReadyPodApp
-from app.modules.connectors.domain.errors import AccountNotFoundError
 
 pytestmark = pytest.mark.asyncio
 
@@ -89,53 +86,6 @@ async def test_resolve_slack_config_rejects_an_app_on_another_platform():
             app_name="support-desk",
             ctx=object(),
         )
-
-
-async def test_require_own_account_allows_an_account_the_caller_owns():
-    user_id, account_id, organization_id = uuid4(), uuid4(), uuid4()
-    owner_check = AsyncMock()
-
-    await require_own_account(
-        account_id,
-        user_id=user_id,
-        organization_id=organization_id,
-        assert_owner=owner_check,
-    )
-
-    owner_check.assert_awaited_once_with(
-        account_id, user_id=user_id, organization_id=organization_id
-    )
-
-
-async def test_require_own_account_is_a_no_op_without_an_account():
-    """A SYSTEM-credential surface binds no account, and an update that doesn't
-    mention one must not be forced to prove anything about it."""
-    owner_check = AsyncMock()
-
-    await require_own_account(
-        None,
-        user_id=uuid4(),
-        organization_id=uuid4(),
-        assert_owner=owner_check,
-    )
-
-    owner_check.assert_not_awaited()
-
-
-async def test_require_own_account_refuses_someone_elses_account():
-    """Accounts are personal: an editor binding a colleague's would hand the pod
-    a credential its owner never offered."""
-
-    with pytest.raises(HTTPException) as caught:
-        await require_own_account(
-            uuid4(),
-            user_id=uuid4(),
-            organization_id=uuid4(),
-            assert_owner=AsyncMock(side_effect=AccountNotFoundError("nope")),
-        )
-
-    assert caught.value.status_code == 403
-    assert "belongs to someone else" in str(caught.value.detail)
 
 
 def test_every_caller_builds_a_surface_config_the_way_it_is_declared():

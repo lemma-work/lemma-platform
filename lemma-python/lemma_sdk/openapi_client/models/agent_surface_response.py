@@ -37,12 +37,12 @@ class AgentSurfaceResponse:
             a Gmail *account* is still something an agent does, through the connector;
             it is just not a surface.
         pod_id (UUID):
-        account_id (None | Unset | UUID):
         agent_id (None | Unset | UUID):
         agent_name (None | str | Unset):
         connection (None | SurfaceConnection | Unset):
         contacts_warning (None | str | Unset):
         credential_mode (SurfaceCredentialMode | Unset):
+        pod_connector (None | str | Unset):
         problem (None | str | Unset):
         reach (None | SurfaceReach | Unset):
         status (AgentSurfaceStatus | Unset):
@@ -58,12 +58,12 @@ class AgentSurfaceResponse:
     name: str
     platform: SurfacePlatform
     pod_id: UUID
-    account_id: None | Unset | UUID = UNSET
     agent_id: None | Unset | UUID = UNSET
     agent_name: None | str | Unset = UNSET
     connection: None | SurfaceConnection | Unset = UNSET
     contacts_warning: None | str | Unset = UNSET
     credential_mode: SurfaceCredentialMode | Unset = UNSET
+    pod_connector: None | str | Unset = UNSET
     problem: None | str | Unset = UNSET
     reach: None | SurfaceReach | Unset = UNSET
     status: AgentSurfaceStatus | Unset = UNSET
@@ -87,14 +87,6 @@ class AgentSurfaceResponse:
         platform = self.platform.value
 
         pod_id = str(self.pod_id)
-
-        account_id: None | str | Unset
-        if isinstance(self.account_id, Unset):
-            account_id = UNSET
-        elif isinstance(self.account_id, UUID):
-            account_id = str(self.account_id)
-        else:
-            account_id = self.account_id
 
         agent_id: None | str | Unset
         if isinstance(self.agent_id, Unset):
@@ -127,6 +119,12 @@ class AgentSurfaceResponse:
         credential_mode: str | Unset = UNSET
         if not isinstance(self.credential_mode, Unset):
             credential_mode = self.credential_mode.value
+
+        pod_connector: None | str | Unset
+        if isinstance(self.pod_connector, Unset):
+            pod_connector = UNSET
+        else:
+            pod_connector = self.pod_connector
 
         problem: None | str | Unset
         if isinstance(self.problem, Unset):
@@ -183,8 +181,6 @@ class AgentSurfaceResponse:
                 "pod_id": pod_id,
             }
         )
-        if account_id is not UNSET:
-            field_dict["account_id"] = account_id
         if agent_id is not UNSET:
             field_dict["agent_id"] = agent_id
         if agent_name is not UNSET:
@@ -195,6 +191,8 @@ class AgentSurfaceResponse:
             field_dict["contacts_warning"] = contacts_warning
         if credential_mode is not UNSET:
             field_dict["credential_mode"] = credential_mode
+        if pod_connector is not UNSET:
+            field_dict["pod_connector"] = pod_connector
         if problem is not UNSET:
             field_dict["problem"] = problem
         if reach is not UNSET:
@@ -230,23 +228,6 @@ class AgentSurfaceResponse:
         platform = SurfacePlatform(d.pop("platform"))
 
         pod_id = UUID(d.pop("pod_id"))
-
-        def _parse_account_id(data: object) -> None | Unset | UUID:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                account_id_type_0 = UUID(data)
-
-                return account_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | Unset | UUID, data)
-
-        account_id = _parse_account_id(d.pop("account_id", UNSET))
 
         def _parse_agent_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -306,6 +287,15 @@ class AgentSurfaceResponse:
             credential_mode = UNSET
         else:
             credential_mode = SurfaceCredentialMode(_credential_mode)
+
+        def _parse_pod_connector(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pod_connector = _parse_pod_connector(d.pop("pod_connector", UNSET))
 
         def _parse_problem(data: object) -> None | str | Unset:
             if data is None:
@@ -390,12 +380,12 @@ class AgentSurfaceResponse:
             name=name,
             platform=platform,
             pod_id=pod_id,
-            account_id=account_id,
             agent_id=agent_id,
             agent_name=agent_name,
             connection=connection,
             contacts_warning=contacts_warning,
             credential_mode=credential_mode,
+            pod_connector=pod_connector,
             problem=problem,
             reach=reach,
             status=status,

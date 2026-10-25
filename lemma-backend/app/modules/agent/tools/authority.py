@@ -12,11 +12,20 @@ There are exactly three:
   grants, intersected with what the person it works for may do. Anything
   beyond that -- a missing grant, a destructive action, an auth-required step
   -- is refused with a code the tool turns into ``needs_approval``.
-* **The person's, lent for one approved call.** When a person approves a
-  ``request_approval``, that exact call runs as them: their own permissions,
-  nothing more, and the destructive-action gate is satisfied because a person
-  approved it at the time (PS-ACCESS-021). Nothing is left behind -- the
-  agent's next call is judged on its own grants again.
+* **The agent's own, plus what one approval lends.** When a person approves a
+  ``request_approval``, that exact call runs with the agent's delegated context
+  as above, and the permissions the server refused it for are answered as
+  approved -- for that one context, which is discarded after the call
+  (``session_approvals.approve_for_this_context``). The destructive-action gate
+  is satisfied because a person approved it at the time (PS-ACCESS-021), the
+  person's ceiling still applies, and nothing is left behind -- the agent's
+  next call is judged on its own grants again.
+
+  It used to run as the approver: ``build_user_context`` for the person, whole.
+  An approval of one row's delete then lent the call everything the person
+  could do -- an approved subagent spawn or connector call ran with all of it,
+  and the context was not even delegated any more, so nothing downstream could
+  tell an agent was acting (H7).
 
 Every tool family used to build its own delegated context from
 ``deps.workload_id or DEFAULT_POD_AGENT_ID``, and the approval executor relied
@@ -39,6 +48,7 @@ from app.core.authorization.context import Context
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.pod_principal import build_pod_context
+from app.core.authorization.session_approvals import approve_for_this_context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.context import AgentContext
 
@@ -66,12 +76,7 @@ async def tool_authorization_context(
             contact_id=audience.contact_id,
         )
     authorization = create_authorization_data_service(uow)
-    approved = deps.approved_execution
-    if approved is not None:
-        return await authorization.build_user_context(
-            user_id=approved.approver_user_id, pod_id=deps.pod_id
-        )
-    return await authorization.build_delegated_workload_context(
+    ctx = await authorization.build_delegated_workload_context(
         user_id=deps.user_id,
         principal_type=workload_principal_type(deps),
         principal_id=getattr(deps, "workload_id", None) or DEFAULT_POD_AGENT_ID,
@@ -81,6 +86,26 @@ async def tool_authorization_context(
         delegation_actor_name=deps.agent_name,
         # Session approvals (APPROVE_FOR_SESSION) are keyed by conversation.
         delegation_session_id=str(deps.conversation_id),
+    )
+    approved = deps.approved_execution
+    if approved is not None:
+        # Exactly what the server refused this call for, answered as approved on
+        # this context alone. Not the person's context: the agent still acts,
+        # under its own grants and scope, with the person's ceiling over both.
+        approve_for_this_context(ctx, approved.permission_ids)
+    return ctx
+
+
+async def approver_context(uow: SqlAlchemyUnitOfWork, deps: AgentContext) -> Context:
+    """The approving person's own context, for conferring what a card offered.
+
+    Never the authority a tool runs with -- that is one of the three above.
+    It is who decides whether the agent may be *given* a grant: a card that
+    offers one is answered by its person, and the grant is theirs to confer
+    only as far as they could use it themselves (``conferral``).
+    """
+    return await create_authorization_data_service(uow).build_user_context(
+        user_id=deps.user_id, organization_id=deps.org_id, pod_id=deps.pod_id
     )
 
 
@@ -129,12 +154,14 @@ def workspace_principal(deps: AgentContext) -> WorkspacePrincipal:
     """The sandbox half of :func:`tool_authorization_context`.
 
     A sandbox tool (``exec_command``, ``execute_python``) runs the ``lemma`` CLI
-    with whatever token its session was minted with, so this is where an
-    approved destructive command -- deleting a stale pod, say -- gets the
-    person's authority: the session is minted for the user, with no workload.
+    with whatever token its session was minted with: always the workload's,
+    approved or not. An approved command gets exactly what it was lent through
+    the session-approval store (``approval_denials.lent_to_the_sandbox``).
+
+    An approved command used to get a session minted for the person, with no
+    workload -- their whole authority, in a shell the agent goes on using, for
+    the price of one approved ``ls`` (H7).
     """
-    if deps.approved_execution is not None:
-        return WorkspacePrincipal(None, None, None)
     return WorkspacePrincipal(
         getattr(deps, "workload_type", None),
         getattr(deps, "workload_id", None),

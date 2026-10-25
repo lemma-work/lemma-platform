@@ -27,6 +27,9 @@ a pooled database connection is not held during provider I/O.
 | `auth_configs` | Organization installation/configuration and encrypted OAuth client secrets |
 | `accounts` | User-owned encrypted provider credentials and connection status |
 | `connect_requests` | Short-lived OAuth state and authorization flow metadata |
+| `pod_connectors` | A pod's declaration of one org installation under a pod-local slug, with its mode: PER_MEMBER (each caller's own account) or SHARED (one pod account). The only thing an operation is run through, so the account is the connector's decision and never an argument |
+| `pod_accounts` | One org account in use in one pod, owned by the account's owner, with a visibility only that owner may widen (PERSONAL, POD, RESTRICTED). A row rather than an inference so a pod's use of an account is recorded, authorized like any pod resource, and removed with the member. `allow_sandbox_use` is the owner's "allow use inside sandboxes": only with it may the sandbox git bridge write a shared account's token into another member's workspace; withdrawing the account clears it, and turning it off takes the token back out of a session on its next git command |
+| `connector_installations` | Which organization an installation of an app Lemma operates belongs to (`connector_id` + the upstream's `external_id`; GitHub today), and who bound it. Not an auth config: that is an org's app registration, this is ownership of one upstream tenant. One org per installation: a first claim needs proof from GitHub that the claimant administers it and `org.installation.manage` in Lemma; token minting and webhook routing reach an installation only through its own org; GitHub's `installation.deleted` releases it |
 
 ## API groups
 
@@ -37,7 +40,15 @@ a pooled database connection is not held during provider I/O.
 | `/.../auth-configs` | Create/list/get/delete organization auth configurations |
 | `/.../accounts` | Create/list/get/delete user accounts and resolve account credentials |
 | `/.../connect-requests` + callback | Start OAuth and exchange callback state/code |
-| `/.../{auth_config}/operations` | Search/details and execute an operation |
+| `/.../{auth_config}/operations` | Search and read an install's operations |
+| `/pods/{pod}/connectors[/{slug}]` | Declare, list, change and remove the pod's connectors (`pod.connector.manage`). Each carries `can_use`: whether the caller may run it, so the "connect yours" ask is not put to a viewer or someone a RESTRICTED connector leaves out |
+| `/pods/{pod}/connectors/{slug}/coverage` | For an editor: how many of the members allowed to use a PER_MEMBER connector have a working account, and who it waits on (missing, or `REAUTH_REQUIRED`) -- names only, never their accounts. One connector per call, because it weighs each member's own access; listings leave it out |
+| `/pods/{pod}/connectors/{slug}/ask-members` | An editor asks those members to connect: one line each in their own channel, from the pod's agent for the editor (the path `channel_post` writes). Once per connector per member per day, held in Redis and marked only after the line is committed |
+| `/pods/{pod}/connectors/{slug}/operations[/{op}[/execute]]` | Discover and run operations through a pod connector |
+| `/pods/{pod}/connector-accounts[/{id}]` | The accounts in use in the pod; their owners add, share and withdraw them |
+| `/pods/{pod}/connector-accounts/{id}/share-as` | "Share as <slug>": the owner, who must also manage connectors, shares the account and points or declares a SHARED connector on it -- every check first, then both in one transaction |
+| `/me/connectors/accounts/{id}/pods` | Where one of my accounts is used |
+| `/organizations/{org}/installations/{id}/impact` | What removing an installation would stop: accounts, pod accounts, pod connectors, and the surfaces, schedules and MCP event subscriptions running through them (via the `agent_surfaces` and `schedule` contracts). Counts are org-wide; pods are named only where the caller can open them. Fails soft: if the second half cannot be read it says `complete: false` rather than erroring |
 | `/.../{auth_config}/triggers` | Discover provider triggers |
 
 A trigger's `config_schema` is returned by the single-trigger endpoint, not by
@@ -71,12 +82,11 @@ Storing a grant -- a new account, or an existing one granted again -- emits
 for other modules to subscribe a work kind to. It carries the account, the
 install, the connector, the organization and the person; the `purpose` the
 request's starter recorded (`own_apps.start_authorization(purpose=...)`), so a
-subscriber acts only on the grants it started; `renewed`; and `browser_bound`,
-whether the browser that came back carried the starter's own Lemma session.
-The callback is completed by `state` alone, so a consent link somebody was sent
-stores *their* grant on the sender's account; anything that treats a grant as
-proof of who the provider's user is requires `browser_bound`, which a spent
-request also keeps (`own_apps.grant_is_browser_bound`). A request with a
+subscriber acts only on the grants it started; and `renewed`. The callback
+refuses a browser that does not carry the starter's own Lemma session before
+anything is claimed or exchanged, so every stored grant is the starter's own
+consent, and a grant may be taken as proof of who the provider's user is. A
+request with a
 purpose renews an account its person already has connected for the same
 provider identity instead of refusing it as `ACCOUNT_ALREADY_CONNECTED`: its
 starter asked for a fresh grant. `start_authorization(omit_authorize_params=)`

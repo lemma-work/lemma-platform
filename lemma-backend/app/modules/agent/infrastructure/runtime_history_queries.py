@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Subquery, and_, func, or_, select
+from sqlalchemy import Select, and_, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from app.modules.agent.domain.entities import (
     AgentRun as AgentRunEntity,
@@ -243,50 +242,68 @@ class RuntimeHistoryQueries:
         is the turn being answered: one written after it arrived mid-run and
         must not end up after the user turn the model is replying to.
         """
-        ranked = _ranked_unattached(
-            conversation_id,
-            after_sequence=after_sequence,
-            before_sequence=before_sequence,
+        newest = union_all(
+            _newest_unattached_ids(
+                conversation_id,
+                folded=False,
+                limit=limit,
+                after_sequence=after_sequence,
+                before_sequence=before_sequence,
+            ),
+            _newest_unattached_ids(
+                conversation_id,
+                folded=True,
+                limit=folded_limit,
+                after_sequence=after_sequence,
+                before_sequence=before_sequence,
+            ),
         )
         rows = (
             await self.session.scalars(
-                select(aliased(MessageModel, ranked))
-                .where(
-                    or_(
-                        and_(ranked.c.folded, ranked.c.place <= folded_limit),
-                        and_(~ranked.c.folded, ranked.c.place <= limit),
-                    )
-                )
-                .order_by(ranked.c.sequence)
+                select(MessageModel)
+                .where(MessageModel.id.in_(newest))
+                .order_by(MessageModel.sequence)
                 .limit(limit + folded_limit)
             )
         ).all()
         return [row.to_entity() for row in rows]
 
 
-def _ranked_unattached(
-    conversation_id: UUID, *, after_sequence: int | None, before_sequence: int | None
-) -> Subquery:
-    """Every run-less message of the kinds carried, within the bounds, numbered
-    newest first among its own: copies a merge folded in apart from the rest."""
-    folded = MessageModel.message_metadata[FOLDED_FROM_KEY].astext.is_not(None)
-    carried = select(
-        MessageModel,
-        folded.label("folded"),
-        func.row_number()
-        .over(partition_by=folded, order_by=MessageModel.sequence.desc())
-        .label("place"),
-    ).where(
+def _newest_unattached_ids(
+    conversation_id: UUID,
+    *,
+    folded: bool,
+    limit: int,
+    after_sequence: int | None,
+    before_sequence: int | None,
+) -> Select:
+    """The ids of the newest ``limit`` run-less messages of one side: copies a
+    merge folded in, or the rest of the kinds carried.
+
+    Each side is its own ``ORDER BY sequence DESC LIMIT`` so Postgres walks the
+    conversation's sequence index backwards and stops at the bound. Numbering
+    every candidate with a window function instead read and sorted all of a
+    conversation's run-less rows, full text included, on every run.
+    """
+    is_copy = MessageModel.message_metadata[FOLDED_FROM_KEY].astext.is_not(None)
+    side = (
+        is_copy
+        if folded
+        else and_(
+            ~is_copy,
+            or_(
+                MessageModel.kind == MessageKind.NOTIFICATION.value,
+                MessageModel.message_metadata[HELD_FOR_A_PERSON].astext == "true",
+            ),
+        )
+    )
+    query = select(MessageModel.id).where(
         MessageModel.conversation_id == conversation_id,
         MessageModel.agent_run_id.is_(None),
-        or_(
-            MessageModel.kind == MessageKind.NOTIFICATION.value,
-            MessageModel.message_metadata[HELD_FOR_A_PERSON].astext == "true",
-            folded,
-        ),
+        side,
     )
     if after_sequence is not None:
-        carried = carried.where(MessageModel.sequence > after_sequence)
+        query = query.where(MessageModel.sequence > after_sequence)
     if before_sequence is not None:
-        carried = carried.where(MessageModel.sequence < before_sequence)
-    return carried.subquery()
+        query = query.where(MessageModel.sequence < before_sequence)
+    return query.order_by(MessageModel.sequence.desc()).limit(limit)

@@ -18,6 +18,10 @@ from app.modules.agent_surfaces.services.managed_bot_identity import (
 from app.modules.agent_surfaces.services.telegram_manager_store import (
     TelegramManagedBotSetup,
 )
+from app.modules.agent_surfaces.services.surface_connector import connector_slug_for
+from app.modules.connectors.contracts.pod_connectors import (
+    share_own_account_as_pod_connector,
+)
 from app.modules.connectors.contracts.surfaces import upsert_bot_token_account
 
 
@@ -28,7 +32,13 @@ async def persist_managed_bot(
     bot_id: int,
     bot_username: str | None,
     bot_token: str,
-) -> tuple[UUID, UUID]:
+) -> tuple[str, UUID]:
+    """Store the bot Telegram made, share it into the pod, and bind it.
+
+    The person setting the surface up made the bot for this pod's agent, so
+    their own action is the consent sharing needs: the bot's account goes into
+    the pod as a SHARED pod connector, and the surface runs as that.
+    """
     async with uow_factory() as uow:
         display_name = f"@{bot_username}" if bot_username else str(bot_id)
         telegram = surface_connector_binding(SurfacePlatform.TELEGRAM)
@@ -41,6 +51,14 @@ async def persist_managed_bot(
             provider_account_id=str(bot_id),
             display_name=display_name,
             bot_token=bot_token,
+        )
+        pod_connector_slug = await share_own_account_as_pod_connector(
+            uow,
+            pod_id=setup.pod_id,
+            account_id=account_id,
+            owner_user_id=setup.user_id,
+            slug_base=connector_slug_for(SurfacePlatform.TELEGRAM, setup.surface_name),
+            purpose=f"The Telegram bot {display_name}",
         )
         from app.modules.agent_surfaces.composition import build_surface_service
 
@@ -71,12 +89,12 @@ async def persist_managed_bot(
                 name=setup.surface_name,
                 config=SurfaceConfig.model_validate(setup.surface_config),
                 credential_mode=SurfaceCredentialMode.CUSTOM,
-                account_id=account_id,
+                pod_connector_slug=pod_connector_slug,
             )
         elif (
             surface.surface_type is not SurfacePlatform.TELEGRAM
             or surface.credential_mode is not SurfaceCredentialMode.CUSTOM
-            or surface.account_id != account_id
+            or surface.pod_connector_slug != pod_connector_slug
         ):
             raise DomainError(
                 "A different surface already owns this Telegram setup target",
@@ -97,4 +115,4 @@ async def persist_managed_bot(
             user_id=setup.user_id,
         )
         await uow.commit()
-        return account_id, surface.id
+        return pod_connector_slug, surface.id

@@ -64,8 +64,8 @@ def sync_detailed(
     """List Events
 
      What standing work here can start on: the platform's own events, then
-    every event on an MCP server the caller connected in this organization.
-    A connected app's catalog triggers are listed per install
+    every event on an MCP server behind one of the pod's connectors the caller
+    may use. A connected app's catalog triggers are listed per install
     (`connector.trigger.list`).
 
     Args:
@@ -98,8 +98,8 @@ def sync(
     """List Events
 
      What standing work here can start on: the platform's own events, then
-    every event on an MCP server the caller connected in this organization.
-    A connected app's catalog triggers are listed per install
+    every event on an MCP server behind one of the pod's connectors the caller
+    may use. A connected app's catalog triggers are listed per install
     (`connector.trigger.list`).
 
     Args:
@@ -127,8 +127,8 @@ async def asyncio_detailed(
     """List Events
 
      What standing work here can start on: the platform's own events, then
-    every event on an MCP server the caller connected in this organization.
-    A connected app's catalog triggers are listed per install
+    every event on an MCP server behind one of the pod's connectors the caller
+    may use. A connected app's catalog triggers are listed per install
     (`connector.trigger.list`).
 
     Args:
@@ -159,8 +159,8 @@ async def asyncio(
     """List Events
 
      What standing work here can start on: the platform's own events, then
-    every event on an MCP server the caller connected in this organization.
-    A connected app's catalog triggers are listed per install
+    every event on an MCP server behind one of the pod's connectors the caller
+    may use. A connected app's catalog triggers are listed per install
     (`connector.trigger.list`).
 
     Args:

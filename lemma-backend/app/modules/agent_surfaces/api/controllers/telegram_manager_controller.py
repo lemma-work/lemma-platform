@@ -48,7 +48,7 @@ def _response(service, setup) -> TelegramManagedBotSetupResponse:
         launch_url=service.launch_url(setup),
         manager_bot_username=service.manager_username,
         expires_at=setup.expires_at.isoformat(),
-        account_id=setup.account_id,
+        pod_connector=setup.pod_connector_slug,
         surface_id=setup.surface_id,
         bot_username=setup.bot_username,
         bot_launch_url=(

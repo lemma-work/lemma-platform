@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { source, type Pod } from "@/data";
+import { connectionsPath, connectorLabel, connectorsFor, source, type Pod } from "@/data";
+import { ProblemLine } from "@/connect/connection-problem";
 import { lemma } from "@/session/client";
 import { useMe } from "@/session/use-me";
 import { isForbidden } from "@/session/auth-state";
@@ -22,15 +23,12 @@ import { usePaneVisible } from "@/shell/pane-visible";
 /** One workflow, as a page: what it is and who it runs for, whether it is on
  *  — for you, or for the space — and every run it has made, each one a click
  *  from its own page. */
-export function WorkflowPage({ pod, orgId, name, onBack, onOpenRun, onDiscuss, onConnect }: {
+export function WorkflowPage({ pod, name, onBack, onOpenRun, onDiscuss }: {
     pod: Pod;
-    orgId: string | null;
     name: string;
     onBack: () => void;
     onOpenRun: (runId: string, label: string) => void;
     onDiscuss?: (name: string) => void;
-    /** Open the organization's connectors, to connect an account first. */
-    onConnect?: () => void;
 }) {
     const sample = source.label === "sample";
     const flows = useWorkflowList(pod.id);
@@ -91,7 +89,7 @@ export function WorkflowPage({ pod, orgId, name, onBack, onOpenRun, onDiscuss, o
 
                 <div className="agentpage__grid wfpage__grid">
                     <div className="agentpage__main">
-                        <HowItStarts pod={pod} orgId={orgId} name={name} automation={automation} perPerson={perPerson} onConnect={onConnect} />
+                        <HowItStarts pod={pod} name={name} automation={automation} perPerson={perPerson} />
                         <Shape query={shape} teammate={pod.teammate?.name || pod.name} />
                     </div>
                     <aside className="wfpage__dock" aria-label="Runs">
@@ -105,13 +103,11 @@ export function WorkflowPage({ pod, orgId, name, onBack, onOpenRun, onDiscuss, o
 
 /* ── is it on, and for whom ────────────────────────────────────────── */
 
-function HowItStarts({ pod, orgId, name, automation, perPerson, onConnect }: {
+function HowItStarts({ pod, name, automation, perPerson }: {
     pod: Pod;
-    orgId: string | null;
     name: string;
     automation: Automation;
     perPerson: boolean;
-    onConnect?: () => void;
 }) {
     const me = useMe();
     const schedules = useSchedules(pod.id);
@@ -128,7 +124,7 @@ function HowItStarts({ pod, orgId, name, automation, perPerson, onConnect }: {
             <p className="wfstart__what">{whatStarts(automation)}</p>
             <StateLine state={state} owner={owner} />
             {(state.status === "off" || (state.status === "stopped" && !state.byYou && perPerson)) && (
-                <TurnOnForm pod={pod} orgId={orgId} name={name} automation={automation} perPerson={perPerson} onConnect={onConnect} />
+                <TurnOnForm pod={pod} name={name} automation={automation} perPerson={perPerson} />
             )}
             {jobs.length > 0 && (
                 <ul className="wfstart__jobs">
@@ -173,27 +169,31 @@ function StateLine({ state, owner }: { state: TurnOn; owner: (job: StandingJob) 
     return <p className="wfstart__state" data-tone="off"><i />{state.forYou ? "Not on for you yet." : "Off — nobody has turned it on."}</p>;
 }
 
-function TurnOnForm({ pod, orgId, name, automation, perPerson, onConnect }: {
+function TurnOnForm({ pod, name, automation, perPerson }: {
     pod: Pod;
-    orgId: string | null;
     name: string;
     automation: Automation;
     perPerson: boolean;
-    onConnect?: () => void;
 }) {
     const cache = useQueryClient();
     const sample = source.label === "sample";
     const [cron, setCron] = useState(CADENCES[0].cron);
-    const [accountId, setAccountId] = useState("");
-    const accounts = useQuery({
-        queryKey: ["connector-accounts", orgId],
-        enabled: automation.kind === "event" && Boolean(orgId) && !sample,
-        queryFn: () => source.listAccounts(orgId!),
+    const [picked, setPicked] = useState("");
+    /* An app's event is heard through one of the pod's connectors for that
+       app; whose account it listens as is the connector's decision — yours
+       for a per-member one, which the server asks you to connect if you have
+       not. */
+    const connectors = useQuery({
+        queryKey: ["pod-connectors", pod.id],
+        enabled: automation.kind === "event",
+        queryFn: () => source.listPodConnectors(pod.id),
         staleTime: 60_000,
     });
-    const usable = (accounts.data ?? []).filter((account) => account.usable && (automation.kind !== "event" || !automation.connectorId || account.connectorId === automation.connectorId));
-    const chosen = accountId || usable[0]?.id || "";
-    const request = turnOnRequest(name, automation, perPerson, { cron, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, accountId: chosen });
+    const app = automation.kind === "event" ? automation.connectorId : "";
+    const offered = connectorsFor(connectors.data ?? [], app);
+    const usable = offered.filter((one) => one.status === "READY");
+    const chosen = picked || usable[0]?.slug || "";
+    const request = turnOnRequest(name, automation, perPerson, { cron, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, podConnector: chosen });
     const turnOn = useMutation({
         mutationFn: () => lemma(pod.id).request("POST", "/pods/" + pod.id + "/schedules", { body: request }),
         onSuccess: () => void cache.invalidateQueries({ queryKey: ["schedules", pod.id] }),
@@ -211,26 +211,36 @@ function TurnOnForm({ pod, orgId, name, automation, perPerson, onConnect }: {
                 </label>
             )}
             {automation.kind === "event" && (
-                accounts.isPending && !sample ? <p className="wfstart__note">Looking for your {automation.connectorId} account…</p>
+                connectors.isPending ? <p className="wfstart__note">Looking for this space’s {app || "app"} connector…</p>
+                    : connectors.isError ? (
+                        <p className="wfstart__need" role="alert">
+                            This space’s connectors could not be read.{" "}
+                            <button className="agentpage__link" onClick={() => void connectors.refetch()}>Try again</button>
+                        </p>
+                    )
                     : usable.length === 0 ? (
                         <p className="wfstart__need">
-                            It listens through your own {automation.connectorId || "app"} account, and you have none connected.
-                            {onConnect && <button className="agentpage__link" onClick={onConnect}>Connect {automation.connectorId || "an account"}</button>}
+                            {offered.length === 0
+                                ? "It listens through a " + (app || "connected app") + " connector, and this space has none yet."
+                                : "This space’s " + (app || "app") + " connector can’t be used yet: " + offered.map((one) => connectorLabel(one)).join("; ") + "."}{" "}
+                            <a className="agentpage__link" href={connectionsPath(pod.id, offered[0]?.slug)}>Set up connections</a>
                         </p>
                     ) : usable.length > 1 ? (
                         <label>
-                            <span>Account</span>
-                            <select value={chosen} onChange={(event) => setAccountId(event.target.value)}>
-                                {usable.map((account) => <option key={account.id} value={account.id}>{account.label || account.ref || account.id}</option>)}
+                            <span>Through</span>
+                            <select value={chosen} onChange={(event) => setPicked(event.target.value)}>
+                                {offered.map((one) => (
+                                    <option key={one.slug} value={one.slug} disabled={one.status !== "READY"}>{connectorLabel(one)}</option>
+                                ))}
                             </select>
                         </label>
-                    ) : <p className="wfstart__note">Using your {automation.connectorId} account {usable[0].label || usable[0].ref}.</p>
+                    ) : <p className="wfstart__note">Listens through {connectorLabel(usable[0])}.</p>
             )}
             <button className="agentpage__btn agentpage__btn--primary" disabled={sample || !request || turnOn.isPending} onClick={() => turnOn.mutate()}>
                 {turnOn.isPending ? "Turning on…" : verb}
             </button>
             {sample && <p className="wfstart__note">Sign in to turn workflows on.</p>}
-            {turnOn.isError && <p className="runpage__problem" role="alert">{turnOn.error instanceof Error ? turnOn.error.message : "Couldn’t turn it on."}</p>}
+            {turnOn.isError && <ProblemLine className="runpage__problem" error={turnOn.error} fallback="Couldn’t turn it on." />}
         </div>
     );
 }

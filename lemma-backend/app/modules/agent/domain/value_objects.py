@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     pass
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.modules.usage.contracts import AgentRunUsage as AgentRunUsage
@@ -87,26 +87,6 @@ class AgentToolset(str, Enum):
     VIEW_IMAGE = "VIEW_IMAGE"
 
 
-class ConnectorMode(str, Enum):
-    """Connector account ownership mode for access configuration."""
-
-    AGENT_OWNED = "AGENT_OWNED"
-    USER_OWNED = "USER_OWNED"
-
-    @classmethod
-    def normalize(cls, value: object) -> "ConnectorMode":
-        if isinstance(value, cls):
-            return value
-        normalized = str(value).upper()
-        legacy_modes = {
-            "FIXED": cls.AGENT_OWNED,
-            "DYNAMIC": cls.USER_OWNED,
-        }
-        if normalized in legacy_modes:
-            return legacy_modes[normalized]
-        return cls(normalized)
-
-
 class TableAccessMode(str, Enum):
     """Mode for workload table access permissions."""
 
@@ -127,47 +107,6 @@ class TableAccessEntry(BaseModel):
         if not table_name:
             raise ValueError("table_name cannot be empty")
         return table_name
-
-
-class ConnectorAccessConfig(BaseModel):
-    """Configuration for connector access granted to a workload."""
-
-    app_name: str = Field(..., description="Name of the connector")
-    mode: ConnectorMode = Field(..., description="Connector account ownership mode")
-    account_id: UUID | None = Field(
-        None,
-        description="Required for AGENT_OWNED mode - specific account to use",
-    )
-
-    @field_validator("mode", mode="before")
-    @classmethod
-    def validate_mode(cls, value: object) -> ConnectorMode:
-        return ConnectorMode.normalize(value)
-
-    def __init__(self, **data: object) -> None:
-        super().__init__(**data)
-        if self.mode == ConnectorMode.AGENT_OWNED and not self.account_id:
-            raise ValueError("AGENT_OWNED mode requires account_id to be specified")
-
-    def to_dict(self) -> dict[str, str]:
-        result = {
-            "app_name": self.app_name,
-            "mode": self.mode.value,
-        }
-        if self.account_id:
-            result["account_id"] = str(self.account_id)
-        return result
-
-    @classmethod
-    def from_dict(cls, data: JsonObject) -> "ConnectorAccessConfig":
-        account_id = data.get("account_id")
-        if account_id:
-            account_id = UUID(account_id) if isinstance(account_id, str) else account_id
-        return cls(
-            app_name=data["app_name"],
-            mode=data["mode"],
-            account_id=account_id,
-        )
 
 
 class AgentRunStatus(str, Enum):
@@ -532,8 +471,6 @@ def to_json_value(value: object) -> JsonValue:
 
 __all__ = [
     "ACTIVE_AGENT_RUN_STATUSES",
-    "ConnectorAccessConfig",
-    "ConnectorMode",
     "AgentEvent",
     "AgentEventType",
     "AgentRuntimeConfig",

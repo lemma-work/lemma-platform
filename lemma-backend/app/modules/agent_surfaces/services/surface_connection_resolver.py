@@ -65,14 +65,21 @@ class SurfaceConnectionResolver:
 
         Best-effort: this is an annotation on a read, so a database hiccup here
         drops the annotation rather than the surfaces it annotates."""
-        account_ids = [
-            surface.account_id for surface in surfaces if surface.account_id is not None
-        ]
-        if not account_ids:
+        connectors = {
+            surface.id: (surface.pod_id, surface.pod_connector_slug)
+            for surface in surfaces
+            if surface.pod_connector_slug is not None
+        }
+        if not connectors:
             return {}
 
         try:
-            accounts = await self._account_port.list_account_summaries(account_ids)
+            running_as = await self._account_port.accounts_behind_connectors(
+                list(set(connectors.values()))
+            )
+            accounts = await self._account_port.list_account_summaries(
+                list(set(running_as.values()))
+            )
             owners = await self._owner_port.list_pod_owners(
                 [account.user_id for account in accounts.values()], pod_id=pod_id
             )
@@ -85,14 +92,17 @@ class SurfaceConnectionResolver:
 
         connections: dict[UUID, SurfaceConnection] = {}
         for surface in surfaces:
-            if surface.account_id is None:
+            connector = connectors.get(surface.id)
+            if connector is None:
                 continue
-            account = accounts.get(surface.account_id)
+            account_id = running_as.get(connector)
+            account = accounts.get(account_id) if account_id is not None else None
             if account is None:
-                # The id outlived the row. Say so rather than dropping the block:
-                # "the account this ran on is gone" is the actionable reading.
+                # The connector runs as nothing now. Say so rather than dropping
+                # the block: "this needs an account shared again" is the
+                # actionable reading.
                 connections[surface.id] = SurfaceConnection(
-                    account_id=surface.account_id,
+                    pod_connector=connector[1],
                     connector_id="",
                     status=SurfaceConnectionStatus.MISSING,
                 )
@@ -100,6 +110,7 @@ class SurfaceConnectionResolver:
 
             owner = owners.get(account.user_id)
             connections[surface.id] = SurfaceConnection(
+                pod_connector=connector[1],
                 account_id=account.id,
                 connector_id=account.connector_id,
                 display_name=account.display_name or account.email,

@@ -68,13 +68,20 @@ class Schedule(UUIDAuditBase):
         nullable=True,
         index=True,
     )
-    # For WEBHOOK schedules: reference to app connector
-    # SET NULL, not CASCADE: deleting a connector account must not delete the
-    # schedules bound to it, nor their run history through the cascade below.
-    # `agent_surfaces.account_id` and `connector_trigger_id` on this same table
-    # already do this. See migration 0027.
-    account_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True, index=True
+    # For WEBHOOK schedules that listen through a connector: the pod
+    # connector, by its slug. Never an account: which account a fire, a
+    # subscription or a delivery means is the connector's decision, re-read on
+    # every use (`connectors/contracts/pod_connectors.py`), so withdrawing a
+    # shared account or leaving the pod stops the schedule at once. No foreign
+    # key: slugs are immutable, and a connector removed from the pod must leave
+    # a reference that fails typed (POD_CONNECTOR_NOT_FOUND) rather than a NULL
+    # that reads as "listens through nothing".
+    pod_connector_slug: Mapped[str | None] = mapped_column(String(63), nullable=True)
+    # On a PER_MEMBER connector, the owner's pod account it pinned: a second
+    # account (bot B) stays the one it listens through. Resolution uses it
+    # while it is still the owner's, and falls back to their default.
+    pod_account_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("pod_accounts.id", ondelete="SET NULL"), nullable=True
     )
     connector_trigger_id: Mapped[str | None] = mapped_column(
         ForeignKey("connector_triggers.id", ondelete="SET NULL"),
@@ -138,7 +145,8 @@ class Schedule(UUIDAuditBase):
             name="ck_schedules_single_target",
         ),
         Index("ix_schedules_user_pod", "user_id", "pod_id"),
-        Index("ix_schedules_account", "account_id"),
+        Index("ix_schedules_pod_connector", "pod_id", "pod_connector_slug"),
+        Index("ix_schedules_pod_account", "pod_account_id"),
         Index("ix_schedules_connector_trigger", "connector_trigger_id"),
         Index("ix_schedules_type_active", "schedule_type", "is_active"),
         Index("ix_schedules_workflow", "workflow_id"),

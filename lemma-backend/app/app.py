@@ -348,6 +348,11 @@ def _app_cors(app: ASGIApp) -> ASGIApp:
         expose_headers=[
             "X-Request-Id",
             "Retry-After",
+            # So the browser SDK can warn an app still calling a deprecated
+            # route (see app/core/api/deprecation.py).
+            "Deprecation",
+            "Sunset",
+            "X-Lemma-Deprecation",
             "front-token",
             "anti-csrf",
             "st-access-token",

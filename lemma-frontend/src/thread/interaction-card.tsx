@@ -473,6 +473,9 @@ export function InteractionCard({
     const details = (<>
 
             {interaction.details.request && <p className="approval__detail">{interaction.details.request}</p>}
+            {!question && interaction.details.grantNote && (
+                <p className="approval__detail">{interaction.details.grantNote}</p>
+            )}
 
             {/* The arguments of the call that will actually run — not the
                 fields of the approval envelope. This is the only place a
@@ -533,7 +536,11 @@ export function InteractionCard({
                                 disabled={!!deciding}
                                 onClick={() => void decide("APPROVE_ONCE")}
                             >
-                                {deciding === "APPROVE_ONCE" ? "Approving…" : "Approve once"}
+                                {deciding === "APPROVE_ONCE"
+                                    ? "Approving…"
+                                    : interaction.details.grantNote
+                                      ? "Approve"
+                                      : "Approve once"}
                             </button>
                             {interaction.details.canApproveForSession && (
                                 <button
@@ -543,7 +550,9 @@ export function InteractionCard({
                                 >
                                     {deciding === "APPROVE_FOR_SESSION"
                                         ? "Approving…"
-                                        : interaction.details.sessionLabel || "Approve for this conversation"}
+                                        : interaction.details.sessionLabel ||
+                                          interaction.details.sessionScope ||
+                                          "Approve for this conversation"}
                                 </button>
                             )}
                             <button

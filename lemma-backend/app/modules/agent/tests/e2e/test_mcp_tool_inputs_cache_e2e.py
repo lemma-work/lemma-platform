@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.authorization.grants import replace_grantee_resource_grants
+from app.core.authorization.service import AuthorizationDataService
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.session import async_session_maker
@@ -91,8 +92,12 @@ async def test_calls_in_one_lease_derive_once_and_a_grant_change_derives_again(
 
     # Any write to the agent's grants -- here, replacing them with none.
     async with create_uow_from_session_maker(async_session_maker) as uow:
+        owner = await AuthorizationDataService(uow.session).build_user_context(
+            user_id=seeded.user_id, pod_id=seeded.pod_id
+        )
         await replace_grantee_resource_grants(
             uow.session,
+            ctx=owner,
             pod_id=seeded.pod_id,
             grantee_type="AGENT",
             grantee_id=seeded.agent_id,

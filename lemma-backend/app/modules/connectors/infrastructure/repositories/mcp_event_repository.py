@@ -6,14 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.domain.mcp_events import DiscoveredEvent
-from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.mcp_event import (
     AuthConfigEvent,
@@ -23,7 +21,7 @@ from app.modules.connectors.infrastructure.models.mcp_event import (
 #: One refresh pass renews at most this many; the next pass takes the rest.
 REFRESH_BATCH = 200
 
-#: Offers one person sees in the catalog, across every server they connected.
+#: Offers one pod's catalog lists, across every MCP connector it declares.
 MAX_OFFERS = 200
 
 
@@ -48,12 +46,11 @@ class StoredEventSubscription:
 
 @dataclass(frozen=True, slots=True)
 class EventOffer:
-    """One event a person's connected server would tell them about."""
+    """One event an installed MCP server would tell a pod about."""
 
-    account_id: UUID
+    auth_config_id: UUID
     install_name: str
     event: DiscoveredEvent
-    account_label: str | None = None
 
 
 def _stored(row: ConnectorEventSubscription) -> StoredEventSubscription:
@@ -143,27 +140,18 @@ class McpEventRepository:
         ).scalar_one_or_none()
         return _event(row) if row is not None else None
 
-    async def offers_for(
-        self, *, user_id: UUID, organization_id: UUID
+    async def offers_for_installs(
+        self, auth_config_ids: list[UUID]
     ) -> list[EventOffer]:
-        """Every event on every MCP server this person has connected here."""
+        """Every event the MCP servers behind these installs list."""
+        if not auth_config_ids:
+            return []
         rows = (
             await self._session.execute(
-                select(
-                    Account.id,
-                    AuthConfig.name,
-                    AuthConfigEvent,
-                    func.coalesce(Account.display_name, Account.email),
-                )
-                .join(AuthConfig, AuthConfig.id == Account.auth_config_id)
-                .join(
-                    AuthConfigEvent,
-                    AuthConfigEvent.auth_config_id == Account.auth_config_id,
-                )
+                select(AuthConfig.id, AuthConfig.name, AuthConfigEvent)
+                .join(AuthConfigEvent, AuthConfigEvent.auth_config_id == AuthConfig.id)
                 .where(
-                    Account.user_id == user_id,
-                    Account.organization_id == organization_id,
-                    Account.status == AccountStatus.CONNECTED.value,
+                    AuthConfig.id.in_(auth_config_ids),
                     AuthConfig.kind == ConnectorKind.MCP.value,
                 )
                 .order_by(AuthConfig.name, AuthConfigEvent.name)
@@ -171,13 +159,8 @@ class McpEventRepository:
             )
         ).all()
         return [
-            EventOffer(
-                account_id=account_id,
-                install_name=name,
-                event=_event(row),
-                account_label=label,
-            )
-            for account_id, name, row, label in rows
+            EventOffer(auth_config_id=install, install_name=name, event=_event(row))
+            for install, name, row in rows
         ]
 
     async def add_subscription(

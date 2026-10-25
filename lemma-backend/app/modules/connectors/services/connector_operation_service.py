@@ -14,12 +14,7 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
     OperationSummary,
 )
-from app.modules.connectors.domain.auth_config import reject_if_disabled
-from app.modules.connectors.domain.connector import (
-    AuthProvider,
-    ConnectorKind,
-    kind_to_provider,
-)
+from app.modules.connectors.domain.connector import kind_to_provider
 from app.modules.connectors.domain.errors import (
     ConnectorNotFoundError,
     OperationNotFoundError,
@@ -38,9 +33,12 @@ from app.modules.connectors.services.operation_visibility import (
     find_install_or_catalog_operation,
     list_operations_for_install,
 )
-from app.modules.connectors.services.account_resolution_service import (
-    AccountResolutionService,
+from app.modules.connectors.services.pod_connector_resolution import (
+    PodConnectorResolver,
 )
+from app.modules.connectors.domain.account import AccountEntity
+from app.modules.connectors.domain.auth_config import AuthConfigEntity
+from app.modules.connectors.services.auth.github_bindings import routable_external_ref
 from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.connectors.domain.analytics import operation_execution_recorded
 from app.modules.connectors.domain.execution_plan import ResolvedConnectorExecution
@@ -65,14 +63,14 @@ class ConnectorOperationService:
         connector_repository: ConnectorRepositoryPort,
         operation_repository: ConnectorOperationRepositoryPort,
         operation_gateway: AppOperationGatewayPort,
-        account_resolution_service: AccountResolutionService,
+        pod_connector_resolver: PodConnectorResolver,
         connector_service: ConnectorService | None = None,
         auth_config_operation_repository: Any | None = None,
     ):
         self.connector_repository = connector_repository
         self.operation_repository = operation_repository
         self.operation_gateway = operation_gateway
-        self.account_resolution_service = account_resolution_service
+        self.pod_connector_resolver = pod_connector_resolver
         self.connector_service = connector_service
         self.auth_config_operation_repository = auth_config_operation_repository
         self._kind_dispatcher = None
@@ -174,6 +172,14 @@ class ConnectorOperationService:
                 "size_bytes": len(value),
             }
         return value
+
+    async def _routable_external_ref(self, account: AccountEntity) -> str | None:
+        """The tenant the call may act on: for GitHub, the installation an App
+        token is minted for, and only while it is bound to the account's own
+        organization (audit H4)."""
+        if not account.external_ref or self.connector_service is None:
+            return None
+        return await routable_external_ref(self.connector_service.uow.session, account)
 
     async def _resolve_execution_credentials(
         self, account: Any, user_id: UUID
@@ -406,143 +412,134 @@ class ConnectorOperationService:
         )
 
     # -- Resolve / execute split ------------------------------------------------
-    # ``resolve_execution*`` does all the DB reads + authorization + credential
-    # resolution and returns a session-free ``ResolvedConnectorExecution``;
-    # ``execute_resolved`` performs only the external gateway call. The
-    # ConnectorOperationUseCases runs resolve in a short DB scope and execute with
-    # no connection held. ``execute_operation*`` remain as thin wrappers
-    # (resolve + execute) for any single-shot internal callers.
+    # ``resolve_pod_connector_execution`` does all the DB reads + authorization
+    # + credential resolution and returns a session-free
+    # ``ResolvedConnectorExecution``; ``execute_resolved`` performs only the
+    # external gateway call. The ConnectorOperationUseCases runs resolve in a
+    # short DB scope and execute with no connection held.
 
-    async def resolve_execution_for_auth_config(
+    async def pod_connector_operations(
         self,
+        ctx: Context,
         *,
-        user_id: UUID,
-        organization_id: UUID,
-        auth_config_name: str,
+        pod_id: UUID,
+        slug: str,
+        query: str | None = None,
+        limit: int | None = None,
+    ) -> OperationDiscoverResponse:
+        """The operations a pod connector offers, to someone who may run them."""
+        _, auth_config = await self._usable_pod_connector(ctx, pod_id, slug)
+        return await self.discover_operations(
+            auth_config.connector_id,
+            query=query,
+            limit=limit,
+            kind=auth_config.kind.value,
+            auth_config_id=auth_config.id,
+        )
+
+    async def pod_connector_operation(
+        self, ctx: Context, *, pod_id: UUID, slug: str, operation_name: str
+    ) -> OperationDetail:
+        _, auth_config = await self._usable_pod_connector(ctx, pod_id, slug)
+        return await self.get_operation_details(
+            auth_config.connector_id,
+            operation_name,
+            kind=auth_config.kind.value,
+            auth_config_id=auth_config.id,
+        )
+
+    async def _usable_pod_connector(self, ctx: Context, pod_id: UUID, slug: str):
+        connector = await self.pod_connector_resolver.connector(pod_id, slug)
+        if self.connector_service is None:
+            raise ConnectorNotFoundError(slug)
+        auth_config = await self.connector_service.auth_config_repository.get(
+            connector.auth_config_id
+        )
+        if auth_config is None:
+            raise ConnectorNotFoundError(slug)
+        await self.pod_connector_resolver.require_use(ctx, connector, auth_config)
+        return connector, auth_config
+
+    async def resolve_pod_connector_execution(
+        self,
+        ctx: Context,
+        *,
+        pod_id: UUID,
+        slug: str,
         operation_name: str,
         payload: dict[str, Any],
-        actor: Context | None = None,
-        account_id: UUID | None = None,
         act_as: str = "user",
     ) -> ResolvedConnectorExecution:
-        auth_config, connector_id, _kind = await self._resolve_auth_config_context(
-            user_id=user_id,
-            organization_id=organization_id,
-            auth_config_name=auth_config_name,
-        )
-        return await self.resolve_execution(
-            connector_id=connector_id,
+        """Authorize, pick the account, and load everything the call needs.
+
+        The account is never an input. The pod connector's mode and the actor
+        decide it (``PodConnectorResolver.resolve``), so nothing a caller types
+        -- a model least of all -- chooses whose credential a call runs as.
+        """
+        pod_connector = await self.pod_connector_resolver.connector(pod_id, slug)
+        resolved = await self.pod_connector_resolver.resolve(ctx, pod_connector)
+        return await self.execution_for(
+            ctx,
+            auth_config=resolved.auth_config,
+            account=resolved.account,
             operation_name=operation_name,
             payload=payload,
-            user_id=user_id,
-            actor=actor,
-            account_id=account_id,
-            auth_config_id=auth_config.id,
             act_as=act_as,
-            # Loaded by name above; re-reading it by id was a wasted round trip.
-            auth_config=auth_config,
         )
 
-    async def resolve_execution(
+    async def execution_for(
         self,
+        ctx: Context,
         *,
-        connector_id: str,
+        auth_config: AuthConfigEntity,
+        account: AccountEntity,
         operation_name: str,
         payload: dict[str, Any],
-        user_id: UUID,
-        actor: Context | None = None,
-        account_id: UUID | None = None,
-        auth_config_id: UUID | None = None,
-        auth_config: Any | None = None,
-        act_as: str = "user",
+        act_as: str,
     ) -> ResolvedConnectorExecution:
-        kind: str | None = None
-        if auth_config_id is not None:
-            if self.connector_service is None:
-                raise ConnectorNotFoundError(connector_id)
-            if auth_config is None:
-                auth_config = await self.connector_service.auth_config_repository.get(
-                    auth_config_id
-                )
-            if auth_config is None:
-                raise ConnectorNotFoundError(str(auth_config_id))
-            # A bare `get()` sees every install, including one an admin has
-            # switched off -- and this is the path a pod function or an agent
-            # tool takes, addressing the install by id.
-            reject_if_disabled(auth_config)
-            kind = auth_config.kind.value
-            account = (
-                await self.account_resolution_service.resolve_account_for_auth_config(
-                    user_id=user_id,
-                    connector_id=connector_id,
-                    auth_config_id=auth_config_id,
-                    auth_actor=actor,
-                    account_id=account_id,
-                )
-            )
-        else:
-            account = await self.account_resolution_service.resolve_account(
-                user_id=user_id,
-                connector_id=connector_id,
-                auth_actor=actor,
-                account_id=account_id,
-            )
-            if self.connector_service is not None:
-                auth_config = await self.connector_service.auth_config_repository.get(
-                    account.auth_config_id
-                )
-                if auth_config is not None:
-                    kind = auth_config.kind.value
+        connector_id = auth_config.connector_id
+        kind = auth_config.kind.value
 
         # An install's discovered operation wins over a catalog one of the same
         # name: the install describes the server actually being called.
         operation = None
-        if auth_config_id is not None and self.auth_config_operation_repository:
+        if self.auth_config_operation_repository:
             operation = (
                 await self.auth_config_operation_repository.get_by_auth_config_and_name(
-                    auth_config_id, operation_name
+                    auth_config.id, operation_name
                 )
             )
         if operation is None:
-            if kind:
-                operation = (
-                    await self.operation_repository.get_by_connector_kind_and_name(
-                        connector_id, kind, operation_name
-                    )
-                )
-            else:
-                operation = await self.operation_repository.get_by_connector_and_name(
-                    connector_id, operation_name
-                )
+            operation = await self.operation_repository.get_by_connector_kind_and_name(
+                connector_id, kind, operation_name
+            )
         if not operation:
             raise OperationNotFoundError(operation_name)
 
-        credentials = await self._resolve_execution_credentials(account, user_id)
+        credentials = await self._resolve_execution_credentials(
+            account, account.user_id
+        )
         return ResolvedConnectorExecution(
             connector_id=connector_id,
             operation_execution_name=operation.execution_name,
             # The gateway still routes on the legacy provider vocabulary, so map
-            # the install's kind back onto it. Always concrete, never None: that
-            # is what lets the gateway skip its connector-validation read so the
-            # external call holds NO DB connection.
-            provider=(
-                kind_to_provider(kind).value if kind else AuthProvider.LEMMA.value
-            ),
-            kind=kind or ConnectorKind.HTTP.value,
-            connection_config=(
-                getattr(auth_config, "config", None) if auth_config else None
-            ),
+            # the install's kind back onto it. Always concrete: that is what lets
+            # the gateway skip its connector-validation read so the external call
+            # holds NO DB connection.
+            provider=kind_to_provider(kind).value,
+            kind=kind,
+            connection_config=getattr(auth_config, "config", None),
             execution=getattr(operation, "execution", None),
             operation_name=operation.name,
             input_schema=getattr(operation, "input_schema", None),
             third_party_credentials=credentials,
             payload=payload or {},
-            account_id=getattr(account, "id", None),
-            account_external_ref=getattr(account, "external_ref", None),
+            account_id=account.id,
+            account_external_ref=await self._routable_external_ref(account),
             act_as=act_as,
-            account_user_id=getattr(account, "user_id", None),
-            acting_user_id=user_id,
-            organization_id=getattr(account, "organization_id", None),
+            account_user_id=account.user_id,
+            acting_user_id=ctx.delegating_user_id or ctx.user_id,
+            organization_id=account.organization_id,
         )
 
     def _dispatcher(self):
@@ -564,47 +561,3 @@ class ConnectorOperationService:
         return OperationExecutionResponse(
             result=self._normalize_execution_result(result)
         )
-
-    async def execute_operation_for_auth_config(
-        self,
-        *,
-        user_id: UUID,
-        organization_id: UUID,
-        auth_config_name: str,
-        operation_name: str,
-        payload: dict[str, Any],
-        actor: Context | None = None,
-        account_id: UUID | None = None,
-    ) -> OperationExecutionResponse:
-        resolved = await self.resolve_execution_for_auth_config(
-            user_id=user_id,
-            organization_id=organization_id,
-            auth_config_name=auth_config_name,
-            operation_name=operation_name,
-            payload=payload,
-            actor=actor,
-            account_id=account_id,
-        )
-        return await self.execute_resolved(resolved)
-
-    async def execute_operation(
-        self,
-        *,
-        connector_id: str,
-        operation_name: str,
-        payload: dict[str, Any],
-        user_id: UUID,
-        actor: Context | None = None,
-        account_id: UUID | None = None,
-        auth_config_id: UUID | None = None,
-    ) -> OperationExecutionResponse:
-        resolved = await self.resolve_execution(
-            connector_id=connector_id,
-            operation_name=operation_name,
-            payload=payload,
-            user_id=user_id,
-            actor=actor,
-            account_id=account_id,
-            auth_config_id=auth_config_id,
-        )
-        return await self.execute_resolved(resolved)

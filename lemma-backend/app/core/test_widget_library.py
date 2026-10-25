@@ -66,7 +66,10 @@ def test_each_widget_states_its_contract(path: Path):
     assert REQUIRED <= header.keys(), f"missing: {REQUIRED - header.keys()}"
     # The name is where the file lives, so a copy can be found from its header.
     assert header["widget"] == f"{path.parent.name}/{path.stem}"
-    assert header["kind"] in {"http", "composio"}
+    # `view` draws only what it is given: no connector, no operations.
+    assert header["kind"] in {"http", "composio", "view"}
+    if header["kind"] == "view":
+        assert header["connector"] == header["operations"] == "none"
 
 
 @pytest.mark.parametrize("path", WIDGETS, ids=lambda p: f"{p.parent.name}/{p.stem}")
@@ -78,7 +81,11 @@ def test_each_widget_is_a_valid_fragment_with_a_sample(path: Path):
     json.loads(sample.group(1))
 
 
-@pytest.mark.parametrize("path", WIDGETS, ids=lambda p: f"{p.parent.name}/{p.stem}")
+ACTING = [p for p in WIDGETS if _header(p)["kind"] != "view"]
+VIEWS = [p for p in WIDGETS if _header(p)["kind"] == "view"]
+
+
+@pytest.mark.parametrize("path", ACTING, ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_each_widget_calls_only_what_its_header_declares(path: Path):
     """Every `lemma.act` names this widget's connector and a declared operation."""
     header = _header(path)
@@ -148,3 +155,16 @@ def test_each_widget_renders_with_given_data(path: Path):
     page = wrap_html_fragment(path.read_text(encoding="utf-8"), data=sample)
     given = page.index('<script type="application/json" data-lemma-widget-data>')
     assert given < page.index('<script type="application/json" data-lemma-sample>')
+
+
+@pytest.mark.parametrize("path", VIEWS, ids=lambda p: f"{p.parent.name}/{p.stem}")
+def test_a_view_widget_acts_on_nothing_and_reports_what_it_cannot_draw(path: Path):
+    """A view only draws: no button reaches a connector, and a library it
+    cannot load, or data it cannot draw, reaches its host through `lemma.fail`
+    rather than leaving a blank frame."""
+    source = path.read_text(encoding="utf-8")
+    assert "lemma.act(" not in source and "lemma.client(" not in source
+    assert "lemma.fail(" in source
+    # Libraries load inside the failure path, never as a static import that
+    # fails before any of the widget's code runs.
+    assert not re.search(r"^\s*import\s.+from\s", source, re.MULTILINE)

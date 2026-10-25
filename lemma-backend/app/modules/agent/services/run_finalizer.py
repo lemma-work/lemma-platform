@@ -226,6 +226,9 @@ class RunFinalizer:
                         conversation_id=run.conversation_id,
                         finish=finish_result,
                         started_at=run.started_at,
+                        keep_memory_for=(
+                            run.user_id if run.memory_after_turn else None
+                        ),
                     )
             if finish_result is not None:
                 # A retry must repair receipts even when the run is terminal.

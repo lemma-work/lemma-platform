@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.transaction_locks import safe_to_release
-from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
+from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.current import get_current_context
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.context import ResourceVisibility
@@ -236,6 +236,26 @@ class DatastoreAuthorization:
         )
         await self._release_application_connection()
 
+    async def require_record_delete(
+        self,
+        *,
+        user_id: UUID,
+        ctx: TableContext,
+    ) -> None:
+        """Deleting rows asks for ``record.delete``, never ``record.write``.
+
+        It used to ride on the write, so anyone or anything able to write one
+        row could empty the table, and a workload's delete was not destructive
+        (audit H14). Row-level security bounds it as it bounds writes.
+        """
+        auth_ctx = self._context()
+        self._refuse_outsider_on_contact_rows(auth_ctx, ctx)
+        await auth_ctx.require(
+            Permissions.DATASTORE_RECORD_DELETE,
+            ResourceRef.table(ctx.pod_id, ctx.table_id),
+        )
+        await self._release_application_connection()
+
     async def can_admin_table(
         self,
         *,
@@ -324,6 +344,25 @@ class DatastoreAuthorization:
             ctx=ctx,
         )
 
+    async def require_document_share(
+        self,
+        *,
+        user_id: UUID,
+        pod_id: UUID,
+        resource_id: UUID | None = None,
+        resource_name: str | None = None,
+        ctx: Context | None = None,
+    ) -> None:
+        """May the caller make a public link to this file (``folder.share``)."""
+        await self._require_document_action(
+            user_id=user_id,
+            pod_id=pod_id,
+            action=Permissions.FOLDER_SHARE,
+            resource_id=resource_id,
+            resource_name=resource_name,
+            ctx=ctx,
+        )
+
     async def require_document_write(
         self,
         *,
@@ -387,15 +426,8 @@ class DatastoreAuthorization:
         user_id: UUID,
         ctx: Context | None = None,
     ) -> None:
-        # A human deleting their own file is fine via the owner shortcut. A
-        # delegated workload must route through authz — folder.delete is
-        # destructive and gated — so the owner shortcut can't let a workload
-        # bypass it for a file its delegating user happens to own.
-        is_delegated = ctx is not None and (
-            getattr(ctx, "actor_type", None) == ActorType.DELEGATED_USER_WORKLOAD
-        )
-        if file_entity.owner_user_id == user_id and not is_delegated:
-            return
+        # Always through the authorizer: its owner rule lets a person delete
+        # their own file while they are still in the pod, and gates a workload.
         await self.require_document_delete(
             user_id=user_id,
             pod_id=file_entity.pod_id,

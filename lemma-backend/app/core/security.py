@@ -17,6 +17,11 @@ from supertokens_python.recipe.session.exceptions import (
 from app.core.authorization.current import set_current_context
 from app.core.auth_exemptions import exemption_of, is_self_authenticated_websocket
 from app.core.config import settings
+from app.core.api.actor_policy import (
+    refuse_workload,
+    route_template,
+    workload_may_call,
+)
 from app.core.authorization.delegation import (
     CLAIM_ACTOR_ID,
     DelegationClaims,
@@ -36,9 +41,11 @@ from app.core.auth_state_cache import (
     set_account_standing,
 )
 from app.core.analytics.app_session import maybe_record_app_session
+from app.core.app_pin import pin_app_request
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 logger = get_logger(__name__)
 
@@ -435,6 +442,49 @@ async def verify_auth(connection: HTTPConnection):
         )
         # `from e` so the traceback keeps the frame that actually failed.
         raise auth_unavailable() from e
+
+    # Outside the try: a refusal is an answer about the route, not a failure to
+    # check the session, and must not be turned into the 503 above.
+    if getattr(connection.state, "delegation_claims", None) is not None:
+        _refuse_workload_off_its_routes(connection)
+    elif _cookie_session(connection):
+        await _pin_app_page(connection)
+
+
+def _cookie_session(connection: HTTPConnection) -> bool:
+    """Whether the session came from the cookie. SuperTokens prefers the
+    ``Authorization`` header when both are sent, so its absence is the test."""
+    header = connection.headers.get("authorization", "")
+    return not header.lower().startswith("bearer ")
+
+
+async def _pin_app_page(connection: HTTPConnection) -> None:
+    """A pod app's page acts as its viewer only in its own pod (``app_pin``).
+
+    The app's lookup reads the database; a failure there is this deployment
+    failing to check, the same 503 as a session that could not be checked.
+    """
+    try:
+        await pin_app_request(connection)
+    except SQLAlchemyError as e:
+        logger.warning(
+            "security.auth_dependency.unexpected_failure.degraded",
+            error_type=type(e).__name__,
+            exc_info=True,
+        )
+        raise auth_unavailable() from e
+
+
+def _refuse_workload_off_its_routes(connection: HTTPConnection) -> None:
+    """A workload's token reaches only the routes ``actor_policy`` opens to it.
+
+    The matched route is read from the scope: global dependencies run after
+    routing. An unmatched one is refused rather than guessed at.
+    """
+    template = route_template(connection)
+    method = str(connection.scope.get("method", "GET"))
+    if template is None or not workload_may_call(method, template):
+        raise refuse_workload("call this route")
 
 
 #: Seconds a client should wait before retrying a request whose session could

@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -117,6 +117,22 @@ MCP_EVENT_SOURCE = "mcp"
 PROVISIONED_CONFIG_KEYS = frozenset({"provider_trigger_id", "installation_id"})
 
 
+#: Whose authority a table change's run uses. ``ROW_OWNER`` -- the default --
+#: is the person who owns the changed row: the run sees what they would see,
+#: bounded by what the target may do, as if they had asked the agent
+#: themselves. ``SCHEDULE_OWNER`` runs every change as the schedule's owner.
+#: Rows with no person behind them (shared tables, changes from outside the
+#: pod, batched fires) always run as the schedule's owner.
+DatastoreRunAs = Literal["ROW_OWNER", "SCHEDULE_OWNER"]
+
+
+def runs_as_row_owner(schedule: "ScheduleEntity") -> bool:
+    """Whether a table change fires this schedule as the changed row's owner."""
+    if schedule.schedule_type != ScheduleType.DATASTORE:
+        return False
+    return (schedule.config or {}).get("run_as", "ROW_OWNER") == "ROW_OWNER"
+
+
 def authored_config(config: Mapping[str, object] | None) -> dict[str, object]:
     """`config` without the keys only provisioning may write."""
     return {
@@ -179,6 +195,16 @@ class DatastoreScheduleConfig(ScheduleRunCapConfig):
         description=(
             "What an import or sync does to this trigger: skip, each or batch. "
             "Omitted means skip."
+        ),
+    )
+    run_as: DatastoreRunAs = Field(
+        default="ROW_OWNER",
+        description=(
+            "Whose access a change's run uses. ROW_OWNER (the default): the "
+            "person who owns the changed row, bounded by what the target may "
+            "do -- creating or changing such a schedule takes edit access to "
+            "the target. SCHEDULE_OWNER: the schedule's owner, for every "
+            "change. Rows nobody in the pod owns always run as the owner."
         ),
     )
 
@@ -354,8 +380,13 @@ class ScheduleEntity(Entity):
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
 
-    # For WEBHOOK schedules backed by connector provider triggers.
-    account_id: UUID | None = None
+    # For WEBHOOK schedules that listen through a connector -- a provider
+    # trigger, or an MCP server's event: the pod connector, by slug. Which
+    # account that means is resolved on every use, as the schedule's owner.
+    pod_connector_slug: str | None = None
+    # On a PER_MEMBER connector: which of the owner's accounts it listens
+    # through (bot B, not their default bot A), while it is still theirs.
+    pod_account_id: UUID | None = None
     connector_trigger_id: str | None = None
 
     # DATASTORE only. A row added from outside the pod -- an open table's form
@@ -409,13 +440,13 @@ class ScheduleEntity(Entity):
         )
 
     @property
-    def listens_through_account(self) -> bool:
-        """Whether its subscription is made on its author's account -- a
+    def listens_through_connector(self) -> bool:
+        """Whether its subscription is made through a pod connector -- a
         connector trigger, or an MCP server's event -- and so is created,
         swapped and dropped with the schedule."""
         return (
             self.schedule_type == ScheduleType.WEBHOOK
-            and self.account_id is not None
+            and self.pod_connector_slug is not None
             and (bool(self.connector_trigger_id) or self.listens_to_mcp)
         )
 
@@ -440,7 +471,8 @@ class ScheduleCreateEntity(BaseModel):
     instruction: str | None = None
     filter_instruction: str | None = None
     filter_output_schema: dict[str, Any] | None = None
-    account_id: UUID | None = None
+    pod_connector_slug: str | None = None
+    pod_account_id: UUID | None = None
     connector_trigger_id: str | None = None
     include_outside_rows: bool = False
     # None means "caller did not specify": DATASTORE and GLOBAL-workflow

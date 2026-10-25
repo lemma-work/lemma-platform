@@ -14,6 +14,7 @@ from typing import Any
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.tool_payload_limits import bounded_rows
@@ -55,6 +56,22 @@ def _table_summary(table: Any) -> JsonObject:
         # the schema alone rather than learned from the error.
         "columns": [describe_column(column).as_json() for column in table.columns],
     }
+
+
+#: What reading and writing a table's records ask the authorizer for, in turn.
+#: Named up front so an agent refused one is told about both and the person is
+#: asked once (``run_pod_tool``'s ``needs``).
+_READS_RECORDS = frozenset(
+    {Permissions.DATASTORE_TABLE_READ, Permissions.DATASTORE_RECORD_READ}
+)
+_WRITES_RECORDS = frozenset(
+    {Permissions.DATASTORE_TABLE_READ, Permissions.DATASTORE_RECORD_WRITE}
+)
+#: A delete is its own permission, and a destructive one: an agent asks before
+#: it, whatever it may write.
+_DELETES_RECORDS = frozenset(
+    {Permissions.DATASTORE_TABLE_READ, Permissions.DATASTORE_RECORD_DELETE}
+)
 
 
 async def _table_context(services: PodServices, table_name: str) -> TableContext:
@@ -131,6 +148,7 @@ async def pod_get_records(
         tool_name="pod_get_records",
         args=request.model_dump(),
         op=op,
+        needs=_READS_RECORDS,
     )
 
 
@@ -138,11 +156,13 @@ async def pod_write_record(
     ctx: RunContext[BaseAgentContext],
     request: PodWriteRecordRequest,
 ) -> JsonObject:
-    """Create, update, or delete a record in a pod table (requires record.write grant).
+    """Create, update, or delete a record in a pod table.
 
     - ``action="create"`` — needs ``data`` (column -> value).
     - ``action="update"`` — needs ``record_id`` and ``data``.
-    - ``action="delete"`` — needs ``record_id``.
+    - ``action="delete"`` — needs ``record_id``. Deleting is destructive: it
+      needs ``datastore.record.delete``, not ``record.write``, and asks the
+      person for approval unless that was granted.
     """
 
     async def op(services: PodServices) -> JsonObject:
@@ -199,6 +219,7 @@ async def pod_write_record(
         tool_name="pod_write_record",
         args=request.model_dump(),
         op=op,
+        needs=_DELETES_RECORDS if request.action == "delete" else _WRITES_RECORDS,
     )
 
 

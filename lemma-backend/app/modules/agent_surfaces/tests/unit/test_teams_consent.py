@@ -119,7 +119,7 @@ def _pending_teams_surface() -> AgentSurfaceEntity:
         surface_type=SurfacePlatform.TEAMS,
         agent_id=uuid4(),
         config=SurfaceConfig(),
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         external_tenant_id="tenant-123",
     )
     assert surface.status is AgentSurfaceStatus.PENDING_ADMIN_CONSENT

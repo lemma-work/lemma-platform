@@ -31,11 +31,13 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.tests.e2e.helpers import (
+    _bound_through_installation,
     _conversation_by_external_thread,
     _create_agent,
     _create_surface,
     _ensure_connector_account,
     _seed_external_user,
+    _set_user_mobile_number,
     _telegram_payload,
     _whatsapp_payload,
 )
@@ -146,6 +148,40 @@ async def _seed_platform_user(
         external_user_id=external_id,
         resolved_user_id=UUID(user_id),
         tenant_id=tenant_id if platform == "WHATSAPP" else None,
+    )
+
+
+async def _known_on_custom_bot(
+    db_session: AsyncSession,
+    *,
+    platform: str,
+    external_id: str,
+    user_id: str,
+    account_id: UUID,
+) -> None:
+    """How a sender is somebody on the custom bot.
+
+    A Telegram bot's webhook secret is Lemma's, so the cache names its sender.
+    A custom WhatsApp app's secret is the org's, and signs any number: there
+    only a binding made through that installation does, on the number the
+    person verified.
+    """
+    if platform != "WHATSAPP":
+        await _seed_platform_user(
+            db_session, platform=platform, external_id=external_id, user_id=user_id
+        )
+        return
+    await _set_user_mobile_number(
+        db_session, user_id=user_id, mobile_number=external_id
+    )
+    await _bound_through_installation(
+        db_session,
+        platform=platform,
+        tenant_id=CUSTOM_WHATSAPP_WABA_ID,
+        installation_id=account_id,
+        sender=external_id,
+        user_id=user_id,
+        verified_phone=external_id,
     )
 
 
@@ -615,12 +651,12 @@ async def test_custom_bot_scope_and_system_bot_threads_do_not_cross(
     custom_surface_id = UUID(custom_surface["id"])
 
     member_external = _external_id(platform, 701)
-    await _seed_platform_user(
+    await _known_on_custom_bot(
         db_session,
         platform=platform,
         external_id=member_external,
         user_id=fixed_test_user["id"],
-        tenant_id=CUSTOM_WHATSAPP_WABA_ID if platform == "WHATSAPP" else None,
+        account_id=account.id,
     )
     if platform == "WHATSAPP":
         await _seed_platform_user(
@@ -663,12 +699,12 @@ async def test_custom_bot_scope_and_system_bot_threads_do_not_cross(
 
     outsider = await signup_user(async_client, f"{platform.lower()}-custom-outsider")
     outsider_external = _external_id(platform, 702)
-    await _seed_platform_user(
+    await _known_on_custom_bot(
         db_session,
         platform=platform,
         external_id=outsider_external,
         user_id=outsider["id"],
-        tenant_id=CUSTOM_WHATSAPP_WABA_ID if platform == "WHATSAPP" else None,
+        account_id=account.id,
     )
     non_member_ctx = await _prepare_platform_dm(
         db_session,

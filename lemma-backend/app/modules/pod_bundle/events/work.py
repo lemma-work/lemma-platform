@@ -137,7 +137,6 @@ class ImportJob(BaseModel):
 class GithubImportJob(ImportJob):
     owner: str | None = None
     repo: str | None = None
-    account_id: UUID | None = None
 
 
 class UrlImportJob(ImportJob):
@@ -284,15 +283,14 @@ async def end_dead_job(ctx: DeadContext) -> None:
         await publish_bundle_event(
             job_id, error_payload(ended.error or "Job interrupted.", ended.seq)
         )
-        if isinstance(ended, PublishState) and ended.account_id is not None:
+        if isinstance(ended, PublishState) and ended.publish_lock_key is not None:
             from app.modules.pod_bundle.infrastructure.publish_lock import (
                 get_publish_concurrency_lock,
             )
 
+            held = ended.publish_lock_key
             await get_publish_concurrency_lock().release(
-                account_id=ended.account_id,
-                repo_name=ended.repo_name,
-                owner=ended.publish_id,
+                key=held, owner=ended.publish_id
             )
 
     ctx.uow.after_commit(announce)

@@ -133,7 +133,7 @@ function kitConversation() {
     const later = (hours: number) => { clock = Date.now() - hours * 3_600_000; return []; };
     return [
         said("user", teammateFor("kit").ask, 0),
-        ...did("run_connector_operation", { comment: "Reading the last 30 days of #feedback", connector: "slack", operation: "conversations.history", channel: "#feedback" }, { success: true, messages: 214 }, 1.4),
+        ...did("run_connector_operation", { comment: "Reading the last 30 days of #feedback", connector: "slack", operation: "conversations.history", payload: { channel: "#feedback" } }, { success: true, messages: 214 }, 1.4),
         ...did("exec_command", { comment: "A table for every report, and one for the themes they fall into", command: "lemma tables create feedback_reports feedback_themes" }),
         ...did("pod_write_record", { comment: "Filed 214 reports under 9 themes", table: "feedback_reports", records: 214 }, { success: true }, 1.6),
         ...did("pod_query", { comment: "Linked 6 themes to their tickets, 4 tickets to merged PRs", query: "SELECT theme, ticket, pr FROM feedback_themes" }),

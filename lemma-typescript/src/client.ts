@@ -28,6 +28,7 @@ import { ContactsNamespace } from "./namespaces/contacts.js";
 import { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 import { RecordsNamespace } from "./namespaces/records.js";
 import { ResourceAccessNamespace } from "./namespaces/resource-access.js";
+import { CallsNamespace } from "./namespaces/calls.js";
 import { DecisionsNamespace } from "./namespaces/decisions.js";
 import { SchedulesNamespace } from "./namespaces/schedules.js";
 import { TablesNamespace } from "./namespaces/tables.js";
@@ -74,6 +75,7 @@ export class LemmaClient {
   readonly connectors: ConnectorsNamespace;
   readonly resourceAccess: ResourceAccessNamespace;
   readonly schedules: SchedulesNamespace;
+  readonly calls: CallsNamespace;
   readonly decisions: DecisionsNamespace;
   readonly datastore: DatastoreNamespace;
   /** Alias of {@link datastore}, matching the Python SDK's `pod.queries`. */
@@ -141,9 +143,10 @@ export class LemmaClient {
     this.widgets = new WidgetsNamespace(this._http, podIdFn);
     this.workspace = new WorkspaceNamespace(this._http);
     this.webLogins = new WebLoginsNamespace(this._http);
-    this.connectors = new ConnectorsNamespace(this._generated, this._http);
+    this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
     this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
     this.schedules = new SchedulesNamespace(this._generated, podIdFn);
+    this.calls = new CallsNamespace(this._generated, podIdFn);
     this.decisions = new DecisionsNamespace(this._generated, podIdFn);
     this.datastore = new DatastoreNamespace(
       this._generated,

@@ -1,4 +1,4 @@
-"""The contacts cap an organization is held to, and whether it is spent.
+"""The contacts cap an organization is held to.
 
 Three states, and the difference between the last two is the point: an
 organization that never chose gets the deployment's default, so a bot anybody
@@ -66,8 +66,3 @@ def effective_contacts_cap(
 def may_answer_another_contact(cap: ContactsCap, *, answered: int) -> bool:
     """Whether a contact nobody has answered yet may be: the count has room."""
     return cap.max_contacts is None or answered < cap.max_contacts
-
-
-def cap_reached(cap: ContactsCap, *, consumed_usd: Decimal) -> bool:
-    """Whether what was spent and is still reserved has reached the cap."""
-    return cap.limit_usd is not None and consumed_usd >= cap.limit_usd

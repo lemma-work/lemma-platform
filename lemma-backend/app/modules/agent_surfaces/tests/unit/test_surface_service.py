@@ -53,7 +53,17 @@ def _repo() -> AsyncMock:
     repo = AsyncMock()
     repo.list_by_pod.return_value = ([], None)
     repo.get_platform_identity_holder.return_value = None
+    # Nothing else runs as the account a surface's connector means, unless a
+    # test says so: a mock is truthy, and every create would be refused.
+    repo.get_sharing_account_with.return_value = None
     return repo
+
+
+def _accounts() -> AsyncMock:
+    """The account port: which account a pod connector means."""
+    accounts = AsyncMock()
+    accounts.account_for_binding.return_value = uuid4()
+    return accounts
 
 
 def _surface_entity(**overrides) -> AgentSurfaceEntity:
@@ -63,7 +73,7 @@ def _surface_entity(**overrides) -> AgentSurfaceEntity:
         "name": "slack",
         "agent_id": uuid4(),
         "surface_type": SurfacePlatform.SLACK,
-        "account_id": uuid4(),
+        "pod_connector_slug": "slack-bot",
         "config": SurfaceConfig(),
     }
     payload.update(overrides)
@@ -204,6 +214,7 @@ async def test_create_surface(monkeypatch):
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=enricher,
+        account_port=_accounts(),
     )
     monkeypatch.setattr(
         "app.core.config.settings.api_url",
@@ -212,7 +223,6 @@ async def test_create_surface(monkeypatch):
 
     pod_id = uuid4()
     agent_id = uuid4()
-    account_id = uuid4()
     config = SurfaceConfig()
 
     repo.create.side_effect = lambda entity: entity
@@ -223,13 +233,13 @@ async def test_create_surface(monkeypatch):
         pod_id=pod_id,
         agent_id=agent_id,
         config=config,
-        account_id=account_id,
+        pod_connector_slug="own-bot",
     )
 
     assert result.pod_id == pod_id
     assert result.agent_id == agent_id
     assert result.surface_type == SurfacePlatform.SLACK
-    assert result.account_id == account_id
+    assert result.pod_connector_slug == "own-bot"
     assert result.surface_identity_id == "U-BOT"
     repo.create.assert_awaited_once()
     enricher.resolve_binding.assert_awaited_once()
@@ -244,6 +254,7 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=enricher,
+        account_port=_accounts(),
     )
     monkeypatch.setattr(
         "app.core.config.settings.api_url",
@@ -260,7 +271,7 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
         pod_id=pod_id,
         agent_id=uuid4(),
         config=SurfaceConfig(),
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
     )
     assert created.name == "slack"
     repo.get_by_pod_and_name.assert_awaited_with(pod_id=pod_id, name="slack")
@@ -274,7 +285,7 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
             pod_id=pod_id,
             agent_id=uuid4(),
             config=SurfaceConfig(),
-            account_id=uuid4(),
+            pod_connector_slug="own-bot",
         )
 
     # An explicit distinct name for a second Slack surface succeeds.
@@ -285,7 +296,7 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
         agent_id=uuid4(),
         name="slack-support",
         config=SurfaceConfig(),
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
     )
     assert second.name == "slack-support"
 
@@ -298,6 +309,7 @@ async def test_create_telegram_surface_uses_built_in_credentials_without_account
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=enricher,
+        account_port=_accounts(),
     )
 
     pod_id = uuid4()
@@ -318,7 +330,7 @@ async def test_create_telegram_surface_uses_built_in_credentials_without_account
         config=config,
     )
 
-    assert result.account_id is None
+    assert result.pod_connector_slug is None
     assert result.surface_type is SurfacePlatform.TELEGRAM
 
 
@@ -334,7 +346,7 @@ async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch
 
     account_id = uuid4()
     config = SurfaceConfig()
-    repo.get_by_platform_and_account_id.return_value = None
+    repo.get_sharing_account_with.return_value = None
     enricher.resolve_binding.return_value = (None, None, None)
     account_port.get_account.return_value = SurfaceAccountInfo(
         id=account_id,
@@ -353,7 +365,7 @@ async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
-            account_id=account_id,
+            pod_connector_slug="own-bot",
         )
 
     repo.create.assert_not_awaited()
@@ -373,7 +385,7 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
 
     account_id = uuid4()
     config = SurfaceConfig()
-    repo.get_by_platform_and_account_id.return_value = None
+    repo.get_sharing_account_with.return_value = None
     repo.create.side_effect = lambda entity: entity
     enricher.resolve_binding.return_value = (None, None, None)
     account_port.get_account.return_value = SurfaceAccountInfo(
@@ -394,7 +406,7 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
         pod_id=uuid4(),
         agent_id=uuid4(),
         config=config,
-        account_id=account_id,
+        pod_connector_slug="own-bot",
     )
 
     assert result.webhook_secret
@@ -417,12 +429,11 @@ async def test_create_telegram_webhook_surface_rejects_duplicate_account(monkeyp
         account_port=account_port,
     )
 
-    account_id = uuid4()
     config = SurfaceConfig()
-    repo.get_by_platform_and_account_id.return_value = _surface_entity(
+    repo.get_sharing_account_with.return_value = _surface_entity(
         surface_type=SurfacePlatform.TELEGRAM,
         config=config,
-        account_id=account_id,
+        pod_connector_slug="own-bot",
     )
     enricher.resolve_binding.return_value = (None, None, None)
     monkeypatch.setattr(
@@ -430,13 +441,13 @@ async def test_create_telegram_webhook_surface_rejects_duplicate_account(monkeyp
         "https://api.example.test",
     )
 
-    with pytest.raises(AgentSurfaceValidationError, match="already connected"):
+    with pytest.raises(AgentSurfaceCredentialConflictError):
         await service.create_surface(
             platform=SurfacePlatform.TELEGRAM,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
-            account_id=account_id,
+            pod_connector_slug="own-bot",
         )
 
     account_port.get_account.assert_not_awaited()
@@ -461,6 +472,7 @@ async def test_create_shared_surface_refuses_a_second_org_claim(monkeypatch):
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=enricher,
+        account_port=_accounts(),
     )
 
     config = SurfaceConfig()
@@ -469,7 +481,7 @@ async def test_create_shared_surface_refuses_a_second_org_claim(monkeypatch):
         surface_type=SurfacePlatform.TELEGRAM,
         name="telegram",
         config=config,
-        account_id=None,
+        pod_connector_slug=None,
     )
     repo.get_system_credential_conflict_in_org.return_value = holder
     enricher.resolve_binding.return_value = (None, None, None)
@@ -497,18 +509,18 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=enricher,
+        account_port=_accounts(),
     )
 
-    account_id = uuid4()
     config = SurfaceConfig()
     repo.create.side_effect = lambda entity: entity
     holder = _surface_entity(
         surface_type=SurfacePlatform.SLACK,
         name="slack",
         config=config,
-        account_id=account_id,
+        pod_connector_slug="own-bot",
     )
-    repo.get_account_conflict_in_org.return_value = holder
+    repo.get_sharing_account_with.return_value = holder
     enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
     monkeypatch.setattr(
         "app.core.config.settings.api_url",
@@ -523,7 +535,7 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
-            account_id=account_id,
+            pod_connector_slug="own-bot",
         )
 
     assert raised.value.details == {
@@ -539,11 +551,11 @@ async def test_create_teams_surface_with_account_awaits_admin_consent(monkeypatc
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=enricher,
+        account_port=_accounts(),
     )
 
     pod_id = uuid4()
     agent_id = uuid4()
-    account_id = uuid4()
     config = SurfaceConfig()
 
     repo.create.side_effect = lambda entity: entity
@@ -558,16 +570,16 @@ async def test_create_teams_surface_with_account_awaits_admin_consent(monkeypatc
         pod_id=pod_id,
         agent_id=agent_id,
         config=config,
-        account_id=account_id,
+        pod_connector_slug="own-bot",
     )
 
     assert result.status is AgentSurfaceStatus.PENDING_ADMIN_CONSENT
     assert result.external_tenant_id == "tenant-123"
-    assert result.account_id == account_id
+    assert result.pod_connector_slug == "own-bot"
 
 
 async def test_create_teams_requires_account_id():
-    with pytest.raises(AgentSurfaceValidationError, match="require account_id"):
+    with pytest.raises(AgentSurfaceValidationError, match="run as a pod connector"):
         AgentSurfaceEntity.create(
             surface_type=SurfacePlatform.TEAMS,
             pod_id=uuid4(),
@@ -634,11 +646,10 @@ async def test_toggle_telegram_webhook_surface_deletes_provider_webhook(monkeypa
         surface_repository=repo,
         account_binding_resolver=AsyncMock(),
     )
-    account_id = uuid4()
     entity = _surface_entity(
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
-        account_id=account_id,
+        pod_connector_slug="own-bot",
         webhook_secret="surface-secret",
         is_active=True,
     )
@@ -666,13 +677,13 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
     entity = _surface_entity(
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
-        account_id=account_id,
+        pod_connector_slug="own-bot",
         webhook_secret="old-secret",
         is_active=False,
     )
     repo.get.return_value = entity
     repo.update.side_effect = lambda updated: updated
-    repo.get_by_platform_and_account_id.return_value = None
+    repo.get_sharing_account_with.return_value = None
     account_port.get_account.return_value = SurfaceAccountInfo(
         id=account_id,
         user_id=uuid4(),
@@ -709,7 +720,7 @@ async def test_delete_telegram_webhook_surface_deletes_provider_webhook(monkeypa
     entity = _surface_entity(
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         webhook_secret="surface-secret",
         is_active=False,
     )
@@ -809,6 +820,7 @@ async def test_update_surface_updates_account_metadata(monkeypatch):
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=enricher,
+        account_port=_accounts(),
     )
 
     entity = _surface_entity()
@@ -822,7 +834,7 @@ async def test_update_surface_updates_account_metadata(monkeypatch):
 
     result = await service.update_surface(
         surface_id=entity.id,
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
     )
     assert result.external_workspace_id == "T999"
     assert result.surface_identity_id == "U-BOT-NEW"
@@ -835,7 +847,7 @@ async def test_slack_surface_matches_workspace_from_connected_account():
         pod_id=uuid4(),
         agent_id=uuid4(),
         config=SurfaceConfig(),
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         external_workspace_id="T123",
     )
 
@@ -849,7 +861,7 @@ async def test_surface_event_mode_defaults_and_validation():
         pod_id=uuid4(),
         agent_id=uuid4(),
         config=SurfaceConfig(),
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
     )
     # "Is this email?" is the platform, and only the platform. There used to be
     # a `mode` column beside it holding the same answer, a `_resolve_mode` that
@@ -939,7 +951,9 @@ async def test_resend_surface_allowed_without_public_url_when_polling_enabled(
         "app.modules.agent_surfaces.config.surface_settings.enable_resend_polling_mode",
         True,
     )
-    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+    surface = _surface_entity(
+        surface_type=SurfacePlatform.RESEND, pod_connector_slug=None
+    )
 
     assert _runtime_service()._validate_runtime_supported(surface) is None
 
@@ -953,7 +967,9 @@ async def test_resend_surface_rejected_on_local_url_without_polling(monkeypatch)
         "app.modules.agent_surfaces.config.surface_settings.enable_resend_polling_mode",
         False,
     )
-    surface = _surface_entity(surface_type=SurfacePlatform.RESEND, account_id=None)
+    surface = _surface_entity(
+        surface_type=SurfacePlatform.RESEND, pod_connector_slug=None
+    )
 
     with pytest.raises(AgentSurfaceValidationError, match="public link"):
         _runtime_service()._validate_runtime_supported(surface)
@@ -970,7 +986,9 @@ async def test_a_second_surface_of_one_platform_for_one_agent_is_refused(monkeyp
     enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
     monkeypatch.setattr("app.core.config.settings.api_url", "https://api.example.test")
     service = AgentSurfaceService(
-        surface_repository=repo, account_binding_resolver=enricher
+        surface_repository=repo,
+        account_binding_resolver=enricher,
+        account_port=_accounts(),
     )
     pod_id, agent_id = uuid4(), uuid4()
     held = _surface_entity(
@@ -987,7 +1005,7 @@ async def test_a_second_surface_of_one_platform_for_one_agent_is_refused(monkeyp
             pod_id=pod_id,
             agent_id=agent_id,
             name="slack-second",
-            account_id=uuid4(),
+            pod_connector_slug="own-bot",
         )
 
     assert raised.value.status_code == 409
@@ -1003,9 +1021,11 @@ async def test_another_agent_in_the_same_pod_may_hold_the_same_platform(monkeypa
     enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
     monkeypatch.setattr("app.core.config.settings.api_url", "https://api.example.test")
     repo.create.side_effect = lambda entity: entity
-    repo.get_account_conflict_in_org.return_value = None
+    repo.get_sharing_account_with.return_value = None
     service = AgentSurfaceService(
-        surface_repository=repo, account_binding_resolver=enricher
+        surface_repository=repo,
+        account_binding_resolver=enricher,
+        account_port=_accounts(),
     )
     pod_id = uuid4()
     # The pod's other agent already has one; `list_by_pod` is asked with
@@ -1017,7 +1037,7 @@ async def test_another_agent_in_the_same_pod_may_hold_the_same_platform(monkeypa
         pod_id=pod_id,
         agent_id=uuid4(),
         name="slack-second",
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
     )
 
     assert created.surface_type is SurfacePlatform.SLACK
@@ -1033,7 +1053,7 @@ async def test_moving_a_surface_onto_an_agent_that_has_one_is_refused():
     )
     pod_id, busy_agent = uuid4(), uuid4()
     moving = _surface_entity(
-        pod_id=pod_id, surface_type=SurfacePlatform.SLACK, account_id=None
+        pod_id=pod_id, surface_type=SurfacePlatform.SLACK, pod_connector_slug=None
     )
     repo.get.return_value = moving
     repo.list_by_pod.return_value = (
@@ -1043,7 +1063,7 @@ async def test_moving_a_surface_onto_an_agent_that_has_one_is_refused():
                 agent_id=busy_agent,
                 name="slack",
                 surface_type=SurfacePlatform.SLACK,
-                account_id=None,
+                pod_connector_slug=None,
             )
         ],
         None,

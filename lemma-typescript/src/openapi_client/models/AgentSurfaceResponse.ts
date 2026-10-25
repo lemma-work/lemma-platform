@@ -9,7 +9,6 @@ import type { SurfaceCredentialMode } from './SurfaceCredentialMode.js';
 import type { SurfacePlatform } from './SurfacePlatform.js';
 import type { SurfaceReach } from './SurfaceReach.js';
 export type AgentSurfaceResponse = {
-    account_id?: (string | null);
     agent_id?: (string | null);
     agent_name?: (string | null);
     config: SurfaceConfigResponse;
@@ -19,6 +18,7 @@ export type AgentSurfaceResponse = {
     id: string;
     name: string;
     platform: SurfacePlatform;
+    pod_connector?: (string | null);
     pod_id: string;
     problem?: (string | null);
     reach?: (SurfaceReach | null);

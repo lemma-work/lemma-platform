@@ -181,7 +181,7 @@ public, and a fork must not be able to read them.
 ```python
 @scenario("A person connects GitHub and Lemma knows whose account it is")
 @proves("PS-CONN-011")
-@covers("connector.account.create", "connector.operation.execute")
+@covers("connector.account.create", "pod.connector.operation.execute")
 async def test_connecting_github_identifies_the_account(github):
     needs(GITHUB_REPO, REAL_MODEL)
     ...

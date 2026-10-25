@@ -199,8 +199,9 @@ put it there having to think about it on every operation.
 
 > **Verified by:** `test_a_query_says_the_facility_is_unavailable` in
 > `app/modules/datastore/tests/e2e/test_query_unavailable_e2e.py`, not by a
-> scenario. Direct querying runs as a dedicated Postgres role
-> (`datastore_query_role`), and taking that role away is the only way the state
+> scenario. Direct querying runs as a Postgres role of the pod's own, which
+> holds nothing on any other pod's schema and which the app creates, so a
+> deployment whose app role cannot create roles is the only way the state
 > exists — which a scenario cannot do: the suite forbids mocking, and dropping
 > the role from a shared stack breaks every other scenario using it. Inducing a
 > dependency failure is what the module e2e suite is for

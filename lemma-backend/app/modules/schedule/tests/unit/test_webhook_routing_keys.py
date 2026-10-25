@@ -61,16 +61,28 @@ async def _no_uow():
     yield None
 
 
-def _webhook(config: dict[str, Any], *, account_id: UUID | None) -> ScheduleEntity:
+def _webhook(config: dict[str, Any], *, bound: bool) -> ScheduleEntity:
+    """A webhook schedule; ``bound`` ones listen through a pod connector."""
     return ScheduleEntity(
         id=uuid4(),
         user_id=uuid4(),
+        pod_id=uuid4(),
         schedule_type=ScheduleType.WEBHOOK,
-        account_id=account_id,
-        connector_trigger_id="trigger" if account_id else None,
+        pod_connector_slug="tracker" if bound else None,
+        connector_trigger_id="trigger" if bound else None,
         config=config,
         is_active=True,
     )
+
+
+class _Resolves:
+    """What each schedule's pod connector resolves to now; absent: nothing."""
+
+    def __init__(self, accounts: dict[UUID, UUID]) -> None:
+        self.accounts = accounts
+
+    async def __call__(self, _uow, schedule: ScheduleEntity) -> UUID | None:
+        return self.accounts.get(schedule.id)
 
 
 def test_an_author_cannot_send_a_key_only_provisioning_writes() -> None:
@@ -86,8 +98,8 @@ def test_an_author_cannot_send_a_key_only_provisioning_writes() -> None:
 
 @pytest.mark.asyncio
 async def test_a_typed_in_trigger_id_routes_nothing_to_an_unbound_schedule() -> None:
-    owner = _webhook({"provider_trigger_id": "ti_1"}, account_id=uuid4())
-    forged = _webhook({"provider_trigger_id": "ti_1"}, account_id=None)
+    owner = _webhook({"provider_trigger_id": "ti_1"}, bound=True)
+    forged = _webhook({"provider_trigger_id": "ti_1"}, bound=False)
     matcher = WebhookScheduleMatcher(schedule_repository=_Schedules(owner, forged))
 
     by_plugin = await matcher.match_criteria({"provider_trigger_id": "ti_1"})
@@ -102,8 +114,8 @@ async def test_a_typed_in_installation_id_routes_nothing_to_an_unbound_schedule(
     None
 ):
     routing = {"source": "github", "installation_id": "42", "event": "push"}
-    owner = _webhook(routing, account_id=uuid4())
-    forged = _webhook(dict(routing), account_id=None)
+    owner = _webhook(routing, bound=True)
+    forged = _webhook(dict(routing), bound=False)
     matcher = WebhookScheduleMatcher(schedule_repository=_Schedules(owner, forged))
 
     assert [s.id for s in await matcher.match_criteria(routing)] == [owner.id]
@@ -111,7 +123,7 @@ async def test_a_typed_in_installation_id_routes_nothing_to_an_unbound_schedule(
 
 @pytest.mark.asyncio
 async def test_a_key_anyone_may_type_still_matches_unbound_schedules() -> None:
-    plain = _webhook({"source": "custom", "event": "ping"}, account_id=None)
+    plain = _webhook({"source": "custom", "event": "ping"}, bound=False)
     matcher = WebhookScheduleMatcher(schedule_repository=_Schedules(plain))
 
     assert await matcher.match_criteria({"source": "custom", "event": "ping"}) == [
@@ -125,8 +137,8 @@ async def test_a_delivery_verified_by_one_account_fires_only_that_accounts_sched
 ):
     mine, theirs = uuid4(), uuid4()
     routed = {"provider_trigger_id": "sub_1"}
-    own = _webhook(dict(routed), account_id=mine)
-    other = _webhook(dict(routed), account_id=theirs)
+    own = _webhook(dict(routed), bound=True)
+    other = _webhook(dict(routed), bound=True)
     fired = _Fired()
     handler = WebhookHandler(
         matcher_factory=lambda _uow: WebhookScheduleMatcher(
@@ -134,6 +146,7 @@ async def test_a_delivery_verified_by_one_account_fires_only_that_accounts_sched
         ),
         uow_factory=_no_uow,
         fire=fired,
+        bound_account=_Resolves({own.id: mine, other.id: theirs}),
     )
 
     started = await handler.handle_webhook(
@@ -149,3 +162,64 @@ async def test_a_delivery_verified_by_one_account_fires_only_that_accounts_sched
 
     assert started == [own.id]
     assert fired.schedule_ids == [own.id]
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_whose_connector_no_longer_resolves_does_not_fire() -> None:
+    """Its owner left the pod, or the shared account was withdrawn: the
+    routing key still matches, and the schedule must not run on it."""
+    routing = {"source": "github", "installation_id": "42", "event": "push"}
+    live = _webhook(dict(routing), bound=True)
+    stopped = _webhook(dict(routing), bound=True)
+    fired = _Fired()
+    handler = WebhookHandler(
+        matcher_factory=lambda _uow: WebhookScheduleMatcher(
+            schedule_repository=_Schedules(live, stopped)
+        ),
+        uow_factory=_no_uow,
+        fire=fired,
+        bound_account=_Resolves({live.id: uuid4()}),
+    )
+
+    started = await handler.handle_webhook(
+        source="github",
+        payload={},
+        normalized=NormalizedWebhook(
+            payload={"action": "opened"},
+            source_event_id="github:delivery-1",
+            match=routing,
+        ),
+    )
+
+    assert started == [live.id]
+    assert fired.schedule_ids == [live.id]
+
+
+@pytest.mark.asyncio
+async def test_a_delivery_verified_by_an_account_never_fires_an_unbound_schedule() -> (
+    None
+):
+    routed = {"provider_trigger_id": "sub_1"}
+    plain = _webhook(dict(routed), bound=False)
+    fired = _Fired()
+    handler = WebhookHandler(
+        matcher_factory=lambda _uow: WebhookScheduleMatcher(
+            schedule_repository=_Schedules(plain)
+        ),
+        uow_factory=_no_uow,
+        fire=fired,
+        bound_account=_Resolves({}),
+    )
+
+    started = await handler.handle_webhook(
+        source="mcp",
+        payload={},
+        normalized=NormalizedWebhook(
+            payload={},
+            source_event_id="mcp:sub_1:evt_1",
+            match=routed,
+            account_id=str(uuid4()),
+        ),
+    )
+
+    assert started == []

@@ -111,6 +111,11 @@ rights than the person who asked.
   then the system shall refuse the access.
 - The system shall apply this on every request the workload makes, not only on
   the first.
+- The system shall let an agent or function make a public link to a file only
+  where it was granted permission to share that file, whether or not it acts
+  for a person: a link hands the file to whoever holds it, outside every grant.
+  Every person in the pod may share what they can read, and the pod's
+  assistant shares as the person it acts for.
 - Granting a workload access to a resource shall not, by itself, withdraw that
   resource from the people in the pod. A grant to an agent says what the agent
   may do; it says nothing about who may see the thing. Otherwise configuring a
@@ -127,6 +132,9 @@ rights than the person who asked.
   person at the time.
 - The system shall apply that rule even when the workload acts for the person
   who created the resource.
+- The system shall treat deleting records, one or many, as destructive, and
+  shall not let permission to write a table's records stand in for permission
+  to delete them.
 - If the record of session approvals is unavailable, then the system shall treat
   every action as unapproved and shall ask again, rather than allowing it.
 

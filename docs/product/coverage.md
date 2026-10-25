@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 175 |
+| `covered` | 176 |
 | `gap` | 4 |
 | `manual` | 24 |
 | `planned` | 24 |
 | `withdrawn` | 0 |
-| **total** | **227** |
+| **total** | **228** |
 
-Scenario tests declaring a promise: 449.
+Scenario tests declaring a promise: 454.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 250 | 344 |
+| OpenAPI operations | 259 | 364 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -69,7 +69,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-AGENT-012` A person can stop an agent | `covered` | `test_stopping_a_run_leaves_the_conversation_usable` |
 | `PS-AGENT-013` A failed run can be tried again | `covered` | `test_retrying_a_healthy_run_is_refused` |
 | `PS-AGENT-015` A person can add to what the agent is already doing | `covered` | `test_a_message_sent_mid_run_is_answered` |
-| `PS-AGENT-016` Everyday requests finish while the person waits | `covered` | `test_a_question_about_data`, `test_a_record_is_added`, `test_a_doc_is_edited_in_place`, `test_a_csv_is_exported`, `test_a_pdf_report_is_made`, `test_a_word_document_is_made`, `test_a_research_memo`, `test_a_web_lookup`, `test_something_is_remembered`, `test_a_widget_is_shown`, `test_a_widget_of_its_own_design` |
+| `PS-AGENT-016` Everyday requests finish while the person waits | `covered` | `test_a_question_about_data`, `test_a_record_is_added`, `test_a_doc_is_edited_in_place`, `test_a_csv_is_exported`, `test_a_pdf_report_is_made`, `test_a_word_document_is_made`, `test_a_research_memo`, `test_a_web_lookup`, `test_something_is_remembered`, `test_something_mentioned_in_passing_is_remembered_after_the_answer`, `test_a_widget_is_shown`, `test_a_widget_of_its_own_design` |
 | `PS-AGENT-014` A conversation is private to the pod | `covered` | `test_an_outsider_cannot_read_a_conversation` |
 | `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
@@ -140,13 +140,14 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-CONN-012` Removing an installation removes what depended on it | `covered` | `test_uninstalling_stops_everything_under_it` |
 | `PS-CONN-013` An app the catalog has never heard of can still be connected | `covered` | `test_installing_discovers_operations` |
 | `PS-CONN-014` A connector the platform cannot sign in to asks for credentials instead of offering to connect | `manual` | — |
-| `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_connecting_github_identifies_the_account`, `test_connecting_slack_identifies_the_workspace` |
+| `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_a_shared_connector_runs_as_the_shared_account`, `test_connecting_github_identifies_the_account`, `test_connecting_slack_identifies_the_workspace` |
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `covered` | `test_connecting_needs_a_consent_flow`, `test_an_unknown_callback_is_refused` |
 | `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |
-| `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable`, `test_an_issue_is_created_and_closed`, `test_a_message_is_posted_and_taken_back` |
-| `PS-CONN-031` An operation runs as the identity its connector is bound to | `covered` | `test_an_account_is_not_shared`, `test_an_operation_reaches_the_provider` |
+| `PS-CONN-030` A person finds the operation they need | `covered` | `test_operations_can_be_refreshed`, `test_operations_read_in_bulk`, `test_installing_discovers_operations`, `test_an_operation_is_readable`, `test_a_pod_connector_offers_its_installations_operations`, `test_an_issue_is_created_and_closed`, `test_a_message_is_posted_and_taken_back` |
+| `PS-CONN-031` An operation runs as the identity its pod connector is bound to | `covered` | `test_an_account_is_not_shared`, `test_a_shared_connector_runs_as_the_shared_account`, `test_an_operation_reaches_the_provider` |
 | `PS-CONN-032` A slow or failing provider does not damage the pod | `covered` | `test_a_failing_provider_is_reported_not_swallowed`, `test_a_failing_provider_does_not_take_the_pod_with_it`, `test_a_hanging_provider_is_given_up_on` |
-| `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector` |
+| `PS-CONN-033` An agent can only use the connectors it was granted | `covered` | `test_an_agent_uses_github_only_when_granted`, `test_an_agent_cannot_call_an_ungranted_connector`, `test_an_agent_granted_a_connector_reaches_it` |
+| `PS-CONN-034` A pod declares the connectors it runs, and whose account each uses | `covered` | `test_a_member_cannot_declare_a_connector`, `test_a_shared_connector_runs_as_the_shared_account` |
 | `PS-CONN-040` A person sees what a provider can notify them about | `covered` | `test_a_trigger_reads_back`, `test_triggers_are_listable` |
 
 ## [Getting started](journeys/getting-started.md)

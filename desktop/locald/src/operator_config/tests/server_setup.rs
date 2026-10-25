@@ -408,11 +408,11 @@ fn a_resend_key_and_the_email_section_save_as_one_change() {
     assert!(empty.is_err());
 }
 
-/// The voice is the workspace server's, so its key goes there alone. Routing
-/// what the caller says is a backend decision, so the TypeSafe key goes to the
-/// backend alone, and makes TypeSafe the backend's decision provider.
+/// Calls are the API's: the voice key and the routing key both go to the
+/// backend and nothing to the workspace server, and the TypeSafe key makes
+/// TypeSafe the backend's decision provider.
 #[test]
-fn the_voice_key_goes_to_the_frontend_and_the_routing_key_to_the_backend() {
+fn the_voice_and_routing_keys_go_to_the_backend() {
     let (_root, store) = store_with(Default::default(), Default::default(), Default::default());
     assert!(store.frontend_environment().unwrap().is_empty());
     assert!(!store
@@ -430,11 +430,9 @@ fn the_voice_key_goes_to_the_frontend_and_the_routing_key_to_the_backend() {
         }),
     )
     .unwrap();
-    let frontend = store.frontend_environment().unwrap();
-    assert_eq!(frontend["GEMINI_API_KEY"], "g-1");
-    assert!(!frontend.contains_key("TYPESAFE_API_KEY"));
+    assert!(store.frontend_environment().unwrap().is_empty());
     let backend = store.backend_environment().unwrap();
-    assert!(!backend.contains_key("GEMINI_API_KEY"));
+    assert_eq!(backend["GEMINI_API_KEY"], "g-1");
     assert_eq!(backend["TYPESAFE_API_KEY"], "t-1");
     assert_eq!(backend["DECISION_PROVIDER"], "typesafe");
 }

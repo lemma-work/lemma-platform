@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.authorization.permissions import POD_ADMIN_PERMISSIONS
 from app.core.authorization.permissions import Permissions
 from app.modules.identity.domain.organization_entities import (
     OrganizationRole,
@@ -66,9 +67,10 @@ def test_managing_people_is_an_editor_permission_and_billing_is_not():
 
 
 def test_an_editor_lacks_exactly_what_makes_an_owner():
+    # Billing, and administering every pod in the organization.
     assert org_role_permission_ids(OWNER) - org_role_permission_ids(EDITOR) == {
         Permissions.ORG_BILLING_MANAGE
-    }
+    } | (POD_ADMIN_PERMISSIONS - org_role_permission_ids(EDITOR))
 
 
 @pytest.mark.asyncio

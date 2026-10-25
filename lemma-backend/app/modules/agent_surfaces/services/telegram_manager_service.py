@@ -181,7 +181,7 @@ class TelegramManagerService:
         bot_id: int,
         bot_username: str | None,
         bot_token: str,
-    ) -> tuple[UUID, UUID]:
+    ) -> tuple[str, UUID]:
         return await persist_managed_bot(
             uow_factory=self._uow_factory,
             setup=setup,

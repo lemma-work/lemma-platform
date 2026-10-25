@@ -8,9 +8,8 @@
   surface is made from the new account. Keyed by the account, so a fact
   emitted twice runs once while queued, and the handler is idempotent after.
 * ``surface.slack_workspace_installed`` -- subscribed to the same fact, for a
-  grant of Lemma's own app that "Add to Slack" started (its purpose) and that
-  came back to its starter's own browser (``browser_bound``): the workspace it
-  names gets Lemma's app as its manager (``services/slack_install``). Keyed
+  grant of Lemma's own app that "Add to Slack" started (its purpose): the
+  workspace it names gets Lemma's app as its manager (``services/slack_install``). Keyed
   by the account; one organization's adoptions run one at a time, and the
   binding is idempotent, so a renewed grant refreshes and welcomes no one.
 * ``surface.slack_manager_message`` -- a DM the manager owes a person, staged

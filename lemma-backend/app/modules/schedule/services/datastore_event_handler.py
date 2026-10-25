@@ -186,7 +186,12 @@ def trigger_change(change: Change, *, table_name: str) -> TriggerChange:
         row=row or {},
         changed=change.changed,
         previous=change.old_values if change.op is ChangeOp.UPDATE else None,
-        owner_user_id=change.owner_user_id,
+        # A row from outside the pod is stamped with the member who opened the
+        # table, who did not write it: it runs as the schedule's owner, who
+        # chose to let outside rows in, never as that member.
+        owner_user_id=None
+        if change.outside_actor is not None
+        else change.owner_user_id,
         occurred_at=change.at,
         from_outside=change.outside_actor is not None,
         metadata=metadata,

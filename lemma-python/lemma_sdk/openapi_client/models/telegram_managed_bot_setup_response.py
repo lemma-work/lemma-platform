@@ -21,10 +21,10 @@ class TelegramManagedBotSetupResponse:
         manager_bot_username (str):
         setup_id (str):
         status (str):
-        account_id (None | Unset | UUID):
         bot_launch_url (None | str | Unset):
         bot_username (None | str | Unset):
         error (None | str | Unset):
+        pod_connector (None | str | Unset):
         surface_id (None | Unset | UUID):
     """
 
@@ -33,10 +33,10 @@ class TelegramManagedBotSetupResponse:
     manager_bot_username: str
     setup_id: str
     status: str
-    account_id: None | Unset | UUID = UNSET
     bot_launch_url: None | str | Unset = UNSET
     bot_username: None | str | Unset = UNSET
     error: None | str | Unset = UNSET
+    pod_connector: None | str | Unset = UNSET
     surface_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -50,14 +50,6 @@ class TelegramManagedBotSetupResponse:
         setup_id = self.setup_id
 
         status = self.status
-
-        account_id: None | str | Unset
-        if isinstance(self.account_id, Unset):
-            account_id = UNSET
-        elif isinstance(self.account_id, UUID):
-            account_id = str(self.account_id)
-        else:
-            account_id = self.account_id
 
         bot_launch_url: None | str | Unset
         if isinstance(self.bot_launch_url, Unset):
@@ -76,6 +68,12 @@ class TelegramManagedBotSetupResponse:
             error = UNSET
         else:
             error = self.error
+
+        pod_connector: None | str | Unset
+        if isinstance(self.pod_connector, Unset):
+            pod_connector = UNSET
+        else:
+            pod_connector = self.pod_connector
 
         surface_id: None | str | Unset
         if isinstance(self.surface_id, Unset):
@@ -96,14 +94,14 @@ class TelegramManagedBotSetupResponse:
                 "status": status,
             }
         )
-        if account_id is not UNSET:
-            field_dict["account_id"] = account_id
         if bot_launch_url is not UNSET:
             field_dict["bot_launch_url"] = bot_launch_url
         if bot_username is not UNSET:
             field_dict["bot_username"] = bot_username
         if error is not UNSET:
             field_dict["error"] = error
+        if pod_connector is not UNSET:
+            field_dict["pod_connector"] = pod_connector
         if surface_id is not UNSET:
             field_dict["surface_id"] = surface_id
 
@@ -121,23 +119,6 @@ class TelegramManagedBotSetupResponse:
         setup_id = d.pop("setup_id")
 
         status = d.pop("status")
-
-        def _parse_account_id(data: object) -> None | Unset | UUID:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                account_id_type_0 = UUID(data)
-
-                return account_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | Unset | UUID, data)
-
-        account_id = _parse_account_id(d.pop("account_id", UNSET))
 
         def _parse_bot_launch_url(data: object) -> None | str | Unset:
             if data is None:
@@ -166,6 +147,15 @@ class TelegramManagedBotSetupResponse:
 
         error = _parse_error(d.pop("error", UNSET))
 
+        def _parse_pod_connector(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pod_connector = _parse_pod_connector(d.pop("pod_connector", UNSET))
+
         def _parse_surface_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -189,10 +179,10 @@ class TelegramManagedBotSetupResponse:
             manager_bot_username=manager_bot_username,
             setup_id=setup_id,
             status=status,
-            account_id=account_id,
             bot_launch_url=bot_launch_url,
             bot_username=bot_username,
             error=error,
+            pod_connector=pod_connector,
             surface_id=surface_id,
         )
 

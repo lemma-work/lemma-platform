@@ -27,7 +27,7 @@ Resend address.
 
 | Table | Meaning |
 | --- | --- |
-| `agent_surfaces` | Pod/platform/name, the one agent it answers as, account binding, allowed channels, identity and send policy |
+| `agent_surfaces` | Pod/platform/name, the one agent it answers as, the SHARED pod connector it runs as (`pod_connector_slug`, no account stored: `services/surface_connector.py` resolves the account through the connector on every use, so an owner withdrawing it stops the surface at once), allowed channels, identity and send policy |
 | `agent_surface_external_users` | Stable external identity to Lemma user/contact resolution |
 | `surface_verified_identities` | One row per hashed platform/tenant/installation/actor binding: that this person proved who they are, and the pod and installation their private chat reaches. A check constraint keeps a revoked identity from holding a destination, so a live route beside a revoked proof is unrepresentable rather than merely unlikely |
 | `surface_pending_onboarding` | Onboarding in flight for one binding — step, email challenge, offered pods, and the original inbound event held until there is a conversation to commit it to |
@@ -672,9 +672,10 @@ answered with who does answer.
   race. The connect request carries the purpose `slack_workspace_install` and
   omits Slack's `user_scope`: the installer is named by `authed_user` without
   it. `surface.slack_workspace_installed` subscribes to
-  `ConnectorAccountConnected` for that purpose **and** `browser_bound` only, so
-  an ordinary Slack connect for tools never adopts or says anything, and a
-  consent link somebody else completed is not even queued. It runs
+  `ConnectorAccountConnected` for that purpose only, so an ordinary Slack
+  connect for tools never adopts or says anything. A consent link somebody
+  else opened never gets that far: the callback refuses a browser that is not
+  the starter's own before it stores a grant. It runs
   `bind_manager`, the reach sheet's binding: one organization per workspace,
   conflict-tolerant, and the installer proven `INSTALL`. A refusal (another
   organization holds it, the person may no longer add installs) is a DM from
@@ -739,7 +740,9 @@ unsubscribe every email carries still works for whoever it reached. What it says
 model -- a refusal, a parked-mail note, "a person will reply" -- is windowed in
 Redis by `services/contact_windows.py`, failing closed. Before a run for
 somebody outside the pod starts, `services/outside_cap.py` asks whether the
-organization's contacts cap is reached, or a member answers the contact by hand
+organization's contacts cap is reached -- first, in a unit of work of its own
+(`organization_capped`), from the running total the run's requests would be
+admitted on -- or a member answers the contact by hand
 (`services/contact_hold.py`: the channel's agent is switched off, or a member
 stepped in by writing there -- the assignee of its current case -- and has
 written within the channel's hand-back window; past it, the member is let go

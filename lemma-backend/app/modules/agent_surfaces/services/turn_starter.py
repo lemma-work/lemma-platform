@@ -70,6 +70,7 @@ from app.modules.agent_surfaces.services.outside_cap import (
     first_word_today,
     hand_to_a_person,
     held_for_a_person,
+    organization_capped,
 )
 from app.modules.agent_surfaces.services.plain_reply import reply_text
 from app.modules.agent_surfaces.services.attachment_ingest_memo import (
@@ -314,7 +315,7 @@ class SurfaceTurnStarter:
             platform=context.platform,
             surface_id=context.surface_id,
             surface_name=context.surface_name,
-            surface_account_id=context.surface_account_id,
+            surface_connector=context.surface_connector,
             surface_config=context.surface_config,
             agent_display_name=context.agent_display_name,
             event=context.event,
@@ -372,9 +373,13 @@ class SurfaceTurnStarter:
         """
         if not context.audience.answers_outsiders or context.pod_id is None:
             return False
+        capped = await organization_capped(self.uow_factory, pod_id=context.pod_id)
         async with self.uow_factory() as uow:
             return await held_for_a_person(
-                uow, pod_id=context.pod_id, conversation_id=context.conversation_id
+                uow,
+                pod_id=context.pod_id,
+                conversation_id=context.conversation_id,
+                capped=capped,
             )
 
     async def _hand_to_a_person(
@@ -528,12 +533,13 @@ class SurfaceTurnStarter:
         Read in a short scope of its own and returned as a plain dict, so no
         connection is held during the platform I/O that follows.
 
-        Resolved *for the surface* when the context names one and the platform
-        needs it: ``for_platform`` cannot know a value that lives on the surface
-        row, and every agent reply on an email surface failed for want of it.
-        The extra read is Resend's alone -- its ``from_address`` is the only
-        credential value stored per surface -- so it stays off every other
-        platform's inbound path.
+        A surface that runs as a pod connector has its account resolved
+        through the connector here, at the moment of use. Resolved *for the
+        surface* when the platform needs it: ``for_platform`` cannot know a
+        value that lives on the surface row, and every agent reply on an email
+        surface failed for want of it. The extra read is Resend's alone -- its
+        ``from_address`` is the only credential value stored per surface -- so
+        it stays off every other platform's inbound path.
 
         The number the message arrived on is passed through for the same
         reason in reverse: the read receipt, the typing indicator, the media
@@ -551,9 +557,14 @@ class SurfaceTurnStarter:
                 surface = await SurfaceRepository(uow).get(surface_id)
                 if surface is not None:
                     return await resolver.for_surface(surface)
+            if context.surface_connector is not None:
+                return await resolver.for_connector(
+                    context.platform,
+                    pod_id=context.surface_connector.pod_id,
+                    slug=context.surface_connector.slug,
+                )
             return await resolver.for_platform(
                 context.platform,
-                context.surface_account_id,
                 surface=None,
                 arrived_on=arrival_number(context.event),
             )

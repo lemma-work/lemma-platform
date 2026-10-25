@@ -42,9 +42,6 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repository import (  # noqa: E501
     InboundMessageRepository,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-    SurfaceRepository,
-)
 from app.modules.agent_surfaces.platforms.common import platform_transport_errors
 from app.modules.agent_surfaces.platforms.delivery import track_sends
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
@@ -188,10 +185,6 @@ class PlatformDeliverySender:
                 return SendResult(delivered=False, error="inbound message is gone")
             source, payload, headers = row.source, dict(row.payload), dict(row.headers)
             surface_id = row.surface_id
-            account_id = None
-            if surface_id is not None:
-                surface = await SurfaceRepository(uow).get(surface_id)
-                account_id = surface.account_id if surface is not None else None
         platform = SurfacePlatform.from_source(source)
         adapters = SurfacePlatformAdapterRegistry()
         adapter = adapters.get(platform) if platform else None
@@ -215,7 +208,6 @@ class PlatformDeliverySender:
                     SurfaceReplyContext(
                         platform=platform,
                         surface_id=surface_id,
-                        surface_account_id=account_id,
                         event=parsed,
                         reply_kind="processing_failed",
                         reply_message=content.text,

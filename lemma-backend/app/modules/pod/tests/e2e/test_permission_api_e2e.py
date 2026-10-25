@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from starlette import status
 
+from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
@@ -357,7 +358,27 @@ async def test_workload_permission_apis_replace_resource_grants_e2e(
                 is_active=True,
             )
         )
+    installation = AuthConfig(
+        id=uuid4(),
+        organization_id=fixed_test_org["id"],
+        connector_id=connector_id,
+        name=f"telegram-{uuid4().hex[:8]}",
+        kind="http",
+        config_source="SYSTEM_DEFAULT",
+        status="ACTIVE",
+    )
+    db_session.add(installation)
     await db_session.commit()
+    # Grants name the pod's connector by its slug, not the catalog id.
+    declared = await authenticated_client.post(
+        f"/pods/{pod_id}/connectors",
+        json={
+            "slug": connector_id,
+            "auth_config_id": str(installation.id),
+            "mode": "PER_MEMBER",
+        },
+    )
+    assert declared.status_code == status.HTTP_201_CREATED, declared.text
 
     agent_response = await authenticated_client.post(
         f"/pods/{pod_id}/agents",
@@ -1389,6 +1410,43 @@ async def test_resource_access_unknown_name_returns_404_e2e(
     assert "missing_agent" in access.text
 
 
+async def test_a_pod_account_named_by_a_non_uuid_is_unknown_not_a_500_e2e(
+    authenticated_client,
+    fixed_test_org,
+):
+    """A pod account has no name; grants name it by its id. A string that is
+    not a UUID used to reach Postgres as a uuid comparison and come back as a
+    500 -- it is simply a name nothing has."""
+    pod_id = await _create_pod(
+        authenticated_client, fixed_test_org, "Pod Account Name Pod"
+    )
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": "account_agent", "instruction": "Use granted resources."},
+    )
+    assert agent.status_code == status.HTTP_201_CREATED, agent.text
+
+    grant = await authenticated_client.put(
+        f"/pods/{pod_id}/agents/account_agent/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "connector_account",
+                    "resource_name": "alices-gmail",
+                    "permission_ids": ["connector_account.use"],
+                }
+            ]
+        },
+    )
+    assert grant.status_code == status.HTTP_400_BAD_REQUEST, grant.text
+    assert "connector_account:alices-gmail" in grant.text
+
+    access = await authenticated_client.get(
+        f"/pods/{pod_id}/resources/connector_account/alices-gmail/access"
+    )
+    assert access.status_code == status.HTTP_404_NOT_FOUND, access.text
+
+
 async def test_pod_editor_can_rewire_the_resources_they_author_e2e(
     authenticated_client,
     async_client,
@@ -1420,13 +1478,26 @@ async def test_pod_editor_can_rewire_the_resources_they_author_e2e(
     table_response = await authenticated_client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
+            # POD, so the editor can read it: they may only hand an agent what
+            # they could use themselves (`assert_can_confer_grants`).
             "name": "rewire_table",
-            "visibility": "RESTRICTED",
+            "visibility": "POD",
             "columns": [{"name": "title", "type": "TEXT"}],
         },
     )
     assert table_response.status_code == status.HTTP_201_CREATED, table_response.text
     table_name = table_response.json()["name"]
+    private_response = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "rewire_private_table",
+            "visibility": "RESTRICTED",
+            "columns": [{"name": "title", "type": "TEXT"}],
+        },
+    )
+    assert private_response.status_code == status.HTTP_201_CREATED, (
+        private_response.text
+    )
 
     editor = await signup_user(async_client, "rewire-editor")
     editor_org = await invite_org_member(
@@ -1490,3 +1561,21 @@ async def test_pod_editor_can_rewire_the_resources_they_author_e2e(
         f"/pods/{pod_id}/agents/rewire_agent", headers=editor_headers
     )
     assert deleted.status_code == status.HTTP_403_FORBIDDEN, deleted.text
+
+    # Editing is not a way round the table's own visibility: a RESTRICTED table
+    # the editor was never let into cannot be lent to their agent.
+    lent = await async_client.put(
+        f"/pods/{pod_id}/agents/rewire_agent/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": private_response.json()["name"],
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ]
+        },
+        headers=editor_headers,
+    )
+    assert lent.status_code == status.HTTP_403_FORBIDDEN, lent.text
+    assert lent.json()["code"] == "CONFERRAL_EXCEEDS_HOLDER"

@@ -33,6 +33,7 @@ from uuid import UUID
 
 from app.modules.agent.domain.folded_turns import framed_folds, newest_folds
 from app.modules.agent.domain.history_notices import SYNTHETIC_NOTICE_PREFIX
+from app.modules.agent.domain.unattached_cut import newest_unattached
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
 from app.modules.agent.domain.value_objects import AgentRunStatus
@@ -280,18 +281,21 @@ async def assemble_runtime_history(
     after_sequence, before_sequence = unattached_message_window(
         bounded, run_id, dropped_runs=dropped_runs
     )
+    # One more than is carried of each, so a cut can be told to the model
+    # rather than made silently: an agent taking a conversation back from a
+    # member who answered by hand for a while would otherwise answer a thread
+    # whose start it never saw.
     unattached, folds_cut = newest_folds(
         await source.load_unattached_messages(
             conversation_id,
             after_sequence=after_sequence,
             before_sequence=before_sequence,
-            limit=MAX_UNATTACHED_MESSAGES,
-            # One past the bound, to know whether it left any out.
+            limit=MAX_UNATTACHED_MESSAGES + 1,
             folded_limit=MAX_FOLDED_MESSAGES + 1,
         ),
         keep=MAX_FOLDED_MESSAGES,
     )
-    messages.extend(unattached)
+    messages.extend(newest_unattached(unattached, keep=MAX_UNATTACHED_MESSAGES))
     if read_channel is not None:
         # A run cut to its requests keeps none of what it was shown around them.
         messages = await read_channel(

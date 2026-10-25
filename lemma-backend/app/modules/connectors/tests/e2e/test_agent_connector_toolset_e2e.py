@@ -2,9 +2,9 @@
 
 The four tools were registered and unit-tested, but nothing drove them against
 a real install -- so "an agent can use a tenant connector" was an assumption.
-This walks the path an agent actually takes: list the installs, search their
-operations, read one's schema, run it, and get a real answer back from a real
-server.
+This walks the path an agent actually takes: list the pod's connectors, search
+their operations, read one's schema, run it, and get a real answer back from a
+real server.
 
 It also pins the two things that are easy to get wrong in a toolset: a bad
 argument must come back as something the model can correct rather than an
@@ -103,11 +103,21 @@ def _run_context(deps):
     return RunContext(deps=deps, model=None, usage=RunUsage(), prompt=None)
 
 
+#: The pod connector every test here runs through.
+SLUG = "fx"
+
+
 @pytest_asyncio.fixture
 async def installed_connector(
-    db_session, fixed_test_org, fixed_test_user, agent_mcp_server, allow_private_targets
+    db_session,
+    fixed_test_org,
+    fixed_test_user,
+    agent_mcp_server,
+    allow_private_targets,
+    connector_test_pod,
+    authenticated_client,
 ):
-    """An MCP install with a connected account, as an org admin would leave it."""
+    """An MCP install with a connected account, declared in the pod as `fx`."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.connectors.api.dependencies import get_connector_service
 
@@ -150,6 +160,11 @@ async def installed_connector(
         auth_config_id=install.id,
         credentials={"api_key": "unused-by-this-server"},
     )
+    declared = await authenticated_client.post(
+        f"/pods/{connector_test_pod['id']}/connectors",
+        json={"slug": SLUG, "auth_config_id": str(install.id), "mode": "PER_MEMBER"},
+    )
+    assert declared.status_code == 201, declared.text
     return install, org_id, user_id
 
 
@@ -177,18 +192,17 @@ def agent_deps(installed_connector, connector_test_pod):
 
 
 class TestTheAgentCanUseATenantConnector:
-    async def test_list_shows_the_install_and_its_kind(
+    async def test_list_shows_the_pod_connector_and_whose_account_it_uses(
         self, installed_connector, agent_deps
     ):
         from app.modules.agent.tools.connectors.pydantic_adapter import list_connectors
 
         install, _org, _user = installed_connector
         result = await list_connectors(_run_context(agent_deps))
-        names = {item["auth_config"] for item in result["items"]}
-        assert install.name in names
-        entry = next(i for i in result["items"] if i["auth_config"] == install.name)
-        # The agent is told the kind, so it knows what it is talking to.
-        assert entry["kind"] == "mcp"
+        entry = next(i for i in result["items"] if i["connector"] == SLUG)
+        assert entry["connector_id"] == install.connector_id
+        # The agent is told whose account a call uses.
+        assert entry["mode"] == "PER_MEMBER"
 
     async def test_search_finds_the_servers_own_tool(
         self, installed_connector, agent_deps
@@ -204,7 +218,7 @@ class TestTheAgentCanUseATenantConnector:
         result = await search_connector_operations(
             _run_context(agent_deps),
             SearchConnectorOperationsRequest(
-                auth_config=install.name, query="currency", limit=10
+                connector=SLUG, query="currency", limit=10
             ),
         )
         found = str(result)
@@ -225,7 +239,7 @@ class TestTheAgentCanUseATenantConnector:
         result = await describe_connector_operation(
             _run_context(agent_deps),
             DescribeConnectorOperationRequest(
-                auth_config=install.name, operation="convert_currency"
+                connector=SLUG, operation="convert_currency"
             ),
         )
         schema = result.get("input_schema") or {}
@@ -245,9 +259,9 @@ class TestTheAgentCanUseATenantConnector:
         result = await run_connector_operation(
             _run_context(agent_deps),
             RunConnectorOperationRequest(
-                auth_config=install.name,
+                connector=SLUG,
                 operation="convert_currency",
-                arguments={"amount": 21, "to_currency": "EUR"},
+                payload={"amount": 21, "to_currency": "EUR"},
             ),
         )
         assert "error" not in result, result
@@ -271,9 +285,9 @@ class TestTheAgentCanUseATenantConnector:
         result = await run_connector_operation(
             _run_context(agent_deps),
             RunConnectorOperationRequest(
-                auth_config=install.name,
+                connector=SLUG,
                 operation="convert_currency",
-                arguments={"amount": "twenty-one", "to_currency": "EUR"},
+                payload={"amount": "twenty-one", "to_currency": "EUR"},
             ),
         )
         assert result["code"] == "invalid_arguments"
@@ -299,14 +313,14 @@ class TestTheAgentCanUseATenantConnector:
         result = await run_connector_operation(
             _run_context(agent_deps),
             RunConnectorOperationRequest(
-                auth_config=install.name,
+                connector=SLUG,
                 operation="refuse_transfer",
-                arguments={"amount": 5},
+                payload={"amount": 5},
             ),
         )
 
         assert result_is_failure(result), result
-        assert result["auth_config"] == install.name
+        assert result["connector"] == SLUG
         assert result["operation"] == "refuse_transfer"
         assert "insufficient funds" in result["upstream_message"]
         assert result["server_host"] == "127.0.0.1"
@@ -327,14 +341,14 @@ class TestTheAgentCanUseATenantConnector:
         result = await run_connector_operation(
             _run_context(agent_deps),
             RunConnectorOperationRequest(
-                auth_config=install.name,
+                connector=SLUG,
                 operation="no_such_tool",
-                arguments={},
+                payload={},
             ),
         )
         assert "error" in result
 
-    async def test_an_agent_outside_the_org_sees_nothing(
+    async def test_an_agent_in_another_pod_sees_nothing(
         self, installed_connector, agent_deps
     ):
         # The toolset resolves through the same authorization path as the HTTP
@@ -346,19 +360,19 @@ class TestTheAgentCanUseATenantConnector:
         from app.modules.agent.tools.connectors.pydantic_adapter import list_connectors
 
         install, _org, user_id = installed_connector
+        elsewhere = uuid4()
         stranger = BaseAgentContext(
             user_id=user_id,
-            org_id=uuid4(),
-            pod_id=agent_deps.pod_id,
+            org_id=agent_deps.org_id,
+            pod_id=elsewhere,
             conversation_id=uuid4(),
-            workload_id=agent_deps.pod_id,
+            workload_id=elsewhere,
             agent_name=DEFAULT_POD_AGENT_NAME,
             is_pod_default_agent=True,
         )
         result = await list_connectors(_run_context(stranger))
-        assert "error" in result
-        names = {item["auth_config"] for item in result.get("items", [])}
-        assert install.name not in names
+        names = {item["connector"] for item in result.get("items", [])}
+        assert SLUG not in names, result
 
 
 class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
@@ -417,29 +431,24 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
         result = await run_connector_operation(
             _run_context(deps),
             RunConnectorOperationRequest(
-                auth_config=install.name,
+                connector=SLUG,
                 operation="convert_currency",
-                arguments={"amount": 21, "to_currency": "EUR"},
+                payload={"amount": 21, "to_currency": "EUR"},
             ),
         )
-        assert "error" in result, result
-        assert result.get("code") == "CONNECTOR_ACCESS_DENIED", result
-        # No computed 42 came back. The connector's random name is left out:
-        # a hex suffix like ``02ed42b1`` holds the digits by chance.
-        assert "42" not in str(
-            {k: v for k, v in result.items() if k != "auth_config"}
-        ), result
+        assert result["success"] is False, result
+        assert result.get("code") == "MISSING_WORKLOAD_RESOURCE_GRANT", result
+        assert "42" not in str(result), result
 
-    async def test_reading_the_operation_list_is_not_itself_gated(
+    async def test_an_ungranted_agent_is_not_shown_the_connector_at_all(
         self, installed_connector, connector_test_pod, authenticated_client
     ):
-        """Stated because it surprised the author of this test.
+        """The operation list is the connector's, and so is the grant.
 
-        The grant is checked where a credential is resolved, so it gates
-        *running* an operation, not seeing that one exists. An ungranted agent
-        in the organization can still read the install's operation list -- the
-        same surface the install itself already advertises org-wide. Nothing
-        here reaches the server or the credential.
+        It used to be readable by any agent in the organization, because the
+        grant was only checked where a credential was resolved. Now an agent
+        sees what it may run and nothing else, so a search across connectors
+        comes back empty rather than full of operations it would be refused.
         """
         from app.modules.agent.tools.connectors.pydantic_adapter import (
             search_connector_operations,
@@ -457,15 +466,15 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
             agent_name=agent["name"],
         )
 
-        result = await search_connector_operations(
-            _run_context(deps),
-            SearchConnectorOperationsRequest(auth_config=install.name),
+        across = await search_connector_operations(
+            _run_context(deps), SearchConnectorOperationsRequest()
         )
-        assert "error" not in result, result
-        assert sorted(item["name"] for item in result["items"]) == [
-            "convert_currency",
-            "refuse_transfer",
-        ]
+        assert across["items"] == [], across
+        named = await search_connector_operations(
+            _run_context(deps),
+            SearchConnectorOperationsRequest(connector=SLUG),
+        )
+        assert named["success"] is False, named
 
     async def test_a_granted_named_agent_reaches_the_real_server(
         self, installed_connector, connector_test_pod, authenticated_client
@@ -484,7 +493,7 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
             authenticated_client,
             pod_id=pod_id,
             agent_name=agent["name"],
-            connector_id=install.connector_id,
+            connector_id=SLUG,
         )
 
         deps = self._named_agent_context(
@@ -496,9 +505,9 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
         result = await run_connector_operation(
             _run_context(deps),
             RunConnectorOperationRequest(
-                auth_config=install.name,
+                connector=SLUG,
                 operation="convert_currency",
-                arguments={"amount": 21, "to_currency": "EUR"},
+                payload={"amount": 21, "to_currency": "EUR"},
             ),
         )
         # The answer comes from the MCP server itself, so this is the whole

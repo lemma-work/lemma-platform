@@ -4,7 +4,6 @@ import {
     accountName,
     accountTrouble,
     accountUsable,
-    bestAccount,
     isCredentialConflict,
     readAccount,
     readConnector,
@@ -82,34 +81,6 @@ test("each unfinished state says the thing that can actually be done", () => {
     assert.equal(at("REAUTH_REQUIRED", "READY"), "Needs signing in again");
     assert.equal(at("CONNECTED", "INSTALL_REQUIRED"), "Needs installing before it can reach anything");
     assert.equal(at("CONNECTED", "PENDING_APPROVAL"), "Waiting on an organization owner");
-});
-
-test("the best account is a working one, and the default wins", () => {
-    const accounts = [
-        readAccount({ id: "old", connector_id: "slack", status: "CONNECTED", install_state: "READY", created_at: "2026-01-01" }),
-        readAccount({ id: "broken", connector_id: "slack", status: "REAUTH_REQUIRED", created_at: "2026-09-01" }),
-        readAccount({ id: "chosen", connector_id: "slack", status: "CONNECTED", install_state: "READY", is_default: true, created_at: "2026-02-01" }),
-    ].filter((account): account is ConnectorAccount => account !== null);
-
-    assert.equal(bestAccount(accounts, "slack")?.id, "chosen");
-    assert.equal(bestAccount(accounts, "notion"), null);
-});
-
-test("with no default, the newest working account wins", () => {
-    const accounts = [
-        readAccount({ id: "old", connector_id: "slack", status: "CONNECTED", install_state: "READY", created_at: "2026-01-01" }),
-        readAccount({ id: "new", connector_id: "slack", status: "CONNECTED", install_state: "READY", created_at: "2026-09-01" }),
-    ].filter((account): account is ConnectorAccount => account !== null);
-
-    assert.equal(bestAccount(accounts, "slack")?.id, "new");
-});
-
-test("an account that cannot reach anything is never chosen", () => {
-    const accounts = [
-        readAccount({ id: "half", connector_id: "github", status: "CONNECTED", install_state: "INSTALL_REQUIRED" }),
-    ].filter((account): account is ConnectorAccount => account !== null);
-
-    assert.equal(bestAccount(accounts, "github"), null);
 });
 
 test("a taken credential is a signal, not a failure to report", () => {

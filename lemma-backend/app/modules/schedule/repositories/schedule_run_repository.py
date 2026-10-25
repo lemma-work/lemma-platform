@@ -452,7 +452,7 @@ class ScheduleRunRepository:
         *,
         schedule_id: UUID,
         run_id: UUID,
-        redriven_by_user_id: UUID,
+        redriven_by_user_id: UUID | None,
         fallback_user_id: UUID,
         required_user_id: UUID | None = None,
     ) -> tuple[ScheduleRunEntity, bool] | None:
@@ -482,7 +482,10 @@ class ScheduleRunRepository:
 
         redrive = ScheduleRun(
             schedule_id=schedule_id,
-            user_id=source.user_id or fallback_user_id,
+            # Runs as the person who asked for it again, with their access --
+            # not as whoever the first attempt ran as. Somebody retrying a
+            # run cannot borrow its owner's authority to finish it.
+            user_id=redriven_by_user_id or source.user_id or fallback_user_id,
             source_event_id=f"redrive:{source.id}",
             status=ScheduleRunStatus.PROCESSING.value,
             attempts=0,

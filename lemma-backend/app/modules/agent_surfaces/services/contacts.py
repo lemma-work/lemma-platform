@@ -114,7 +114,7 @@ def is_pods_own_bot(surface: AgentSurfaceEntity) -> bool:
     if surface.surface_type.is_email:
         return True
     return (
-        surface.account_id is not None
+        surface.pod_connector_slug is not None
         or surface.credential_mode is not SurfaceCredentialMode.SYSTEM
     )
 

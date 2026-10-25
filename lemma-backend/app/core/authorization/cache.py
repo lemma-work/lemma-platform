@@ -55,7 +55,10 @@ def _get_role_cache() -> RedisJsonCache | None:
     if _role_cache is None or _role_cache._ttl_seconds != ttl:
         _role_cache = RedisJsonCache(
             redis_url=settings.redis_url,
-            key_prefix="authz:role-snapshot",
+            # Versioned: bump it when what a snapshot means changes, so a
+            # deploy doesn't serve snapshots derived under the old rules for a
+            # TTL. v2: built-in roles carry their code-defined permissions.
+            key_prefix="authz:role-snapshot:v2",
             ttl_seconds=ttl,
         )
     return _role_cache

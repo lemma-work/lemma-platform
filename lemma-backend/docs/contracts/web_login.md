@@ -21,7 +21,8 @@ The table below is generated from the committed OpenAPI specification by `script
 
 Every site the caller's sandbox browser is signed in to, grouped by
 registrable domain so `example.com` and `api.example.com` read as one login
-rather than two.
+rather than two. A person has one browser, in their one workspace, so a site
+signed in to for one agent is signed in for every agent of theirs.
 
 Read from the browser each time, not from a table — the browser keeps its own
 profile, so what it holds is the only true answer. **Never carries a secret**,

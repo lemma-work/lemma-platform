@@ -15,10 +15,14 @@ from app.modules.agent.tools.workspace_cli import github_credential_bridge as br
 from app.modules.agent.tools.workspace_cli import github_project
 from app.modules.agent.tools.workspace_cli import workspace_cli
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
-from app.modules.connectors.domain.errors import (
-    AccountResolutionError,
-    ConnectorAccessDeniedError,
+from app.core.domain.errors import DomainError
+from app.modules.connectors.contracts.pod_connectors import (
+    ConnectionRequiredError,
+    ConnectorNeedsAccountError,
+    PodConnectorNotFoundError,
+    ReauthRequiredError,
 )
+from app.modules.connectors.domain.errors import ConnectorAccessDeniedError
 
 # Nothing in this file is patched. `ensure_github_credentials` takes its Redis
 # client and its credential resolver as arguments, `_resolve_github_credential`
@@ -34,9 +38,9 @@ class _FakeRedis:
         self.values: dict[str, str] = {}
         self.calls: list[tuple] = []
 
-    async def exists(self, key: str) -> int:
-        self.calls.append(("exists", key))
-        return 1 if key in self.values else 0
+    async def get(self, key: str) -> str | None:
+        self.calls.append(("get", key))
+        return self.values.get(key)
 
     async def set(self, key: str, value: str, *, ex: int):
         self.calls.append(("set", key, value, ex))
@@ -99,9 +103,9 @@ def _must_not_resolve():
     return _resolve
 
 
-# The account is part of the key so two conversations in one session cannot
-# inherit each other's credential file; "default" is the no-account-named case.
-_MARKER_KEY = f"{bridge._MARKER_KEY_PREFIX}:session-1:default"
+# Per session: which account is written is the pod connector's decision for
+# the person acting, so nothing about the conversation enters the key.
+_MARKER_KEY = f"{bridge._MARKER_KEY_PREFIX}:session-1"
 
 
 @pytest.mark.parametrize(
@@ -170,26 +174,38 @@ async def test_ensure_github_credentials_writes_credential_file_and_marks_provis
     )
 
     written = dict(session.written)
-    assert written["/tmp/.git-credentials"] == (
+    assert written["/tmp/lemma-sess/session-1/git-credentials"] == (
         b"https://x-access-token:gho_faketoken123@github.com\n"
     )
     # `gh` does not read git's credential file. Writing its own config is what
     # makes `gh` authenticate as the same account, without the token entering
     # the environment where `env` would print it into a tool result.
-    assert b"oauth_token: gho_faketoken123" in written["/tmp/lemma-gh/hosts.yml"]
-    assert b"user: octocat" in written["/tmp/lemma-gh/hosts.yml"]
+    hosts = written["/tmp/lemma-sess/session-1/gh/hosts.yml"]
+    assert b"oauth_token: gho_faketoken123" in hosts
+    assert b"user: octocat" in hosts
+    gitconfig = written["/tmp/lemma-sess/session-1/gitconfig"].decode()
+    assert (
+        'helper = "store --file=/tmp/lemma-sess/session-1/git-credentials"' in gitconfig
+    )
+    assert 'name = "octocat"' in gitconfig
+    assert 'email = "octocat@example.com"' in gitconfig
+    assert "gho_faketoken123" not in gitconfig
 
     assert len(session.commands) == 1
     cmd = session.commands[0]
-    assert "credential.helper" in cmd
-    assert "/tmp/.git-credentials" in cmd
-    assert "user.name octocat" in cmd
-    assert "user.email octocat@example.com" in cmd
     # Both credential files are delivered via write_file, never interpolated
     # into a shell string that could end up in process listings or command
     # logs. The permissions are what the command is for.
     assert "gho_faketoken123" not in cmd
-    assert "chmod 600 /tmp/lemma-gh/hosts.yml" in cmd
+    assert "git config" not in cmd
+    assert "chmod 600 /tmp/lemma-sess/session-1/gh/hosts.yml" in cmd
+    # Ended sessions' directories go, each of which held a credential any
+    # process in the sandbox could read; only ones nobody refreshed for twice
+    # the longest a live session goes between writes.
+    assert (
+        "(find /tmp/lemma-sess -mindepth 1 -maxdepth 1 -type d "
+        f"-mmin +{2 * bridge._PROVISIONED_TTL_SECONDS // 60} -exec rm -rf {{}} +"
+    ) in cmd
     assert redis.values[_MARKER_KEY] == "provisioned"
     assert ("set", _MARKER_KEY, "provisioned", bridge._PROVISIONED_TTL_SECONDS) in (
         redis.calls
@@ -197,27 +213,38 @@ async def test_ensure_github_credentials_writes_credential_file_and_marks_provis
 
 
 @pytest.mark.asyncio
-async def test_ensure_github_credentials_keys_the_marker_by_account() -> None:
-    """A conversation bound to a project names the account it works as. Two
-    conversations sharing one session must not inherit each other's file."""
+async def test_a_refusal_reaches_the_agent_once_with_its_remedy() -> None:
+    """No credential is not silence any more: the pod connector says why --
+    connect your account, reconnect it, the pod declares no `github` -- and
+    the agent sees that, link included, the first time it reaches for git.
+    The refusal is cached like before, so the next command says nothing."""
     redis = _FakeRedis()
-    account_id = uuid4()
-    ctx = _context()
-    ctx.workspace_repo = ProjectRepo(
-        owner="acme", repo="widgets", account_id=account_id
+    session = _FakeCredentialSession()
+    refusal = bridge.GithubRefusal(
+        code="CONNECTION_REQUIRED",
+        message="Connect your github account to use 'github' in this pod.",
+        connect_url="https://app.example/pods/p/connections?connector=github",
     )
 
-    await bridge.ensure_github_credentials(
-        ctx,
-        _FakeCredentialSession(),
-        redis=redis,
-        resolve_credential=_credential(),
+    async def _refuse(ctx):
+        del ctx
+        return refusal
+
+    notice = await bridge.ensure_github_credentials(
+        _context(), session, redis=redis, resolve_credential=_refuse
     )
 
-    assert f"{bridge._MARKER_KEY_PREFIX}:session-1:{account_id}" in redis.values, (
-        redis.values
+    assert notice is not None
+    assert "Connect your github account" in notice
+    assert "https://app.example/pods/p/connections?connector=github" in notice
+    assert session.written == []
+    assert redis.values[_MARKER_KEY] == "unavailable"
+    assert (
+        await bridge.ensure_github_credentials(
+            _context(), session, redis=redis, resolve_credential=_must_not_resolve()
+        )
+        is None
     )
-    assert _MARKER_KEY not in redis.values
 
 
 @pytest.mark.asyncio
@@ -233,9 +260,9 @@ async def test_ensure_github_credentials_falls_back_to_noreply_email() -> None:
         resolve_credential=_credential(email=None),
     )
 
-    cmd = session.commands[0]
-    assert "user.name octocat" in cmd
-    assert "user.email octocat@users.noreply.github.com" in cmd
+    gitconfig = dict(session.written)["/tmp/lemma-sess/session-1/gitconfig"]
+    assert b'name = "octocat"' in gitconfig
+    assert b'email = "octocat@users.noreply.github.com"' in gitconfig
 
 
 @pytest.mark.asyncio
@@ -251,9 +278,10 @@ async def test_ensure_github_credentials_skips_identity_setup_without_login() ->
         resolve_credential=_credential(login=None, email=None),
     )
 
-    cmd = session.commands[0]
-    assert "user.name" not in cmd
-    assert "user.email" not in cmd
+    written = dict(session.written)
+    assert "/tmp/lemma-sess/session-1/git-credentials" in written
+    gitconfig = written["/tmp/lemma-sess/session-1/gitconfig"]
+    assert b"[user]" not in gitconfig
 
 
 @pytest.mark.asyncio
@@ -270,6 +298,54 @@ async def test_ensure_github_credentials_noop_without_session_id() -> None:
 
     assert redis.calls == []
     assert session.written == []
+
+
+@pytest.mark.asyncio
+async def test_two_sessions_in_one_sandbox_never_share_a_credential() -> None:
+    """Every agent session of a person runs in their one sandbox. A credential
+    file or a `git config --global` the sandbox shares was whichever session
+    wrote last, so one conversation pushed as the account another resolved."""
+    from app.modules.workspace.contracts.session_config import session_config_env
+
+    first = _FakeCredentialSession(session_id="conversation-a")
+    second = _FakeCredentialSession(session_id="conversation-b")
+    for session in (first, second):
+        await bridge.ensure_github_credentials(
+            _context(), session, redis=_FakeRedis(), resolve_credential=_credential()
+        )
+
+    first_paths = {path for path, _ in first.written}
+    second_paths = {path for path, _ in second.written}
+    assert not first_paths & second_paths
+    assert all(p.startswith("/tmp/lemma-sess/conversation-a/") for p in first_paths)
+    assert all(p.startswith("/tmp/lemma-sess/conversation-b/") for p in second_paths)
+    # Nothing global: no shared file, no `git config --global`.
+    for session in (first, second):
+        assert "git config" not in " ".join(session.commands)
+        assert "/tmp/.git-credentials" not in {p for p, _ in session.written}
+
+    # Each session's environment names its own files, and so only its own.
+    env_a = session_config_env("conversation-a")
+    env_b = session_config_env("conversation-b")
+    assert env_a["GIT_CONFIG_VALUE_0"] in first_paths
+    assert env_b["GIT_CONFIG_VALUE_0"] in second_paths
+    assert env_a["GH_CONFIG_DIR"] != env_b["GH_CONFIG_DIR"]
+    assert "GIT_CONFIG_GLOBAL" not in env_a
+
+
+def test_a_session_id_cannot_climb_out_of_its_directory() -> None:
+    from app.modules.workspace.contracts.session_config import (
+        SESSION_CONFIG_ROOT,
+        session_config_dir,
+    )
+
+    hostile = session_config_dir("../../home/user")
+    lookalike = session_config_dir("..__home_user")
+
+    assert hostile.startswith(f"{SESSION_CONFIG_ROOT}/")
+    assert "/" not in hostile.removeprefix(f"{SESSION_CONFIG_ROOT}/")
+    assert ".." not in hostile
+    assert hostile != lookalike
 
 
 class _RecordingWorkspaceSession:
@@ -384,26 +460,19 @@ async def test_exec_command_internal_runs_command_even_if_bridge_raises() -> Non
 
 # --------------------------------------------------------------------------
 # `_resolve_github_credential` itself. Every test above supplies a resolver, so
-# none of them reach its own account-resolution/error handling. It takes its
-# unit of work as an argument now, so these no longer open a real async session
-# and rely on nobody executing a query inside it.
+# none of them reach its own pod-connector resolution or error handling. Its
+# unit of work and connector collaborators are arguments, so these open no
+# database session.
 
-
-def _project_context(*, account_id: UUID | None = None) -> BaseAgentContext:
-    ctx = _context()
-    if account_id is not None:
-        ctx.workspace_repo = ProjectRepo(
-            owner="acme", repo="widgets", account_id=account_id
-        )
-    return ctx
-
-
-_DELEGATED = SimpleNamespace(organization_id=None)
+_ACTING = uuid4()
 
 
 async def _fake_tool_authorization_context(uow, ctx):
-    del uow, ctx
-    return _DELEGATED
+    del uow
+    # What `acting_person` reads: no Person actor, the delegating person.
+    return SimpleNamespace(
+        actor=None, delegating_user_id=ctx.user_id, organization_id=None
+    )
 
 
 def _uow_factory():
@@ -424,9 +493,6 @@ async def _passthrough_refresh(_uow, account, _user_id):
     credentials = getattr(account, "credentials", None)
     if credentials is None:
         return {}
-    dump = getattr(credentials, "model_dump", None)
-    if callable(dump):
-        return dump()
     return {
         key: value
         for key, value in vars(credentials).items()
@@ -434,116 +500,163 @@ async def _passthrough_refresh(_uow, account, _user_id):
     }
 
 
-async def _resolve(ctx, service, refresh=_passthrough_refresh):
+async def _resolve(ctx, connector, refresh=_passthrough_refresh):
     return await bridge._resolve_github_credential(
         ctx,
         uow_factory=_uow_factory(),
         delegated_context=_fake_tool_authorization_context,
-        account_resolution=lambda _uow: service,
+        resolve_connector=connector,
         refresh_credentials=refresh,
     )
+
+
+class _Resolved:
+    """The pod's `github` connector, resolving to one account."""
+
+    def __init__(
+        self,
+        *,
+        owner: UUID | None = None,
+        email: str | None = None,
+        allow_sandbox_use: bool = False,
+        pod_account_id: UUID | None = None,
+    ):
+        self.calls: list[dict[str, object]] = []
+        self.context_while_resolving: object = "not-set"
+        self._owner = owner
+        self._email = email
+        self._allow_sandbox_use = allow_sandbox_use
+        self.pod_account_id = pod_account_id or uuid4()
+
+    async def __call__(self, uow, auth_ctx, *, pod_id, slug):
+        del uow
+        self.calls.append({"auth_ctx": auth_ctx, "pod_id": pod_id, "slug": slug})
+        self.context_while_resolving = get_current_context()
+        return SimpleNamespace(
+            owner_user_id=self._owner or auth_ctx.delegating_user_id,
+            pod_account_id=self.pod_account_id,
+            allow_sandbox_use=self._allow_sandbox_use,
+            account=SimpleNamespace(
+                credentials=SimpleNamespace(access_token="gho_realtoken"),
+                display_name="octocat",
+                email=self._email,
+            ),
+        )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "error",
     [
-        AccountResolutionError("no connected account"),
+        ConnectionRequiredError(
+            slug="github",
+            connector_id="github",
+            connect_url="https://app.example/pods/p/connections?connector=github",
+        ),
+        ReauthRequiredError(
+            slug="github",
+            connector_id="github",
+            connect_url="https://app.example/pods/p/connections?connector=github",
+            acting_person_is_owner=True,
+        ),
+        PodConnectorNotFoundError("github"),
+        ConnectorNeedsAccountError(slug="github", connect_url="https://app.test/c"),
         ConnectorAccessDeniedError("not authorized"),
     ],
 )
-async def test_resolve_github_credential_returns_none_when_resolution_is_denied(
-    error: Exception,
-) -> None:
-    """Neither "no account connected" nor "not authorized" is an error the
-    caller should see -- both mean the same thing to a git command: there is
-    no credential to provision, so `ensure_github_credentials` caches
-    "unavailable" and lets the underlying command run without one."""
+async def test_a_typed_refusal_comes_back_as_data(error: DomainError) -> None:
+    """Whatever the pod connector refuses with is the agent's to read, with the
+    connect link when there is one -- never an exception that only a log sees."""
 
-    class _DenyingResolution:
-        async def resolve_account(self, **kwargs):
-            del kwargs
-            raise error
+    async def _refusing(uow, auth_ctx, *, pod_id, slug):
+        del uow, auth_ctx, pod_id, slug
+        raise error
 
-    assert await _resolve(_context(), _DenyingResolution()) is None
+    refusal = await _resolve(_context(), _refusing)
+
+    assert isinstance(refusal, bridge.GithubRefusal)
+    assert refusal.code == error.code
+    assert refusal.message == error.message
+    details = error.details if isinstance(error.details, dict) else {}
+    assert refusal.connect_url == details.get("connect_url")
+
+
+@pytest.mark.asyncio
+async def test_a_shared_account_is_never_written_into_a_sandbox() -> None:
+    """A SHARED `github` connector runs as somebody else's account. A token in a
+    sandbox is a token every later command can read, so only the acting
+    person's own account is put there, and nothing is refreshed for one that
+    is not."""
+
+    async def _must_not_refresh(*_args):
+        raise AssertionError("must not touch a borrowed account's token")
+
+    refusal = await _resolve(_context(), _Resolved(owner=uuid4()), _must_not_refresh)
+
+    assert isinstance(refusal, bridge.GithubRefusal)
+    assert refusal.code == "SHARED_ACCOUNT_NOT_FOR_SANDBOX"
+    assert refusal.connect_url is None
+
+
+@pytest.mark.asyncio
+async def test_a_shared_account_its_owner_allowed_in_sandboxes_is_written() -> None:
+    """The owner's opt-in ("allow use inside sandboxes") is the one way a
+    borrowed account's token reaches a workspace (design §3.8), and the
+    credential remembers whose it is, for the session's marker."""
+    lent = _Resolved(owner=uuid4(), allow_sandbox_use=True)
+    ctx = _context()
+
+    credential = await _resolve(ctx, lent)
+
+    assert credential == bridge._GithubCredential(
+        access_token="gho_realtoken",
+        login="octocat",
+        email=None,
+        borrowed_pod_account_id=lent.pod_account_id,
+        borrower_user_id=ctx.user_id,
+    )
 
 
 @pytest.mark.asyncio
 async def test_resolve_github_credential_returns_none_without_an_access_token() -> None:
-    class _NoTokenResolution:
-        async def resolve_account(self, **kwargs):
-            del kwargs
-            return SimpleNamespace(
-                credentials=SimpleNamespace(),  # no access_token at all
-                display_name="octocat",
-                email="octocat@example.com",
-            )
-
-    assert await _resolve(_context(), _NoTokenResolution()) is None
-
-
-class _WorkingResolution:
-    def __init__(self, *, email: str | None = "octocat@example.com"):
-        self.captured: dict[str, object] = {}
-        self.context_while_resolving: object = "not-set"
-        self._email = email
-
-    async def resolve_account(self, **kwargs):
-        self.captured.update(kwargs)
-        self.context_while_resolving = get_current_context()
+    async def _no_token(uow, auth_ctx, *, pod_id, slug):
+        del uow, pod_id, slug
         return SimpleNamespace(
-            credentials=SimpleNamespace(access_token="gho_realtoken"),
-            display_name="octocat",
-            email=self._email,
+            owner_user_id=auth_ctx.delegating_user_id,
+            account=SimpleNamespace(
+                credentials=SimpleNamespace(), display_name="octocat", email=None
+            ),
         )
+
+    assert await _resolve(_context(), _no_token) is None
 
 
 @pytest.mark.asyncio
-async def test_resolve_github_credential_returns_a_credential_on_success() -> None:
-    resolution = _WorkingResolution()
+async def test_the_pods_github_connector_is_what_resolves() -> None:
+    resolved = _Resolved(email="octocat@example.com")
     ctx = _context()
 
-    credential = await _resolve(ctx, resolution)
+    credential = await _resolve(ctx, resolved)
 
     assert credential == bridge._GithubCredential(
         access_token="gho_realtoken", login="octocat", email="octocat@example.com"
     )
-    assert resolution.captured["user_id"] == ctx.user_id
-    assert resolution.captured["connector_id"] == "github"
-    # No project repo, so no account is named -- resolution falls back to
-    # picking for the user (ambiguous only if they connected GitHub twice).
-    assert resolution.captured["account_id"] is None
+    assert resolved.calls[0]["pod_id"] == ctx.pod_id
+    assert resolved.calls[0]["slug"] == "github"
 
 
 @pytest.mark.asyncio
 async def test_resolve_github_credential_resolves_under_the_delegated_context() -> None:
-    """The connector layer authorizes off the *current* context, so the
-    delegated one has to be installed for the call and taken back down after
-    it. Neither half was observable while this function built its own unit of
-    work: the token dance ran, and nothing here could see whether it worked.
-    """
-    resolution = _WorkingResolution()
+    """The connector layer authorizes off the context it is handed and the
+    *current* one, so the delegated one has to be installed for the call and
+    taken back down after it."""
+    resolved = _Resolved()
 
-    await _resolve(_context(), resolution)
+    await _resolve(_context(), resolved)
 
-    assert resolution.context_while_resolving is _DELEGATED
-    assert resolution.captured["auth_actor"] is _DELEGATED
+    delegated = resolved.calls[0]["auth_ctx"]
+    assert resolved.context_while_resolving is delegated
     assert get_current_context() is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_github_credential_names_the_projects_connected_account() -> None:
-    """A project names the account it works as; resolution must be told,
-    rather than falling back to whichever account happens to resolve for the
-    user (ambiguous when they connected GitHub more than once)."""
-    resolution = _WorkingResolution(email=None)
-    account_id = uuid4()
-
-    credential = await _resolve(_project_context(account_id=account_id), resolution)
-
-    assert credential is not None
-    assert credential.email is None
-    assert resolution.captured["account_id"] == account_id
 
 
 # The token the sandbox is handed is a *copy*, so how long it is good for is
@@ -559,7 +672,7 @@ async def test_the_written_token_is_the_refreshed_one() -> None:
     async def _refresh(_uow, _account, _user_id):
         return {"access_token": "gho_refreshed"}
 
-    credential = await _resolve(_context(), _WorkingResolution(), _refresh)
+    credential = await _resolve(_context(), _Resolved(), _refresh)
 
     assert credential is not None
     assert credential.access_token == "gho_refreshed"
@@ -576,7 +689,7 @@ async def test_the_numeric_id_comes_from_the_stored_profile() -> None:
             "user_data": {"profile": {"id": 583231, "login": "octocat"}},
         }
 
-    credential = await _resolve(_context(), _WorkingResolution(email=None), _refresh)
+    credential = await _resolve(_context(), _Resolved(), _refresh)
 
     assert credential is not None
     assert credential.user_id == "583231"
@@ -630,3 +743,38 @@ class TestProvisioningWindow:
         """The bug this whole change is about: without an expiry-derived
         window, a dead token was rewritten on a wall clock and believed."""
         assert bridge._provisioned_ttl(self._credential(-1)) == 30
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "credential_notice, checkout_notice, expected",
+    [
+        ("no github", None, "no github"),
+        (None, "clone failed", "clone failed"),
+        ("no github", "clone failed", "no github\nclone failed"),
+        (None, None, None),
+    ],
+)
+async def test_the_project_step_shows_the_credential_refusal_too(
+    credential_notice, checkout_notice, expected
+) -> None:
+    """Why the clone failed is usually why there was no credential, so the
+    agent is told both, in that order."""
+
+    async def _credentials(ctx, workspace_session):
+        del ctx, workspace_session
+        return credential_notice
+
+    async def _checkout(ctx, workspace_session):
+        del ctx, workspace_session
+        return checkout_notice
+
+    notice = await github_project.prepare_project_directory(
+        _context(),
+        _FakeCredentialSession(),
+        wanted=True,
+        ensure_credentials=_credentials,
+        ensure_checkout=_checkout,
+    )
+
+    assert notice == expected

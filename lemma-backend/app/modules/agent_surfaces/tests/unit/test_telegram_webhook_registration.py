@@ -173,7 +173,7 @@ def _surface_with_secret() -> AgentSurfaceEntity:
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
     )
     surface.configure_webhook_secret(secret="the-secret")
     return surface

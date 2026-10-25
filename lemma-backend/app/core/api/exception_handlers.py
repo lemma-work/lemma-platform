@@ -25,6 +25,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.core.authorization.session_approvals import record_delegated_refusal
 from app.core.infrastructure.db.transient_errors import is_transient_database_error
 from app.core.domain.errors import DomainError
 from app.core.observability.telemetry import record_exception_on_current_span
@@ -325,6 +326,13 @@ def register_exception_handlers(app: FastAPI) -> None:
             error_type=type(exc).__name__,
             exception=exc if exc.status_code >= 500 else None,
         )
+        claims = getattr(request.state, "delegation_claims", None)
+        if claims is not None and exc.status_code == 403:
+            # A workload's token refused something a person could approve: the
+            # sandbox CLI's refusals, recorded from the refusal itself so an
+            # approval of the command lends them -- never the model's account
+            # of them (H6).
+            await record_delegated_refusal(claims, code=exc.code, details=exc.details)
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(request, exc.message, exc.code, exc.details),

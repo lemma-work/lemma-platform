@@ -104,3 +104,43 @@ def test_parse_function_headers_stops_at_first_code_line():
 def test_file_path_key():
     assert _file_path_key(["a", "b", "c"]) == "a/b/c"
     assert _file_path_key([]) == ""
+
+
+def test_a_bundle_of_this_format_or_older_reads():
+    from lemma_pod_bundle import FORMAT_VERSION, check_format_version
+
+    assert check_format_version({"format_version": FORMAT_VERSION}) == FORMAT_VERSION
+    assert check_format_version({"format_version": 2}) == 2
+    # Written by hand, or before the field existed: the oldest format.
+    assert check_format_version({}) == 0
+
+
+def test_a_bundle_of_a_newer_format_is_refused_up_front():
+    """A reader of an older format would skip what the newer one added --
+    format 4's connectors -- and import everything naming them bound to
+    nothing, so it says so instead."""
+    from lemma_pod_bundle import FORMAT_VERSION, check_format_version
+
+    with pytest.raises(ValueError, match=f"reads up to format {FORMAT_VERSION}"):
+        check_format_version({"format_version": FORMAT_VERSION + 1})
+    with pytest.raises(ValueError, match="whole number"):
+        check_format_version({"format_version": "four"})
+
+
+def test_a_bundle_is_written_as_format_4_only_when_it_declares_a_connector(tmp_path):
+    """4 added ``connectors/`` and nothing else, so a bundle declaring none is
+    written as 3 and an older reader still reads every bundle it could. An
+    empty ``connectors/`` -- every exporter makes one -- declares nothing."""
+    from lemma_pod_bundle import (
+        FORMAT_VERSION,
+        FORMAT_VERSION_WITHOUT_CONNECTORS,
+        bundle_format_version,
+    )
+
+    assert FORMAT_VERSION_WITHOUT_CONNECTORS == 3
+    assert bundle_format_version(tmp_path) == 3
+    (tmp_path / "connectors").mkdir()
+    (tmp_path / "connectors" / ".DS_Store").write_text("")
+    assert bundle_format_version(tmp_path) == 3
+    (tmp_path / "connectors" / "crm").mkdir()
+    assert bundle_format_version(tmp_path) == FORMAT_VERSION == 4

@@ -15,9 +15,10 @@ Two kinds of follow-up, both in the same transaction:
   the parent's SUBAGENT wait), each deciding with a pure predicate.
 * **This module's own** follow-ups are written directly, and only when the
   conversation can owe them: queued messages, a sub-agent's result to a parent
-  that did not wait, a pod-to-pod answer. Each runs in its own item, in its own
-  transaction -- a child's finalize never takes its parent's row lock, which is
-  the lock-order hazard of doing the delivery inline.
+  that did not wait, a pod-to-pod answer, and the memory pass of a run a person
+  was waiting on. Each runs in its own item, in its own transaction -- a
+  child's finalize never takes its parent's row lock, which is the lock-order
+  hazard of doing the delivery inline.
 
 Only the transaction that actually moved the run (``updated``) writes any of
 this, so a second finalize of the same run writes nothing.
@@ -38,12 +39,15 @@ from app.modules.agent.domain.value_objects import (
     AgentRunFinishResult,
     AgentRunStatus,
 )
-from app.modules.agent.events.turn_payloads import ConversationWork
+from app.modules.agent.events.turn_payloads import ConversationWork, MemoryPassWork
 from app.modules.agent.events.work_kinds import (
     AGENT_FOLLOWUP,
+    AGENT_MEMORY,
     AGENT_SUBAGENT_RESULT,
     POD_ASK_DELIVER,
     followup_key,
+    memory_pass_key,
+    memory_pod_key,
     pod_ask_key,
     subagent_result_key,
 )
@@ -100,8 +104,14 @@ async def stage_run_followups(
     conversation_id: UUID,
     finish: AgentRunFinishResult,
     started_at: datetime | None = None,
+    keep_memory_for: UUID | None = None,
 ) -> AgentRunFinished | None:
     """Write every follow-up of a run that ``finish`` just ended, in ``uow``.
+
+    ``keep_memory_for`` is the person the run worked for, when it was told its
+    memory is kept after it ends: a completed one is owed that pass, which acts
+    for the same person. Not the conversation's owner -- in a shared
+    conversation the run answers whoever spoke, and their ``/me`` is theirs.
 
     Returns the fact, or ``None`` when there is nothing to write: the finish
     moved nothing (a second finalize), or the conversation is gone.
@@ -133,6 +143,19 @@ async def stage_run_followups(
         )
     if origin.settles_pod_asks:
         await work.add(POD_ASK_DELIVER, ns, payload, dedup_key=pod_ask_key(run_id))
+    # Completed only: a failed or stopped turn's words are said again in the
+    # turn that answers them, and a pass over a half-finished one would keep
+    # what the person was still in the middle of saying.
+    if keep_memory_for is not None and finish.status is AgentRunStatus.COMPLETED:
+        await work.add(
+            AGENT_MEMORY,
+            ns,
+            MemoryPassWork(
+                conversation_id=conversation.id, run_id=run_id, user_id=keep_memory_for
+            ),
+            dedup_key=memory_pass_key(run_id),
+            concurrency_key=memory_pod_key(conversation.pod_id),
+        )
     logger.debug(
         "agent.run.followups_staged.observed",
         agent_run_id=str(run_id),

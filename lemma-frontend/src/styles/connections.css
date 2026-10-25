@@ -1,0 +1,102 @@
+/* ── A teammate's connections ───────────────────────────────────────
+   The pod's own connectors, my standing on each, and my accounts in it.
+   Rows rather than cards: each is a sentence about whose account runs, and
+   a grid of logos would say nothing of that. */
+
+.podconn { display: flex; flex-direction: column; gap: 28px; }
+.podconn__section { display: flex; flex-direction: column; gap: 10px; }
+.podconn__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.podconn__head h2 { margin: 0; font-size: var(--t-lead); font-weight: 500; color: var(--ink); }
+
+.podconn__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.podconn__row {
+    display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
+    padding: 12px 0; border-top: 1px solid var(--line);
+    font-size: 13px; color: var(--ink-2);
+}
+.podconn__row:first-child { border-top: 0; }
+.podconn__row > .acct__dot { margin-top: 7px; }
+.podconn__row[data-focused] {
+    margin: 0 -10px; padding: 12px 10px; border-radius: var(--r-md);
+    background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent-line);
+}
+.podconn__what { display: flex; flex-direction: column; gap: 4px; flex: 1 1 260px; min-width: 0; }
+.podconn__name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.podconn__name b { font-family: var(--mono); font-weight: 500; font-size: 12.5px; color: var(--ink); overflow-wrap: anywhere; }
+.podconn__name .pill { font-size: 10.5px; padding: 1px 7px; }
+.podconn__app { font-size: 12px; color: var(--ink-3); }
+.podconn__purpose { font-size: 12.5px; color: var(--ink-2); }
+.podconn__mine { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-3); }
+.podconn__mine--needs { color: var(--wait); }
+/* An editor's coverage of a required per-member connector. */
+.podconn__coverage { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; font-size: 12.5px; color: var(--ink-2); }
+.podconn__coverage b { font-weight: 500; color: var(--ink); }
+.podconn__coverage .linkish { min-height: 32px; }
+.podconn__row .acct__acts { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+.podconn__row .acct__acts .btn,
+.podconn__row .acct__acts .linkish { min-height: 36px; }
+.podconn__row .acct__confirm { flex-wrap: wrap; margin-left: 0; }
+
+.podconn__people { border: 0; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.podconn__people legend { font-size: 12px; color: var(--ink-3); margin-bottom: 4px; }
+.podconn__as,
+.podconn__bring { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.podconn__as label,
+.podconn__bring label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink-3); min-width: 0; }
+.podconn__as input,
+.podconn__bring select {
+    font: inherit; font-size: 13px; color: var(--ink); background: var(--paper);
+    border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 8px 10px; min-height: 40px; max-width: 100%;
+}
+.podconn__as input { font-family: var(--mono); }
+.podconn__as small { flex-basis: 100%; font-size: 11.5px; color: var(--ink-3); }
+.podconn__sandbox { margin-top: 4px; }
+.podconn__form .smanage__check { align-items: flex-start; }
+
+/* The line over a pod, or an app in it, asking me to connect what it needs. */
+.connectbanner {
+    flex: none; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 0 var(--gutter) 8px; padding: 8px 10px 8px 12px;
+    border-radius: var(--r-md); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent-line);
+    font-size: 13px; color: var(--ink);
+}
+.connectbanner__say { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.connectbanner__say small { font-size: 11.5px; color: var(--ink-2); }
+.connectbanner__acts { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.connectbanner__acts .btn { min-height: 36px; }
+.connectbanner__close { flex: none; }
+
+/* Where one of my accounts is used, under it on the organization's page. */
+.acct__usage { flex-basis: 100%; margin: 0 0 2px 15px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--ink-3); }
+
+/* What removing an installation stops, before it goes. */
+.impact { flex-basis: 100%; margin: 4px 0 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--canvas); box-shadow: 0 0 0 1px var(--line); font-size: 12.5px; color: var(--ink-2); }
+.impact ul { margin: 6px 0 8px; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+
+/* An agent's connectors, granted by slug. */
+.agentconn { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.agentconn li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); }
+.agentconn code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+.agentconn__add { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.agentconn__add select {
+    font: inherit; font-size: 13px; color: var(--ink); background: var(--paper);
+    border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 6px 8px; min-height: 36px; max-width: 100%;
+}
+
+/* The account a channel runs as, and the way to move it. */
+.sconn { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--r-md); box-shadow: 0 0 0 1px var(--line); font-size: 12.5px; color: var(--ink-2); }
+.sconn__trouble { display: inline-flex; align-items: center; gap: 6px; color: var(--wait); }
+.sconn__move { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.sconn__move select {
+    font: inherit; font-size: 13px; color: var(--ink); background: var(--paper);
+    border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 6px 8px; min-height: 36px; max-width: 100%;
+}
+
+@media (max-width: 620px) {
+    .podconn__row .acct__acts { margin-left: 16px; width: 100%; }
+    .connectbanner { margin: 0 10px 8px; }
+}
+
+/* A button that cannot act yet looks it, as in every other view. */
+.podconn .btn:disabled, .podconn__form .btn:disabled, .connectbanner .btn:disabled,
+.agentconn__add .btn:disabled, .sconn__move .btn:disabled, .impact .btn:disabled { opacity: .45; cursor: default; }

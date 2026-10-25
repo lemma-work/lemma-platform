@@ -87,6 +87,68 @@ write is a switch that does nothing. That grant is recomputed from the toolsets
 on every save rather than stored once: grant writes have replace semantics, so a
 grant applied once would survive exactly until the next edit.
 
+## When memory is written
+
+It depends on whether somebody is waiting for the run.
+
+**A run a person is waiting on answers first.** That is a web chat turn or a
+message that arrived on a surface, run on Lemma's own harness. The agent writes
+memory itself only when the person asks it to remember something, forget it, or
+correct what memory says, and then does so in the turn. Anything else worth
+keeping it leaves to the memory pass. Saving it first meant listing, reading and
+writing memory files before answering: extra model calls the person sat through
+for a fact they had only mentioned. The two contracts differ in one section,
+`When to write` ([`memory_after_turn.md`](../../lemma-backend/app/modules/agent/prompts/memory_after_turn.md)
+replaces it in [`memory.md`](../../lemma-backend/app/modules/agent/prompts/memory.md)),
+so what is worth keeping and how it is written cannot drift between them.
+[`memory_kept_after_turn`](../../lemma-backend/app/modules/agent/domain/agent_memory_paths.py)
+decides which runs these are, once, when the run's context is built.
+
+**The memory pass** runs once such a run completes. `stage_run_followups`
+writes an `agent.memory` work item in the transaction that finished the run.
+The pass ([`memory_pass.py`](../../lemma-backend/app/modules/agent/services/memory_pass.py))
+reads that turn: what the person said, what the agent did and answered, and the
+reply before it. Some of what a turn answers is stored on other runs: a manual
+retry's original message stays on the run that failed, and the person's answer
+to `ask_user` is stored beside the question on the run that paused. The pass
+reads those too. It also gets the four indexes, and keeps what is durable by
+the same contract, without its `When to write` section
+([`memory_pass.md`](../../lemma-backend/app/modules/agent/prompts/memory_pass.md)
+frames it). In doing so it:
+
+- acts as the agent did, for the person the run worked for. That is not always
+  the conversation's owner: in a shared conversation it is whoever spoke. It
+  uses the agent's own pod file tools under the agent's own authorization, so a
+  write invalidates the brief exactly as the agent's would.
+- reaches only memory. It reads `/memory` and `/me`, and writes the two shared
+  indexes, the agent's own two folders, and pod-shared topic files outside
+  other agents' folders.
+- runs on the run's own model and provider, so the turn goes nowhere it had not
+  already gone, and asks it for no reasoning. Its usage is recorded under its
+  own source, `agent_memory`.
+- runs one at a time per pod, because every agent shares `/memory/AGENTS.md`,
+  and in the automation work class, so it never queues ahead of a person's turn.
+- is best effort. A failed attempt is retried once; a refusal that would only
+  repeat, such as a usage limit or a model no longer configured, is not.
+
+The consequence is timing. A fact mentioned in passing lands in memory a few
+seconds *after* the answer, not before it. A follow-up in the same conversation
+still has the fact in the conversation itself, but a turn that starts before
+the pass finishes, such as a new conversation opened straight away, may not
+see it yet. An explicit "remember …" is still written in the turn, so it is
+there before the answer.
+
+**Every other run saves in the turn**, as all runs used to:
+
+- schedules, workflows, triggers and sub-agents, where nobody waits and the run
+  knows its own work best;
+- Agent Host runs, where the pass would need a model Lemma does not run;
+- runs answering contacts or other pods, whose words are never written to
+  memory with a member's authority.
+
+Setting `AGENT_MEMORY_AFTER_TURN=false` turns the pass off. Every run then
+saves in the turn again, and no pass is queued.
+
 ## Staleness
 
 The runtime brief is cached, and its two halves are cached apart, because they
@@ -115,7 +177,9 @@ its TTL, which is the behaviour that existed before any invalidation at all.
 
 ## What this does not do
 
-Memory is not consolidated, deduplicated, or reconciled. Two agents can write
-contradicting facts to `/memory` and nothing will notice. There is no dedicated
+Memory is not consolidated, deduplicated, or reconciled. The memory pass reads
+one turn and adds to what is there; it never goes back over earlier turns or
+over what other agents wrote. Two agents can write contradicting facts to
+`/memory` and nothing will notice. There is no dedicated
 UI for reviewing or deleting what an agent knows beyond the ordinary file
 browser, and memory does not travel in a pod bundle export.

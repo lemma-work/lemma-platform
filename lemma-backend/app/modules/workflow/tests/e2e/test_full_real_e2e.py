@@ -24,7 +24,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.modules.test_support.e2e.schedule_binding import bind_schedule_to_account
+from app.modules.test_support.e2e.schedule_binding import bind_schedule_to_connector
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_authz import auth_headers, signup_user
 
@@ -631,7 +631,7 @@ async def test_webhook_event_trigger_runs_full_real_workflow(
         )
         # Bound as provisioning leaves it, which would otherwise call Composio:
         # a typed-in trigger id is not kept.
-        await bind_schedule_to_account(
+        await bind_schedule_to_connector(
             db_session,
             schedule_id=schedule["id"],
             org_id=org_id,

@@ -633,6 +633,8 @@ async def test_a_function_writes_many_rows_through_the_table_facade(
                     "datastore.table.read",
                     "datastore.record.read",
                     "datastore.record.write",
+                    # It deletes two rows too; writing no longer carries that.
+                    "datastore.record.delete",
                 ],
             },
         ],

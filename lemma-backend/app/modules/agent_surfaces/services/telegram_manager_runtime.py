@@ -31,7 +31,7 @@ class TelegramManagerRuntime(Protocol):
         bot_id: int,
         bot_username: str | None,
         bot_token: str,
-    ) -> tuple[UUID, UUID]:
+    ) -> tuple[str, UUID]:
         raise NotImplementedError
 
     async def _configure_managed_bot(

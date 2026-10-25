@@ -265,49 +265,148 @@ class TestCacheExpiry:
         assert store._redis.calls == []
 
 
-class TestMintingWorkload:
-    """Who a live link is re-checked as, recorded at mint."""
+class TestWhoMayMint:
+    """Making a public link is ``folder.share`` on the file (audit M22): asked
+    of everyone, after the read, and decided by the authorizer -- so a named
+    agent or function mints only where it was granted to."""
 
-    AGENT_ID = "00000000-0000-0000-0000-0000000000a1"
+    AGENT_ID = UUID("00000000-0000-0000-0000-0000000000a1")
     USER_ID = UUID("00000000-0000-0000-0000-0000000000b2")
+    POD_ID = UUID("00000000-0000-0000-0000-0000000000c3")
+    FILE_ID = UUID("00000000-0000-0000-0000-0000000000d4")
+
+    class _Refused(Exception):
+        pass
+
+    class _Authz:
+        def __init__(self, *, allow: bool) -> None:
+            self.allow = allow
+            self.asked: list[dict] = []
+
+        async def require_document_share(self, **kwargs):
+            self.asked.append(kwargs)
+            if not self.allow:
+                raise TestWhoMayMint._Refused
+
+    class _Reader:
+        def __init__(self, authz, entity) -> None:
+            self.authz = authz
+            self.entity = entity
+
+        async def get_file_by_path(self, *_args, **_kwargs):
+            return self.entity
 
     @staticmethod
-    def _ctx(actor_type, actor_id, *, user_id=None, user_equivalent=False):
+    def _ctx(actor, *, user_id=None):
+        from app.core.authorization.context import Context
+
+        return Context(
+            actor=actor, actor_id=str(user_id), user_id=user_id, authorizer=object()
+        )
+
+    def _entity(self, *, is_folder: bool = False):
         from types import SimpleNamespace
 
         return SimpleNamespace(
-            actor_type=actor_type,
-            actor_id=actor_id,
-            user_id=user_id,
-            is_user_equivalent=user_equivalent,
+            id=self.FILE_ID, pod_id=self.POD_ID, path="/notes.md", is_folder=is_folder
+        )
+
+    async def test_minting_is_refused_without_share_on_the_file(self, monkeypatch):
+        from app.core.authorization.context import Person
+        from app.modules.datastore.services.files import signed_links
+        from app.modules.datastore.services.files.signed_links import SignedLinks
+
+        def _no_store():
+            raise AssertionError("a refused mint must not reach the store")
+
+        monkeypatch.setattr(signed_links, "get_signed_url_store", _no_store)
+        authz = self._Authz(allow=False)
+        links = SignedLinks(self._Reader(authz, self._entity()), file_repository=None)
+
+        with pytest.raises(self._Refused):
+            await links.create(
+                self.POD_ID,
+                "/notes.md",
+                self._ctx(Person(user_id=self.USER_ID), user_id=self.USER_ID),
+            )
+
+        (asked,) = authz.asked
+        assert (asked["resource_id"], asked["resource_name"]) == (
+            self.FILE_ID,
+            "/notes.md",
+        )
+
+    async def test_a_granted_agent_mints_and_is_recorded(self, monkeypatch):
+        from app.core.authorization.context import Workload, WorkloadKind
+        from app.modules.datastore.services.files import signed_links
+        from app.modules.datastore.services.files.signed_links import SignedLinks
+
+        minted: dict = {}
+
+        class _Store:
+            async def create(self, **kwargs):
+                minted.update(kwargs)
+                return "code", "https://x/public/s/code", None, 10
+
+        monkeypatch.setattr(signed_links, "get_signed_url_store", lambda: _Store())
+        monkeypatch.setattr(SignedLinks, "_links", lambda self: None)
+        links = SignedLinks(
+            self._Reader(self._Authz(allow=True), self._entity()),
+            file_repository=None,
+        )
+        ctx = self._ctx(
+            Workload(
+                kind=WorkloadKind.AGENT,
+                workload_id=self.AGENT_ID,
+                for_user_id=self.USER_ID,
+            ),
+            user_id=self.USER_ID,
+        )
+
+        await links.create(self.POD_ID, "/notes.md", ctx)
+
+        assert minted["minted_by_workload"] == f"agent:{self.AGENT_ID}"
+        assert minted["created_by_user_id"] == self.USER_ID
+
+
+class TestMintingWorkload:
+    """Who a live link is re-checked as, recorded at mint."""
+
+    AGENT_ID = UUID("00000000-0000-0000-0000-0000000000a1")
+    USER_ID = UUID("00000000-0000-0000-0000-0000000000b2")
+
+    @staticmethod
+    def _ctx(actor, *, user_id=None):
+        from app.core.authorization.context import Context
+
+        return Context(
+            actor=actor, actor_id=str(user_id), user_id=user_id, authorizer=object()
         )
 
     def test_a_person_minting_for_themselves_is_the_person_alone(self):
-        from app.core.authorization.context import ActorType
+        from app.core.authorization.context import Person
         from app.modules.datastore.services.files.signed_links import minting_workload
 
-        ctx = self._ctx(ActorType.USER, str(self.USER_ID), user_id=self.USER_ID)
+        ctx = self._ctx(Person(user_id=self.USER_ID), user_id=self.USER_ID)
         assert minting_workload(ctx) is None
 
     def test_the_default_agent_acts_as_the_person(self):
-        from app.core.authorization.context import ActorType
+        from app.core.authorization.context import Assistant
         from app.modules.datastore.services.files.signed_links import minting_workload
 
-        ctx = self._ctx(
-            ActorType.DELEGATED_USER_WORKLOAD,
-            f"agent:{self.AGENT_ID}",
-            user_id=self.USER_ID,
-            user_equivalent=True,
-        )
+        ctx = self._ctx(Assistant(user_id=self.USER_ID), user_id=self.USER_ID)
         assert minting_workload(ctx) is None
 
     def test_an_agent_acting_for_a_person_is_recorded_with_them(self):
-        from app.core.authorization.context import ActorType
+        from app.core.authorization.context import Workload, WorkloadKind
         from app.modules.datastore.services.files.signed_links import minting_workload
 
         ctx = self._ctx(
-            ActorType.DELEGATED_USER_WORKLOAD,
-            f"agent:{self.AGENT_ID}",
+            Workload(
+                kind=WorkloadKind.AGENT,
+                workload_id=self.AGENT_ID,
+                for_user_id=self.USER_ID,
+            ),
             user_id=self.USER_ID,
         )
         assert minting_workload(ctx) == f"agent:{self.AGENT_ID}"
@@ -315,12 +414,12 @@ class TestMintingWorkload:
     def test_an_agent_acting_for_nobody_says_so(self):
         """The permissive case is the one that has to be explicit: a link that
         does not say `alone:` needs its person at fetch time."""
-        from app.core.authorization.context import ActorType
+        from app.core.authorization.context import Workload, WorkloadKind
         from app.modules.datastore.services.files.signed_links import (
             ACTING_ALONE,
             minting_workload,
         )
 
-        ctx = self._ctx(ActorType.AGENT, self.AGENT_ID)
-        assert minting_workload(ctx) == f"{ACTING_ALONE}agent:{self.AGENT_ID}"
+        ctx = self._ctx(Workload(kind=WorkloadKind.FUNCTION, workload_id=self.AGENT_ID))
+        assert minting_workload(ctx) == f"{ACTING_ALONE}function:{self.AGENT_ID}"
         assert len(minting_workload(ctx)) <= 80

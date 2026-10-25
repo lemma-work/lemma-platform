@@ -42,6 +42,7 @@ from app.modules.agent_surfaces.services.outside_cap import (
     first_word_today,
     hand_to_a_person,
     held_for_a_person,
+    organization_capped,
 )
 from app.modules.agent_surfaces.services.contact_keepers import answers
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
@@ -134,6 +135,7 @@ class WebChat:
         ):
             raise refused("Too many messages. Try again later.", 429, "rate_limited")
         owner = widget.looked_after_by
+        capped = await organization_capped(self.uow_factory, pod_id=widget.pod_id)
         async with self.uow_factory() as uow:
             if owner is None or await pod_member_id(uow, widget.pod_id, owner) is None:
                 raise refused("Nobody is answering this chat", 503, "unattended")
@@ -152,7 +154,10 @@ class WebChat:
                 display_name=await self._display_name(uow, session),
             )
             held = await held_for_a_person(
-                uow, pod_id=widget.pod_id, conversation_id=conversation_id
+                uow,
+                pod_id=widget.pod_id,
+                conversation_id=conversation_id,
+                capped=capped,
             )
             if not held:
                 await self._start_visitor_turn(

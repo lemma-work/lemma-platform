@@ -90,6 +90,10 @@ export interface StandingJob {
     scope: Scope;
     /** What is missing before it can fire, in words — empty when nothing is. */
     needsSetup: string;
+    /** The pod connector a WEBHOOK schedule listens through, by slug. Whose
+     *  account that means is the connector's decision, re-read as the
+     *  schedule's owner on every fire. Empty for every other schedule. */
+    podConnector: string;
     /** For a schedule on a connected server's event: whether it is still
      *  hearing from the server. Null for every other schedule. */
     listening: Listening | null;
@@ -129,16 +133,18 @@ export function scopeOf(kind: ScheduleKind, visibility: string): Scope {
     return "space";
 }
 
-/** A WEBHOOK schedule listens through a connected account and a connector
- *  trigger; without both it is a schedule that can never fire, and nothing
- *  else on the row says so. */
-export function setupOf(kind: ScheduleKind, accountId: string, connectorTriggerId: string, source = ""): string {
+/** A WEBHOOK schedule on a connector trigger or an MCP server's event listens
+ *  through a pod connector; without one it is a schedule that can never fire,
+ *  and nothing else on the row says so. A webhook routed on a source of the
+ *  deployment's own needs no connector at all. */
+export function setupOf(kind: ScheduleKind, podConnector: string, connectorTriggerId: string, source = ""): string {
     if (kind !== "WEBHOOK") return "";
-    if (!accountId) return "Needs an account connected before it can listen.";
+    const throughConnector = source === MCP_SOURCE || Boolean(connectorTriggerId) || !source;
+    if (!podConnector) return throughConnector ? "Needs a connector to listen through before it can listen." : "";
     /* A connected MCP server's event is subscribed when the row is made; it
        names no catalog trigger. */
     if (source === MCP_SOURCE) return "";
-    if (!connectorTriggerId) return "Needs its trigger installed on the connected account.";
+    if (!connectorTriggerId) return "Needs its trigger installed on the connector.";
     return "";
 }
 
@@ -312,7 +318,8 @@ export function readSchedule(raw: unknown): StandingJob {
         ownerId: text(row["user_id"]),
         visibility: text(row["visibility"]).toUpperCase(),
         raw: row,
-        needsSetup: setupOf(kind, text(row["account_id"]), text(row["connector_trigger_id"]), text(config["source"])),
+        needsSetup: setupOf(kind, text(row["pod_connector"]), text(row["connector_trigger_id"]), text(config["source"])),
+        podConnector: text(row["pod_connector"]),
         listening: listeningOf(row["listening"]),
     };
 }
@@ -539,19 +546,19 @@ export function agoOf(iso: string, now: number = Date.now()): string {
 /* ── making one ─────────────────────────────────────────────────────── */
 
 /** What starts a new schedule: a time, a row added to a table, or an event on
- *  an MCP server you connected (`server`, with `serverEvent` set). A catalog
+ *  an MCP server behind one of the pod's connectors (`server`, with
+ *  `serverEvent` set). A catalog
  *  connector trigger needs an id nothing here can offer honestly, so it is not
  *  in the form. */
 export type DraftWhen = "time" | "record.created" | "server";
 
-/** An event on an MCP server someone connected, as the pod's catalog offers
- *  it: listened to through that person's account, so it is theirs to pick. */
+/** An event on an MCP server, as the pod's catalog offers it: one entry per
+ *  pod connector the caller may use that reaches the server. */
 export interface ServerEvent {
-    /** The picker's value; unique across servers and accounts. */
+    /** The picker's value; unique across servers and connectors. */
     key: string;
-    accountId: string;
-    /** Which of your accounts it listens through, in words; may be empty. */
-    accountLabel: string;
+    /** The pod connector a schedule on it listens through, by slug. */
+    podConnector: string;
     server: string;
     event: string;
     description: string;
@@ -583,17 +590,16 @@ export function readServerEvents(raw: unknown): ServerEvent[] {
     const items = Array.isArray(record(raw)["items"]) ? (record(raw)["items"] as unknown[]) : [];
     return items.flatMap((item) => {
         const row = record(item);
-        const accountId = text(row["account_id"]);
+        const podConnector = text(row["pod_connector"]);
         const event = text(row["event"]);
-        if (!accountId || !event) return [];
+        if (!podConnector || !event) return [];
         const schema = record(row["input_schema"]);
         const properties = record(schema["properties"]);
         const required = new Set(Array.isArray(schema["required"]) ? (schema["required"] as unknown[]).map(text).filter(Boolean) : []);
         const names = [...new Set([...required, ...Object.keys(properties)])];
         return [{
-            key: MCP_SOURCE + ":" + accountId + ":" + event,
-            accountId,
-            accountLabel: text(row["account_label"]),
+            key: MCP_SOURCE + ":" + podConnector + ":" + event,
+            podConnector,
             server: text(row["server"]),
             event,
             description: text(row["description"]),
@@ -604,17 +610,17 @@ export function readServerEvents(raw: unknown): ServerEvent[] {
     });
 }
 
-/** The picker's groups: one per server, and per account when you have more
- *  than one on the same server — the events are the same, the account is
- *  the difference. */
+/** The picker's groups: one per server, and per connector when more than one
+ *  of the pod's connectors reaches the same server — the events are the same,
+ *  the connector is the difference. */
 export function serverGroups(events: ServerEvent[]): { label: string; events: ServerEvent[] }[] {
-    const accountsOn = new Map<string, Set<string>>();
-    for (const one of events) (accountsOn.get(one.server) ?? accountsOn.set(one.server, new Set()).get(one.server)!).add(one.accountId);
+    const connectorsOn = new Map<string, Set<string>>();
+    for (const one of events) (connectorsOn.get(one.server) ?? connectorsOn.set(one.server, new Set()).get(one.server)!).add(one.podConnector);
     const groups = new Map<string, { label: string; events: ServerEvent[] }>();
     for (const one of events) {
-        const several = (accountsOn.get(one.server)?.size ?? 0) > 1;
-        const key = one.server + (several ? "\u0000" + one.accountId : "");
-        const label = "From " + one.server + (several ? " (" + (one.accountLabel || "account " + one.accountId.slice(0, 8)) + ")" : "");
+        const several = (connectorsOn.get(one.server)?.size ?? 0) > 1;
+        const key = one.server + (several ? "\u0000" + one.podConnector : "");
+        const label = "From " + one.server + (several ? " (through " + one.podConnector + ")" : "");
         (groups.get(key) ?? groups.set(key, { label, events: [] }).get(key)!).events.push(one);
     }
     return [...groups.values()];
@@ -737,7 +743,7 @@ export function draftProblems(draft: ScheduleDraft): Record<string, string> {
  */
 export function createRequest(draft: ScheduleDraft): Record<string, unknown> {
     const body: Record<string, unknown> = { name: draft.name.trim(), ...startOf(draft) };
-    if (draft.when === "server" && draft.serverEvent) body.account_id = draft.serverEvent.accountId;
+    if (draft.when === "server" && draft.serverEvent) body.pod_connector = draft.serverEvent.podConnector;
     if (draft.target === "workflow") body.workflow_name = draft.workflowName.trim();
     else body.agent_name = draft.agentName.trim();
     if (draft.instruction.trim()) body.instruction = draft.instruction.trim();
@@ -789,31 +795,24 @@ export const CADENCES: { label: string; cron: string }[] = [
  *
  *  A schedule runs as whoever made it, so "get this for me" is a new schedule
  *  of your own with the same trigger and target. A table change needs no
- *  copy — it already runs as each row's owner — and a webhook needs *your*
- *  account, because it listens through the account it was made with. */
-export type CopyNeed = "none" | "account" | "not-needed" | "impossible";
+ *  copy — it already runs as each row's owner. A webhook's copy names the same
+ *  pod connector, and the connector decides whose account that is: yours for
+ *  a per-member one, which the server asks you to connect if you have not. A
+ *  webhook still missing its connector has nothing a copy could listen
+ *  through. */
+export type CopyNeed = "none" | "not-needed" | "impossible";
 
 export function copyNeedOf(job: StandingJob): CopyNeed {
     if (job.broken || job.target.kind === "none" || !job.target.name) return "impossible";
     if (job.kind === "DATASTORE") return "not-needed";
-    if (job.kind === "WEBHOOK") return "account";
+    if (job.kind === "WEBHOOK") return job.needsSetup ? "impossible" : "none";
     if (job.kind === "TIME") return "none";
     return "impossible";
 }
 
-/** Your accounts a copy of this server-event schedule could listen through:
- *  those on the server it listens to that offer its event. */
-export function accountsOffering(events: ServerEvent[], job: Pick<StandingJob, "listening" | "raw">): Set<string> {
-    const event = text(record(job.raw["config"])["event"]);
-    const server = job.listening?.server ?? "";
-    return new Set(events.filter((one) => one.event === event && (!server || one.server === server)).map((one) => one.accountId));
-}
-
 /** The create request for your own copy — personal, so it is yours alone. */
-export function copyRequest(job: StandingJob, accountId?: string): Record<string, unknown> | null {
-    const need = copyNeedOf(job);
-    if (need === "impossible" || need === "not-needed") return null;
-    if (need === "account" && !accountId) return null;
+export function copyRequest(job: StandingJob): Record<string, unknown> | null {
+    if (copyNeedOf(job) !== "none") return null;
     const row = job.raw;
     const body: Record<string, unknown> = {
         schedule_type: job.kind,
@@ -831,15 +830,14 @@ export function copyRequest(job: StandingJob, accountId?: string): Record<string
         const schema = row["filter_output_schema"];
         if (schema && typeof schema === "object") body.filter_output_schema = schema;
     }
+    if (job.kind === "WEBHOOK" && job.podConnector) body.pod_connector = job.podConnector;
     if (job.kind === "WEBHOOK" && text(record(row["config"])["source"]) === MCP_SOURCE) {
-        /* Subscribed afresh on your account; the original's subscription id
-           is not carried over. */
-        body.account_id = accountId;
+        /* Subscribed afresh as you; the original's subscription id is not
+           carried over. */
         body.config = Object.fromEntries(
             Object.entries(record(row["config"])).filter(([key]) => key !== "provider_trigger_id"),
         );
-    } else if (job.kind === "WEBHOOK") {
-        body.account_id = accountId;
+    } else if (job.kind === "WEBHOOK" && job.podConnector) {
         /* An agent's webhook names its trigger; a workflow's derives it and
            refuses to be told (`schedule_target_policy.py`). */
         if (job.target.kind === "agent") body.connector_trigger_id = text(row["connector_trigger_id"]);

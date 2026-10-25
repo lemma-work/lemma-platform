@@ -157,6 +157,14 @@ class AgentSettings(BaseSettings):
             "backstop for an invalidation that never arrived."
         ),
     )
+    agent_memory_after_turn: bool = Field(
+        default=True,
+        description=(
+            "Whether a run a person is waiting on leaves memory to a pass after "
+            "it ends instead of saving it before answering. Off, every run "
+            "saves memory in the turn again and no pass is queued."
+        ),
+    )
     function_run_poll_interval_seconds: float = Field(
         default=0.5,
         description="Interval an agent tool waits between function-run status polls.",

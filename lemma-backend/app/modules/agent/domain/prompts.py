@@ -40,6 +40,12 @@ _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
 _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
 _MEMORY_PROMPT_PATH = _PROMPT_DIR / "memory.md"
+_MEMORY_AFTER_TURN_PROMPT_PATH = _PROMPT_DIR / "memory_after_turn.md"
+_MEMORY_PASS_PROMPT_PATH = _PROMPT_DIR / "memory_pass.md"
+#: memory.md's sections, and the one that differs between a run that saves
+#: memory itself and one whose memory is kept after it ends.
+_MEMORY_SECTION_HEADING = "### "
+_MEMORY_TIMING_SECTION = "When to write"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 _MESSAGING_PROMPT_PATH = _PROMPT_DIR / "messaging.md"
 _SUBAGENTS_PROMPT_PATH = _PROMPT_DIR / "subagents.md"
@@ -196,7 +202,7 @@ def load_user_interaction_prompt() -> str:
     return _read_required_prompt(_USER_INTERACTION_PROMPT_PATH)
 
 
-def load_memory_prompt() -> str:
+def load_memory_prompt(*, after_turn: bool = False) -> str:
     """The memory contract: where durable facts live and how AGENTS.md is used.
 
     One file, read by both harnesses -- the remote one through
@@ -204,8 +210,50 @@ def load_memory_prompt() -> str:
     It used to be three hand-synced copies (this fragment inside
     ``workspace_cli.md``, plus paragraphs in the ``pod_write_file`` and
     ``pod_read_file`` docstrings), which is two more than can stay true.
+
+    With ``after_turn`` its ``When to write`` section is the one in
+    ``memory_after_turn.md``: the run a person is waiting on, whose memory a
+    pass keeps once it ends (``memory_kept_after_turn``). Only that section
+    differs, so what is worth keeping and how it is written cannot drift
+    between the two.
     """
-    return _read_required_prompt(_MEMORY_PROMPT_PATH)
+    contract = _read_required_prompt(_MEMORY_PROMPT_PATH)
+    if not after_turn:
+        return contract
+    return _replace_section(
+        contract,
+        _read_required_prompt(_MEMORY_AFTER_TURN_PROMPT_PATH),
+        title=_MEMORY_TIMING_SECTION,
+    )
+
+
+def load_memory_pass_prompt() -> str:
+    """What the memory pass is told: its own framing, then the contract.
+
+    The contract without its ``When to write`` section, which speaks to an
+    agent in the middle of a turn. The pass runs once the turn is over, and
+    keeps memory by the same rules the agent itself writes it by.
+    """
+    sections = _prompt_sections(
+        _read_required_prompt(_MEMORY_PROMPT_PATH), heading=_MEMORY_SECTION_HEADING
+    )
+    if sections.pop(_MEMORY_TIMING_SECTION, None) is None:
+        raise ValueError(f"memory.md has no '{_MEMORY_TIMING_SECTION}' section")
+    rules = "\n\n".join(body.strip() for body in sections.values())
+    return f"{_read_required_prompt(_MEMORY_PASS_PROMPT_PATH)}\n\n{rules}"
+
+
+def _replace_section(text: str, replacement: str, *, title: str) -> str:
+    """``text`` with its memory section named ``title`` swapped for ``replacement``.
+
+    Raises rather than returning ``text`` unchanged: a renamed heading would
+    otherwise tell a run the rule it was meant not to get.
+    """
+    sections = _prompt_sections(text, heading=_MEMORY_SECTION_HEADING)
+    if title not in sections:
+        raise ValueError(f"no '{title}' section to replace")
+    sections[title] = replacement
+    return "\n\n".join(body.strip() for body in sections.values())
 
 
 def load_agent_host_runtime_prompt(*, host_execution: bool = False) -> str:

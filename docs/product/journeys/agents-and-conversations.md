@@ -205,6 +205,10 @@ whether copying succeeded.
   shall not re-check what a tool has already reported, render or screenshot
   what it has just written in order to check it, or build machinery a plain
   answer does not need.
+- When a person mentions something worth remembering while asking for
+  something else, the system shall answer without first stopping to save it,
+  and remember it once the answer is given. When they ask outright for
+  something to be remembered, the system shall remember it before it answers.
 - A widget's page shall already carry the design tokens and the means to query
   the pod and draw the common shapes, so that a widget is the answer's own
   markup and not a copy of shared boilerplate.
@@ -231,7 +235,7 @@ whether copying succeeded.
 **Status:** covered
 
 - If an agent attempts something destructive — dropping a table, deleting
-  records in bulk, sending a message outside the pod — then the system shall
+  records, sending a message outside the pod — then the system shall
   pause the run and ask a person before doing it.
 - While a run is paused for approval, the system shall keep it paused
   indefinitely rather than timing out and proceeding.

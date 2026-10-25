@@ -23,6 +23,7 @@ from sqlalchemy import text
 
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.events.orphan_schema_tasks import reap_orphan_pod_schemas
+from app.modules.datastore.infrastructure.query_role import pod_query_role_name
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.datastore.tests.e2e.harness import pod_payload
 
@@ -42,6 +43,17 @@ async def _delete_pod(client: AsyncClient, pod_id: UUID) -> None:
 
 async def _schema_exists(manager: SchemaManager, pod_id: UUID) -> bool:
     return await manager.datastore_schema_exists(pod_id)
+
+
+async def _role_exists(manager: SchemaManager, pod_id: UUID) -> bool:
+    """Whether the pod's query role exists. Roles are cluster-wide: one left
+    behind by a dropped schema would outlive its pod for good."""
+    role = pod_query_role_name(manager.get_schema_name(pod_id))
+    async with manager.session_factory() as session:
+        found = await session.scalar(
+            text("SELECT 1 FROM pg_roles WHERE rolname = :role"), {"role": role}
+        )
+    return found is not None
 
 
 async def test_only_pods_gone_past_retention_lose_their_schema(
@@ -85,6 +97,10 @@ async def test_only_pods_gone_past_retention_lose_their_schema(
     )
     assert not await _schema_exists(manager, long_deleted)
     assert not await _schema_exists(manager, never_existed)
+    assert await _role_exists(manager, live), "a live pod lost its query role"
+    assert not await _role_exists(manager, long_deleted), (
+        "a dropped schema left its query role behind"
+    )
 
 
 async def test_a_schema_that_is_not_a_pods_is_left_alone(db_manager):
