@@ -28,6 +28,9 @@ export function useHuddle({ pod, teammate, conversationId }: {
      *  just because you are looking at something else. */
     const [expanded, setExpanded] = useState(false);
     const [callId, setCallId] = useState<string | null>(null);
+    /** The last call's conversation, kept after it ends: its transcript lands
+     *  there once the server has finished with it. */
+    const [lastCallId, setLastCallId] = useState<string | null>(null);
     const [setupError, setSetupError] = useState<string | null>(null);
     const setupAttempt = useRef(0);
     const queryClient = useQueryClient();
@@ -64,6 +67,7 @@ export function useHuddle({ pod, teammate, conversationId }: {
             });
             if (attempt !== setupAttempt.current) return;
             setCallId(opened.call_id);
+            setLastCallId(opened.call_id);
             const brief = await context();
             if (attempt !== setupAttempt.current) return;
             await startCall(opened.call_id, { teammate, pod: pod.name, context: brief });
@@ -104,6 +108,8 @@ export function useHuddle({ pod, teammate, conversationId }: {
         active: call.active,
         canvas: call.canvas,
         callConversationId: callId,
+        lastCallId,
+        settled: call.settled,
         expanded: expanded && call.active,
         expand: useCallback(() => setExpanded(true), []),
         collapse: useCallback(() => setExpanded(false), []),

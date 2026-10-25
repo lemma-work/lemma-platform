@@ -1895,7 +1895,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                                 onOpenTable={openTable}
                                                 onVoice={voiceReady ? startCall : undefined}
                                                 callError={huddle.error}
-                                                callRefresh={callConversationId === openConversationId ? `${huddle.active}:${huddle.thinking}:${huddle.expanded}` : ""}
+                                                callRefresh={callConversationId === openConversationId
+                                                    ? `${huddle.active}:${huddle.thinking}:${huddle.expanded}`
+                                                    : huddle.lastCallId === openConversationId ? `settled:${huddle.settled}` : ""}
                                             />
                                         ) : (
                                             <ConversationPane
@@ -1932,6 +1934,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onAbout={() => openAbout(null)}
+                                            onCall={voiceReady ? startCall : undefined}
                                             onAsk={(text, files, model) => startChat(text, model ? { agent_runtime: { profile_id: model.runtimeId, model_name: model.model || null } } : undefined, files)}
                                         />
                                     ) : tab.view === "about" ? (

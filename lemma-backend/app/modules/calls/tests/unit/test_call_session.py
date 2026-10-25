@@ -32,7 +32,7 @@ from app.modules.calls.services.agents import (
     Working,
 )
 from app.modules.calls.services.gate import Route
-from app.modules.calls.services.session import CallLimits, CallSession
+from app.modules.calls.services.session import CallLimits, CallSession, CallStats
 
 pytestmark = pytest.mark.unit
 
@@ -331,3 +331,18 @@ def test_a_canvas_item_whose_data_is_json_text_is_described_by_its_title() -> No
         result={"success": True},
     )
     assert _describe(shown)[0] == "Venues"
+
+
+async def test_a_call_counts_the_audio_and_turns_it_carried() -> None:
+    caller, voice, agents = Caller(), Voice(), Agents()
+    session = _session(caller, voice, agents, _gate({"hello": Route.VOICE}))
+    running = asyncio.create_task(session.run())
+    caller.inbox.put_nowait(b"\x00" * 640)
+    caller.inbox.put_nowait(json.dumps({"type": "mute", "muted": True}))
+    caller.inbox.put_nowait(b"\x00" * 640)  # muted: not counted
+    await voice.out.put(Heard("hello", final=True))
+    await voice.out.put(Said("Hi there.", final=True))
+    await _until(lambda: session.stats.voice_lines)
+    caller.inbox.put_nowait(json.dumps({"type": "end"}))
+    await running
+    assert session.stats == CallStats(audio_in_bytes=640, caller_turns=1, voice_lines=1)

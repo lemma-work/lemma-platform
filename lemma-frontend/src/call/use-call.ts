@@ -23,6 +23,10 @@ export function useCall({ podId }: { podId: string }) {
     const [working, setWorking] = useState(false);
     const [canvas, setCanvas] = useState<CanvasItem[]>([]);
     const [level, setLevel] = useState(0);
+    /** Calls the server has finished with, transcript saved. Counts up so a
+     *  conversation can reload on it; the transcript is written as the
+     *  server ends the call, after this tab has stopped listening. */
+    const [settled, setSettled] = useState(0);
 
     const attemptRef = useRef(0);
     const connectionRef = useRef<CallConnection | null>(null);
@@ -39,8 +43,9 @@ export function useCall({ podId }: { podId: string }) {
 
     const end = useCallback(() => {
         ++attemptRef.current;
-        connectionRef.current?.close();
+        const connection = connectionRef.current;
         teardown();
+        void connection?.close().then(() => setSettled((count) => count + 1));
         setMuted(false); mutedRef.current = false;
         setWorking(false);
         setStatus((current) => (current === "error" ? current : "ended"));
@@ -93,6 +98,7 @@ export function useCall({ podId }: { podId: string }) {
                     if (attempt !== attemptRef.current) return;
                     ++attemptRef.current;
                     teardown();
+                    setSettled((count) => count + 1);
                     if (reason) { setError(reason); setStatus("error"); } else setStatus("ended");
                 },
             });
@@ -131,7 +137,7 @@ export function useCall({ podId }: { podId: string }) {
     }, []);
 
     return {
-        status, error, muted, working, transcript, canvas, level,
+        status, error, muted, working, transcript, canvas, level, settled,
         start, end, toggleMute, looking, renderFailed,
         active: status === "live" || status === "connecting",
     };

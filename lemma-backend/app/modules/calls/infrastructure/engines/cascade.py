@@ -58,6 +58,9 @@ _LONG_CLAUSE_CHARS = 140
 #: The history the talker gets; older lines are dropped, the agents keep them.
 _HISTORY_LINES = 40
 _FLUSH_TIMEOUT_SECONDS = 30.0
+#: Said when the talker or the speaker fails a reply, so the caller is not left
+#: waiting on a silence that will not end.
+_SORRY = "Sorry, I couldn't answer that just now. Could you say it again?"
 _NOTE_PROMPT = (
     "Your team just sent this for the caller. Tell them now, briefly, in your "
     "own words:\n"
@@ -101,6 +104,9 @@ class CascadeEngine:
         self._speaking: _Reply | None = None
         self._turn = asyncio.Lock()
         self._dropping_audio = False
+        #: The caller's words so far this turn. Flux sends the whole turn on
+        #: every update; the session is sent only what is new.
+        self._heard_so_far = ""
         self._tasks: list[asyncio.Task[None]] = []
 
     async def open(self) -> None:
@@ -141,14 +147,14 @@ class CascadeEngine:
             async for turn in self._listener.turns():
                 match turn.event:
                     case "StartOfTurn":
+                        self._heard_so_far = ""
                         offer(self._events, UserSpeaking())
                         if self._speaking is not None or (
                             self._reply is not None and self._reply.committed.is_set()
                         ):
                             await self._interrupt()
                     case "Update":
-                        if turn.transcript:
-                            offer(self._events, Heard(turn.transcript, final=False))
+                        self._heard_more(turn.transcript)
                     case "EagerEndOfTurn":
                         self._start(
                             turn.transcript,
@@ -175,7 +181,18 @@ class CascadeEngine:
                 essential=True,
             )
 
+    def _heard_more(self, transcript: str) -> None:
+        # A revision ("three menu" -> "three venues") is not sent as a
+        # fragment: the final transcript replaces the line when the turn ends.
+        if not transcript.startswith(self._heard_so_far):
+            return
+        new = transcript[len(self._heard_so_far) :]
+        self._heard_so_far = transcript
+        if new:
+            offer(self._events, Heard(new, final=False))
+
     def _end_of_turn(self, transcript: str) -> None:
+        self._heard_so_far = ""
         if not transcript.strip():
             return
         offer(self._events, Heard(transcript, final=True))
@@ -227,6 +244,7 @@ class CascadeEngine:
                 # survives it: the caller can say it again.
                 logger.warning("calls.cascade.reply.failed", exc_info=True)
                 self._record(reply, interrupted=True)
+                await self._apologise()
                 return
             finally:
                 if self._speaking is reply:
@@ -265,6 +283,15 @@ class CascadeEngine:
         reply.spoken.append(sentence)
         offer(self._events, Said(sentence + " ", final=False))
         await self._speaker.speak(sentence)
+
+    async def _apologise(self) -> None:
+        self._dropping_audio = False
+        # The speaker may be what failed; then the caption is all there is.
+        with contextlib.suppress(ConnectionClosed, EngineUnavailable, OSError):
+            await self._speaker.speak(_SORRY)
+            await self._speaker.flush()
+        self._history.append(Line("voice", _SORRY))
+        offer(self._events, Said(_SORRY, final=True))
 
     def _record(self, reply: _Reply, *, interrupted: bool) -> None:
         if not reply.committed.is_set():
