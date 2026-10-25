@@ -16,3 +16,39 @@ class HarnessRegistry:
         if harness is None:
             raise HarnessNotFoundError(f"No harness registered for {kind.value}")
         return harness
+
+
+def build_harness_registry() -> HarnessRegistry:
+    """The harnesses a worker runs agent turns on.
+
+    Built per turn by the turn handler; the harness imports live behind this
+    call, not at the top of a module every process that starts a turn loads.
+    """
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.infrastructure.harness.lemma.harness import (
+        PydanticAIHarness,
+    )
+    from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
+        PodFileAgentHostArtifactWriter,
+    )
+    from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+        RemoteHarness,
+    )
+
+    uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+    return HarnessRegistry(
+        [
+            PydanticAIHarness(),
+            # One harness for every Agent Host tool; which one runs is decided
+            # by the profile's harness_id, not by the registry.
+            RemoteHarness(
+                uow_factory,
+                # Without a writer the harness drops every image an agent
+                # produces: a content block with no text renders to nothing,
+                # so Codex's `$imagegen` output reached this process and was
+                # discarded.
+                artifact_writer=PodFileAgentHostArtifactWriter(uow_factory),
+            ),
+        ]
+    )

@@ -18,10 +18,9 @@ from uuid import UUID
 import pytest
 
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.services.harness_wiring import (
-    build_harness_registry,
-    worker_uow_factory,
-)
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent.infrastructure.harnesses.registry import build_harness_registry
 from app.modules.agent.services.run_session import RunSession
 from app.modules.agent.tests.e2e.turn_work_support import TurnPod, scalar, turn_pod
 from app.modules.test_support.query_counting import counted_queries, format_statements
@@ -41,7 +40,7 @@ async def pod(authenticated_client, fixed_test_org) -> TurnPod:
 
 async def _start_run(run_id: UUID, *, user_id: UUID, pod_id: UUID, agent_name: str):
     """What ``AgentRunnerService.execute`` does before the harness is called."""
-    uow_factory = worker_uow_factory()
+    uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     runner = AgentRunnerService(
         uow_factory=uow_factory, harness_registry=build_harness_registry()
     )

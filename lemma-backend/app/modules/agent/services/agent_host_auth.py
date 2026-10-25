@@ -16,10 +16,6 @@ import hashlib
 import secrets
 
 
-class InvalidAgentHostCredential(ValueError):
-    """A host credential is missing, malformed, or unknown."""
-
-
 def generate_pairing_code() -> str:
     return secrets.token_urlsafe(32)
 

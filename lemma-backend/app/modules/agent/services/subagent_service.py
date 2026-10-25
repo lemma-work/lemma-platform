@@ -45,7 +45,7 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
-from app.modules.agent.services.call_marks import call_of_parent, worker_canvas_note
+from app.modules.agent.domain.calls import worker_canvas_note
 from app.modules.agent.application.conversations.start import StartConversation
 from app.modules.agent.application.turns.send_message import SendMessage
 from app.modules.agent.application.turns.stop import StopConversation
@@ -211,7 +211,9 @@ class SubAgentService:
                 )
                 if earlier is not None:
                     return earlier
-                in_call = await call_of_parent(uow, deps.conversation_id)
+                # A sub-agent spawned from a live call draws on that call's canvas.
+                parent_call = await Conversations(uow).get_call(deps.conversation_id)
+                in_call = parent_call.for_worker() if parent_call else None
                 conversation = await StartConversation.build(uow).start(
                     pod_id=deps.pod_id,
                     agent_name=target_name,

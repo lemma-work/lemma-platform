@@ -20,11 +20,10 @@ from app.modules.agent.application.pauses.decide import DecidePause
 from app.modules.agent.application.turns.stop import StopConversation
 from app.modules.agent.application.turns.withdraw import WithdrawQueuedMessage
 from app.modules.agent.services.agent_service import AgentService
-from app.modules.agent.services.service_factories import build_agent_service
 
 
 def get_agent_service(uow: UoWDep) -> AgentService:
-    return build_agent_service(uow)
+    return AgentService.build(uow)
 
 
 # The conversation use cases a request-scoped route runs, each on the request's

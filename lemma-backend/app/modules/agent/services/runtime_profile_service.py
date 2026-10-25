@@ -53,7 +53,7 @@ from app.modules.agent.domain.resolved_runtime import (
     RuntimeHolder,
     model_unavailable_error,
 )
-from app.modules.agent.services.runtime_capabilities import (
+from app.modules.agent.domain.runtime_capabilities import (
     unselected_capabilities,
     with_harness_vision,
 )

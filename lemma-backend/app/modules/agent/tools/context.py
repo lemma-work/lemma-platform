@@ -15,11 +15,7 @@ from pydantic import BaseModel, Field
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.outsiders import refuse_owner_workspace
 from app.modules.agent.domain.context import AgentContext
-from app.modules.agent.domain.subscription_models import SubscriptionModels
 from app.modules.agent.domain.vision import AgentVisionMode
-from app.modules.agent.services.subscription_models_provider import (
-    resolve_subscription_models,
-)
 from app.modules.agent.domain.workspace_location import (
     ProjectRepo,
     pod_cwd_from_workspace_cwd,
@@ -109,9 +105,6 @@ class BaseAgentContext(AgentContext):
         return WorkspaceFileManager(
             self.user_id, cwd=self.workspace_cwd or WORKSPACE_ROOT
         )
-
-    async def get_subscription_models(self) -> SubscriptionModels:
-        return await resolve_subscription_models(self.user_id)
 
     @property
     def host_execution_mode(self) -> Literal["native", "sandbox"] | None:

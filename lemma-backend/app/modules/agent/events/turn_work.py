@@ -155,13 +155,14 @@ ObserverFactory = Callable[[UnitOfWorkFactory], object | None]
 
 def _deployment_runner(fences: TurnFences) -> TurnRunner:
     from app.modules.agent.services.agent_runner_service import AgentRunnerService
-    from app.modules.agent.services.harness_wiring import (
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.infrastructure.harnesses.registry import (
         build_harness_registry,
-        worker_uow_factory,
     )
 
     return AgentRunnerService(
-        uow_factory=worker_uow_factory(),
+        uow_factory=SessionUnitOfWorkFactory(async_session_maker),
         harness_registry=build_harness_registry(),
         terminal_units=fences.terminal,
         step_units=fences.steps,
@@ -244,7 +245,8 @@ def pod_of(ns: str) -> UUID:
 def _turn_handler(build_runner: RunnerFactory, build_observer: ObserverFactory):
     async def run_turn(ctx: JobContext, payload: AgentTurnWork) -> None:
         from app.modules.agent.domain.errors import ConversationNotFoundError
-        from app.modules.agent.services.harness_wiring import worker_uow_factory
+        from app.core.infrastructure.db.session import async_session_maker
+        from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
         from app.modules.agent.services.run_event_pump import TurnYielded
 
         ctx.raise_if_stopping()
@@ -255,7 +257,7 @@ def _turn_handler(build_runner: RunnerFactory, build_observer: ObserverFactory):
                 attempt=ctx.item.attempts,
                 lease_losses=ctx.item.lease_losses,
             )
-        uow_factory = worker_uow_factory()
+        uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         runner = build_runner(
             TurnFences(
                 terminal=FencedTerminal(ctx, uow_factory),
@@ -349,11 +351,12 @@ async def generate_title(ctx: JobContext, payload: ConversationWork) -> None:
     from app.modules.agent.application.background.title import (
         ConversationTitleService,
     )
-    from app.modules.agent.services.harness_wiring import worker_uow_factory
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 
     ctx.raise_if_stopping()
     await ConversationTitleService(
-        uow_factory=worker_uow_factory()
+        uow_factory=SessionUnitOfWorkFactory(async_session_maker)
     ).generate_title_if_absent(payload.conversation_id)
 
 

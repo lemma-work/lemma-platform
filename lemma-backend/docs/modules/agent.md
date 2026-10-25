@@ -25,9 +25,13 @@ lose one. Each step of a turn (a tool call, its return, the answer) commits
 fenced by the turn's claim, so a worker that lost the turn's lease cannot add a
 second answer, and a resumed turn whose answer had committed ends on it without
 asking the model again. Lemma's database being unreachable mid-turn interrupts
-the turn, which resumes; it is never recorded as the model failing. Transient token/status frames use the core realtime-channel port with
-a Redis Pub/Sub adapter; each SSE connection leases one subscription connection
-and releases it on completion, failure, or cancellation.
+the turn, which resumes; it is never recorded as the model failing. Transient
+token/status frames go out through one publisher, `infrastructure/live.py`
+(the `LiveEvents` port, on the core realtime-channel port's Redis Pub/Sub
+adapter); the SSE stream, the web app's live socket and a visitor's page each
+subscribe to that one publish and encode its frames (`domain/live_events.py`)
+for their own wire. Each SSE connection leases one subscription connection and
+releases it on completion, failure, or cancellation.
 
 Migration `0056_agent_surface_bundle_work` arms every active wait. A turn that
 was running on the old transport, and a conversation paused on an approval that
@@ -96,6 +100,12 @@ object, and none inherits from another.
 | `pauses/reconcile.ReconcileDecision` | Write a decided pause's return exactly once, then resume |
 | `pauses/resume.ResumeRun` | Write a pause's return and start the run that replays it, at most once |
 | `pauses/supersede.SupersedeStalePauses` | Deny what the person moved past and cancel a wait typed past, in the caller's transaction |
+| `agents/manage_runtime_profiles.RuntimeProfileCreation` | Create a model-provider or Agent Host runtime profile (discovery first, then the row) |
+| `agents/edit_runtime_profile.AgentRuntimeProfileEditor` | Update, archive and restore a runtime profile |
+| `agents/choose_organization_default.OrganizationDefaultService` | Set or clear the model an organization's teammates run on |
+| `agents/check_provider.check_saved_provider_connection` | The Models page's "Test connection": list the models, send one message |
+| `background/title.ConversationTitleService` | Title a conversation after its first run (first-message title unless a title model is configured) |
+| `background/memory_pass.MemoryPass` | After a turn, keep what the person said that is worth remembering |
 
 Each commits where the step it absorbed always did; `StartConversation`,
 `UpdateConversation` and `SupersedeStalePauses` ride the caller's transaction.
@@ -105,6 +115,19 @@ the return (`services/conversation_resume_return`), stopping one run
 (`services/run_stop`), the access checks (`services/conversation_access`) -- are
 in `services/`; what a message carries and the typed-reply vocabulary are pure
 and in `domain/` (`turn_admission`, `interaction_reply`).
+
+## Layout
+
+| Layer | What is there |
+| --- | --- |
+| `domain/` | Pure: entities and value types, the run's resolved runtime (`resolved_runtime`) and the pure steps of runtime resolution (`runtime_choice`), history assembly (`runtime_history`), a provider PATCH (`runtime_provider_patch`), the live frames (`live_events`), a background call's terms (`background`), prompt assembly (the `prompt/` package), and the ports (`ports.py`: `Harness`, `ModelProvider`, `LiveEvents`) |
+| `application/` | The use cases above; each opens and commits its own unit of work |
+| `services/` | Shared steps that never commit on their own. The "one of each": `runtime_resolution.resolve_runtime(request, purpose=...)` is the one chain every model choice goes through (a turn, a title, the memory pass, the vision delegate, compaction); `background_model.BackgroundModel` resolves, builds, meters and runs every non-turn model call through the `ModelProvider` port; `run_session.RunSession` loads what a run works against once (conversation, agent, run, history, runtime, grants) and builds the tools' context for the runner, the resume path, the Agent Host MCP call (`run_session_relay`, with the runtime and grants cached per lease by grant generation) and the pod MCP server (`pod_tool_context`); the run's briefs are the `context_brief/` package |
+| `infrastructure/` | Repositories (`db/`), model construction and vendor quirks (`providers/`, the only place besides the harness that imports pydantic-ai or a vendor SDK), the in-process harness on pydantic-ai (`harness/lemma/`), the Agent Host harness and its payload (`harnesses/`), the live publisher (`live.py`) and the MCP wire format (`mcp.py`, `mcp_content.py`) |
+
+Nothing under `services/` or `application/` imports pydantic-ai or a model
+vendor SDK; the MCP serving services still import the `mcp` SDK until their own
+adapter is consolidated.
 
 ## API groups
 
@@ -131,8 +154,10 @@ stateDiagram-v2
     RUNNING --> STOPPED: cooperative stop
 ```
 
-The runner resolves a runtime profile and harness (`pydantic_ai`, Agent Host,
-or test harness), builds only the allowed toolsets, creates short UoWs for
+The runner loads the run's session (`RunSession.load`), resolves its runtime
+through the one chain and its harness (the in-process one in
+`infrastructure/harness/lemma`, Agent Host, or a test harness), builds only the
+allowed toolsets, creates short UoWs for
 message/status transitions, performs model/tool I/O outside them, publishes
 realtime frames, and records usage. Tool calls receive a delegated workload
 context; destructive operations require a standing grant or session approval.

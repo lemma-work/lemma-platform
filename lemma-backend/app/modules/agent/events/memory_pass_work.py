@@ -44,12 +44,13 @@ MEMORY_PASS_RETRY = RetryPolicy(
 
 
 async def keep_memory(ctx: JobContext, payload: MemoryPassWork) -> None:
-    from app.modules.agent.services.harness_wiring import worker_uow_factory
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
     from app.modules.agent.application.background.memory_pass import MemoryPass
 
     ctx.raise_if_stopping()
     try:
-        await MemoryPass(worker_uow_factory()).keep(
+        await MemoryPass(SessionUnitOfWorkFactory(async_session_maker)).keep(
             conversation_id=payload.conversation_id,
             run_id=payload.run_id,
             user_id=payload.user_id,
