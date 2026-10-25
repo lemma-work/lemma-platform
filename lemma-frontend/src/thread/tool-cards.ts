@@ -343,18 +343,25 @@ export function askCardView(ask: TeammateAsk): {
 /** One `run_connector_operation`. */
 export interface ConnectorRun {
     kind: "connector";
-    /** The install, by its auth-config name — `gmail`, `outlook`. */
+    /** The pod connector, by its slug — `gmail`, `support-inbox`. Whose
+     *  account the call ran as was the connector's decision, so the card has
+     *  no account to name. */
     connector: string;
     /** The operation, verbatim: it is an identifier a reader may need to match
      *  against the connector's own list. */
     operation: string;
-    account: string;
     params: { name: string; value: string }[];
     /** Where a file result was asked to land in the pod. */
     savedTo: string;
     pending: boolean;
     failed: boolean;
     error: string;
+    /** The refusal's code — CONNECTION_REQUIRED, REAUTH_REQUIRED, … — when
+     *  the connector could not run for this person. */
+    code: string;
+    /** Where to connect or reconnect the account it needed, when the person
+     *  reading can. */
+    connectUrl: string;
     /** What came back, as one line. The result is arbitrary provider JSON, so
      *  it is described rather than printed. */
     summary: string;
@@ -766,11 +773,11 @@ function sourcesCard(tool: string, args: unknown, result: unknown, answered: boo
 
 function connectorCard(args: unknown, result: unknown, answered: boolean): ConnectorRun | null {
     const record = asRecord(args);
-    const connector = asString(record.auth_config);
+    const connector = asString(record.connector);
     const operation = asString(record.operation);
     if (!connector || !operation) return null;
 
-    const params = Object.entries(asRecord(record.arguments))
+    const params = Object.entries(asRecord(record.payload))
         .map(([name, value]) => ({ name, value: describe(value) }))
         .filter((param) => param.value !== "")
         .slice(0, 5);
@@ -785,12 +792,13 @@ function connectorCard(args: unknown, result: unknown, answered: boolean): Conne
         kind: "connector",
         connector,
         operation,
-        account: asString(record.account_id),
         params,
         savedTo: asString(record.output_path),
         pending: !answered,
         failed: Boolean(error),
         error: message || error,
+        code: answered ? asString(resultField(result, "code")) : "",
+        connectUrl: answered ? asString(resultField(result, "connect_url")) : "",
         summary: error ? "" : describe(resultField(result, "result")),
     };
 }

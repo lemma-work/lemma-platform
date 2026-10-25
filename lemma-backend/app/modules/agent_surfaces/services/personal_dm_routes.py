@@ -8,6 +8,11 @@ from uuid import UUID
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.services.surface_connector import (
+    bound_account_id,
+    installation_identity,
+)
+from app.modules.connectors.contracts.pod_connectors import PodConnectorRefusal
 from app.modules.agent.contracts.provisioning import pod_default_agent_exists
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -15,7 +20,10 @@ from app.modules.agent_surfaces.domain.entities import (
     ResolvedSurfaceUser,
 )
 from app.modules.agent_surfaces.domain.personal_route import PersonalRouteUnavailable
-from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.domain.ingress_context import (
+    SurfaceChatContext,
+    SurfaceConnectorRef,
+)
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
     SqlAlchemySurfaceRoutingResolutionAdapter,
@@ -76,9 +84,13 @@ async def _require_usable_installation(
     surface = await SurfaceRepository(uow).get(surface_id)
     if surface is None:
         raise PersonalRouteUnavailable("The installation is unavailable")
-    if route.binding_key != platform_binding_key(
-        event, surface.account_id or surface.id
-    ):
+    try:
+        installation_id = await installation_identity(uow, surface)
+    except PodConnectorRefusal as refused:
+        raise PersonalRouteUnavailable(
+            "The installation credentials are unavailable"
+        ) from refused
+    if route.binding_key != platform_binding_key(event, installation_id):
         raise PersonalRouteUnavailable(
             "The sender does not own this personal conversation"
         )
@@ -184,7 +196,7 @@ async def prepare_personal_dm_context(
         platform=installation.surface_type,
         surface_id=installation.id,
         surface_name=installation.name,
-        surface_account_id=installation.account_id,
+        surface_connector=SurfaceConnectorRef.of(installation),
         surface_config=installation.config,
         pod_id=route.pod_id,
         agent_name=DEFAULT_POD_AGENT_NAME,
@@ -214,8 +226,9 @@ async def _require_installation_organization(
     target_org = await live_pod_organization_id(uow, pod_id)
     if installation_org is None or installation_org != target_org:
         raise PersonalRouteUnavailable("The personal pod is outside this installation")
-    if surface.account_id is not None:
-        connected = await account(uow, surface.account_id)
+    account_id = await bound_account_id(uow, surface)
+    if account_id is not None:
+        connected = await account(uow, account_id)
         if (
             connected is None
             or connected.organization_id != installation_org

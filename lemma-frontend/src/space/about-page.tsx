@@ -9,7 +9,8 @@ import { SkillsView } from "@/skills/skills-view";
 import { StandingWork } from "@/schedule/standing-work";
 import { ModelChoice } from "@/shell/runs-on";
 import { ReachPanel } from "@/shell/reach";
-import { ConnectorsSection } from "@/org/connectors";
+import { PodConnections } from "@/connect/pod-connections";
+import { useSearchParams } from "next/navigation";
 import { WhoCanJoin } from "@/shell/who-can-join";
 import { AtTheDoor } from "@/shell/at-the-door";
 import { AddPeople } from "@/shell/add-people";
@@ -56,9 +57,9 @@ const PARTS: readonly Part[] = [
         note: (name) => "Notes " + name + " writes as it works. Open one to read or fix it.", blurb: "Notes it wrote itself" },
     { id: "agents", label: "Agents", icon: AgentIcon,
         note: (name) => "Agents that take a piece of the job from " + name + " or from a workflow.", blurb: "Agents it hands work to" },
-    { id: "connectors", label: "Connectors", icon: ConnectorIcon,
-        note: (name) => "Accounts " + name + " can use — Gmail, Slack, GitHub and the rest. They belong to the organization, so every teammate in it shares them.",
-        blurb: "Accounts it can use" },
+    { id: "connections", label: "Connections", icon: ConnectorIcon,
+        note: (name) => "The apps " + name + " works through — Gmail, Slack, GitHub and the rest — and whose account each one uses: each person’s own, or one somebody shared here.",
+        blurb: "What it works through" },
     { id: "schedules", label: "Standing work", icon: ClockIcon,
         note: () => "What it does without being asked, on a time or an event.", blurb: "What it does unasked" },
     { id: "channels", label: "Channels", icon: ReachIcon, title: (name) => "Where to reach " + name,
@@ -201,6 +202,8 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
        reads. */
     const [connecting, setConnecting] = useState<{ asker?: string } | null>(null);
     const manageLinks = useMayConnect(pod.id);
+    /* The connector a link named — every typed refusal's `connect_url`. */
+    const focus = useSearchParams().get("connector");
 
     let action: ReactNode = null;
     let body: ReactNode;
@@ -215,10 +218,8 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
         case "channels":
             body = <ReachPanel pod={pod} inline />;
             break;
-        case "connectors":
-            body = orgId
-                ? <ConnectorsSection orgId={orgId} />
-                : <p className="aboutpage__quiet">No organization to read connectors from.</p>;
+        case "connections":
+            body = <PodConnections pod={pod} focus={focus} />;
             break;
         case "works-with":
             action = manageLinks ? (
@@ -250,7 +251,7 @@ function PartPage({ pod, part, orgId, orgName, onBack, onOpenAgent, onOpenTeamma
             body = <WhatItRemembers pod={pod} onFile={onFile} />;
             break;
         case "schedules":
-            body = <StandingWork podId={pod.id} teammate={pod.name} members={pod.members} orgId={orgId} onOpenRun={onOpenRun} onOpenConversation={onOpenConversation} />;
+            body = <StandingWork podId={pod.id} teammate={pod.name} members={pod.members} onOpenRun={onOpenRun} onOpenConversation={onOpenConversation} />;
             break;
         case "agents":
             action = (

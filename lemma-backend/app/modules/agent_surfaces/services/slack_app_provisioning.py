@@ -352,6 +352,8 @@ class SlackAppProvisioner:
                     "client_secret": created.client_secret,
                     "signing_secret": created.signing_secret,
                 },
+                # Slack handed these to Lemma; no person chose the secret.
+                made_by_lemma=True,
             )
             row_id = await self.pending.add(
                 organization_id=request.organization_id,

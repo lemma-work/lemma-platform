@@ -278,3 +278,26 @@ class ExternalSurfaceUserRepository:
             .values(resolved_user_id=None)
         )
         return int(result.rowcount or 0)
+
+    async def forget_resolution(
+        self,
+        *,
+        platform: str,
+        tenant_id: str | None,
+        external_user_id: str,
+        resolved_user_id: UUID,
+    ) -> int:
+        """Forget who this one sender is, if it is still ``resolved_user_id``.
+
+        Conditional on the id read, so a proof written since is not erased."""
+        stmt = update(AgentSurfaceExternalUser).where(
+            AgentSurfaceExternalUser.platform == platform,
+            AgentSurfaceExternalUser.external_user_id == external_user_id,
+            AgentSurfaceExternalUser.resolved_user_id == resolved_user_id,
+        )
+        if tenant_id is None:
+            stmt = stmt.where(AgentSurfaceExternalUser.tenant_id.is_(None))
+        else:
+            stmt = stmt.where(AgentSurfaceExternalUser.tenant_id == tenant_id)
+        result = await self.session.execute(stmt.values(resolved_user_id=None))
+        return int(getattr(result, "rowcount", 0) or 0)

@@ -3,7 +3,7 @@
 What fires and what is skipped is ``deliver_page``'s (covered against real
 Postgres in ``tests/e2e/test_trigger_delivery_e2e.py`` and the change-log e2e
 tests); this covers the conversion in between: the row a condition sees, what
-the write did, whose row it is, and whether it came from outside the pod.
+the write did, and whether it came from outside the pod.
 """
 
 from datetime import datetime, timezone
@@ -65,13 +65,24 @@ def test_a_delete_is_matched_against_the_row_it_removed():
     assert change.previous is None
 
 
-def test_the_row_owner_and_the_write_intent_reach_the_trigger():
+def test_the_write_intent_and_the_row_owner_reach_the_trigger():
+    """The row's owner is who a row-owner schedule runs as."""
     owner = UUID(int=5)
     change = trigger_change(
         _change(ChangeOp.INSERT, owner_user_id=owner, intent="bulk"), table_name="t"
     )
-    assert change.owner_user_id == owner
     assert change.intent is WriteIntent.BULK
+    assert change.owner_user_id == owner
+
+
+def test_an_outside_row_has_no_owner_to_run_as():
+    """An outside row is stamped with the member who opened the table, who did
+    not write it: it runs as the schedule's owner, never as them."""
+    change = trigger_change(
+        _change(ChangeOp.INSERT, owner_user_id=UUID(int=6), outside_actor="visitor:s1"),
+        table_name="t",
+    )
+    assert change.owner_user_id is None
 
 
 def test_an_outside_row_is_marked_untrusted_in_so_many_words():

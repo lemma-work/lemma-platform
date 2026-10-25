@@ -7,7 +7,7 @@ it: one Telegram bot, one WhatsApp number, one Slack app, fronting pods in
 several organizations, so a DM has to pick which pod hears it.
 
 A bot a pod brought itself is the opposite case. Telegram delivers by token and
-a token belongs to one surface across every org (``ensure_unique_telegram_account``);
+an account backs one surface in its org (``ensure_unique_org_credential_binding``);
 a connected mailbox has its own address. Messaging that bot is already
 unambiguous, so there is no choice to offer and asking for one only suggests
 the message might go somewhere else.
@@ -63,7 +63,7 @@ def inbound_address_key(surface: AgentSurfaceEntity) -> str:
     platform = surface.surface_type.value
     capabilities = get_platform_capabilities(platform)
     if (
-        surface.account_id is None
+        surface.pod_connector_slug is None
         and surface.credential_mode is SurfaceCredentialMode.SYSTEM
     ):
         if capabilities is None or capabilities.system_credential_is_identity:
@@ -74,8 +74,8 @@ def inbound_address_key(surface: AgentSurfaceEntity) -> str:
             return f"system:{platform}:{_tenant_scope(surface)}"
     if surface.surface_identity_email:
         return f"email:{surface.surface_identity_email.strip().lower()}"
-    if surface.account_id is not None:
-        return f"account:{platform}:{surface.account_id}"
+    if surface.pod_connector_slug is not None:
+        return f"connector:{platform}:{surface.pod_id}:{surface.pod_connector_slug}"
     if surface.surface_identity_username:
         return f"handle:{platform}:{surface.surface_identity_username.strip().lower()}"
     return f"surface:{surface.id}"

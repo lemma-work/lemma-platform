@@ -41,6 +41,7 @@ per object, and their buttons act through the viewer's own connected account:
 | slack | thread |
 | intercom | conversation |
 | linkedin | post |
+| show | diagram, chart, note, image |
 
 The header comment at the top of each file is its contract: the `data` shape it
 reads, the connector, and every operation its buttons call. Fetch the real
@@ -52,6 +53,13 @@ display_resource(type="WIDGET", path="/skills/lemma-widget/library/gmail/email-t
 ```
 
 A draft reply belongs in `data.draft`; the person edits it and sends.
+
+`show` is the exception to fetching a record: its widgets draw what you give
+them and act on nothing. `show/diagram` takes Mermaid source, `show/chart` a
+Vega-Lite `spec` with its data inline, `show/note` markdown and `show/image` an
+https `url`, each with an optional `title`. Reach for them before writing a
+widget of your own: you write the diagram, the spec or the note, never the
+HTML around it.
 
 `gmail/inbox` is the exception to fetching first: pass only a Gmail search,
 `data={"query": "is:unread in:inbox"}`, and it reads the mail itself as the
@@ -101,8 +109,11 @@ over.
      and friends; never paste the token preamble, it is already there;
    - `window.lemma`: `lemma.query(sql)` → rows (`rows.truncated` when the cap
      cut it), `lemma.records(table, options)`, `lemma.compose(text)` and
-     `lemma.canCompose()`, and `lemma.esc / num / money / pct / date`. It loads
-     and authenticates the SDK itself on first use — never write an SDK loader;
+     `lemma.canCompose()`, `lemma.esc / num / money / pct / date`, and
+     `lemma.fail(message, where?)`, which says in place that the widget could
+     not draw and tells whoever showed it (uncaught errors are reported the
+     same way). It loads and authenticates the SDK itself on first use — never
+     write an SDK loader;
    - and the shapes most answers take, drawn to the visual standard below
      (hover, a hidden data table, mono figures, hairlines, state colours):
 

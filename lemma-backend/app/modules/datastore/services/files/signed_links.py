@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from app.core.authorization.context import ActorType, Context
+from app.core.authorization.context import Context
 from app.modules.datastore.domain.errors import (
     DatastoreRevocationIncompleteError,
     DatastoreValidationError,
@@ -50,14 +50,11 @@ def minting_workload(ctx: Context) -> str | None:
     acts for nobody (``alone:agent:<id>``). The pod's default agent acts *as*
     the person, so it is recorded as the person alone.
     """
-    if ctx.is_user_equivalent:
+    workload = ctx.workload
+    if workload is None:
         return None
-    if ctx.actor_type is ActorType.DELEGATED_USER_WORKLOAD:
-        return ctx.actor_id
-    if ctx.actor_type in (ActorType.AGENT, ActorType.FUNCTION):
-        workload = f"{ctx.actor_type.value.lower()}:{ctx.actor_id}"
-        return workload if ctx.user_id else ACTING_ALONE + workload
-    return None
+    recorded = f"{workload.kind.value.lower()}:{workload.workload_id}"
+    return recorded if workload.for_user_id is not None else ACTING_ALONE + recorded
 
 
 class SignedLinks:
@@ -87,12 +84,23 @@ class SignedLinks:
         The returned ``{api_url}/public/s/{code}`` link needs no auth to open, expires
         after ``expires_seconds`` (clamped to the configured ceiling), and serves
         the bytes at most ``max_hits`` times over (also clamped). Authorization
-        to create one mirrors a normal file read — the read is what proves the
-        caller could have handed the bytes over anyway.
+        to create one is a normal file read -- the read is what proves the
+        caller could have handed the bytes over anyway -- and ``folder.share``
+        on the file (audit M22). A link gives the file to anyone holding it,
+        outside every grant, so it is its own permission: every person role
+        holds it, the assistant mirrors its person, and a named agent or
+        function holds it only where it was granted.
         """
         entity = await self._reader.get_file_by_path(pod_id, path, ctx.user_id, ctx=ctx)
         if entity.is_folder:
             raise DatastoreValidationError("Folders do not have a downloadable URL")
+        await self._reader.authz.require_document_share(
+            user_id=ctx.user_id,
+            pod_id=entity.pod_id,
+            resource_id=entity.id,
+            resource_name=entity.path,
+            ctx=ctx,
+        )
         (
             _code,
             signed_url,

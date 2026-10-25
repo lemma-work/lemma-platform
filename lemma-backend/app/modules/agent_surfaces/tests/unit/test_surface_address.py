@@ -38,7 +38,9 @@ def test_shared_system_bot_is_one_address_across_pods():
 
 def test_own_bot_has_its_own_address():
     """A Telegram token answers for exactly one surface, so it can never contend."""
-    own = _surface(account_id=uuid4(), credential_mode=SurfaceCredentialMode.CUSTOM)
+    own = _surface(
+        pod_connector_slug="own-bot", credential_mode=SurfaceCredentialMode.CUSTOM
+    )
     shared = _surface()
 
     assert inbound_address_key(own) != inbound_address_key(shared)

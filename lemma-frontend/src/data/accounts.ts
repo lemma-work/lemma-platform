@@ -164,17 +164,6 @@ export function accountTrouble(account: ConnectorAccount): string {
     return "Not usable yet";
 }
 
-/** The account a surface should be built on: a usable one, preferring the
- *  org's default, then the newest. */
-export function bestAccount(accounts: ConnectorAccount[], connectorId: string): ConnectorAccount | null {
-    const usable = accounts.filter((account) => account.connectorId === connectorId && account.usable);
-    if (usable.length === 0) return null;
-    return (
-        usable.find((account) => account.isDefault) ??
-        [...usable].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
-    );
-}
-
 /** The write-side refusal when a credential is already spoken for.
  *
  *  A connected account is claimable **once per organization**. The available-

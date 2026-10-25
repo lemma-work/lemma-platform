@@ -1,6 +1,5 @@
 """One committed journal entry and one settlement per provider dispatch."""
 
-from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -19,8 +18,8 @@ from app.modules.usage.domain.budget_windows import budget_windows
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.events import ModelUsageEvent
 from app.modules.usage.services.usage_metrics import record_usage_metrics
-from app.modules.usage.services.contacts_cap import applicable_contacts_cap
-from app.modules.usage.domain.ports import UsageLimitValues, normalize_limit_values
+from app.modules.usage.services.usage_admission import run_limits
+from app.modules.usage.domain.ports import UsageLimitValues
 from app.modules.usage.infrastructure import request_accounting
 from app.modules.usage.infrastructure.price_catalog import RateCard
 from app.modules.usage.services.usage_limit_provider import build_usage_limit_port
@@ -52,42 +51,13 @@ class PostgresRequestAccountingGateway:
         self._admitted_under: dict[UUID, UsageLimitValues] = {}
 
     async def _limits(self, uow: SqlAlchemyUnitOfWork) -> UsageLimitValues:
-        provider = build_usage_limit_port(uow)
-        limits = (
-            normalize_limit_values(
-                await provider.resolve_limits(
-                    organization_id=self.identity.organization_id,
-                    user_id=self.identity.user_id,
-                )
-            )
-            if provider is not None
-            else UsageLimitValues()
-        )
-        return await self._with_contacts_cap(uow, limits)
-
-    async def _with_contacts_cap(
-        self, uow: SqlAlchemyUnitOfWork, limits: UsageLimitValues
-    ) -> UsageLimitValues:
-        """``limits``, with the contacts cap that applies to the organization.
-
-        Its own where an owner set one, the deployment's default where nobody
-        did. Read only for a run that answers people outside the organization:
-        no other request is held to it, so no other request pays for the read.
-        """
-        organization_id = self.identity.organization_id
-        if (
-            organization_id is None
-            or self.identity.source_type not in OUTSIDE_AUDIENCE_SOURCES
-        ):
-            return limits
-        cap = await applicable_contacts_cap(
-            uow, organization_id, settings=self.settings
-        )
-        return replace(
-            limits,
-            contacts_monthly_limit_usd=(
-                None if cap.limit_usd is None else float(cap.limit_usd)
-            ),
+        return await run_limits(
+            uow,
+            build_usage_limit_port(uow),
+            organization_id=self.identity.organization_id,
+            user_id=self.identity.user_id,
+            outside_audience=self.identity.source_type in OUTSIDE_AUDIENCE_SOURCES,
+            settings=self.settings,
         )
 
     def _windows(self, limits: UsageLimitValues, now: datetime) -> list[BudgetWindow]:

@@ -26,7 +26,7 @@ import {
   resolveSafeRedirectUri,
   setTestingToken,
 } from "./auth.js";
-import { ApiError } from "./http.js";
+import { ApiError, ConnectionRequiredError, isConnectionRequiredError } from "./http.js";
 import { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
 import {
   LEMMA_APP_THEME_MESSAGE_TYPE,
@@ -54,6 +54,8 @@ export {
   resolveSafeRedirectUri,
   setTestingToken,
   ApiError,
+  ConnectionRequiredError,
+  isConnectionRequiredError,
   POD_DEFAULT_AGENT_SELECTOR,
   LEMMA_APP_THEME_MESSAGE_TYPE,
   LEMMA_THEME_EVENT,
@@ -85,6 +87,8 @@ if (typeof globalThis !== "undefined") {
     resolveSafeRedirectUri,
     setTestingToken,
     ApiError,
+    ConnectionRequiredError,
+    isConnectionRequiredError,
     POD_DEFAULT_AGENT_SELECTOR,
     LEMMA_APP_THEME_MESSAGE_TYPE,
     LEMMA_THEME_EVENT,

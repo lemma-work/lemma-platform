@@ -14,6 +14,7 @@ from lemma_sdk.openapi_client.models.update_schedule_request import (
 
 from ...cli_app.enums import DATASTORE_OPERATIONS as _DATASTORE_OPERATIONS
 from ..confirm import confirm_destructive
+from ..deprecation import warn_deprecated
 from ..io import emit, list_items, to_plain
 from ..payload import build_request, read_json
 from ..sdk import pod_client
@@ -148,9 +149,9 @@ def _create_target(
     *,
     agent: str | None,
     workflow: str | None,
-    account: str | None,
+    connector: str | None,
 ) -> tuple[str | None, str | None, str | None]:
-    """``(agent, workflow, account)``, from the flags or else the payload.
+    """``(agent, workflow, pod connector)``, from the flags or else the payload.
 
     A flag wins. Resolved before the check and before the request is built:
     the flags used to be written over the payload unconditionally, so a target
@@ -163,7 +164,26 @@ def _create_target(
             "Provide exactly one of --agent or --workflow (or agent_name / "
             "workflow_name in the payload)."
         )
-    return agent, workflow, account or _text_field(payload, "account_id")
+    return agent, workflow, connector or _text_field(payload, "pod_connector")
+
+
+def _deprecated_account(payload: dict[str, object], account: str | None) -> str | None:
+    """The account a schedule was told to listen as, the way it was before
+    pod connectors: ``--account`` or ``account_id`` in the payload.
+
+    Still sent, and the server turns it into the pod connector serving that
+    account to the caller; it says so, and so does this, once.
+    """
+    account = account or _text_field(payload, "account_id")
+    if account:
+        warn_deprecated(
+            "schedules create --account"
+            if "account_id" not in payload
+            else "account_id in a schedule's --data",
+            "pass --connector <slug> (or pod_connector in the payload); the "
+            "pod connector decides the account",
+        )
+    return account
 
 
 @app.command("create")
@@ -207,7 +227,15 @@ def create_schedule(
         ),
     ),
     webhook_source: str | None = typer.Option(None, "--webhook-source"),
-    account: str | None = typer.Option(None, "--account"),
+    connector: str | None = typer.Option(
+        None,
+        "--connector",
+        help=(
+            "Pod connector, by slug, a WEBHOOK schedule listens through -- for "
+            "--connector-trigger or an MCP server's event. See `lemma "
+            "connectors pod-list`."
+        ),
+    ),
     connector_trigger: str | None = typer.Option(
         None,
         "--connector-trigger",
@@ -224,12 +252,16 @@ def create_schedule(
         None, "--file", "-f", exists=True, dir_okay=False, readable=True
     ),
     pod: str | None = typer.Option(None, "--pod"),
+    # Deprecated: the account it listens as, from before pod connectors.
+    # Hidden, still served -- as the pod connector serving that account.
+    account: str | None = typer.Option(None, "--account", hidden=True),
 ) -> None:
     """Create a schedule."""
     extra = read_json(json_payload, file, required=False)
-    agent, workflow, account = _create_target(
-        extra, agent=agent, workflow=workflow, account=account
+    agent, workflow, connector = _create_target(
+        extra, agent=agent, workflow=workflow, connector=connector
     )
+    account = _deprecated_account(extra, account)
     schedule_type = "TIME"
     config: dict[str, object] = {}
     if cron:
@@ -266,12 +298,13 @@ def create_schedule(
                     "workflow_name": workflow,
                     "config": config,
                     "instruction": instruction or extra.get("instruction"),
-                    "account_id": account,
+                    "pod_connector": connector,
                     "connector_trigger_id": connector_trigger
                     or extra.get("connector_trigger_id"),
                     "filter_instruction": filter_instruction
                     or extra.get("filter_instruction"),
                     "filter_output_schema": extra.get("filter_output_schema"),
+                    **({"account_id": account} if account else {}),
                 },
                 context="schedule",
             )

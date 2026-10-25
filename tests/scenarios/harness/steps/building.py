@@ -1,4 +1,4 @@
-"""Functions, workflows, schedules, apps, bundles, connectors, and usage.
+"""Functions, workflows, schedules, apps, bundles, and usage.
 
 One module rather than seven, because each of these is currently a handful of
 verbs. Split it when any one of them grows past a screen — a step module per
@@ -11,10 +11,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from harness.connector_credentials import credential_matching, credential_schema_of
 from harness.run import a_name_for
 from harness.drivers.api import items_of
-from harness.tenant import STANDING_CONNECTORS, standing_auth_config_name
 from harness.waiting import eventually, UNTIL_BACKGROUND_WORK_LANDS
 
 JSON = dict[str, Any]
@@ -298,15 +296,7 @@ class BuildingSteps:
             what=f"{self.label} revoking access to {on_name!r}",
         )
 
-    # --- connectors and usage --------------------------------------------
-
-    async def available_connectors(self) -> list[JSON]:
-        return items_of(await self.api.get("/connectors"))
-
-    async def connector_status_of(self, organization: JSON) -> JSON:
-        return await self.api.get(
-            f"/organizations/{organization['id']}/connectors/status"
-        )
+    # --- usage ------------------------------------------------------------
 
     async def usage_summary_of(self, organization: JSON) -> JSON:
         return await self.api.get(f"/usage/organizations/{organization['id']}/summary")
@@ -609,240 +599,6 @@ class BuildingSteps:
             timeout=timeout,
         )
 
-    # --- connector installs and accounts -----------------------------------
-
-    async def installs_connector(
-        self,
-        connector_id: str,
-        *,
-        in_organization: JSON,
-        named: str | None = None,
-        kind: str | None = None,
-    ) -> JSON:
-        body: JSON = {
-            "connector_id": connector_id,
-            "name": named or a_name_for(connector_id),
-        }
-        if kind is not None:
-            # Which of the connector's kinds. Optional when it offers one, and
-            # decisive when it offers more: `gmail` is OAuth2 against a Google
-            # client this deployment does not have under its own kind, and
-            # Composio's managed OAuth app under "composio".
-            body["kind"] = kind
-        return await self.api.post(
-            f"/organizations/{in_organization['id']}/connectors/auth-configs",
-            what=f"{self.label} installing {connector_id!r}",
-            json=body,
-        )
-
-    async def uses_connector(self, connector_id: str, *, in_organization: JSON) -> JSON:
-        """The organization's standing auth config, found before it is made.
-
-        The difference from `installs_connector` is what happens on the second
-        run. An account belongs to the auth config it was consented against, so
-        a fresh auth config every run discards every OAuth account every run —
-        and re-consenting is the one step the suite cannot take for itself.
-        Scenarios that want a *connected* provider go through here; scenarios
-        about installing a connector still install their own, marked and
-        disposable like everything else they make.
-        """
-        wanted = standing_auth_config_name(connector_id)
-        for config in await self.auth_configs_in(in_organization):
-            if config.get("name") == wanted:
-                return config
-        declared = next(
-            (c for c in STANDING_CONNECTORS if c.connector == connector_id), None
-        )
-        return await self.installs_connector(
-            connector_id,
-            in_organization=in_organization,
-            named=wanted,
-            kind=declared.kind if declared else None,
-        )
-
-    async def account_for(
-        self, connector_id: str, *, in_organization: JSON
-    ) -> JSON | None:
-        """The connected account for a connector, if a person has made one."""
-        for account in await self.accounts_in(in_organization):
-            if account.get("connector_id") == connector_id and (
-                account.get("status") == "CONNECTED"
-            ):
-                return account
-        return None
-
-    async def connects_account(
-        self,
-        *,
-        in_organization: JSON,
-        auth_config: JSON,
-        credentials: JSON,
-        provider_account_id: str | None = None,
-    ) -> JSON:
-        body: JSON = {
-            "auth_config_id": str(auth_config["id"]),
-            "credentials": credentials,
-        }
-        if provider_account_id:
-            body["provider_account_id"] = provider_account_id
-        return await self.api.post(
-            f"/organizations/{in_organization['id']}/connectors/accounts",
-            what=f"{self.label} connecting an account",
-            json=body,
-        )
-
-    async def credential_for(self, auth_config: JSON, *, holding: str) -> JSON:
-        """A credential this install's connector accepts, carrying ``holding``.
-
-        Asked of the catalogue, because the shape is the connector kind's: an
-        HTTP connector spends ``access_token``, Telegram requires ``bot_token``
-        and refuses anything else. See `harness.connector_credentials`.
-        """
-        connector = await self.opens_connector(str(auth_config["connector_id"]))
-        schema = credential_schema_of(connector, auth_config.get("kind"))
-        return credential_matching(schema, holding)
-
-    async def accounts_in(self, organization: JSON) -> list[JSON]:
-        return items_of(
-            await self.api.get(f"/organizations/{organization['id']}/connectors/accounts")
-        )
-
-    async def deletes_account(self, account: JSON, *, in_organization: JSON) -> None:
-        await self.api.delete(
-            f"/organizations/{in_organization['id']}/connectors/accounts/{account['id']}"
-        )
-
-    async def installs_http_connector(
-        self,
-        *,
-        in_organization: JSON,
-        server_url: str,
-        spec_url: str,
-        named: str | None = None,
-    ) -> JSON:
-        """Install a connector for an API described by its own OpenAPI spec.
-
-        The `http` kind is how anyone connects an internal or bespoke API, and
-        it is the one connector kind a scenario can drive end to end without a
-        third party — the provider is a server the suite runs itself.
-        """
-        return await self.api.post(
-            f"/organizations/{in_organization['id']}/connectors/auth-configs",
-            what=f"{self.label} installing an HTTP connector",
-            json={
-                "connector_id": "openapi",
-                "kind": "http",
-                "name": named or a_name_for("provider"),
-                "config": {"server_url": server_url, "spec_url": spec_url},
-            },
-        )
-
-    async def auth_configs_in(self, organization: JSON) -> list[JSON]:
-        return items_of(
-            await self.api.get(
-                f"/organizations/{organization['id']}/connectors/auth-configs"
-            )
-        )
-
-    async def opens_auth_config(
-        self, auth_config: JSON, *, in_organization: JSON
-    ) -> JSON:
-        return await self.api.get(
-            f"/organizations/{in_organization['id']}/connectors/auth-configs/"
-            f"{auth_config['name']}"
-        )
-
-    async def renames_auth_config(
-        self, auth_config: JSON, *, to: str, in_organization: JSON
-    ) -> JSON:
-        return await self.api.patch(
-            f"/organizations/{in_organization['id']}/connectors/auth-configs/"
-            f"{auth_config['name']}",
-            what=f"{self.label} renaming an installation",
-            json={"name": to},
-        )
-
-    async def uninstalls_connector(
-        self, auth_config: JSON, *, in_organization: JSON
-    ) -> None:
-        await self.api.delete(
-            f"/organizations/{in_organization['id']}/connectors/auth-configs/"
-            f"{auth_config['name']}",
-            what=f"{self.label} uninstalling a connector",
-        )
-
-    async def operations_of(
-        self, auth_config: JSON, *, in_organization: JSON
-    ) -> list[JSON]:
-        return items_of(
-            await self.api.get(
-                f"/organizations/{in_organization['id']}/connectors/"
-                f"{auth_config['name']}/operations"
-            )
-        )
-
-    async def operation_detail(
-        self, name: str, *, auth_config: JSON, in_organization: JSON
-    ) -> JSON:
-        return await self.api.get(
-            f"/organizations/{in_organization['id']}/connectors/"
-            f"{auth_config['name']}/operations/{name}"
-        )
-
-    async def runs_operation(
-        self,
-        name: str,
-        *,
-        auth_config: JSON,
-        in_organization: JSON,
-        payload: JSON,
-        account: JSON | None = None,
-    ) -> JSON:
-        body: JSON = {"payload": payload}
-        if account is not None:
-            body["account_id"] = str(account["id"])
-        return await self.api.post(
-            f"/organizations/{in_organization['id']}/connectors/"
-            f"{auth_config['name']}/operations/{name}/execute",
-            what=f"{self.label} running operation {name!r}",
-            json=body,
-        )
-
-    async def is_refused_running_operation(
-        self,
-        name: str,
-        *,
-        auth_config: JSON,
-        in_organization: JSON,
-        payload: JSON,
-        account: JSON | None = None,
-    ) -> int:
-        body: JSON = {"payload": payload}
-        if account is not None:
-            body["account_id"] = str(account["id"])
-        response = await self.api.call(
-            "POST",
-            f"/organizations/{in_organization['id']}/connectors/"
-            f"{auth_config['name']}/operations/{name}/execute",
-            json=body,
-        )
-        if response.status_code < 400:
-            raise AssertionError(
-                f"{self.label} was expected to be refused running {name!r}, "
-                f"but it succeeded ({response.status_code})"
-            )
-        return response.status_code
-
-    async def triggers_of(
-        self, auth_config: JSON, *, in_organization: JSON
-    ) -> list[JSON]:
-        return items_of(
-            await self.api.get(
-                f"/organizations/{in_organization['id']}/connectors/"
-                f"{auth_config['name']}/triggers"
-            )
-        )
-
     async def changes_workflow(self, name: str, *, in_pod: JSON, **changes: Any) -> JSON:
         return await self.api.patch(
             f"/pods/{in_pod['id']}/workflows/{name}",
@@ -925,38 +681,6 @@ class BuildingSteps:
 
     async def app_assets(self, name: str, *, in_pod: JSON) -> Any:
         return await self.api.call("GET", f"/pods/{in_pod['id']}/apps/{name}/assets")
-
-    async def opens_connector(self, connector_id: str) -> JSON:
-        return await self.api.get(f"/connectors/{connector_id}")
-
-    async def skill_for(self, connector_id: str) -> Any:
-        return await self.api.call("GET", f"/connectors/{connector_id}/skill")
-
-    async def refreshes_operations(
-        self, auth_config: JSON, *, in_organization: JSON
-    ) -> Any:
-        return await self.api.call(
-            "POST",
-            f"/organizations/{in_organization['id']}/connectors/auth-configs/"
-            f"{auth_config['name']}/operations/refresh",
-        )
-
-    async def operation_details(
-        self, names: list[str], *, auth_config: JSON, in_organization: JSON
-    ) -> Any:
-        return await self.api.call(
-            "POST",
-            f"/organizations/{in_organization['id']}/connectors/"
-            f"{auth_config['name']}/operations/details",
-            json={"operation_names": names},
-        )
-
-    async def starts_connecting(self, *, in_organization: JSON, auth_config: JSON) -> Any:
-        return await self.api.call(
-            "POST",
-            f"/organizations/{in_organization['id']}/connectors/connect-requests",
-            json={"auth_config_id": str(auth_config["id"])},
-        )
 
     async def import_status(self, import_id: str, *, in_pod: JSON) -> JSON:
         return await self.api.get(f"/pods/{in_pod['id']}/bundle/imports/{import_id}")

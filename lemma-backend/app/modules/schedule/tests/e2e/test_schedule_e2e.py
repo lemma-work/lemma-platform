@@ -17,7 +17,7 @@ from app.modules.connectors.infrastructure.models.connector_trigger import (
 from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
-from app.modules.test_support.e2e.schedule_binding import bind_schedule_to_account
+from app.modules.test_support.e2e.schedule_binding import bind_schedule_to_connector
 from app.modules.datastore.config import datastore_settings
 from app.modules.test_support.e2e.waiters import (
     eventually,
@@ -128,7 +128,7 @@ async def _create_schedule(
     workflow_name: str | None = None,
     config: dict,
     name: str | None = None,
-    account_id: str | None = None,
+    pod_connector: str | None = None,
     connector_trigger_id: str | None = None,
     filter_instruction: str | None = None,
     filter_output_schema: dict | None = None,
@@ -146,8 +146,8 @@ async def _create_schedule(
         payload["agent_name"] = agent_name
     if workflow_name is not None:
         payload["workflow_name"] = workflow_name
-    if account_id is not None:
-        payload["account_id"] = account_id
+    if pod_connector is not None:
+        payload["pod_connector"] = pod_connector
     if connector_trigger_id is not None:
         payload["connector_trigger_id"] = connector_trigger_id
     if filter_instruction is not None:
@@ -1033,11 +1033,11 @@ async def test_composio_webhook_schedule_starts_event_workflow_from_logged_paylo
         workflow_name=workflow["name"],
         config={"source": "composio", "provider_trigger_id": provider_id},
     )
-    # A typed-in trigger id is not kept: only provisioning writes one, on the
-    # account it subscribed through. Bind the row the way that leaves it --
+    # A typed-in trigger id is not kept: only provisioning writes one, through
+    # the pod connector it subscribed through. Bind the row the way that leaves it --
     # provisioning itself would call Composio.
     assert "provider_trigger_id" not in schedule["config"]
-    await bind_schedule_to_account(
+    await bind_schedule_to_connector(
         db_session,
         schedule_id=schedule["id"],
         org_id=fixed_test_org["id"],
@@ -1278,10 +1278,13 @@ async def test_datastore_schedule_starts_workflow_from_record_api(
 async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
+    fixed_test_user,
     fixed_test_org,
     db_manager,
     worker,
 ):
+    """A member's row write runs as them: the run sees what they see, and is
+    theirs to find in the run history."""
     _ = worker
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     await _create_datastore_table(authenticated_client, pod_id)
@@ -1385,6 +1388,7 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
 
     admin_retry = await authenticated_client.post(retry_path)
     assert admin_retry.status_code == 202, admin_retry.text
+    assert admin_retry.json()["user_id"] == fixed_test_user["id"]
 
 
 @pytest.mark.asyncio

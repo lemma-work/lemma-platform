@@ -15,6 +15,8 @@ never see each other's places.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.tests.e2e.helpers import share_account_as_connector
+
 import json
 import secrets
 from typing import Any
@@ -110,7 +112,9 @@ async def _slack_surface(
         f"/pods/{pod_id}/surfaces",
         json={
             "platform": "SLACK",
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                client, pod_id, account.id
+            ),
             "default_agent_name": agent["name"],
             "config": {
                 "channels": [
@@ -334,6 +338,14 @@ async def test_slack_channel_mention_is_answered_in_its_thread(
         pod_id=pod_id,
         user_id=fixed_test_user["id"],
         fake_slack=fake_slack,
+    )
+    # Known in the workspace already: a Slack profile email names nobody.
+    await _seed_external_user(
+        db_session,
+        platform="SLACK",
+        external_user_id=slack_payloads.SENDER_ID,
+        tenant_id=slack_payloads.TEAM_ID,
+        resolved_user_id=UUID(fixed_test_user["id"]),
     )
     answer = f"Four o'clock, in #support [{uuid4().hex[:6]}]"
 

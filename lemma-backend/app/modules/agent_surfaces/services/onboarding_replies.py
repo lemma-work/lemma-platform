@@ -124,6 +124,10 @@ async def say_privately(
 #: ignored. The confirmation is cheap and it is sent before the replay, so the
 #: flow is never silent even when the replay is.
 READY_MESSAGE = "You're all set. Picking up your message now."
+#: The org's own number has no workspace to set up and nothing to pick up: the
+#: binding is the whole outcome, and the pod's membership answers what comes
+#: next.
+VERIFIED_HERE = "Thanks, you're verified on this number. Send your message again."
 
 
 def ready_message(invited_pod_name: str | None = None) -> str:

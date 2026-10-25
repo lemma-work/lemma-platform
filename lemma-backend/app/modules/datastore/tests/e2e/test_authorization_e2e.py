@@ -248,6 +248,7 @@ class TestDatastoreAuthorizationBoundaries:
             "datastore.table.read",
             "datastore.record.read",
             "datastore.record.write",
+            "datastore.record.delete",
             "datastore.table.update",
         }
         assert set(editor_table_items[table_names["editor"]]["allowed_actions"]) == {
@@ -259,6 +260,7 @@ class TestDatastoreAuthorizationBoundaries:
             "datastore.table.read",
             "datastore.record.read",
             "datastore.record.write",
+            "datastore.record.delete",
             "datastore.table.update",
         }
         editor_get_restricted_table = await editor_api.get_table(table_names["editor"])
@@ -387,6 +389,8 @@ class TestDatastoreAuthorizationBoundaries:
         assert set(editor_file_items[default_file["id"]]["allowed_actions"]) == {
             "folder.read",
             "folder.write",
+            # Every person role makes public links to what it reads (M22).
+            "folder.share",
         }
         assert set(editor_file_items[editor_file["id"]]["allowed_actions"]) == {
             "folder.read"
@@ -395,6 +399,8 @@ class TestDatastoreAuthorizationBoundaries:
         assert set(editor_get_default_file["allowed_actions"]) == {
             "folder.read",
             "folder.write",
+            # Every person role makes public links to what it reads (M22).
+            "folder.share",
         }
         editor_get_restricted_file = await editor_api.get_file(editor_file["path"])
         assert set(editor_get_restricted_file["allowed_actions"]) == {"folder.read"}
@@ -408,7 +414,8 @@ class TestDatastoreAuthorizationBoundaries:
         }
         custom_file_items = {item["id"]: item for item in custom_files["items"]}
         assert set(custom_file_items[default_file["id"]]["allowed_actions"]) == {
-            "folder.read"
+            "folder.read",
+            "folder.share",
         }
         assert set(custom_file_items[custom_file["id"]]["allowed_actions"]) == {
             "folder.read"

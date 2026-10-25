@@ -17,6 +17,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_context import (
+    SurfaceConnectorRef,
     SurfaceReplyContext,
     SurfaceReplyKind,
 )
@@ -123,7 +124,7 @@ def private_reply_metadata(parsed: ParsedInboundSurfaceEvent) -> dict[str, str] 
 def _can_disclose_pod_access_link(surface: AgentSurfaceEntity) -> bool:
     if surface.credential_mode is not SurfaceCredentialMode.SYSTEM:
         return True
-    if surface.account_id is not None:
+    if surface.pod_connector_slug is not None:
         return True
     return not has_shared_system_bot(surface.surface_type)
 
@@ -142,7 +143,7 @@ def _reply_context(
     return SurfaceReplyContext(
         platform=SurfacePlatform(platform),
         surface_id=surface.id if surface and include_surface_id else None,
-        surface_account_id=surface.account_id if surface else None,
+        surface_connector=SurfaceConnectorRef.of(surface),
         surface_config=surface.config if surface else None,
         agent_display_name=agent_display_name,
         reply_kind=reply_kind,

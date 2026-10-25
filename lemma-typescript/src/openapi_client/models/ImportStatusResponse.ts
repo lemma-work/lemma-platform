@@ -12,6 +12,10 @@ import type { PartialApplyResponse } from './PartialApplyResponse.js';
 export type ImportStatusResponse = {
     cancel_requested_at?: (string | null);
     committed_steps?: Array<number>;
+    /**
+     * Where to connect the GitHub account the pod's `github` connector needs, when the job failed for want of one.
+     */
+    connect_url?: (string | null);
     current_step?: (number | null);
     error?: (string | null);
     error_code?: (string | null);

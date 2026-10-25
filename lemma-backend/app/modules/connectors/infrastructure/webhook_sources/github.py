@@ -19,7 +19,7 @@ bug nobody connects to the rename.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from app.core.log.log import get_logger
 from app.core.webhooks.signatures import hex_digest_signature_matches
@@ -207,6 +207,16 @@ class GitHubWebhookSource:
 
     source = "github"
 
+    def __init__(
+        self,
+        bound_organization: Callable[[WebhookPayload], Awaitable[str | None]]
+        | None = None,
+    ) -> None:
+        """``bound_organization`` finds which Lemma organization a delivery's
+        installation is bound to; the binding table unless a caller says
+        otherwise."""
+        self._bound_organization = bound_organization or _bound_organization
+
     async def verify(self, delivery: WebhookDelivery) -> VerifiedDelivery:
         import json
 
@@ -228,7 +238,11 @@ class GitHubWebhookSource:
             raise WebhookNotVerified from exc
         if not isinstance(payload, dict):
             raise WebhookNotVerified
-        return VerifiedDelivery(delivery=delivery, payload=payload)
+        return VerifiedDelivery(
+            delivery=delivery,
+            payload=payload,
+            organization_id=await self._bound_organization(payload),
+        )
 
     async def observe(self, verified: VerifiedDelivery) -> None:
         """Retire what an uninstalled App leaves behind.
@@ -270,6 +284,16 @@ class GitHubWebhookSource:
             )
             return None
 
+        if verified.organization_id is None:
+            # Bound to no Lemma organization, so no schedule anywhere is its
+            # schedule (audit H4). Acknowledged rather than refused: a non-2xx
+            # answer has GitHub retry and then disable the hook for everyone.
+            logger.warning(
+                "schedule.webhook_sources.github.unbound_installation_dropped.denied",
+                github_event=event,
+            )
+            return None
+
         repository = payload.get("repository") or {}
         repository_id = repository.get("id")
         event_id = source_event_id(event, str(installation_id), repository_id, payload)
@@ -287,6 +311,7 @@ class GitHubWebhookSource:
             match=match,
             refine=_narrower(repository_id, payload.get("action")),
             context=_repo_context(payload, event),
+            organization_id=verified.organization_id,
         )
 
 
@@ -404,6 +429,27 @@ def _narrower(
     return accepts
 
 
+async def _bound_organization(payload: WebhookPayload) -> str | None:
+    """The Lemma organization this delivery's installation is bound to.
+
+    Looked up rather than inferred from whichever schedules carry the id: the
+    binding is the one place an installation's owner is written down, and a
+    schedule's routing key is only a copy of it.
+    """
+    installation_id = (payload.get("installation") or {}).get("id")
+    if installation_id is None:
+        return None
+    from app.core.api.dependencies import get_uow_factory
+    from app.core.authorization.scope import uow_scope
+    from app.modules.connectors.services.auth.github_bindings import (
+        bound_organization,
+    )
+
+    async with uow_scope(get_uow_factory()) as uow:
+        organization_id = await bound_organization(uow.session, str(installation_id))
+    return str(organization_id) if organization_id is not None else None
+
+
 async def _retire_installation(installation_id: str, *, action: str) -> None:
     """Stand down what an uninstalled App leaves behind.
 
@@ -415,6 +461,9 @@ async def _retire_installation(installation_id: str, *, action: str) -> None:
     from app.core.authorization.scope import uow_scope
     from app.modules.connectors.contracts.retirement import (
         retire_accounts_for_tenant,
+    )
+    from app.modules.connectors.services.auth.github_bindings import (
+        release_installation,
     )
     from app.modules.schedule.contracts.retirement import (
         deactivate_matching_schedules,
@@ -429,6 +478,8 @@ async def _retire_installation(installation_id: str, *, action: str) -> None:
             criteria={"source": "github", "installation_id": installation_id},
             reason=f"github_installation_{action}",
         )
+        if action == "deleted":
+            await release_installation(uow.session, installation_id)
         await uow.commit()
 
     logger.warning(

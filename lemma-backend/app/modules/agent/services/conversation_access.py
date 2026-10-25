@@ -218,7 +218,7 @@ async def require_agent_actions(
     # its steward's, and what it may do there is the link's grant, checked below.
     if ctx.actor_type != ActorType.POD and user_id not in {
         ctx.user_id,
-        ctx.delegated_by_user_id,
+        ctx.delegating_user_id,
     }:
         raise DomainError(
             "The request's identity does not match the conversation's user",

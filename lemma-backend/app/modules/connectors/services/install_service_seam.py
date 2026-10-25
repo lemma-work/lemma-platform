@@ -83,5 +83,5 @@ class InstallServiceSeam(Protocol):
         *,
         user_id: UUID,
         organization_id: UUID,
-        allowed_roles: list[str] | None = None,
+        permission: str | None = None,
     ) -> None: ...

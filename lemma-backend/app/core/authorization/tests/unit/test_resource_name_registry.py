@@ -40,6 +40,11 @@ EXPECTED_TYPES = {
     ResourceType.SCHEDULE,
     ResourceType.FOLDER,
     ResourceType.DOCUMENT,
+    # Pod connectors (by slug) and pod accounts (by id). These were special
+    # cases inside core -- a uuid5 of a catalog id, a raw org account id --
+    # and are now the connectors module's own rows.
+    ResourceType.CONNECTOR,
+    ResourceType.CONNECTOR_ACCOUNT,
 }
 
 
@@ -112,6 +117,7 @@ def test_a_module_may_declare_nothing(assembled: dict) -> None:
     assert set(declaring) == {
         "agent",
         "apps",
+        "connectors",
         "datastore",
         "function",
         "schedule",

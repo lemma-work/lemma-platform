@@ -16,6 +16,8 @@ tests' too.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.tests.e2e.helpers import share_account_as_connector
+
 import json
 import secrets
 from typing import Any
@@ -125,7 +127,9 @@ async def _slack_bot(
         f"/pods/{pod_id}/surfaces",
         json={
             "platform": "SLACK",
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                client, pod_id, account.id
+            ),
             "name": f"slack-{bot.lower()}",
             "default_agent_name": agent["name"],
             "config": {"channels": [{"channel_id": workspace.channel}]},

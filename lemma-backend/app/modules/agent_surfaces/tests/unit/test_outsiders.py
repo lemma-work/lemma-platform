@@ -338,7 +338,7 @@ def _surface_entity():
         pod_id=POD,
         surface_type=SurfacePlatform.TELEGRAM,
         name="telegram",
-        account_id=None,
+        pod_connector_slug=None,
         config=SurfaceConfig(),
         channel_route_for=lambda **_: None,
     )

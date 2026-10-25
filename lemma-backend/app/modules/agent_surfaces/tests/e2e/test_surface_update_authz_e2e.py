@@ -9,6 +9,8 @@ rewire or take over a restricted agent's surface.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.tests.e2e.helpers import share_account_as_connector
+
 from uuid import uuid4
 
 import pytest
@@ -60,7 +62,9 @@ async def _restricted_agent_surface(
         json={
             "platform": "SLACK",
             "default_agent_name": agent_name,
-            "account_id": str(account.id),
+            "pod_connector": await share_account_as_connector(
+                owner, pod_id, account.id
+            ),
         },
     )
     assert created.status_code == status.HTTP_200_OK, created.text

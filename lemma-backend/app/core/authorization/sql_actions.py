@@ -22,8 +22,10 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql import ColumnElement
 
 from app.core.authorization.context import (
-    ActorType,
+    Assistant,
     Context,
+    OtherPod,
+    Person,
     PrincipalRef,
     ResourceType,
 )
@@ -87,10 +89,7 @@ def allowed_actions_expr(
         dict.fromkeys([*owner_actions_for_resource(resource_type), *role_actions])
     )
     grant_candidate_actions: Sequence[str] = resource_actions
-    if (
-        ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-        and not ctx.workload_principal_refs
-    ):
+    if ctx.is_assistant:
         # Default pod agent (user-equivalent): destructive actions never
         # project as available — at execution time they require a session
         # approval (DESTRUCTIVE_ACTION_REQUIRES_APPROVAL otherwise).
@@ -99,11 +98,16 @@ def allowed_actions_expr(
         grant_candidate_actions = [
             a for a in resource_actions if a not in DESTRUCTIVE_ACTIONS
         ]
+    acts_as_a_person = isinstance(ctx.actor, (Person, Assistant))
+    if acts_as_a_person and ctx.pod_id is not None and not ctx.belongs_to_its_pod():
+        # As in ``Authorizer._outside_the_pod_decision``: someone who left the
+        # pod keeps nothing there, rows they own included -- Public reads only.
+        role_actions, owner_actions, grant_candidate_actions = [], [], []
     empty_actions = _text_array([])
 
     # Before the outsider branch: another pod is an outsider too, but one this
     # pod may have granted things to.
-    if ctx.actor_type == ActorType.POD:
+    if isinstance(ctx.actor, OtherPod):
         return _pod_allowed_actions_expr(
             ctx=ctx,
             resource_type=resource_type,
@@ -122,10 +126,7 @@ def allowed_actions_expr(
             pod_id=ctx.pod_id,
         )
 
-    if (
-        ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-        and ctx.workload_principal_refs
-    ):
+    if ctx.is_named_workload:
         return _delegated_allowed_actions_expr(
             ctx=ctx,
             resource_type=resource_type,
@@ -138,37 +139,68 @@ def allowed_actions_expr(
             resource_path_col=resource_path_col,
         )
 
-    restricted_actions = _grant_actions_array_expr(
-        ctx=ctx,
-        resource_type=resource_type,
-        resource_id_col=resource_id_col,
-        pod_id_col=pod_id_col,
-        principal_sets=ctx.grant_principal_sets or (ctx.principal_refs,),
-        candidate_actions=grant_candidate_actions,
-        resource_path_col=resource_path_col,
+    principal_sets = ctx.grant_principal_sets or (ctx.principal_refs,)
+    is_person = isinstance(ctx.actor, Person) and ctx.user_id is not None
+    owns = (
+        owner_user_id_col == ctx.user_id
+        if owner_user_id_col is not None and ctx.user_id is not None
+        else false()
     )
-
-    # Mirrors Authorizer._visibility_read_decision. These two must agree: if the
-    # projection is wider, a row advertises actions that 403 on use; if narrower,
-    # a resource the viewer can genuinely open renders as read-only or vanishes.
-    # POD and PUBLIC used to share one branch here, which is the listing half of
-    # the bug that made PUBLIC do nothing.
-    visibility_read_actions: list[str] = []
-    if ctx.actor_type == ActorType.USER and ctx.user_id is not None:
-        visibility_read_actions = [a for a in resource_actions if a.endswith(".read")]
-    public_actions = list(dict.fromkeys([*role_actions, *visibility_read_actions]))
-
-    whens = []
-    if owner_user_id_col is not None and ctx.user_id is not None:
-        whens.append((owner_user_id_col == ctx.user_id, _text_array(owner_actions)))
-    if visibility_col is not None:
-        whens.append((visibility_col == "POD", _text_array(role_actions)))
-        whens.append((visibility_col == "PUBLIC", _text_array(public_actions)))
-        whens.append((visibility_col == "RESTRICTED", restricted_actions))
-        whens.append((visibility_col == "PERSONAL", empty_actions))
+    if visibility_col is None:
+        visibility = literal("POD")
     else:
-        whens.append((literal(True), _text_array(role_actions)))
-    return case(*whens, else_=empty_actions)
+        visibility = visibility_col
+
+    def allowed(action: str) -> ColumnElement[bool]:
+        """``Authorizer.authorize`` for one action, rule for rule, as SQL.
+
+        The two must agree (``test_ladder_projection_agree_e2e``): a wider
+        listing offers actions that 403, a narrower one hides what the caller
+        may open. Each line below is one of the ladder's branches.
+        """
+        granted = (
+            _grant_exists_for_principal_sets(
+                resource_type=resource_type,
+                resource_id_col=resource_id_col,
+                pod_id_col=pod_id_col,
+                principal_sets=principal_sets,
+                action=action,
+                resource_path_col=resource_path_col,
+            )
+            if action in grant_candidate_actions
+            else false()
+        )
+        branches = []
+        # The owner's own actions on what they own.
+        if action in owner_actions:
+            branches.append(owns)
+        # A person reads what is Public.
+        if is_person and action.endswith(".read"):
+            branches.append(visibility == "PUBLIC")
+        if action in role_actions:
+            # Held by role: anywhere but someone else's PERSONAL, and a
+            # RESTRICTED row still needs its grant.
+            branches.append(
+                or_(
+                    visibility.in_(["PUBLIC", "POD"]),
+                    owns,
+                    and_(visibility == "RESTRICTED", granted),
+                )
+            )
+        else:
+            # Not held by role: a grant, never on someone else's PERSONAL -- and
+            # an unreadable level counts as PERSONAL, as hydration reads it.
+            branches.append(
+                and_(
+                    granted,
+                    or_(visibility.in_(["POD", "PUBLIC", "RESTRICTED"]), owns),
+                )
+            )
+        return or_(*branches) if branches else false()
+
+    return _conditional_actions_array_expr(
+        [(action, allowed(action)) for action in resource_actions]
+    )
 
 
 def allowed_read_filter(
@@ -292,33 +324,48 @@ def _delegated_allowed_actions_expr(
     empty_actions: ColumnElement,
     resource_path_col=None,
 ) -> ColumnElement:
-    # The workload's own grants decide the projection for every visibility;
-    # only PERSONAL rows owned by someone else stay empty.
-    #
-    # That is HALF of what ``workload_authority`` decides. Since PS-ACCESS-020
-    # was implemented, a delegated action also has to clear the invoking
-    # person's own authority, and that half is not expressible here: their
-    # access comes from role permissions, ownership and visibility as well as
-    # grants. So this projection can be *wider* than what the workload may
-    # actually do, and every action it lists is re-decided by ``authorize``
-    # before it happens.
-    #
-    # Deliberate rather than overlooked: the projection is exactly as wide as
-    # it was when grants were standalone authority, so narrowing the decision
-    # took exposure away and left none behind. Narrowing the projection to
-    # match means intersecting two text[] expressions per row, which is worth
-    # doing on its own and not on the way past.
+    # PS-ACCESS-020 for a listing: an action shows only if the workload was
+    # granted it AND the invoking person could take it themselves -- the same
+    # two halves ``workload_authority`` decides one request at a time. This
+    # used to be the workload's grants alone, so search and listings returned
+    # rows a direct read of the same row refused (an agent with a pod-wide
+    # folder grant searched a RESTRICTED folder its person could not open).
+    from app.core.authorization.workload_authority import invoking_person_context
+
+    if ctx.pod_id is not None and not ctx.belongs_to_its_pod():
+        # The person it acts for left the pod: the ladder refuses the workload
+        # outright (``_outside_the_pod_decision``), Public rows included.
+        return empty_actions
+    person = invoking_person_context(ctx.authorizer, ctx)
+    person_actions = (
+        allowed_actions_expr(
+            ctx=person,
+            resource_type=resource_type,
+            resource_id_col=resource_id_col,
+            pod_id_col=pod_id_col,
+            owner_user_id_col=owner_user_id_col,
+            visibility_col=visibility_col,
+            resource_path_col=resource_path_col,
+        )
+        if person is not None
+        else None
+    )
     workload_actions = _conditional_actions_array_expr(
         [
             (
                 action,
-                _grant_exists_for_action(
-                    resource_type=resource_type,
-                    resource_id_col=resource_id_col,
-                    pod_id_col=pod_id_col,
-                    principal_group=ctx.workload_principal_refs,
-                    action=action,
-                    resource_path_col=resource_path_col,
+                and_(
+                    _grant_exists_for_action(
+                        resource_type=resource_type,
+                        resource_id_col=resource_id_col,
+                        pod_id_col=pod_id_col,
+                        principal_group=ctx.workload_principal_refs,
+                        action=action,
+                        resource_path_col=resource_path_col,
+                    ),
+                    allowed_actions_contains(person_actions, action)
+                    if person_actions is not None
+                    else literal(True),
                 ),
             )
             for action in all_actions

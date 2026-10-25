@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.context import ResourceType
 from app.core.authorization.dependencies import (
+    PodContextDep,
     pod_from_path,
     require_action,
     require_pod_membership,
@@ -127,8 +128,10 @@ async def connect_pod(
     data: ConnectPodRequest,
     user: CurrentUser,
     uow: UoWDep,
+    ctx: PodContextDep,
 ) -> Response:
     await PodLinkService(uow).connect(
+        ctx,
         answering_pod_id=pod_id,
         asking_pod_id=asking_pod_id,
         user_id=user.id,

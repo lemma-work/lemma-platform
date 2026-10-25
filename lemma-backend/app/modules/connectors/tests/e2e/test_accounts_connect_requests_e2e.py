@@ -780,10 +780,10 @@ async def test_delete_account_removes_account_and_404s_on_repeat(
     db_session,
 ):
     """Regression: DELETE .../connectors/accounts/{account_id} previously 400'd
-    with "organization_id is required". The route's `reject_delegated_workload`
-    dependency resolves org context via `get_org_context`, which only read the
-    `{org_id}` path param while this router is mounted under
-    `{organization_id}` -- so the org id was never found. Exercised end-to-end
+    with "organization_id is required". The route's workload guard resolved org
+    context via `get_org_context`, which only read the `{org_id}` path param
+    while this router is mounted under `{organization_id}` -- so the org id was
+    never found. Exercised end-to-end
     (real HTTP + real dependency chain) rather than via the service directly,
     since the bug lived in path-param resolution, not the service layer.
     """

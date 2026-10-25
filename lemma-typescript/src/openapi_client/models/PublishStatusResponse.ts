@@ -9,7 +9,14 @@ import type { PublishStatus } from './PublishStatus.js';
  * Status of a pod publish job (pure Redis read).
  */
 export type PublishStatusResponse = {
-    account_id: (string | null);
+    /**
+     * @deprecated
+     */
+    account_id?: (string | null);
+    /**
+     * Where to connect the GitHub account the pod's `github` connector needs, when the publish failed for want of one.
+     */
+    connect_url?: (string | null);
     error?: (string | null);
     error_code?: (string | null);
     events_url: string;

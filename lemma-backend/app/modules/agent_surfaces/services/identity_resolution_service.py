@@ -30,8 +30,30 @@ from app.modules.agent_surfaces.domain.phone_numbers import (
 from app.modules.agent_surfaces.services.email_sender_trust import (
     email_sender_is_believable as _email_sender_is_believable,
 )
+from app.modules.agent_surfaces.services.slack_cached_identity import (
+    forgot_an_unproven_slack_answer,
+)
 
 logger = get_logger(__name__)
+
+#: Where the sender's number is the platform's word and not the sender's. A
+#: WhatsApp sender id *is* the number Meta delivered from; a Telegram number
+#: arrives only in a contact the sender shared of themselves. A Slack profile
+#: phone and a Teams ``mobilePhone`` are fields their owner types, so matching
+#: them would hand a member's identity to whoever typed that member's number.
+_PHONE_ATTESTED = frozenset({SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM})
+
+
+def _email_may_match(platform: SurfacePlatform) -> bool:
+    """Is this platform's sender email good enough to name a Lemma user?
+
+    Not Slack's: a workspace admin can set anybody's profile email, so a Slack
+    sender is somebody only on a proof (Lemma's app's, or the installation's
+    own verification). Teams' is the UPN, and only on a domain the tenant
+    verified (``tenant_verified_address``); an email surface's sender has
+    already been authenticated by the receiving mail service.
+    """
+    return platform is not SurfacePlatform.SLACK
 
 
 @dataclass(frozen=True)
@@ -97,14 +119,20 @@ class SurfaceIdentityResolutionService:
     ----------------
     1. Cache hit — ExternalSurfaceUser row already has a resolved_user_id, and
        that user is still live. Skipped entirely when the caller asked for a
-       proven identity, unless the platform still attests the match.
+       proven identity, unless the platform still attests the match. On Slack
+       only while Slack's proof says the same (``slack_cached_identity``).
     2. Email match — profile email (fetched from platform API) matched against
-       the users table.
-    3. Phone match — for platforms that expose phone numbers (WhatsApp, and
-       Telegram's contact-share flow), against numbers verified on a profile.
-       An unverified profile number matches only where the deployment has opted
-       in (``surface_allow_unverified_phone_match``) and exactly one profile
-       claims it.
+       the users table. Never on Slack, whose profile email an admin can set:
+       a Slack sender is matched only on a proof.
+    3. Phone match — only where the platform attests the sender's number
+       (WhatsApp, and Telegram's contact-share flow), against numbers verified
+       on a profile. An unverified profile number matches only where the
+       deployment has opted in (``surface_allow_unverified_phone_match``) and
+       exactly one profile claims it.
+
+    On a surface whose deliveries are signed with a secret its customer holds
+    (``customer_held_secrets``) none of this runs: only a proof made through
+    that same installation names anybody.
 
     A Telegram sender is matched on nothing else: Telegram gives no email, and
     its @username is not proof of anything -- anyone can claim any free handle,
@@ -159,9 +187,18 @@ class SurfaceIdentityResolutionService:
         installation_id: UUID | None = None,
         require_proven_identity: bool = False,
         profile_unavailable: bool = False,
+        customer_held_secret: bool = False,
     ) -> ResolvedSurfaceUser:
         """``profile_unavailable``: the platform could not be asked who sent
-        this, so a miss here is not an answer and is not remembered as one."""
+        this, so a miss here is not an answer and is not remembered as one.
+
+        ``customer_held_secret``: the delivery verified against a secret a
+        person holds (``signed_with_a_customer_secret``), so its sender id is
+        theirs to choose -- see `_resolve_on_a_customer_secret`."""
+        if customer_held_secret:
+            return await self._resolve_on_a_customer_secret(
+                event, sender_profile, installation_id
+            )
         if installation_id is not None and event.platform in (
             SurfacePlatform.SLACK,
             SurfacePlatform.TEAMS,
@@ -210,7 +247,9 @@ class SurfaceIdentityResolutionService:
             match = (
                 await self._match_proven_sender(event, known)
                 if require_proven_identity
-                else await self._match_user_result(email=known.email, phone=known.phone)
+                else await self._match_user_result(
+                    event.platform, email=known.email, phone=known.phone
+                )
             )
             match = await self._unless_proven_elsewhere(event, known, match)
 
@@ -227,6 +266,49 @@ class SurfaceIdentityResolutionService:
             phone=known.phone,
             display_name=known.display_name
             or (external_user.display_name if external_user else None),
+        )
+
+    async def _resolve_on_a_customer_secret(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        sender_profile: SurfaceSenderProfile | None,
+        installation_id: UUID | None,
+    ) -> ResolvedSurfaceUser:
+        """Who sent a delivery that the secret's holder could have written.
+
+        Whoever holds a bring-your-own app's signing secret can sign a body
+        naming any user of the workspace, or any phone number, and it verifies.
+        Every other answer `resolve` has is keyed on that claimed id and was
+        made somewhere else: the external-user cache and Lemma's own app's
+        proofs are per workspace, not per app; the shared bot's bindings are
+        the shared bot's; an email or a phone match is only the claim again.
+        Honouring any of them let the holder act as any member somebody proved
+        anywhere. What is left is a binding made through this installation --
+        the person verified their mailbox in a private chat with this very app
+        -- so the holder can only be somebody who chose to trust their app.
+
+        The cache is still told what the platform's profile says, but never
+        who the sender is: writing a resolution here would let a forged
+        delivery speak for every surface in the workspace, and writing ``None``
+        would let one erase somebody's.
+        """
+        known = _KnownSender.of(sender_profile or SurfaceSenderProfile(), event)
+        if installation_id is not None and not event.platform.is_email:
+            from app.modules.agent_surfaces.services import verified_surface_identity
+
+            verified = await verified_surface_identity.resolve_shared_verified_identity(
+                self.uow, event, installation_id
+            )
+            if verified is not None:
+                return verified
+        if known.external_user_id:
+            await self._upsert(event, known)
+        return ResolvedSurfaceUser(
+            internal_user_id=None,
+            external_user_id=known.external_user_id,
+            email=known.email,
+            phone=known.phone,
+            display_name=known.display_name,
         )
 
     async def _cached_resolution(
@@ -264,11 +346,17 @@ class SurfaceIdentityResolutionService:
             return None
         if not await self._live_user_lookup(external_user.resolved_user_id):
             return None
+        proven = (await self._slack_proof(event, known)).user_id
+        if await forgot_an_unproven_slack_answer(
+            self.external_user_repository, event, external_user, proven=proven
+        ):
+            return None
         if (
             require_proven_identity
-            and (await self._slack_proof(event, known)).user_id
-            != external_user.resolved_user_id
-            and not await self._cache_is_attested(known, external_user.resolved_user_id)
+            and proven != external_user.resolved_user_id
+            and not await self._cache_is_attested(
+                event.platform, known, external_user.resolved_user_id
+            )
         ):
             return None
         if await self._cache_rests_on_an_unverified_number(external_user, known, event):
@@ -282,7 +370,7 @@ class SurfaceIdentityResolutionService:
         )
 
     async def _cache_is_attested(
-        self, known: "_KnownSender", cached_user_id: UUID
+        self, platform: SurfacePlatform, known: "_KnownSender", cached_user_id: UUID
     ) -> bool:
         """Is this cached resolution one the platform stands behind?
 
@@ -300,12 +388,16 @@ class SurfaceIdentityResolutionService:
         an entry already written is still consistent with an attested field --
         which is strictly more than the unconditional short-circuit that shipped
         before it checked anything at all.
+
+        Each field counts only where it may match at all: on Slack neither the
+        profile email nor the profile phone does, so a Slack entry stands here
+        only on Slack's own proof (`_slack_proof`, asked by the caller).
         """
-        if known.email:
+        if known.email and _email_may_match(platform):
             by_email = await self._users.user_id_by_email(known.email)
             if by_email is not None and by_email == cached_user_id:
                 return True
-        if known.phone:
+        if known.phone and platform in _PHONE_ATTESTED:
             candidates = _phone_lookup_candidates(known.phone)
             if candidates:
                 ids = await self._users.user_ids_by_mobile_numbers(
@@ -349,7 +441,7 @@ class SurfaceIdentityResolutionService:
         )
         if cached_user_id not in unverified:
             return False
-        if await self._cache_is_attested(known, cached_user_id):
+        if await self._cache_is_attested(event.platform, known, cached_user_id):
             return False
         verified = await self._users.user_ids_by_mobile_numbers(
             candidates, verified=True
@@ -444,16 +536,20 @@ class SurfaceIdentityResolutionService:
 
     async def _match_user_result(
         self,
+        platform: SurfacePlatform,
         *,
         email: str | None,
         phone: str | None,
     ) -> _UserMatch:
-        if email:
+        if email and _email_may_match(platform):
             user_id = await self._users.user_id_by_email(email)
             if user_id:
                 return _UserMatch(user_id)
 
-        if phone:
+        # The verified-ownership check below is about the *profile's* side of
+        # the match; it says nothing about the sender's side, which has to be
+        # the platform's word before it is compared with anything.
+        if phone and platform in _PHONE_ATTESTED:
             phone_match = await self._match_user_by_phone(phone)
             if phone_match.user_id:
                 return phone_match

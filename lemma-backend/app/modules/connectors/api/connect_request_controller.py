@@ -14,6 +14,7 @@ from app.core.api.callback_page import (
 from app.core.api.dependencies import BrowserUserId, CurrentUser
 from app.core.config import settings
 from app.modules.connectors.contracts.github import (
+    InstallState,
     github_install_url,
     install_state_for,
 )
@@ -29,6 +30,7 @@ from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.errors import ConnectorDomainError
 from app.modules.connectors.services.connect_request_lifecycle import (
     followup_account_id,
+    installation_needs_an_admin,
     return_path,
     safe_return_path,
 )
@@ -156,7 +158,9 @@ def _is_install_return(request: Request) -> bool:
     return bool(query.get("installation_id") or query.get("setup_action"))
 
 
-def _connect_outcome(account: AccountEntity, setup_action: str | None) -> str:
+def _connect_outcome(
+    account: AccountEntity, setup_action: str | None, *, needs_admin: bool = False
+) -> str:
     """What the person still has to do, if anything.
 
     Deliberately asks the connectors module what an account needs rather than
@@ -170,11 +174,33 @@ def _connect_outcome(account: AccountEntity, setup_action: str | None) -> str:
     """
     from app.modules.connectors.contracts.github import installation_still_needed
 
+    if needs_admin:
+        return PENDING_APPROVAL
     if not installation_still_needed(account.connector_id, account.external_ref):
         return CONNECTED
     if (setup_action or "").strip().lower() == _SETUP_ACTION_REQUEST:
         return PENDING_APPROVAL
     return INSTALL_REQUIRED
+
+
+async def _installation_waits_on_an_admin(
+    connector_service: object, state: str | None
+) -> bool:
+    """Whether the callback connected the account without the installation it
+    came back with: nobody holds it yet, and this person is not its GitHub
+    owner (audit H4). It waits on an admin -- the state reconcile reports for
+    the same account -- rather than "install it", which it already is."""
+    if not state:
+        return False
+    return installation_needs_an_admin(
+        await peek_connect_request(connector_service, state)
+    )
+
+
+def _install_state(account: AccountEntity, needs_admin: bool) -> InstallState:
+    if needs_admin:
+        return InstallState.PENDING_APPROVAL
+    return install_state_for(account.connector_id, account.external_ref)
 
 
 def _wants_json(request: Request, response_format: str | None) -> bool:
@@ -338,13 +364,12 @@ async def oauth_callback(
     # Same derivation the accounts API does. Without it this path keeps the
     # schema default and tells a JSON client READY for an account that can
     # reach nothing -- the exact claim this change exists to stop making.
-    account_response.install_state = install_state_for(
-        account.connector_id, account.external_ref
-    ).value
+    needs_admin = await _installation_waits_on_an_admin(connector_service, state)
+    account_response.install_state = _install_state(account, needs_admin).value
     if wants_json:
         return JSONResponse(content=account_response.model_dump(mode="json"))
 
-    outcome = _connect_outcome(account, setup_action)
+    outcome = _connect_outcome(account, setup_action, needs_admin=needs_admin)
     if outcome == INSTALL_REQUIRED and not was_followup:
         # Straight on to the install rather than back through Lemma to be told
         # to go there. Authorizing and installing are two things GitHub needs

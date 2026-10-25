@@ -82,30 +82,37 @@ _SYSTEM_CREDENTIALS: dict[SurfacePlatform, Callable[[], SurfaceCredentials | Non
 
 async def receiver_credentials(
     surface: AgentSurfaceEntity,
+    account_id: UUID | None,
     account_port: SurfaceAccountPort,
     account_cache: dict[UUID, CredentialPayload],
 ) -> SurfaceCredentials | None:
     """The credentials this surface's receiver would run on, or None.
 
+    ``account_id`` is the account the surface's pod connector runs as now
+    (``None`` on system credentials, or when the connector runs as nothing).
     ``account_cache`` holds each account's stored payload for the scan, so
     surfaces sharing an account read it once.
     """
-    if surface.account_id is None:
+    if surface.pod_connector_slug is None:
         system = _SYSTEM_CREDENTIALS.get(surface.surface_type)
         return system() if system is not None else None
+    if account_id is None:
+        logger.debug(
+            "agent_surfaces.event_receiver_service.native_receiver_skipped_surface_s.diagnostic",
+            surface_id=surface.id,
+        )
+        return None
 
-    if surface.account_id not in account_cache:
-        account = await account_port.get_account(surface.account_id)
+    if account_id not in account_cache:
+        account = await account_port.get_account(account_id)
         if account is None:
             logger.debug(
                 "agent_surfaces.event_receiver_service.native_receiver_skipped_surface_s.diagnostic",
-                account_id=surface.account_id,
+                surface_id=surface.id,
             )
             return None
-        account_cache[surface.account_id] = dict(account.credentials or {})
-    credentials = credentials_for(
-        surface.surface_type, account_cache[surface.account_id]
-    )
+        account_cache[account_id] = dict(account.credentials or {})
+    credentials = credentials_for(surface.surface_type, account_cache[account_id])
     if (
         isinstance(credentials, SlackCredentials)
         and surface.credential_mode is SurfaceCredentialMode.SYSTEM
@@ -119,7 +126,7 @@ async def receiver_credentials(
 
 
 def _telegram_candidate(
-    surface: AgentSurfaceEntity, credentials: CredentialsLike
+    surface: AgentSurfaceEntity, credentials: CredentialsLike, account_id: UUID | None
 ) -> NativeReceiverCandidate | None:
     telegram = TelegramCredentials.of(credentials)
     bot_token = (reveal_secret(telegram.bot_token) or "").strip()
@@ -128,7 +135,7 @@ def _telegram_candidate(
             "agent_surfaces.event_receiver_service.telegram_native_receiver_skipped_surface.diagnostic"
         )
         return None
-    credential_label = str(surface.account_id) if surface.account_id else "system"
+    credential_label = str(account_id) if account_id else "system"
     return NativeReceiverCandidate(
         key=receiver_key("telegram", credential_label, bot_token),
         platform=SurfacePlatform.TELEGRAM,
@@ -139,7 +146,7 @@ def _telegram_candidate(
 
 
 def _slack_candidate(
-    surface: AgentSurfaceEntity, credentials: CredentialsLike
+    surface: AgentSurfaceEntity, credentials: CredentialsLike, account_id: UUID | None
 ) -> NativeReceiverCandidate | None:
     slack = SlackCredentials.of(credentials)
     app_token = (reveal_secret(slack.app_token) or "").strip()
@@ -151,7 +158,7 @@ def _slack_candidate(
     credential_label = (
         "system"
         if surface.credential_mode is SurfaceCredentialMode.SYSTEM
-        else str(surface.account_id)
+        else str(account_id)
     )
     return NativeReceiverCandidate(
         key=receiver_key("slack", credential_label, app_token),
@@ -162,23 +169,36 @@ def _slack_candidate(
     )
 
 
+def _resend_candidate(
+    surface: AgentSurfaceEntity, credentials: CredentialsLike, account_id: UUID | None
+) -> NativeReceiverCandidate | None:
+    return resend_candidate_from_surface(surface, credentials)
+
+
 _CANDIDATES: dict[
     SurfacePlatform,
-    Callable[[AgentSurfaceEntity, CredentialsLike], NativeReceiverCandidate | None],
+    Callable[
+        [AgentSurfaceEntity, CredentialsLike, UUID | None],
+        NativeReceiverCandidate | None,
+    ],
 ] = {
     SurfacePlatform.TELEGRAM: _telegram_candidate,
     SurfacePlatform.SLACK: _slack_candidate,
-    SurfacePlatform.RESEND: resend_candidate_from_surface,
+    SurfacePlatform.RESEND: _resend_candidate,
 }
 
 
 def candidate_from_surface(
-    surface: AgentSurfaceEntity, credentials: CredentialsLike
+    surface: AgentSurfaceEntity,
+    credentials: CredentialsLike,
+    *,
+    account_id: UUID | None = None,
 ) -> NativeReceiverCandidate | None:
     """The receiver these credentials make for this surface, if its platform
-    has native receivers at all."""
+    has native receivers at all. ``account_id`` is the account they came from,
+    which keys a receiver on a bot of its own."""
     build = _CANDIDATES.get(surface.surface_type)
-    return build(surface, credentials) if build is not None else None
+    return build(surface, credentials, account_id) if build is not None else None
 
 
 def enabled_receiver_platforms() -> set[SurfacePlatform]:
@@ -210,6 +230,9 @@ async def load_receiver_candidates(
     from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
         SurfaceRepository,
     )
+    from app.modules.agent_surfaces.services.surface_connector import (
+        bound_account_ids,
+    )
 
     repository = SurfaceRepository(uow)
     account_port = SqlAlchemySurfaceAccountAdapter(uow)
@@ -221,11 +244,15 @@ async def load_receiver_candidates(
     )
     if system_telegram is not None:
         candidates[system_telegram.key] = system_telegram
+    running_as = await bound_account_ids(uow, surfaces)
     for surface in surfaces:
-        credentials = await receiver_credentials(surface, account_port, account_cache)
+        account_id = running_as.get(surface.id)
+        credentials = await receiver_credentials(
+            surface, account_id, account_port, account_cache
+        )
         if credentials is None:
             continue
-        candidate = candidate_from_surface(surface, credentials)
+        candidate = candidate_from_surface(surface, credentials, account_id=account_id)
         if candidate is None:
             continue
         candidate = replace(candidate, pod_ids=(surface.pod_id,))

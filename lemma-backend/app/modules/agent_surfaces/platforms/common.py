@@ -125,7 +125,10 @@ def computed_webhook_url(surface: AgentSurfaceEntity) -> str | None:
     if not public_https_api_url_available():
         return None
     base = settings.api_url.rstrip("/")
-    if has_shared_system_bot(surface.surface_type) and surface.account_id is not None:
+    if (
+        has_shared_system_bot(surface.surface_type)
+        and surface.pod_connector_slug is not None
+    ):
         return f"{base}/surfaces/{surface.id}/webhook"
     # A pooled number receives on a callback of its own, because the handshake
     # carries nothing that could select a token on the shared URL -- so the path

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import yaml
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 
@@ -161,14 +163,53 @@ def test_backend_e2e_triggers_directly_without_a_label() -> None:
     )
 
 
+def test_every_gated_job_runs_in_the_merge_queue() -> None:
+    """A required check has to run its suites on `merge_group`, not just report.
+
+    The three workflows behind the required checks are triggered by
+    `merge_group`, and each aggregator reads a skipped job as unaffected. So a
+    job whose `if:` allowlists `pull_request` without also naming `merge_group`
+    skips in the queue, and its check goes green there having run nothing.
+    `backend-e2e-sandbox` was added with exactly that allowlist after the
+    trigger was first written.
+    """
+    for path, aggregator in (
+        (".github/workflows/ci.yml", "ci"),
+        (".github/workflows/e2e.yml", "e2e-passed"),
+        (".github/workflows/security.yml", "security-passed"),
+    ):
+        workflow = yaml.safe_load(_read(path))
+        # PyYAML reads the bare key `on` as the boolean True.
+        assert "merge_group" in workflow[True], path
+        jobs = workflow["jobs"]
+        # The aggregator first: a skipped required check reads as passed, so
+        # an aggregator that stopped running in the queue would wave every
+        # entry through without looking at the jobs below.
+        assert "!= 'merge_group'" not in str(jobs[aggregator].get("if", "")), path
+        for name in [aggregator, *jobs[aggregator]["needs"]]:
+            condition = str(jobs[name].get("if", ""))
+            # `!= 'pull_request'` already lets a merge group through; only an
+            # allowlist that names the pull request event has to name it too.
+            if "== 'pull_request'" in condition:
+                assert "'merge_group'" in condition, f"{path}: {name}"
+
+
 def test_expensive_security_jobs_are_change_scoped() -> None:
     workflow = _read(".github/workflows/security.yml")
+    jobs = yaml.safe_load(workflow)["jobs"]
 
-    assert "name: Detect security-relevant changes" in workflow
-    assert "if: needs.changes.outputs.python == 'true'" in workflow
-    assert "if: needs.changes.outputs.javascript == 'true'" in workflow
-    assert "if: needs.changes.outputs.python_dependencies == 'true'" in workflow
-    assert "if: needs.changes.outputs.backend_image == 'true'" in workflow
+    def condition(job: str) -> str:
+        return str(jobs[job].get("if", ""))
+
+    assert jobs["changes"]["name"] == "Detect security-relevant changes"
+    assert "needs.changes.outputs.python == 'true'" in condition("codeql-python")
+    assert "needs.changes.outputs.javascript == 'true'" in condition(
+        "codeql-javascript"
+    )
+    assert "needs.changes.outputs.python_dependencies == 'true'" in condition(
+        "python-audit"
+    )
+    assert "needs.changes.outputs.backend_image == 'true'" in condition("container")
 
 
 def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:

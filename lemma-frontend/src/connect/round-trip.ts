@@ -194,6 +194,29 @@ export function openAuthorization(url: string, what: string): boolean {
 
 const OUTCOME_KEYS = ["connect", "connector", "account", "code", "reason"];
 
+/** The address the phone app waits on after a provider sign-in. Its browser
+ *  session (a Custom Tab, an `ASWebAuthenticationSession`) ends when it
+ *  reaches this, and the app reads the outcome off the query. */
+export const PHONE_APP_RETURN = "lemma://connect/done";
+
+/** Where the completion page sends a round trip the phone app started, or
+ *  null for every other one.
+ *
+ *  The app marks its own `return_to` with `client=mobile`, and the backend
+ *  keeps that query when it adds the outcome. There is no tab here to hand
+ *  the outcome to — only the app, which the browser cannot reach any other
+ *  way — and without this the session sat on the web's home until the person
+ *  closed it by hand. */
+export function phoneAppReturn(params: { get(key: string): string | null }): string | null {
+    if (params.get("client") !== "mobile") return null;
+    const query = new URLSearchParams();
+    for (const key of OUTCOME_KEYS) {
+        const value = params.get(key);
+        if (value) query.set(key, value);
+    }
+    return PHONE_APP_RETURN + "?" + query.toString();
+}
+
 function readOutcome(source: { get(key: string): string | null }): ConnectOutcome | null {
     const connect = source.get("connect");
     if (!connect) return null;

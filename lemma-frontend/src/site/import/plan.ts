@@ -1,4 +1,6 @@
 import type {
+    ConnectorChoice,
+    ConnectorPlan,
     ImportStatus,
     PlanStep,
     StepAction,
@@ -21,6 +23,7 @@ const KINDS: Record<string, { one: string; many: string; order: number }> = {
     FUNCTION: { one: "Function", many: "Functions", order: 6 },
     SURFACE: { one: "Channel", many: "Channels", order: 7 },
     FILE: { one: "File", many: "Files", order: 8 },
+    CONNECTOR: { one: "Connection", many: "Connections", order: 9 },
 };
 const HIDDEN = new Set(["AGENT_GRANTS", "FUNCTION_GRANTS"]);
 
@@ -97,7 +100,7 @@ export function askedVariables(variables: VariableSpec[]): VariableSpec[] {
     return variables.filter((v) => v.kind !== "pod_member");
 }
 
-/** `slack_account` → "Slack account", `triage-channel` → "Triage channel". */
+/** `app_slug` → "App slug", `triage-channel` → "Triage channel". */
 export function humanize(name: string): string {
     const words = name
         .replace(/[_-]+/g, " ")
@@ -147,8 +150,7 @@ export function slugify(name: string): string {
 
 /** What a variable is worth when nobody has chosen a value.
  *
- *  An account cannot be invented — it belongs to whoever is installing — but a
- *  free variable is only ever a name (an app's slug, say), and the teammate's
+ *  A free variable is only ever a name (an app's slug, say), and the teammate's
  *  name is the one thing the person has already chosen. Deriving it is what
  *  lets the plain path install without asking a non-technical person what a
  *  slug is; the developer path shows the same value in an editable field. */
@@ -159,10 +161,9 @@ export function suggestedValue(variable: VariableSpec, who: string): string {
 }
 
 /** Whether the plain path has to put this variable in front of the person:
- *  because nothing can fill it in for them, or because the name we would have
- *  derived came out empty. */
+ *  because the name we would have derived came out empty. */
 export function needsAnswer(variable: VariableSpec, who: string): boolean {
-    return variable.kind === "account" || !suggestedValue(variable, who);
+    return !suggestedValue(variable, who);
 }
 
 /** What a bundle brings, as one line: "2 agents, 1 workflow and 1 table".
@@ -176,4 +177,97 @@ export function contentsLine(groups: StepGroup[]): string {
     );
     if (parts.length < 2) return parts.join("");
     return parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1];
+}
+
+/** What the installer has picked for one bundled connector.
+ *
+ *  `installation` is an installation id, `CREATE` to install Lemma's own app
+ *  for it, or empty when there is nothing to pick from. `share` is one of the
+ *  installer's own account ids, or empty to share none — a credential is only
+ *  ever shared on purpose, so empty is the default. */
+export interface ConnectorPick {
+    installation: string;
+    share: string;
+}
+
+export const CREATE_INSTALLATION = "create";
+
+/** The pick a connector starts with: the org's default installation, else
+ *  nothing (the installer has to choose to create one), sharing no account. */
+export function defaultPick(c: ConnectorPlan): ConnectorPick {
+    return { installation: c.auth_config_id ?? "", share: "" };
+}
+
+/** Whether the plan declares this connector at all — not one the pod
+ *  already has, nor one whose slug clashes with the pod's. */
+export function declares(c: ConnectorPlan): boolean {
+    return c.status !== "EXISTS" && c.status !== "CONFLICT";
+}
+
+/** Why this connector stops the install as picked, or null when it does not.
+ *
+ *  A connector with nowhere to map to cannot be declared, and whatever names
+ *  its slug would be bound to nothing; a shared one with no account only
+ *  waits for one, which is a warning, not a stop. */
+export function blockedBy(c: ConnectorPlan, pick: ConnectorPick): string | null {
+    if (c.status === "CONFLICT") return c.message ?? "Its name is taken in this teammate.";
+    if (!declares(c)) return null;
+    if (pick.installation === CREATE_INSTALLATION)
+        return c.can_create_installation ? null : c.message;
+    if (pick.installation) return null;
+    return c.message ?? "Your organization has no " + c.connector + " installation.";
+}
+
+/** Which connectors the installer is asked about: any that blocks, has more
+ *  than one installation to pick from, could be created, or runs as one
+ *  shared account. A per-member one with one installation has nothing to ask. */
+export function askedConnectors(list: ConnectorPlan[]): ConnectorPlan[] {
+    return list.filter(
+        (c) =>
+            c.status === "CONFLICT" ||
+            (declares(c) &&
+                (c.installations.length !== 1 ||
+                    c.mode === "SHARED" ||
+                    c.can_create_installation)),
+    );
+}
+
+/** The accounts a shared connector can share on the picked installation. */
+export function shareableAccounts(c: ConnectorPlan, pick: ConnectorPick) {
+    return c.account_options.filter(
+        (a) => a.auth_config_id === pick.installation,
+    );
+}
+
+/** The apply request's `connectors`, by slug. Only what differs from the
+ *  plan's own default is sent; the server fills in the rest. */
+export function connectorChoices(
+    list: ConnectorPlan[],
+    picks: Record<string, ConnectorPick>,
+): Record<string, ConnectorChoice> {
+    const out: Record<string, ConnectorChoice> = {};
+    for (const c of list) {
+        if (!declares(c)) continue;
+        const pick = picks[c.slug] ?? defaultPick(c);
+        const choice: ConnectorChoice = {};
+        if (pick.installation === CREATE_INSTALLATION)
+            choice.create_installation = true;
+        else if (pick.installation && pick.installation !== c.auth_config_id)
+            choice.auth_config_id = pick.installation;
+        if (pick.share && c.mode === "SHARED")
+            choice.share_account_id = pick.share;
+        if (Object.keys(choice).length > 0) out[c.slug] = choice;
+    }
+    return out;
+}
+
+/** One line on what a connector is and how it runs. */
+export function connectorLine(c: ConnectorPlan): string {
+    const how =
+        c.mode === "SHARED"
+            ? "one shared account for everyone"
+            : c.required
+              ? "each member's own account — members are asked to connect"
+              : "each member's own account";
+    return humanize(c.connector) + ", " + how + (c.purpose ? ". " + c.purpose : "");
 }

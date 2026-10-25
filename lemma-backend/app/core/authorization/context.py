@@ -8,26 +8,28 @@ from enum import Enum
 from typing import Protocol
 from uuid import UUID
 
+from app.core.authorization.actor import (
+    Actor,
+    ActorType,
+    Assistant,
+    Delegation,
+    OtherPod,
+    Outsider,
+    OutsiderKind,
+    Person,
+    Workload,
+    WorkloadKind,
+    actor_type_of,
+)
 from app.core.authorization.permissions import equivalent_permission_ids
+from app.core.authorization.principals import PrincipalRef
+from app.core.authorization.session_approvals import APPROVABLE_REFUSALS, also_refused
+from app.core.authorization.denials import (
+    denial_message as _denial_message,
+    denial_resource_details as _denial_resource_details,
+)
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.transaction_locks import safe_to_release
-
-
-class ActorType(str, Enum):
-    USER = "USER"
-    AGENT = "AGENT"
-    FUNCTION = "FUNCTION"
-    DELEGATED_USER_WORKLOAD = "DELEGATED_USER_WORKLOAD"
-    SYSTEM = "SYSTEM"
-    ANONYMOUS = "ANONYMOUS"
-    #: Somebody outside the pod whom it knows by a vouched-for handle. Reads
-    #: what an anonymous visitor reads, and the pod database narrows contact-
-    #: owned tables to their own rows (``Context.contact_id``).
-    CONTACT = "CONTACT"
-    #: Another pod, asking this one over a link (``authorization.pod_principal``):
-    #: Public reads here, plus whatever this pod granted that pod, and nothing
-    #: in any other pod.
-    POD = "POD"
 
 
 class ResourceType(str, Enum):
@@ -97,12 +99,6 @@ def normalize_resource_visibility(
         return ResourceVisibility(normalized)
     except ValueError:
         return _VISIBILITY_ALIASES.get(normalized)
-
-
-@dataclass(frozen=True, slots=True)
-class PrincipalRef:
-    type: str
-    id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,18 +204,6 @@ class ResourceRef:
             pod_id=pod_id,
         )
 
-    @classmethod
-    def connector_auth_config(
-        cls,
-        organization_id: UUID,
-        auth_config_id: UUID,
-    ) -> "ResourceRef":
-        return cls(
-            resource_type=ResourceType.CONNECTOR_AUTH_CONFIG,
-            resource_id=auth_config_id,
-            organization_id=organization_id,
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class AuthorizationDecision:
@@ -236,68 +220,9 @@ class AuthorizationDecision:
     resource_name: str | None = None
 
 
-# Grantee kind -> the CLI command that adds a grant to it. A denial is the moment
-# the operator needs the fix, and the fix is one command.
-_GRANT_COMMAND_BY_TYPE = {
-    "datastore_table": "<table>:read,write",
-    "folder": "<path>:read",
-    "document": "doc:<path>:read",
-    "function": "function:<name>:execute",
-    "agent": "agent:<name>:execute",
-    "workflow": "workflow:<name>:execute",
-    "connector": "connector:<name>:use",
-    "connector_account": "account:<id>:use",
-    "app": "app:<name>:read",
-    "schedule": "schedule:<name>:read",
-}
-
-
-def _denial_resource_details(decision: "AuthorizationDecision") -> dict[str, object]:
-    resource = decision.resource
-    if resource is None:
-        return {}
-    details: dict[str, object] = {"resource_type": resource.resource_type.value}
-    if decision.resource_name:
-        details["resource_name"] = decision.resource_name
-    return details
-
-
-def _denial_message(permission_id: str, decision: "AuthorizationDecision") -> str:
-    """Say what was denied AND on what.
-
-    "Missing permission datastore.table.read" is unactionable when the caller
-    touches several tables: it names the verb, never the noun. The docs have
-    always told operators the error names the resource, so make that true.
-    """
-    resource = decision.resource
-    if resource is None:
-        return f"Missing permission {permission_id}"
-    resource_type = resource.resource_type.value
-    target = f" on {resource_type}"
-    if decision.resource_name:
-        target += f" '{decision.resource_name}'"
-    message = f"Missing permission {permission_id}{target}"
-    if decision.reason_code == "DELEGATION_EXCEEDS_INVOKER":
-        # The workload is granted this; the person it is acting for is not. Say
-        # so, because the usual fix — grant the workload more — is the one thing
-        # that cannot work here.
-        return (
-            f"{message} — the person this run acts for does not have it, and a "
-            f"workload never exceeds its invoker. Give that person the "
-            f"permission, or run this as someone who already has it."
-        )
-    if decision.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT":
-        spec = _GRANT_COMMAND_BY_TYPE.get(resource_type)
-        if spec and decision.resource_name:
-            spec = spec.replace("<table>", decision.resource_name)
-            spec = spec.replace("<path>", decision.resource_name)
-            spec = spec.replace("<name>", decision.resource_name)
-            spec = spec.replace("<id>", decision.resource_name)
-            message += (
-                f" — grant it with `lemma agents|functions permissions add "
-                f"<workload> {spec}`"
-            )
-    return message
+#: A row named on one pod's route that lives in another pod. ``require`` answers
+#: it as not found: to the pod being asked, it does not exist.
+RESOURCE_NOT_IN_POD = "RESOURCE_NOT_IN_POD"
 
 
 class AuthorizerProtocol(Protocol):
@@ -319,7 +244,9 @@ class AuthorizerProtocol(Protocol):
 
 @dataclass(slots=True)
 class Context:
-    actor_type: ActorType
+    #: Who is acting. Its type is the actor kind; there is no separate flag.
+    actor: Actor
+    #: The actor's audit label ("<user id>", "agent:<id>", "pod:<id>").
     actor_id: str
     authorizer: AuthorizerProtocol
     request_id: str | None = None
@@ -331,7 +258,6 @@ class Context:
     permission_ids: frozenset[str] = field(default_factory=frozenset)
     principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
     grant_principal_sets: tuple[frozenset[PrincipalRef], ...] = ()
-    workload_principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
     #: The invoking person's OWN principals and role names, kept unmerged.
     #:
     #: ``principal_refs`` and ``role_names`` above are the union of the person's
@@ -343,17 +269,7 @@ class Context:
     #: person holds no grants", never "skip the check".
     invoker_principal_refs: frozenset[PrincipalRef] = field(default_factory=frozenset)
     invoker_role_names: frozenset[str] = field(default_factory=frozenset)
-    delegated_by_user_id: UUID | None = None
-    delegation_session_id: str | None = None
-    delegation_scope: frozenset[str] = field(default_factory=frozenset)
-    delegation_actor_name: str | None = None
     is_superuser: bool = False
-    # The default pod agent (``pod_default``) runs as a DELEGATED_USER_WORKLOAD but
-    # inherits the invoking user's context verbatim, scoped to its own pod. This
-    # flag lets pod-scoped USER-only authorization shortcuts (e.g. the org-owner
-    # pod allow) treat it as the user it is acting for — without widening
-    # real (grant-backed) agent/function workloads, which leave it False.
-    is_user_equivalent: bool = False
     #: Whether the pod this context is scoped to has been deleted.
     #:
     #: A deleted pod is soft-deleted: its rows, its memberships and its role
@@ -365,6 +281,10 @@ class Context:
     #: run on a contact's behalf. The pod database names it to every session it
     #: opens for this context, so contact-owned tables show only their rows.
     contact_id: UUID | None = None
+    #: Every permission the action under way needs, when its caller knows them.
+    #: A refusal then names all the approvable ones at once, so the person is
+    #: asked one time per action (``session_approvals.also_refused``).
+    action_requirements: frozenset[str] = field(default_factory=frozenset)
     _decision_cache: dict[
         tuple[str, ResourceType | None, UUID | None], AuthorizationDecision
     ] = field(default_factory=dict)
@@ -379,6 +299,11 @@ class Context:
     _session_approval_cache: dict[str, bool] = field(default_factory=dict)
 
     @property
+    def actor_type(self) -> ActorType:
+        """The label this actor is reported under. Not for decisions."""
+        return actor_type_of(self.actor)
+
+    @property
     def is_authenticated(self) -> bool:
         return not self.is_outsider
 
@@ -387,14 +312,77 @@ class Context:
         """Somebody outside the pod: an anonymous visitor, a contact, or another
         pod asking over a link. None of them is a member, and the pod database
         reads each as nobody in particular (``RowPrincipal.of``)."""
-        return self.actor_type in (
-            ActorType.ANONYMOUS,
-            ActorType.CONTACT,
-            ActorType.POD,
-        )
+        return isinstance(self.actor, (Outsider, OtherPod))
+
+    @property
+    def is_assistant(self) -> bool:
+        """The pod's default agent, mirroring the person who invoked it."""
+        return isinstance(self.actor, Assistant)
+
+    @property
+    def workload(self) -> Workload | None:
+        """The named agent or function acting, if one is."""
+        return self.actor if isinstance(self.actor, Workload) else None
+
+    @property
+    def is_named_workload(self) -> bool:
+        """A named agent or function acting for a person: the intersection
+        actor (person's access ∩ its own grants)."""
+        return isinstance(self.actor, Workload) and self.actor.for_user_id is not None
+
+    @property
+    def workload_principal_refs(self) -> frozenset[PrincipalRef]:
+        """A named workload's own principals, when it acts for a person.
+
+        Empty for every other actor -- including a person-less run, whose
+        principals are already the context's own ``principal_refs``, and which
+        is decided on them alone rather than as one half of an intersection.
+        """
+        if self.is_named_workload:
+            return self.actor.principal_refs  # type: ignore[union-attr]
+        return frozenset()
+
+    @property
+    def delegation(self) -> Delegation | None:
+        """Present when software acts for a person: the assistant, or a named
+        workload with a person behind it. None for a person, an outsider, and a
+        person-less run."""
+        if isinstance(self.actor, Assistant) or self.is_named_workload:
+            return self.actor.delegation  # type: ignore[union-attr]
+        return None
+
+    @property
+    def is_delegated(self) -> bool:
+        return self.delegation is not None
+
+    @property
+    def delegating_user_id(self) -> UUID | None:
+        """The person a piece of software acts for; None otherwise."""
+        if isinstance(self.actor, Assistant):
+            return self.actor.user_id
+        if isinstance(self.actor, Workload):
+            return self.actor.for_user_id
+        return None
 
     def has_permission(self, permission_id: str) -> bool:
         return bool(equivalent_permission_ids(permission_id) & self.permission_ids)
+
+    def belongs_to_its_pod(self) -> bool:
+        """Whether the person this context acts as holds a role in its pod.
+
+        A pod role, or an org role that reaches every pod (an org owner's).
+        For a named workload it is the invoking person who must belong. The
+        per-request check and the SQL listings both ask this, so a person
+        removed from a pod loses what they owned there in both at once.
+        """
+        principals = (
+            self.invoker_principal_refs
+            if self.is_named_workload
+            else self.principal_refs
+        )
+        return any(ref.type == "POD_MEMBER" for ref in principals) or (
+            self.has_permission("pod.read")
+        )
 
     async def can(
         self,
@@ -418,6 +406,11 @@ class Context:
                 code="AUTH_REQUIRED",
                 status_code=401,
             )
+        if decision.reason_code == RESOURCE_NOT_IN_POD:
+            raise DomainError("Not found", code="NOT_FOUND", status_code=404)
+        permission_ids = [permission_id]
+        if decision.reason_code in APPROVABLE_REFUSALS:
+            permission_ids += await also_refused(self, permission_id, resource)
         raise DomainError(
             _denial_message(permission_id, decision),
             code=decision.reason_code,
@@ -426,7 +419,7 @@ class Context:
             # into a request_approval payload (session approvals key on it), and
             # so callers can act on the resource without parsing prose.
             details={
-                "permission_ids": [permission_id],
+                "permission_ids": permission_ids,
                 **_denial_resource_details(decision),
             },
         )
@@ -542,3 +535,27 @@ class Context:
         if not safe_to_release(session):
             return
         await session.commit()
+
+
+__all__ = [
+    "RESOURCE_NOT_IN_POD",
+    "Actor",
+    "ActorType",
+    "Assistant",
+    "AuthorizationDecision",
+    "AuthorizerProtocol",
+    "Context",
+    "Delegation",
+    "OtherPod",
+    "Outsider",
+    "OutsiderKind",
+    "Person",
+    "PrincipalRef",
+    "ResourceRef",
+    "ResourceType",
+    "ResourceVisibility",
+    "Workload",
+    "WorkloadKind",
+    "actor_type_of",
+    "normalize_resource_visibility",
+]

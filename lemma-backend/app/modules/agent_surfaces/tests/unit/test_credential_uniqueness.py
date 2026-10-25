@@ -239,7 +239,7 @@ def _slack_surface(
     *,
     workspace_id: str | None = "T_ACME",
     bot_identity: str | None = "U_LEMMABOT",
-    account_id=None,
+    pod_connector_slug: str = "slack-bot",
 ) -> AgentSurfaceEntity:
     """A Slack surface as `SurfaceAccountBindingResolver` leaves one.
 
@@ -257,7 +257,7 @@ def _slack_surface(
         config=SurfaceConfig(),
         agent_id=pod_id,
         credential_mode=SurfaceCredentialMode.CUSTOM,
-        account_id=account_id or uuid4(),
+        pod_connector_slug=pod_connector_slug,
         external_workspace_id=workspace_id,
         surface_identity_id=bot_identity,
     )

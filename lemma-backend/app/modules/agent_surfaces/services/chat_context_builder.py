@@ -11,7 +11,10 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
 )
-from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.domain.ingress_context import (
+    SurfaceChatContext,
+    SurfaceConnectorRef,
+)
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
@@ -47,7 +50,7 @@ def build_chat_context(
         user_id=user_id,
         surface_id=surface.id,
         surface_name=surface.name,
-        surface_account_id=surface.account_id,
+        surface_connector=SurfaceConnectorRef.of(surface),
         surface_config=surface.config,
         agent_display_name=route.agent_display_name,
         message_text=parsed.message_text,

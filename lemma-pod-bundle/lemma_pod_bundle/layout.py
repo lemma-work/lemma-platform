@@ -8,7 +8,16 @@ from typing import Any
 
 from .jsonc import loads_jsonc
 
-FORMAT_VERSION = 3
+#: The newest bundle format this code reads. 4 added
+#: ``connectors/<slug>/<slug>.json``: a reader of 3 would skip that directory
+#: and import everything that names those connectors bound to nothing, so a
+#: reader refuses a newer format up front (:func:`check_format_version`)
+#: rather than importing half of it.
+FORMAT_VERSION = 4
+#: The format a bundle declaring no pod connector is written as. Nothing else
+#: changed in 4, so writing 4 for it would only lock out the readers of 3 that
+#: read it whole (:func:`bundle_format_version`).
+FORMAT_VERSION_WITHOUT_CONNECTORS = 3
 # The bundle's root manifest file (pod metadata, contents scope, variables).
 POD_MANIFEST_FILE = "pod.json"
 # Legacy placeholder for a pod-member assignee; superseded by ${name} variables
@@ -22,7 +31,11 @@ JSON_FILE_REF_KEY = "$json_file"
 # Some app scaffolds write the manifest as `lemma.app.json` rather than
 # `<name>.json`. Accept it as an alias so those bundles import without a rename.
 APP_MANIFEST_ALIAS = "lemma.app.json"
+# `connectors` comes first: every other resource may name a pod connector by
+# its slug (a schedule or surface runs through one, a grant is on one), so an
+# importer declares them before anything that refers to them.
 RESOURCE_DIRS = (
+    "connectors",
     "tables",
     "functions",
     "agents",
@@ -34,6 +47,10 @@ RESOURCE_DIRS = (
 )
 EXPORTABLE_RESOURCE_DIRS = frozenset(RESOURCE_DIRS)
 RESOURCE_DIR_ALIASES = {
+    "connector": "connectors",
+    "connectors": "connectors",
+    "pod_connector": "connectors",
+    "pod_connectors": "connectors",
     "table": "tables",
     "tables": "tables",
     "function": "functions",
@@ -273,3 +290,35 @@ def _bundle_folder_keys(files_root: Path) -> set[str]:
             if parts:
                 keys.add(_file_path_key(parts))
     return keys
+
+
+def check_format_version(pod_manifest: object) -> int:
+    """The manifest's ``format_version``, or ``ValueError`` when it is newer
+    than this code reads.
+
+    A missing or unreadable version reads as 0: bundles written by hand, or
+    before the field existed, are the oldest format and import as they did.
+    """
+    raw = pod_manifest.get("format_version") if isinstance(pod_manifest, dict) else None
+    try:
+        version = int(raw or 0)
+    except TypeError, ValueError:
+        raise ValueError(
+            f"{POD_MANIFEST_FILE}: format_version must be a whole number, not {raw!r}"
+        ) from None
+    if version > FORMAT_VERSION:
+        raise ValueError(
+            f"This bundle is format {version}, and this version of Lemma reads up "
+            f"to format {FORMAT_VERSION}. Update the Lemma CLI (or ask for the "
+            "server to be updated) and import it again; importing it now would "
+            "leave out what the newer format added."
+        )
+    return version
+
+
+def bundle_format_version(bundle_root: Path) -> int:
+    """The format to write in this bundle's ``pod.json``: 4 only when it
+    declares a pod connector, the one thing a reader of 3 would leave out."""
+    connectors = bundle_root / "connectors"
+    declares = connectors.is_dir() and any(p.is_dir() for p in connectors.iterdir())
+    return FORMAT_VERSION if declares else FORMAT_VERSION_WITHOUT_CONNECTORS

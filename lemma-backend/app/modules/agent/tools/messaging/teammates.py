@@ -29,6 +29,7 @@ from app.modules.agent.services.pod_ask_service import (
     Teammate,
     resolve_teammate,
 )
+from app.modules.agent.tools.approval_denials import remember_denial
 from app.modules.agent.tools.authority import workload_actor_id
 from app.modules.agent.tools.context import BaseAgentContext, BaseToolResponse
 
@@ -177,7 +178,11 @@ async def ask_teammate(
         # Only asking as the person needs their OK: a link was approved by the
         # other pod's people, once, for asks nobody stands behind.
         if mode is AskMode.AS_PERSON and not await _approved(deps, target):
-            return _approval_needed(target, request)
+            needed = _approval_needed(target, request)
+            # The server's record of what this ask needs, which is what an
+            # approval of it will unlock -- not the model's copy of it.
+            await remember_denial(deps, needed)
+            return needed
         outcome = await service.ask(
             deps,
             teammate=target,
@@ -204,6 +209,7 @@ async def _approved(deps: BaseAgentContext, target: Teammate) -> bool:
         return True
     return await has_session_approval(
         session_id=str(deps.conversation_id),
+        person_user_id=deps.user_id,
         workload_actor_id=workload_actor_id(deps),
         permission_id=ask_permission_id(target.pod_id),
     )

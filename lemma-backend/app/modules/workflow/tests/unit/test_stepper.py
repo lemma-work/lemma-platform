@@ -45,6 +45,13 @@ class StubAgentPort:
         return {"status": "RUNNING"}
 
 
+class AllowsEveryAgent:
+    """The access check, answering yes: these tests are about stepping."""
+
+    async def require_execute(self, *, agent_name, pod_id, user_id):
+        return None
+
+
 class StubFunctionPort:
     def __init__(self, results=None):
         self.calls: list[dict] = []
@@ -97,6 +104,7 @@ def _stepper(function_results=None, agent=None, function=None, work=None) -> Run
         agent=agent or StubAgentPort(),
         function=function or StubFunctionPort(function_results),
         work=work or RecordingWork(),  # type: ignore[arg-type]
+        agent_access=AllowsEveryAgent(),
     )
 
 

@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
+from app.modules.schedule.domain.errors import ScheduleNotFoundError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -76,7 +77,8 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             filter_instruction=entity.filter_instruction,
             filter_output_schema=entity.filter_output_schema,
             include_outside_rows=entity.include_outside_rows,
-            account_id=entity.account_id,
+            pod_connector_slug=entity.pod_connector_slug,
+            pod_account_id=entity.pod_account_id,
             connector_trigger_id=entity.connector_trigger_id,
             visibility=entity.visibility,
             is_active=entity.is_active,
@@ -98,7 +100,9 @@ class ScheduleRepository(ScheduleRepositoryInterface):
                 fire_at=schedule.next_fire_at,
             )
         created = await self.get(schedule.id)
-        assert created is not None
+        if created is None:
+            # Removed in this transaction between the insert and the read.
+            raise ScheduleNotFoundError()
         # `ScheduleCreated` has existed since the module was written and nothing
         # ever published it. Raised here rather than in the service because this
         # is the single write path, and the row exists by now -- so an event that

@@ -7,15 +7,14 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.authorization.conferral import assert_can_confer
 from app.core.authorization.grants import (
     normalize_pod_resource_grants,
     replace_grantee_resource_grants,
     validate_pod_resource_grant_permissions,
 )
+from app.core.api.actor_policy import require_person
 from app.core.authorization.dependencies import (
     PodContextDep,
-    reject_delegated_workload_pod,
 )
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.helpers.slug import normalize_resource_name
@@ -132,7 +131,12 @@ async def create_function(
         pod_id=pod_id, entity=entity, user_id=user.id, code=data.code, request=request
     )
     await apply_function_grants(
-        uow_factory, pod_id=pod_id, function=function, data=data, user=user
+        uow_factory,
+        pod_id=pod_id,
+        function=function,
+        data=data,
+        user=user,
+        request=request,
     )
     return await _function_action_response(function)
 
@@ -292,15 +296,6 @@ async def replace_function_permissions(
     validate_pod_resource_grant_permissions(data.grants)
     # See the agent equivalent: a function runs on its grants, so granting one a
     # permission you do not hold is conferral (PS-ACCESS-010).
-    assert_can_confer(
-        ctx,
-        [
-            permission_id
-            for grant in data.grants
-            for permission_id in grant.permission_ids
-        ],
-        action="grant a function permissions you do not hold",
-    )
     grants = await normalize_pod_resource_grants(
         uow.session,
         pod_id=pod_id,
@@ -308,11 +303,13 @@ async def replace_function_permissions(
     )
     await replace_grantee_resource_grants(
         uow.session,
+        ctx=ctx,
         pod_id=pod_id,
         grantee_type="FUNCTION",
         grantee_id=function.id,
         grants=grants,
         created_by_user_id=user.id,
+        action="grant a function permissions you could not use",
     )
     # After the commit, not inside it. Inline, this held a pooled connection
     # across a Redis round trip, and ran in the wrong order besides: a
@@ -342,7 +339,7 @@ async def replace_function_permissions(
         "`contact_id`, which its input schema must declare. Takes pod settings "
         "permission and either owning the function or administering the pod."
     ),
-    dependencies=[reject_delegated_workload_pod("open a function to contacts")],
+    dependencies=[require_person("open a function to contacts")],
 )
 async def update_function_contact_access(
     request: Request,
@@ -411,7 +408,12 @@ async def update_function(
         request=request,
     )
     await apply_function_grants(
-        uow_factory, pod_id=pod_id, function=function, data=data, user=user
+        uow_factory,
+        pod_id=pod_id,
+        function=function,
+        data=data,
+        user=user,
+        request=request,
     )
     return await _function_action_response(function)
 

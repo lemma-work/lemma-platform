@@ -11,7 +11,6 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.usage.config import UsageSettings, usage_settings
 from app.modules.usage.domain.contacts_cap import (
     ContactsCap,
-    cap_reached,
     effective_contacts_cap,
 )
 from app.modules.usage.infrastructure.contacts_cap_repository import (
@@ -23,11 +22,6 @@ from app.modules.usage.infrastructure.contacts_cap_repository import (
 class ContactsCapStatus:
     cap: ContactsCap
     spent_usd: Decimal
-    reserved_usd: Decimal
-
-    @property
-    def reached(self) -> bool:
-        return cap_reached(self.cap, consumed_usd=self.spent_usd + self.reserved_usd)
 
 
 def this_month(now: datetime) -> tuple[datetime, datetime]:
@@ -58,11 +52,18 @@ async def contacts_cap_status(
     settings: UsageSettings | None = None,
     now: datetime | None = None,
 ) -> ContactsCapStatus:
-    """The cap that applies, what was spent under it, and what is reserved now."""
+    """The cap that applies, and what was spent under it, summed from the ledger.
+
+    For the owners' page, which shows the month's spend whether or not a cap
+    applies: a window with no limit keeps no running total to read. Whether a
+    contact may be answered is decided on that total instead
+    (``usage_admission.contacts_cap_spent``), so the two can differ while it
+    is due a recount.
+    """
     start, end = this_month(now or datetime.now(timezone.utc))
-    caps = UsageContactsCapRepository(uow.session)
     return ContactsCapStatus(
         cap=await applicable_contacts_cap(uow, organization_id, settings=settings),
-        spent_usd=await caps.spend(organization_id, start=start, end=end),
-        reserved_usd=await caps.reserved(organization_id, start=start),
+        spent_usd=await UsageContactsCapRepository(uow.session).spend(
+            organization_id, start=start, end=end
+        ),
     )

@@ -136,10 +136,9 @@ def _conversation_metadata(
 
     repo = (metadata or {}).get("repo")
     if isinstance(repo, dict) and repo:
-        bound = dict(repo)
-        if schedule.account_id is not None:
-            bound["account_id"] = str(schedule.account_id)
-        started["repo"] = bound
+        # The repository only. Which account clones it is the pod's `github`
+        # connector's decision, for the person the run acts for.
+        started["repo"] = dict(repo)
     return started
 
 

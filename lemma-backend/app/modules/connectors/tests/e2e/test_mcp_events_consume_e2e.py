@@ -11,7 +11,8 @@ at `POST /webhooks/mcp` while `events/subscribe` is still waiting -- the
 order that forces the subscription to be committed before the call.
 
 The loop: connecting the server records its events; the pod's catalog offers
-them; a WEBHOOK schedule on one subscribes on the author's account; an
+them; a WEBHOOK schedule on one subscribes through the pod's connector, on the
+account it resolves to for the author; an
 occurrence starts one run and its redelivery none; an edit swaps the
 subscription; renewal refreshes it; deleting the schedule unsubscribes, and the
 old callback stops verifying.
@@ -330,7 +331,12 @@ async def tracker_account(db_session, fixed_test_org, fixed_test_user, tracker):
     return install, account
 
 
-async def _pod(client: AsyncClient, org_id: str) -> str:
+#: The pod connector every test pod declares on the tracker's installation.
+TRACKER = "tracker"
+
+
+async def _pod(client: AsyncClient, org_id: str, install) -> str:
+    """A pod declaring the tracker, per member: each person's own account."""
     response = await client.post(
         "/pods",
         json={
@@ -341,11 +347,17 @@ async def _pod(client: AsyncClient, org_id: str) -> str:
         },
     )
     assert response.status_code == 201, response.text
-    return response.json()["id"]
+    pod_id = response.json()["id"]
+    declared = await client.post(
+        f"/pods/{pod_id}/connectors",
+        json={"slug": TRACKER, "auth_config_id": str(install.id), "mode": "PER_MEMBER"},
+    )
+    assert declared.status_code == 201, declared.text
+    return pod_id
 
 
 async def _schedule(
-    client: AsyncClient, pod_id: str, account_id: str, *, project: str, status=201
+    client: AsyncClient, pod_id: str, connector: str, *, project: str, status=201
 ) -> dict:
     response = await client.post(
         f"/pods/{pod_id}/schedules",
@@ -353,7 +365,7 @@ async def _schedule(
             "schedule_type": "WEBHOOK",
             "agent_name": "POD_DEFAULT",
             "instruction": "Triage the new issue.",
-            "account_id": account_id,
+            "pod_connector": connector,
             "config": {
                 "source": "mcp",
                 "event": "issue.created",
@@ -398,18 +410,16 @@ async def test_an_issue_on_a_connected_server_starts_standing_work_once(
 ):
     _ = worker
     install, account = tracker_account
-    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
 
     catalog = (await authenticated_client.get(f"/pods/{pod_id}/events")).json()
     offered = [item for item in catalog["items"] if item.get("event")]
     assert [
         (item["event"], item["server"], item["schedule_type"]) for item in offered
     ] == [("issue.created", install.name, "WEBHOOK")]
-    assert offered[0]["account_id"] == str(account.id)
+    assert offered[0]["pod_connector"] == TRACKER
 
-    schedule = await _schedule(
-        authenticated_client, pod_id, str(account.id), project="web"
-    )
+    schedule = await _schedule(authenticated_client, pod_id, TRACKER, project="web")
     assert tracker.challenges_passed == 1, "the callback proved itself first"
     [row] = await _subscriptions(db_session)
     assert schedule["config"]["provider_trigger_id"] == str(row.id)
@@ -417,22 +427,22 @@ async def test_an_issue_on_a_connected_server_starts_standing_work_once(
     assert schedule["listening"]["state"] == "listening"
     assert schedule["listening"]["server"] == install.name
 
-    # A schedule in another pod carrying that subscription id with no account
-    # behind it -- however it got there: an import, a path that skipped the
+    # A schedule in another pod carrying that subscription id with no
+    # connector behind it -- however it got there: an import, a path that skipped the
     # API's checks, a row from before they existed. Nothing the server sends
     # for this subscription reaches it.
     from sqlalchemy import update as sql_update
 
     from app.modules.schedule.infrastructure.models.schedule import Schedule
 
-    other_pod = await _pod(authenticated_client, fixed_test_org["id"])
+    other_pod = await _pod(authenticated_client, fixed_test_org["id"], install)
     forged = await _schedule(
-        authenticated_client, other_pod, str(account.id), project="elsewhere"
+        authenticated_client, other_pod, TRACKER, project="elsewhere"
     )
     await db_session.execute(
         sql_update(Schedule)
         .where(Schedule.id == forged["id"])
-        .values(account_id=None, config={"provider_trigger_id": str(row.id)})
+        .values(pod_connector_slug=None, config={"provider_trigger_id": str(row.id)})
     )
     await db_session.commit()
 
@@ -473,11 +483,9 @@ async def test_edit_renew_and_delete_keep_the_server_in_step(
         McpEventSubscriptions,
     )
 
-    _, account = tracker_account
-    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
-    schedule = await _schedule(
-        authenticated_client, pod_id, str(account.id), project="web"
-    )
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
+    schedule = await _schedule(authenticated_client, pod_id, TRACKER, project="web")
     [first] = await _subscriptions(db_session)
 
     edited = await authenticated_client.patch(
@@ -553,10 +561,10 @@ async def test_a_subscription_the_server_keeps_refusing_steps_aside(
     # A batch of one shows with two subscriptions what a full batch of refused
     # ones did before: the refused one took the batch on every pass.
     monkeypatch.setattr(mcp_event_repository, "REFRESH_BATCH", 1)
-    _, account = tracker_account
-    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
-    await _schedule(authenticated_client, pod_id, str(account.id), project="web")
-    await _schedule(authenticated_client, pod_id, str(account.id), project="api")
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
+    await _schedule(authenticated_client, pod_id, TRACKER, project="web")
+    await _schedule(authenticated_client, pod_id, TRACKER, project="api")
     tracker.refusing.add("web")
 
     later = datetime.now(timezone.utc) + timedelta(minutes=40)
@@ -594,10 +602,10 @@ async def test_a_subscription_the_server_keeps_refusing_steps_aside(
 async def test_what_cannot_be_listened_to_is_refused_and_leaves_nothing(
     authenticated_client, fixed_test_org, db_session, tracker, tracker_account
 ):
-    _, account = tracker_account
-    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
 
-    no_account = await authenticated_client.post(
+    no_connector = await authenticated_client.post(
         f"/pods/{pod_id}/schedules",
         json={
             "schedule_type": "WEBHOOK",
@@ -606,7 +614,7 @@ async def test_what_cannot_be_listened_to_is_refused_and_leaves_nothing(
             "config": {"source": "mcp", "event": "issue.created", "arguments": {}},
         },
     )
-    assert no_account.status_code in (400, 422), no_account.text
+    assert no_connector.status_code in (400, 422), no_connector.text
 
     unknown = await authenticated_client.post(
         f"/pods/{pod_id}/schedules",
@@ -614,7 +622,7 @@ async def test_what_cannot_be_listened_to_is_refused_and_leaves_nothing(
             "schedule_type": "WEBHOOK",
             "agent_name": "POD_DEFAULT",
             "instruction": "x",
-            "account_id": str(account.id),
+            "pod_connector": TRACKER,
             "config": {"source": "mcp", "event": "issue.closed", "arguments": {}},
         },
     )
@@ -626,7 +634,7 @@ async def test_what_cannot_be_listened_to_is_refused_and_leaves_nothing(
             "schedule_type": "WEBHOOK",
             "agent_name": "POD_DEFAULT",
             "instruction": "x",
-            "account_id": str(account.id),
+            "pod_connector": TRACKER,
             "config": {"source": "mcp", "event": "issue.created", "arguments": {}},
         },
     )
@@ -680,11 +688,9 @@ async def test_a_subscription_no_schedule_holds_is_dropped(
 
     from app.modules.schedule.infrastructure.models.schedule import Schedule
 
-    _, account = tracker_account
-    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
-    schedule = await _schedule(
-        authenticated_client, pod_id, str(account.id), project="web"
-    )
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
+    schedule = await _schedule(authenticated_client, pod_id, TRACKER, project="web")
     [row] = await _subscriptions(db_session)
     await db_session.execute(delete(Schedule).where(Schedule.id == schedule["id"]))
     await db_session.commit()
@@ -703,11 +709,9 @@ async def test_a_subscription_no_schedule_holds_is_dropped(
 async def test_an_author_who_left_the_pod_stops_their_account_listening(
     authenticated_client, fixed_test_org, db_session, tracker, tracker_account
 ):
-    _, account = tracker_account
-    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
-    schedule = await _schedule(
-        authenticated_client, pod_id, str(account.id), project="web"
-    )
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
+    schedule = await _schedule(authenticated_client, pod_id, TRACKER, project="web")
     [row] = await _subscriptions(db_session)
 
     async def gone(*_: object) -> bool:
@@ -733,6 +737,34 @@ async def test_an_author_who_left_the_pod_stops_their_account_listening(
     assert len(tracker.subscriptions) == 1
 
 
+async def test_a_connector_that_no_longer_reaches_the_account_stops_it_listening(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account
+):
+    """The schedule names the pod's `tracker` connector; the subscription was
+    made on the account it resolved to. Its owner taking that account out of
+    the pod leaves the connector resolving to nothing, and the subscription
+    must not go on renewing on it."""
+    install, _ = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
+    schedule = await _schedule(authenticated_client, pod_id, TRACKER, project="web")
+    [row] = await _subscriptions(db_session)
+    assert (await _reconciler().run()).turned_off == 0, "still resolves: kept"
+
+    listed = await authenticated_client.get(f"/pods/{pod_id}/connector-accounts")
+    [mine] = listed.json()["items"]
+    removed = await authenticated_client.delete(
+        f"/pods/{pod_id}/connector-accounts/{mine['id']}"
+    )
+    assert removed.status_code == 204, removed.text
+
+    assert (await _reconciler().run()).turned_off == 1
+    off = await _schedule_row(db_session, schedule["id"])
+    assert off.is_active is False
+    assert off.last_error.startswith("Turned off: the connector it listens through")
+    assert await _subscriptions(db_session) == []
+    assert row.remote_id in tracker.unsubscribed
+
+
 async def test_a_subscription_the_server_stopped_renewing_turns_the_schedule_off(
     authenticated_client, fixed_test_org, db_session, tracker, tracker_account
 ):
@@ -742,11 +774,9 @@ async def test_a_subscription_the_server_stopped_renewing_turns_the_schedule_off
         LAPSED_AFTER_FAILURES,
     )
 
-    _, account = tracker_account
-    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
-    schedule = await _schedule(
-        authenticated_client, pod_id, str(account.id), project="web"
-    )
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
+    schedule = await _schedule(authenticated_client, pod_id, TRACKER, project="web")
     [row] = await _subscriptions(db_session)
 
     await db_session.execute(
@@ -789,11 +819,9 @@ async def test_a_paused_schedule_stops_listening_when_its_author_leaves(
 ):
     """Paused, its subscription still renews on the author's account; their
     leaving must end that too, not wait for someone to resume it."""
-    _, account = tracker_account
-    pod_id = await _pod(authenticated_client, fixed_test_org["id"])
-    schedule = await _schedule(
-        authenticated_client, pod_id, str(account.id), project="web"
-    )
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
+    schedule = await _schedule(authenticated_client, pod_id, TRACKER, project="web")
     [row] = await _subscriptions(db_session)
     paused = await authenticated_client.patch(
         f"/pods/{pod_id}/schedules/{schedule['id']}", json={"is_active": False}
@@ -811,3 +839,35 @@ async def test_a_paused_schedule_stops_listening_when_its_author_leaves(
     assert off.last_error.startswith("Turned off: the person whose account")
     assert await _subscriptions(db_session) == []
     assert row.remote_id in tracker.unsubscribed
+
+
+async def test_a_schedule_naming_an_account_listens_through_its_pod_connector(
+    authenticated_client, fixed_test_org, db_session, tracker, tracker_account
+):
+    """Deprecated, still served: `account_id` becomes the pod connector that
+    serves that account to its caller, and the response says so."""
+    install, account = tracker_account
+    pod_id = await _pod(authenticated_client, fixed_test_org["id"], install)
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "schedule_type": "WEBHOOK",
+            "agent_name": "POD_DEFAULT",
+            "instruction": "Triage the new issue.",
+            "account_id": str(account.id),
+            "config": {
+                "source": "mcp",
+                "event": "issue.created",
+                "arguments": {"project": "web"},
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["pod_connector"] == TRACKER
+    assert response.json()["account_id"] is None
+    assert (
+        "schedule.create.account_id is deprecated"
+        in (response.headers["x-lemma-deprecation"])
+    )

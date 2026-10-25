@@ -46,9 +46,9 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.context import (
-    ActorType,
     AuthorizationDecision,
     Context,
+    Person,
     ResourceRef,
     ResourceVisibility,
 )
@@ -72,9 +72,8 @@ async def authorize_delegated_workload(
     approval for the action type. That does not lift the ceiling below -- a
     person cannot approve, for a workload, what they could not do themselves.
     """
-    if ctx.delegation_scope and not (
-        equivalent_permission_ids(permission_id) & ctx.delegation_scope
-    ):
+    scope = ctx.delegation.scope if ctx.delegation is not None else frozenset()
+    if scope and not (equivalent_permission_ids(permission_id) & scope):
         # Implication-expanded so a {function.execute} scope also covers
         # the implied function.read a run needs.
         return AuthorizationDecision(
@@ -149,7 +148,7 @@ async def authorize_delegated_workload(
 
         if await _session_approval(
             ctx,
-            session_id=ctx.delegation_session_id,
+            session_id=ctx.delegation.session_id if ctx.delegation else None,
             workload_actor_id=ctx.actor_id,
             permission_id=permission_id,
         ):
@@ -231,7 +230,7 @@ async def _invoker_ceiling_decision(
     decision is reached, and this one runs *inside* another decision, half-way
     through the caller's own transaction.
     """
-    invoker = _invoking_user_context(authorizer, ctx)
+    invoker = invoking_person_context(authorizer, ctx)
     if invoker is None:
         return None
     if (await authorizer.authorize(invoker, permission_id, resource)).allowed:
@@ -245,7 +244,7 @@ async def _invoker_ceiling_decision(
     )
 
 
-def _invoking_user_context(authorizer: "Authorizer", ctx: Context) -> Context | None:
+def invoking_person_context(authorizer: "Authorizer", ctx: Context) -> Context | None:
     """``ctx`` as the invoking person alone, or ``None`` for a headless run.
 
     Built from the person's own half of the delegated context — the
@@ -259,7 +258,7 @@ def _invoking_user_context(authorizer: "Authorizer", ctx: Context) -> Context | 
     if ctx.user_id is None:
         return None
     return Context(
-        actor_type=ActorType.USER,
+        actor=Person(user_id=ctx.user_id),
         actor_id=str(ctx.user_id),
         authorizer=authorizer,
         request_id=ctx.request_id,

@@ -38,9 +38,9 @@ test("space-wide, anyone's live schedule is the answer; a paused one is stopped"
     assert.deepEqual(turnOnOf({ kind: "manual" }, true, [theirs], "me"), { status: "manual" });
 });
 
-test("a webhook without its account is not live", () => {
+test("a webhook without its connector is not live", () => {
     const event = { kind: "event", connectorId: "xero", triggerId: "t" } as const;
-    const unwired = job({ schedule_type: "WEBHOOK", account_id: null, connector_trigger_id: null });
+    const unwired = job({ schedule_type: "WEBHOOK", pod_connector: null, connector_trigger_id: null });
     assert.equal(turnOnOf(event, true, [unwired], "me").status, "stopped");
 });
 
@@ -49,8 +49,8 @@ test("the request is personal per person, space-wide otherwise, and refuses what
         workflow_name: "digest", visibility: "PERSONAL", schedule_type: "TIME", config: { cron: "0 9 * * 1" },
     });
     assert.equal(turnOnRequest("digest", { kind: "time" }, true, {}), null);
-    assert.deepEqual(turnOnRequest("audit", { kind: "event", connectorId: "xero", triggerId: "t" }, false, { accountId: "a1" }), {
-        workflow_name: "audit", visibility: "POD", schedule_type: "WEBHOOK", config: {}, account_id: "a1",
+    assert.deepEqual(turnOnRequest("audit", { kind: "event", connectorId: "xero", triggerId: "t" }, false, { podConnector: "xero-books" }), {
+        workflow_name: "audit", visibility: "POD", schedule_type: "WEBHOOK", config: {}, pod_connector: "xero-books",
     });
     assert.equal(turnOnRequest("audit", { kind: "event", connectorId: "xero", triggerId: "t" }, false, {}), null);
     assert.deepEqual(turnOnRequest("leads", { kind: "rows", table: "leads", operations: [] }, true, {}), {
@@ -66,19 +66,22 @@ test("schedules are matched to their workflow by name, and who it runs for is a 
 
 import { copyNeedOf, copyRequest } from "../src/schedule/schedules.ts";
 
-test("a copy is personal, keeps the trigger and target, and asks for an account only on a webhook", () => {
+test("a copy is personal, keeps the trigger, target and connector, and never names an account", () => {
     const time = readSchedule({ id: "t", name: "digest", schedule_type: "TIME", agent_name: "researcher", agent_id: "a", config: { cron: "0 9 * * 1", timezone: "Europe/Berlin" }, instruction: "Summarise", visibility: "POD", user_id: "priya" });
     assert.equal(copyNeedOf(time), "none");
     assert.deepEqual(copyRequest(time), {
         schedule_type: "TIME", config: { cron: "0 9 * * 1", timezone: "Europe/Berlin" }, visibility: "PERSONAL",
         agent_name: "researcher", instruction: "Summarise",
     });
-    const hook = readSchedule({ id: "w", name: "press", schedule_type: "WEBHOOK", agent_name: "researcher", agent_id: "a", config: { channel: "C1" }, account_id: "theirs", connector_trigger_id: "slack_message_posted", visibility: "POD", user_id: "priya" });
-    assert.equal(copyNeedOf(hook), "account");
-    assert.equal(copyRequest(hook), null);
-    const mine = copyRequest(hook, "mine")!;
-    assert.equal(mine.account_id, "mine");
+    const hook = readSchedule({ id: "w", name: "press", schedule_type: "WEBHOOK", agent_name: "researcher", agent_id: "a", config: { channel: "C1" }, pod_connector: "slack", connector_trigger_id: "slack_message_posted", visibility: "POD", user_id: "priya" });
+    assert.equal(copyNeedOf(hook), "none", "the connector decides whose account the copy listens through");
+    const mine = copyRequest(hook)!;
+    assert.equal(mine.pod_connector, "slack");
+    assert.equal("account_id" in mine, false);
     assert.equal(mine.connector_trigger_id, "slack_message_posted");
+    const unwired = readSchedule({ ...hook.raw, pod_connector: null });
+    assert.equal(copyNeedOf(unwired), "impossible", "a webhook with no connector has nothing a copy could listen through");
+    assert.equal(copyRequest(unwired), null);
     const rows = readSchedule({ id: "d", name: "greet", schedule_type: "DATASTORE", agent_name: "POD_DEFAULT", config: { table_name: "leads" }, visibility: "POD" });
     assert.equal(copyNeedOf(rows), "not-needed");
     assert.equal(copyRequest(rows), null);

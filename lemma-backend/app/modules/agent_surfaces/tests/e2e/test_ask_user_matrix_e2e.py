@@ -37,6 +37,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
+    _known_slack_sender,
     _ensure_connector_account,
     _messages_for_conversation,
     _resend_payload,
@@ -220,6 +221,7 @@ async def test_ask_user_slack_native_failure_falls_back_to_text_and_typed_reply(
         toolsets=["USER_INTERACTION"],
     )
 
+    await _known_slack_sender(db_session, user_id=fixed_test_user["id"])
     fake_slack.chat_post_blocks_error = "invalid_blocks"
     first_payload = slack_payloads.dm(
         text="Help me configure incident notifications",

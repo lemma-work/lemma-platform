@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from uuid import UUID
 
-from fastapi import HTTPException
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.authorization.context import ResourceRef, ResourceType
@@ -11,11 +9,6 @@ from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.services.surface_connection_resolver import (
     SurfaceConnectionResolver,
 )
-from app.modules.connectors.contracts import AccountNotFoundError
-
-# Asserts that this person owns this account, raising ``AccountNotFoundError``
-# when they do not. Bound to a unit of work by the caller.
-AssertAccountOwner = Callable[..., Awaitable[None]]
 
 
 async def require_surface_agent_action(
@@ -98,36 +91,3 @@ async def surface_setup_for_reader(
             surface, pod_id=pod_id, viewer_user_id=viewer_user_id
         ),
     )
-
-
-async def require_own_account(
-    account_id: UUID | None,
-    *,
-    user_id: UUID,
-    organization_id: UUID | None,
-    assert_owner: AssertAccountOwner,
-) -> None:
-    """A caller may only point a surface at an account they own.
-
-    Accounts are personal, so binding someone else's is not a permission an
-    editor has — it would hand the pod a credential its owner never offered.
-    Rebinding to *your own* account is the supported repair when the account a
-    surface runs on expires or its owner leaves, and that path passes this check.
-    """
-    if account_id is None:
-        return
-    try:
-        await assert_owner(account_id, user_id=user_id, organization_id=organization_id)
-    # `assert_owner` answers "not yours" and "no such account" with the
-    # same AccountNotFoundError, which is the whole point: the caller learns
-    # nothing about accounts they do not own. Caught by its own name rather than
-    # through a base class, because which 404 base it carries is exactly what
-    # this branch changes.
-    except AccountNotFoundError as exc:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "That account belongs to someone else. Connect your own account "
-                "for this platform, then bind the surface to it."
-            ),
-        ) from exc

@@ -66,8 +66,8 @@ machine happens to be.
 ```python
 from lemma_sdk import Pod, Lemma
 
-pod = Pod.from_env()                    # token + pod id from env / CLI session
-lemma = Lemma.from_env(org_id="org-id") # org-scoped client; lemma.pod("id") -> Pod
+pod = Pod.from_env()  # token + pod id from env / CLI session
+lemma = Lemma.from_env(org_id="org-id")  # org-scoped client; lemma.pod("id") -> Pod
 ```
 
 `Pod` is a context manager and owns an HTTP transport when constructed directly:
@@ -97,9 +97,9 @@ row = await asyncio.to_thread(pod.table("tickets").get, ticket_id)
 
 # Fanning out? to_thread + gather runs the round trips concurrently; a plain
 # loop of SDK calls serializes them and freezes the loop for the whole batch.
-rows = await asyncio.gather(*(
-    asyncio.to_thread(pod.table("tickets").get, tid) for tid in ticket_ids
-))
+rows = await asyncio.gather(
+    *(asyncio.to_thread(pod.table("tickets").get, tid) for tid in ticket_ids)
+)
 ```
 
 ## Authentication & configuration
@@ -133,8 +133,9 @@ grants) and `LEMMA_POD_ID` are injected for you — just call `Pod.from_env()`.
 Explicit construction (no env needed):
 
 ```python
-pod = Pod(pod_id="pod-id", org_id="org-id", token="token",
-          base_url="https://api.lemma.work")
+pod = Pod(
+    pod_id="pod-id", org_id="org-id", token="token", base_url="https://api.lemma.work"
+)
 ```
 
 When `LEMMA_TOKEN` is unset, settings fall back to the selected server in the CLI
@@ -191,11 +192,11 @@ Plus helpers: `pod.table(name)` (bound single-table helper), `pod.query(sql)`,
 ```python
 t = pod.table("tickets")
 
-row = t.create({"title": "Refund", "status": "new"})   # already a plain dict
+row = t.create({"title": "Refund", "status": "new"})  # already a plain dict
 ticket_id = row["id"]
 
-row = t.get(ticket_id)                            # bare record dict, no envelope
-t.update(ticket_id, {"status": "resolved"})       # only passed fields change
+row = t.get(ticket_id)  # bare record dict, no envelope
+t.update(ticket_id, {"status": "resolved"})  # only passed fields change
 t.delete(ticket_id)
 
 # Writing more than a row or two? Use the batch form -- one round trip instead
@@ -203,7 +204,8 @@ t.delete(ticket_id)
 t.bulk_create([{"title": f"Refund {i}", "status": "new"} for i in range(50)])
 
 rows = pod.records.list(
-    "tickets", limit=50,
+    "tickets",
+    limit=50,
     filter=[
         {"field": "status", "op": "eq", "value": "new"},
         {"field": "priority", "op": "ne", "value": "low"},
@@ -215,7 +217,7 @@ rows = pod.records.list(
 # `next_page_token`. When the answer has to be complete, page to exhaustion:
 every_open = pod.records.list_all(
     "tickets", filter=[{"field": "status", "op": "eq", "value": "new"}]
-)   # -> list of plain row dicts; t.list_all() is the same walk for one table
+)  # -> list of plain row dicts; t.list_all() is the same walk for one table
 
 totals = pod.query(
     "select status, count(*) as total from tickets group by status"
@@ -252,16 +254,22 @@ so you never have to leave the table handle to get a batch.
 
 ```python
 # create: row dicts (ids generated)
-created_count = pod.records.bulk_create("ticket_events", [
-    {"ticket_id": ticket_id, "kind": "created"},
-    {"ticket_id": ticket_id, "kind": "triaged"},
-])
+created_count = pod.records.bulk_create(
+    "ticket_events",
+    [
+        {"ticket_id": ticket_id, "kind": "created"},
+        {"ticket_id": ticket_id, "kind": "triaged"},
+    ],
+)
 
 # update: FLAT dicts that MUST include the primary key
-updated_count = pod.records.bulk_update("tickets", [
-    {"id": id_a, "status": "resolved"},
-    {"id": id_b, "status": "waiting", "priority": "urgent"},
-])
+updated_count = pod.records.bulk_update(
+    "tickets",
+    [
+        {"id": id_a, "status": "resolved"},
+        {"id": id_b, "status": "waiting", "priority": "urgent"},
+    ],
+)
 
 # delete: list of primary-key values
 deleted_count = pod.records.bulk_delete("tickets", [id_a, id_b])
@@ -295,14 +303,16 @@ hits = pod.files.search("refund policy").to_dict()
 # Directory-scoped RAG + method selection:
 hits = pod.files.search(
     "refund policy",
-    scope_path="/knowledge",     # restrict to a folder
-    scope_mode="SUBTREE",        # SUBTREE = folder + all descendants (default); DIRECT = immediate children only
-    search_method="HYBRID",      # TEXT (full-text), VECTOR (semantic), or HYBRID
+    scope_path="/knowledge",  # restrict to a folder
+    scope_mode="SUBTREE",  # SUBTREE = folder + all descendants (default); DIRECT = immediate children only
+    search_method="HYBRID",  # TEXT (full-text), VECTOR (semantic), or HYBRID
 ).to_dict()
 
-md  = pod.files.download_markdown("/knowledge/policy.pdf")           # converted markdown bytes
-kids = pod.files.list_children("/knowledge/policy.pdf")              # derived child files (md, figures, pages)
-raw = pod.files.download("/knowledge/policy.pdf")                     # bytes
+md = pod.files.download_markdown("/knowledge/policy.pdf")  # converted markdown bytes
+kids = pod.files.list_children(
+    "/knowledge/policy.pdf"
+)  # derived child files (md, figures, pages)
+raw = pod.files.download("/knowledge/policy.pdf")  # bytes
 ```
 
 ### Functions, agents, workflows
@@ -322,41 +332,46 @@ wf_run = pod.workflows.create_run("nightly_review").to_dict()
 
 ### Connectors (calling external apps)
 
-`pod.connectors.execute(auth_config, operation, payload)` runs a third-party
-operation. The first argument is the **auth config name** (often the app id), the
-operation id and payload come from discovery, and the response is under
-`["result"]`.
+`pod.connectors.execute(connector, operation, payload)` runs a third-party
+operation through one of the pod's connectors, named by its **slug** (`gmail`,
+`support-inbox`). The connector decides which account it runs as: your own for
+a per-member connector, the one its owner shared for a shared connector. Nothing
+takes an account id. The operation id and payload come from discovery, and the
+response is under `["result"]`.
 
 ```python
 sent = pod.connectors.execute(
-    "workspace-gmail",          # auth config name
-    "GMAIL_SEND_EMAIL",         # operation id from discovery
+    "gmail",  # pod connector slug
+    "GMAIL_SEND_EMAIL",  # operation id from discovery
     {"recipient_email": "a@example.com", "subject": "Hi", "body": "..."},
 ).to_dict()["result"]
 
 # discover before you call:
-matches = pod.connectors.operations.search("workspace-gmail", "send email")
-schema  = pod.connectors.operations.get("workspace-gmail", "GMAIL_SEND_EMAIL")
+connectors = pod.connectors.pod_connectors()  # what this pod declares
+matches = pod.connectors.pod_operations("gmail", "send email")
+schema = pod.connectors.pod_operation("gmail", "GMAIL_SEND_EMAIL")
 ```
 
-Operation ids and payload keys differ between the `lemma` and `composio`
-providers — confirm with discovery for the provider your org installed. Don't pass
-`account_id` unless pinning a specific account; the backend resolves the fixed or
-invoking-user account from the token.
+A connector that cannot run raises a typed error naming the remedy:
+`CONNECTION_REQUIRED` / `REAUTH_REQUIRED` (with `err.connect_url`, the link to
+connect or reconnect), `CONNECTOR_NEEDS_ACCOUNT` (a shared connector nobody has
+shared an account for), `CONNECTOR_UNAVAILABLE` (the installation is disabled),
+`CONNECTION_REQUIRES_PERSON` (a per-member connector called with no member
+behind the call).
 
 ## Org & global usage (`Lemma`)
 
 ```python
 lemma = Lemma.from_env(org_id="org-id")
 
-org   = lemma.org.get()
-pods  = lemma.pods.list()
-pod   = lemma.pod("pod-id")          # -> Pod sharing this transport
-me    = lemma.user.profile()
+org = lemma.org.get()
+pods = lemma.pods.list()
+pod = lemma.pod("pod-id")  # -> Pod sharing this transport
+me = lemma.user.profile()
 
 # org-level connector setup
 auth_configs = lemma.connectors.auth_configs.list()
-accounts     = lemma.connectors.accounts.list(app="gmail")
+accounts = lemma.connectors.accounts.list(app="gmail")
 
 # first-party tools
 results = lemma.tools.web_search("vendor SLA policy", max_results=5)
@@ -372,21 +387,24 @@ A Lemma function is a Python file with header comments declaring its types, plus
 handler `(ctx, data) -> output`:
 
 ```python
-#input_type_name: TriageInput
-#output_type_name: TriageResult
-#function_name: triage_ticket
+# input_type_name: TriageInput
+# output_type_name: TriageResult
+# function_name: triage_ticket
 
 from pydantic import BaseModel
 from lemma_sdk import FunctionContext, Pod
 
+
 class TriageInput(BaseModel):
     ticket_id: str
+
 
 class TriageResult(BaseModel):
     status: str
 
+
 async def triage_ticket(ctx: FunctionContext, data: TriageInput) -> TriageResult:
-    pod = Pod.from_env()    # authenticated as this function's workload principal
+    pod = Pod.from_env()  # authenticated as this function's workload principal
     pod.table("tickets").update(data.ticket_id, {"status": "triaged"})
     return TriageResult(status="triaged")
 ```
@@ -419,7 +437,7 @@ try:
 except LemmaAPIError as e:
     print(e.status_code, e.code, e.message)
 except LemmaConfigError:
-    ...   # missing token / pod id / unreadable config
+    ...  # missing token / pod id / unreadable config
 ```
 
 ## Generated client escape hatch
@@ -427,7 +445,7 @@ except LemmaConfigError:
 For endpoints not yet wrapped by the ergonomic SDK:
 
 ```python
-generated = pod.generated   # authenticated; same base URL/token/timeout/SSL
+generated = pod.generated  # authenticated; same base URL/token/timeout/SSL
 ```
 
 ## Testing against a real Lemma API

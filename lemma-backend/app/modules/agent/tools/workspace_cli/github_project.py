@@ -118,7 +118,7 @@ async def prepare_project_directory(
     workspace_session,
     *,
     wanted: bool,
-    ensure_credentials: Callable[..., Awaitable[None]] | None = None,
+    ensure_credentials: Callable[..., Awaitable[str | None]] | None = None,
     ensure_checkout: Callable[..., Awaitable[str | None]] | None = None,
 ) -> str | None:
     """Put the conversation's project on disk before either tool looks for it.
@@ -152,8 +152,13 @@ async def prepare_project_directory(
         ensure_checkout = ensure_project_checkout
     try:
         with run_phase("tool.workspace.credentials"):
-            await ensure_credentials(ctx, workspace_session)
-            return await ensure_checkout(ctx, workspace_session)
+            # Both told, credential first: a refused credential is usually
+            # why the clone after it failed.
+            notices = [
+                await ensure_credentials(ctx, workspace_session),
+                await ensure_checkout(ctx, workspace_session),
+            ]
+            return "\n".join(n for n in notices if n) or None
     except Exception:
         logger.warning(
             "agent.workspace_cli.github_credential_bridge_failed.degraded",

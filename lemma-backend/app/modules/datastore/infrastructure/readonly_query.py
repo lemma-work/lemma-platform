@@ -1,4 +1,9 @@
-"""Ad-hoc read-only SQL against one pod schema, as the RLS-subject query role."""
+"""Ad-hoc read-only SQL against one pod schema, as that pod's own query role.
+
+The role (``query_role.pod_query_role_name``) holds privileges on this pod's
+schema and on no other, so a query that reaches for another pod's tables is
+refused by the database whatever the SQL parser made of it.
+"""
 
 from __future__ import annotations
 
@@ -11,9 +16,9 @@ from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import DatastoreDomainError
 from app.modules.datastore.domain.ports import DatastoreSchemaPort
 from app.modules.datastore.domain.row_security import RowPrincipal
+from app.modules.datastore.infrastructure.query_role import pod_query_role_name
 from app.modules.datastore.infrastructure.record_query_cost import guard_query_plan
 from app.modules.datastore.infrastructure.rls_context import verify_rls_context
-from app.modules.datastore.infrastructure.sql_identifiers import sanitize_identifier
 
 #: What the query role sees on a pod schema it was never given: a qualified
 #: name is refused (42501) and an unqualified one, looked up on a search_path
@@ -51,8 +56,8 @@ async def execute_readonly_query(
     when the catalog confirms the role really lacks access, so a query naming a
     table that does not exist costs a catalog read, not a grant.
     """
-    await schema_manager.ensure_query_role()
     schema_name = schema_manager.get_schema_name(pod_id)
+    await schema_manager.ensure_query_role(schema_name)
     try:
         return await _run(schema_manager, schema_name, query, principal)
     except (DBAPIError, DatastoreDomainError) as exc:
@@ -70,7 +75,7 @@ async def _run(
     principal: RowPrincipal,
 ) -> QueryRows:
     max_rows = datastore_settings.datastore_query_max_rows
-    query_role = sanitize_identifier(datastore_settings.datastore_query_role)
+    query_role = pod_query_role_name(schema_name)
     async with schema_manager.session_factory() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
         await session.execute(
@@ -84,9 +89,10 @@ async def _run(
         # that named nobody would see no contact-owned row even as a member.
         await schema_manager.set_rls_context(session, principal)
 
-        # Run the user's SQL as the non-superuser, NOBYPASSRLS role so RLS
-        # policies are enforced (the app's own connection bypasses RLS).
-        # Set after the RLS-context GUCs above, which the policies read.
+        # Run the user's SQL as this pod's non-superuser, NOBYPASSRLS role, so
+        # RLS policies are enforced (the app's own connection bypasses RLS)
+        # and no other pod's schema is reachable at all. Set after the
+        # RLS-context GUCs above, which the policies read.
         await session.execute(text(f'SET LOCAL ROLE "{query_role}"'))
 
         await guard_query_plan(session, query, schema_name=schema_name)

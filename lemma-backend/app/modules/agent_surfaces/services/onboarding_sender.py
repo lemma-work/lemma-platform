@@ -10,6 +10,9 @@ and this is the half that comes away cleanly.
 
 from __future__ import annotations
 
+from app.modules.agent_surfaces.services.surface_connector import (
+    installation_identity,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_identity_repository import (
     VerifiedSurfaceIdentityRepository,
 )
@@ -34,8 +37,10 @@ from app.modules.agent_surfaces.composition import (
 )
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
+    ResolvedSurfaceUser,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.onboarding_state import (
     OnboardingIngressResult,
@@ -52,6 +57,9 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
+from app.modules.agent_surfaces.services.customer_held_secrets import (
+    signed_with_a_customer_secret,
+)
 from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
 )
@@ -62,6 +70,7 @@ from app.modules.agent_surfaces.services.onboarding_pod_choice import (
 from app.modules.agent_surfaces.services.onboarding_transport import (
     OnboardingTransport,
     among_the_workspaces_people,
+    answers_its_own_contacts,
 )
 from app.modules.agent_surfaces.services.personal_dm_routes import (
     PersonalRouteUnavailable,
@@ -161,7 +170,10 @@ async def create_pending(
                 "+"
                 + str(event.sender_phone or event.sender_external_user_id).lstrip("+")
             )
+            # WhatsApp's own word only on Lemma's numbers; on the org's own
+            # app it is the app secret holder's, and proves nothing.
             if event.platform == SurfacePlatform.WHATSAPP
+            and not transport.on_its_own_number
             else None,
         )
         uow.session.add(row)
@@ -245,6 +257,34 @@ async def saved_default_outranks_route(
     return default is not None
 
 
+async def _proven_sender(
+    uows: UnitOfWorkFactory,
+    transport: OnboardingTransport,
+    profile: SurfaceSenderProfile | None,
+) -> ResolvedSurfaceUser:
+    """Who the platform proves this sender to be, short of a binding.
+
+    On an app whose secret a person holds, the binding `recognize_sender` read
+    first was the only proof there is; anything found elsewhere would park the
+    claimed person's account on a forged sender's choice.
+    """
+    installation = transport.surface
+    async with uows() as uow:
+        return await SurfaceIdentityResolutionService(
+            uow, ExternalSurfaceUserRepository(uow)
+        ).resolve(
+            event=transport.event,
+            sender_profile=profile,
+            require_proven_identity=True,
+            installation_id=(
+                await installation_identity(uow, installation)
+                if installation is not None
+                else None
+            ),
+            customer_held_secret=await signed_with_a_customer_secret(uow, installation),
+        )
+
+
 async def recognize_sender(
     uows: UnitOfWorkFactory,
     transport: OnboardingTransport,
@@ -290,10 +330,7 @@ async def recognize_sender(
         profile = await adapter.fetch_sender_profile(
             credentials=transport.credentials, event=event
         )
-        async with uows() as uow:
-            resolved = await SurfaceIdentityResolutionService(
-                uow, ExternalSurfaceUserRepository(uow)
-            ).resolve(event=event, sender_profile=profile, require_proven_identity=True)
+        resolved = await _proven_sender(uows, transport, profile)
         if resolved.internal_user_id is not None:
             # Recognised by a verified phone rather than by a binding, which is
             # a different route to the same place: someone the system knows,
@@ -314,9 +351,12 @@ async def recognize_sender(
                     or event.sender_display_name,
                 }
             )
-    if await among_the_workspaces_people(uows, transport):
+    if answers_its_own_contacts(transport) or await among_the_workspaces_people(
+        uows, transport
+    ):
         # Somebody the system does not know, in a workspace the organization
-        # holds: theirs to answer as a contact, not a stranger to sign up.
+        # holds, or on an own number that answers contacts: theirs to answer as
+        # a contact, not a stranger to sign up.
         return OnboardingIngressResult(False)
     return await create_pending(uows, transport, event)
 
@@ -341,7 +381,9 @@ async def offer_workspace_choice(
     is kept for replay once they answer.
     """
     event = transport.event
-    if not event.is_dm:
+    if not event.is_dm or transport.on_its_own_number:
+        # The org's own number belongs to its pod: who answers there is that
+        # pod's membership, which ordinary routing asks, not a choice to offer.
         return None
     # Asked on both paths, because "no route stored on the identity" is not the
     # same as "nowhere to talk". Ordinary ingestion still routes an installation

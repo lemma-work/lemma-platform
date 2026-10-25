@@ -28,7 +28,8 @@ member writes.
 Used by every place a run for somebody outside the pod starts: the chat and
 email surfaces (``SurfaceTurnStarter``) and web chat. All of it is in the
 caller's unit of work, so the message, the hand-off and the note commit
-together.
+together -- except whether the cap is reached, which is asked first, in a unit
+of its own (``organization_capped``).
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from uuid import UUID
 
 from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
@@ -97,27 +99,48 @@ class HeldTurn:
     reply: str | None
 
 
+async def organization_capped(uow_factory: UnitOfWorkFactory, *, pod_id: UUID) -> bool:
+    """Whether the pod's organization has spent its contacts cap this month.
+
+    Asked in a unit of work of its own, committed before the turn's. The
+    answer is read from the running total the run's requests are held to, and
+    a recount of it holds the total's row until its unit ends. A turn starting
+    elsewhere reads that total while holding its conversation's lock or its
+    organization's count of contacts -- the locks the turn's own unit goes on
+    to take -- so holding the total across them could deadlock with it.
+    Committing here also keeps what a recount learned, whatever becomes of the
+    turn.
+    """
+    async with uow_factory() as uow:
+        organization_id = await pod_organization_id(uow, pod_id)
+        capped = organization_id is not None and await contacts_cap_reached(
+            uow, organization_id=organization_id
+        )
+        await uow.commit()
+    return capped
+
+
 async def held_for_a_person(
     uow: SqlAlchemyUnitOfWork,
     *,
     pod_id: UUID,
     conversation_id: UUID,
+    capped: bool,
 ) -> bool:
     """Whether this contact's turn must wait for a member rather than run.
 
     It must while a member answers their channel by hand, while the
-    organization's contacts cap is reached, and when the contact would be one
-    more than the organization's bots may answer. A turn that may run marks its
+    organization's contacts cap is reached (``capped``, what
+    ``organization_capped`` answered), and when the contact would be one more
+    than the organization's bots may answer. A turn that may run marks its
     contact answered, in the same transaction, so the count it was let in under
     holds.
     """
-    if await held_by_a_member(uow, conversation_id) is not None:
+    if capped or await held_by_a_member(uow, conversation_id) is not None:
         return True
     organization_id = await pod_organization_id(uow, pod_id)
     if organization_id is None:
         return False
-    if await contacts_cap_reached(uow, organization_id=organization_id):
-        return True
     conversation = await agent_conversations.surface_conversation(uow, conversation_id)
     contact_id = conversation.audience.contact_id if conversation else None
     if contact_id is None:

@@ -78,6 +78,7 @@ class SenderResolver:
         parsed: ParsedInboundSurfaceEvent,
         credentials: SurfaceCredentials,
         installation_id: UUID | None = None,
+        customer_held_secret: bool = False,
     ) -> ResolvedSurfaceUser:
         profile_unavailable = False
         try:
@@ -100,6 +101,7 @@ class SenderResolver:
             sender_profile=sender_profile,
             installation_id=installation_id,
             profile_unavailable=profile_unavailable,
+            customer_held_secret=customer_held_secret,
         )
         if parsed.platform is SurfacePlatform.SLACK:
             # Read off this message's profile however resolution answered: a

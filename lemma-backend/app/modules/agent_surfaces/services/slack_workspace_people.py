@@ -42,15 +42,16 @@ from app.modules.agent_surfaces.domain.surface_config import (
     ContactAnswer,
     SurfaceContactPolicy,
 )
-from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
-    SqlAlchemySurfaceAccountAdapter,
-)
 from app.modules.agent_surfaces.infrastructure.repositories.slack_manager_repository import (  # noqa: E501
     SlackManagerRepository,
 )
 from app.modules.agent_surfaces.services.sender_handles import (
     SenderHandle,
     workspace_handle,
+)
+from app.modules.connectors.contracts.pod_connectors import (
+    PodConnectorRefusal,
+    resolve_standing_pod_connector,
 )
 from app.modules.pod.contracts.agent_access import pod_organization_ids
 from app.modules.pod.contracts.members import pod_member_holds
@@ -150,7 +151,7 @@ class WorkspacePeople:
         """
         if (config_given if chosen is None else chosen) or (
             entity.surface_type is not SurfacePlatform.SLACK
-            or entity.account_id is None
+            or entity.pod_connector_slug is None
             or entity.config.contacts != SurfaceContactPolicy()
         ):
             return
@@ -158,14 +159,20 @@ class WorkspacePeople:
             self.uow, entity.external_workspace_id, [entity.pod_id]
         ):
             return
-        accounts = await SqlAlchemySurfaceAccountAdapter(
-            self.uow
-        ).list_account_summaries([entity.account_id])
-        account = accounts.get(entity.account_id)
-        if account is None or not await pod_member_holds(
-            self.uow, entity.pod_id, account.user_id, Permissions.CONTACT_READ
+        try:
+            connected = await resolve_standing_pod_connector(
+                self.uow,
+                pod_id=entity.pod_id,
+                slug=entity.pod_connector_slug,
+                record_use=False,
+            )
+        except PodConnectorRefusal:
+            return
+        owner = connected.owner_user_id
+        if not await pod_member_holds(
+            self.uow, entity.pod_id, owner, Permissions.CONTACT_READ
         ):
             return
         entity.config.contacts = entity.config.contacts.model_copy(
-            update={"answer": ContactAnswer.ANYONE, "looked_after_by": account.user_id}
+            update={"answer": ContactAnswer.ANYONE, "looked_after_by": owner}
         )

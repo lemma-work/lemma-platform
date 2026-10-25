@@ -54,7 +54,7 @@ def _context(event: ParsedInboundSurfaceEvent):
             name="telegram",
             agent_id=uuid4(),
             surface_type=SurfacePlatform.TELEGRAM,
-            account_id=uuid4(),
+            pod_connector_slug="own-bot",
             config=SurfaceConfig(),
             is_active=True,
         ),

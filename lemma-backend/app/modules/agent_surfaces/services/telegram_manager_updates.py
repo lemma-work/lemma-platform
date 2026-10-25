@@ -396,7 +396,7 @@ async def _provision(
             raise _PermanentProvisioningError(
                 "Telegram did not return the managed bot token"
             )
-        account_id, surface_id = await runtime._persist_managed_bot(
+        pod_connector_slug, surface_id = await runtime._persist_managed_bot(
             setup=setup,
             bot_id=bot_id,
             bot_username=bot_username,
@@ -406,7 +406,7 @@ async def _provision(
         await _finish_complete(
             runtime,
             setup,
-            account_id,
+            pod_connector_slug,
             surface_id,
             owner=owner,
         )
@@ -429,13 +429,13 @@ async def _provision(
 async def _finish_complete(
     runtime: TelegramManagerRuntime,
     setup: TelegramManagedBotSetup,
-    account_id: UUID,
+    pod_connector_slug: str,
     surface_id: UUID,
     *,
     owner: str,
 ) -> None:
     setup.status = TelegramManagedBotSetupStatus.COMPLETE
-    setup.account_id = account_id
+    setup.pod_connector_slug = pod_connector_slug
     setup.surface_id = surface_id
     setup.error = None
     saved = await runtime._store.save_if_status(

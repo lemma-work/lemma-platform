@@ -71,7 +71,7 @@ async def test_list_operations_reads_from_catalog():
         connector_repository=connector_repository,
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
     )
 
     operations = await service.list_operations("slack")
@@ -122,7 +122,7 @@ async def test_discover_operations_returns_structured_summary():
         connector_repository=connector_repository,
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
     )
 
     response = await service.discover_operations("gmail")
@@ -185,7 +185,7 @@ async def test_discover_operations_uses_repository_search_for_queries():
         connector_repository=connector_repository,
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
     )
 
     response = await service.discover_operations(
@@ -269,7 +269,7 @@ async def test_get_operation_details_batch_returns_all_when_names_omitted():
         ),
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
     )
 
     response = await service.get_operation_details_batch("slack")
@@ -313,7 +313,7 @@ async def test_an_unnamed_details_batch_is_capped_and_says_so():
         ),
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
     )
 
     response = await service.get_operation_details_batch("slack", limit=2)
@@ -350,7 +350,7 @@ async def test_naming_operations_still_returns_exactly_those():
         ),
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
     )
 
     response = await service.get_operation_details_batch(
@@ -386,7 +386,7 @@ async def test_get_operation_details_batch_matches_names_case_insensitively():
         ),
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
     )
 
     response = await service.get_operation_details_batch(
@@ -437,7 +437,7 @@ async def test_discover_operations_includes_relevance_score_for_queries():
         connector_repository=connector_repository,
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
     )
 
     response = await service.discover_operations(
@@ -447,6 +447,50 @@ async def test_discover_operations_includes_relevance_score_for_queries():
 
     assert response.items[0].relevance_score is not None
     assert response.items[0].relevance_score > 0
+
+
+def _account() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid4(),
+        user_id=uuid4(),
+        organization_id=uuid4(),
+        auth_config_id=uuid4(),
+        external_ref=None,
+        credentials={"access_token": "token"},
+    )
+
+
+def _resolver(account: SimpleNamespace) -> SimpleNamespace:
+    """A pod connector resolver that has already picked ``account``.
+
+    Which account a pod connector resolves to is `PodConnectorResolver`'s
+    business and is covered end to end; these tests are about what happens to
+    the call once it has one.
+    """
+    auth_config = SimpleNamespace(
+        id=account.auth_config_id,
+        connector_id="connector",
+        kind=ConnectorKind.COMPOSIO,
+        config=None,
+    )
+    return SimpleNamespace(
+        connector=AsyncMock(return_value=SimpleNamespace()),
+        resolve=AsyncMock(
+            return_value=SimpleNamespace(auth_config=auth_config, account=account)
+        ),
+    )
+
+
+async def _execute(service, *, operation_name: str, payload: dict):
+    ctx = SimpleNamespace(delegating_user_id=None, user_id=uuid4())
+    resolved = await service.resolve_pod_connector_execution(
+        ctx,
+        pod_id=uuid4(),
+        slug="connector",
+        operation_name=operation_name,
+        payload=payload,
+    )
+    return await service.execute_resolved(resolved)
 
 
 async def test_execute_operation_uses_provider_operation_name():
@@ -467,12 +511,7 @@ async def test_execute_operation_uses_provider_operation_name():
         operation_repository.get_by_connector_and_name.return_value
     )
 
-    account = SimpleNamespace(
-        id=uuid4(), auth_config_id=uuid4(), credentials={"access_token": "token"}
-    )
-    account_resolution_service = AsyncMock(
-        resolve_account=AsyncMock(return_value=account)
-    )
+    account = _account()
     operation_gateway = AsyncMock(
         execute_operation=AsyncMock(return_value={"ok": True})
     )
@@ -488,15 +527,14 @@ async def test_execute_operation_uses_provider_operation_name():
         ),
         operation_repository=operation_repository,
         operation_gateway=operation_gateway,
-        account_resolution_service=account_resolution_service,
+        pod_connector_resolver=_resolver(account),
         connector_service=_composio_install_service(),
     )
 
-    response = await service.execute_operation(
-        connector_id="gmail",
+    response = await _execute(
+        service,
         operation_name="gmail_send_email",
         payload={"subject": "Hello"},
-        user_id=uuid4(),
     )
 
     assert response.result == {"ok": True}
@@ -528,9 +566,7 @@ async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
         operation_repository.get_by_connector_and_name.return_value
     )
 
-    account = SimpleNamespace(
-        id=uuid4(), auth_config_id=uuid4(), credentials={"access_token": "token"}
-    )
+    account = _account()
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
             get=AsyncMock(
@@ -544,18 +580,15 @@ async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
         operation_gateway=AsyncMock(
             execute_operation=AsyncMock(side_effect=RuntimeError("provider exploded"))
         ),
-        account_resolution_service=AsyncMock(
-            resolve_account=AsyncMock(return_value=account)
-        ),
+        pod_connector_resolver=_resolver(account),
         connector_service=_composio_install_service(),
     )
 
     with pytest.raises(OperationExecutionError) as exc_info:
-        await service.execute_operation(
-            connector_id="slack",
+        await _execute(
+            service,
             operation_name="send_message",
             payload={"text": "hi"},
-            user_id=uuid4(),
         )
 
     assert exc_info.value.code == "OPERATION_EXECUTION_ERROR"
@@ -586,9 +619,7 @@ async def test_execute_operation_keeps_the_status_an_executor_reported():
     operation_repository.get_by_connector_kind_and_name.return_value = (
         operation_repository.get_by_connector_and_name.return_value
     )
-    account = SimpleNamespace(
-        id=uuid4(), auth_config_id=uuid4(), credentials={"access_token": "token"}
-    )
+    account = _account()
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
             get=AsyncMock(
@@ -602,18 +633,15 @@ async def test_execute_operation_keeps_the_status_an_executor_reported():
         operation_gateway=AsyncMock(
             execute_operation=AsyncMock(side_effect=_HttpFailure())
         ),
-        account_resolution_service=AsyncMock(
-            resolve_account=AsyncMock(return_value=account)
-        ),
+        pod_connector_resolver=_resolver(account),
         connector_service=_composio_install_service(),
     )
 
     with pytest.raises(OperationExecutionNotFoundError) as exc_info:
-        await service.execute_operation(
-            connector_id="github",
+        await _execute(
+            service,
             operation_name="repos_get",
             payload={"owner": "acme", "repo": "crm"},
-            user_id=uuid4(),
         )
 
     assert exc_info.value.status_code == 404
@@ -657,9 +685,7 @@ async def test_execute_operation_normalizes_pydantic_binary_results():
         operation_repository.get_by_connector_and_name.return_value
     )
 
-    account = SimpleNamespace(
-        id=uuid4(), auth_config_id=uuid4(), credentials={"access_token": "token"}
-    )
+    account = _account()
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
             get=AsyncMock(
@@ -679,17 +705,14 @@ async def test_execute_operation_normalizes_pydantic_binary_results():
                 )
             )
         ),
-        account_resolution_service=AsyncMock(
-            resolve_account=AsyncMock(return_value=account)
-        ),
+        pod_connector_resolver=_resolver(account),
         connector_service=_composio_install_service(),
     )
 
-    response = await service.execute_operation(
-        connector_id="google_drive",
+    response = await _execute(
+        service,
         operation_name="files_export",
         payload={"file_id": "123", "mime_type": "text/plain"},
-        user_id=uuid4(),
     )
 
     assert response.result == {
@@ -733,7 +756,7 @@ async def test_naming_one_operation_does_not_read_the_connector_catalog():
         ),
         operation_repository=operation_repository,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
     )
 
     response = await service.get_operation_details_batch(
@@ -830,7 +853,7 @@ async def test_an_install_operation_wins_by_its_provider_alias_too():
         ),
         operation_repository=catalog,
         operation_gateway=AsyncMock(),
-        account_resolution_service=AsyncMock(),
+        pod_connector_resolver=AsyncMock(),
         auth_config_operation_repository=installs,
     )
     auth_config_id = uuid4()

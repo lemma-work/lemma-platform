@@ -316,6 +316,64 @@ async def test_get_session_uses_canonical_logical_workspace_id(
 
 
 @pytest.mark.asyncio
+async def test_every_run_of_a_person_shares_their_one_sandbox_with_its_own_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One sandbox per person, whichever pod or agent the run is for.
+
+    A sandbox per pod and actor multiplied persisted disks and made a person
+    sign in to a site again for every agent. What keeps runs apart instead is
+    the token each session is handed: minted for that run's pod and workload.
+    """
+    user_id, pod_a, pod_b, named = uuid4(), uuid4(), uuid4(), uuid4()
+    sandbox = _FakeSandbox()
+    minted: list[dict[str, object]] = []
+
+    async def mint(**claims: object) -> str:
+        minted.append(claims)
+        return f"token-{len(minted)}"
+
+    monkeypatch.setattr(
+        "app.modules.identity.contracts.delegated_tokens.mint_delegated_token", mint
+    )
+    service = _service(sandbox, manager_client=_FakeManagerClient())
+
+    async def session(pod_id: UUID, **workload: object):
+        # The organization is given so minting the environment reads no pod.
+        return await service.get_session(
+            user_id=user_id,
+            pod_id=pod_id,
+            organization_id=uuid4(),
+            session_id=str(uuid4()),
+            **workload,
+        )
+
+    runs = [
+        await session(pod_a),
+        await session(pod_b),
+        await session(pod_a, workload_type="agent", workload_id=named),
+    ]
+
+    assert {run.logical_id for run in runs} == {user_id}
+    assert set(sandbox.ensure_calls) == {user_id}
+    assert [run.env_vars["LEMMA_TOKEN"] for run in runs] == [
+        "token-1",
+        "token-2",
+        "token-3",
+    ]
+    assert [(claims["pod_id"], claims["workload_id"]) for claims in minted] == [
+        (pod_a, None),
+        (pod_b, None),
+        (pod_a, named),
+    ]
+    # And their git and gh read files of their own, named in the same
+    # environment, rather than whatever the last session configured globally.
+    assert len({run.env_vars["GIT_CONFIG_VALUE_0"] for run in runs}) == 3
+    assert len({run.env_vars["GH_CONFIG_DIR"] for run in runs}) == 3
+    assert "GIT_CONFIG_GLOBAL" not in runs[0].env_vars
+
+
+@pytest.mark.asyncio
 async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates_later(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

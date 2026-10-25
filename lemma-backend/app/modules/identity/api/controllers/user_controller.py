@@ -2,12 +2,30 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request, status
 
+from app.core.app_pin import app_request_of
 from app.modules.identity.api.dependencies import UserServiceDep
 from app.modules.identity.api.schemas.user_schemas import (
     UserProfileRequest,
     UserResponse,
 )
 from app.modules.identity.domain.user_entities import UserEntity
+
+#: What a pod app's page is not told about the person viewing it (H20): it
+#: learns who they are, not how to reach them off the platform or how old they
+#: are. The person's own clients still read the whole profile.
+_HIDDEN_FROM_APPS = {
+    "mobile_number": None,
+    "mobile_verified_at": None,
+    "date_of_birth": None,
+}
+
+
+def _user_response(request: Request, user_data: UserEntity) -> UserResponse:
+    response = UserResponse.model_validate(user_data)
+    if app_request_of(request) is not None:
+        return response.model_copy(update=_HIDDEN_FROM_APPS)
+    return response
+
 
 router = APIRouter(
     prefix="/users",
@@ -30,7 +48,7 @@ async def get_current_user(
     """Get current user information."""
     user: UserEntity = request.state.user
     user_data = await user_service.get_user(user.id)
-    return UserResponse.model_validate(user_data)
+    return _user_response(request, user_data)
 
 
 @router.get(
@@ -47,7 +65,7 @@ async def get_profile(
     """Get user profile."""
     user: UserEntity = request.state.user
     user_data = await user_service.get_user(user.id)
-    return UserResponse.model_validate(user_data)
+    return _user_response(request, user_data)
 
 
 @router.post(

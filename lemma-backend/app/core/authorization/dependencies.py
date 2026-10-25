@@ -14,7 +14,8 @@ from app.core.authorization.pod_liveness import (
     _assert_pod_is_live,
     _refuse_a_deleted_pod,
 )
-from app.core.authorization.context import ActorType, Context, ResourceRef, ResourceType
+from app.core.authorization.context import Context, Person, ResourceRef, ResourceType
+from app.core.authorization.permissions import Permissions
 from app.core.authorization.current import set_current_context
 from app.core.authorization.delegation import (
     DESTRUCTIVE_ACTIONS,
@@ -269,85 +270,6 @@ OrgContextDep = Annotated[Context, Depends(get_org_context)]
 PodContextDep = Annotated[Context, Depends(get_pod_context)]
 
 
-#: What the three ``reject_delegated_workload*`` guards answer. Terminal: they
-#: turn a workload away whatever it was granted or approved, so the code must not
-#: be the approval gate's, which tells an agent to ask for an approval that would
-#: change nothing here.
-WORKLOAD_NOT_ALLOWED = "WORKLOAD_NOT_ALLOWED"
-
-
-def reject_delegated_workload(action_label: str):
-    """Deny a delegated workload outright for an org-scoped destructive action.
-
-    Use where there is no pod context to run the nuanced destructive gate (an
-    explicit grant / session approval are pod-scoped). A workload has no
-    business performing these org-level, ownership-based actions — deleting a
-    user's connected account, etc. Humans are unaffected.
-    """
-
-    async def _dependency(ctx: OrgContextDep) -> None:
-        if ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD:
-            from app.core.domain.errors import DomainError
-
-            raise DomainError(
-                f"Delegated workloads may not {action_label}.",
-                code=WORKLOAD_NOT_ALLOWED,
-                status_code=403,
-            )
-
-    return Depends(_dependency)
-
-
-def reject_delegated_workload_anywhere(action_label: str):
-    """Deny a delegated workload on a route that has no organization in its path.
-
-    :func:`reject_delegated_workload` resolves ``OrgContextDep``, which needs an
-    ``org_id`` path or query parameter -- so the organization routes addressed
-    only by an invitation id (accept, revoke) could not use it, and those are
-    exactly the ones that mint or withdraw membership.
-
-    Reading the claims straight off the request is not a shortcut around the
-    context: ``verify_auth`` parses a delegated token on *every* path, which is
-    why a workload token reaches these routes at all. The same fact that lets it
-    in is the one that turns it away.
-    """
-
-    async def _dependency(request: Request) -> None:
-        if getattr(request.state, "delegation_claims", None) is None:
-            return
-        from app.core.domain.errors import DomainError
-
-        raise DomainError(
-            f"Delegated workloads may not {action_label}.",
-            code=WORKLOAD_NOT_ALLOWED,
-            status_code=403,
-        )
-
-    return Depends(_dependency)
-
-
-def reject_delegated_workload_pod(action_label: str):
-    """Pod-scoped counterpart of :func:`reject_delegated_workload`.
-
-    For pod-routed ownership actions that mint membership (approving a join
-    request grants org/pod membership). There is no per-resource grant or session
-    approval that should let a workload confer membership on someone, so deny it
-    outright. Humans are unaffected.
-    """
-
-    async def _dependency(ctx: PodContextDep) -> None:
-        if ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD:
-            from app.core.domain.errors import DomainError
-
-            raise DomainError(
-                f"Delegated workloads may not {action_label}.",
-                code=WORKLOAD_NOT_ALLOWED,
-                status_code=403,
-            )
-
-    return Depends(_dependency)
-
-
 def assert_pod_membership(ctx: Context, action_label: str = "browse this pod") -> None:
     """The membership rule itself: pure, and never touches the database.
 
@@ -360,14 +282,13 @@ def assert_pod_membership(ctx: Context, action_label: str = "browse this pod") -
         return
     # Somebody outside the pod is never a member of it, whatever it made
     # Public: reaching *through* the pod is exactly what membership gates.
-    if not ctx.is_outsider and ctx.actor_type != ActorType.USER:
+    if not ctx.is_outsider and not isinstance(ctx.actor, Person):
         return
     if any(ref.type == "POD_MEMBER" for ref in ctx.principal_refs):
         return
-    # Org owners hold authority over every pod in their organization without
-    # necessarily having a membership row — the same shortcut
-    # Authorizer._is_org_owner_of_pod applies.
-    if "ORG_OWNER" in ctx.role_names:
+    # Org owners hold every pod's admin permissions through their org role,
+    # without a membership row; the authorizer counts them as members too.
+    if ctx.has_permission(Permissions.POD_READ):
         return
     from app.core.domain.errors import DomainError
 
@@ -500,12 +421,12 @@ def require_resource_admin_or_creator(
         # a destructive action: table/agent/etc. deletion is gated (explicit
         # grant or session approval), and a workload delegating for the creator
         # would otherwise bypass that. Fall through to ctx.require (the gate).
-        workload_destructive = (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-            and permission_id in DESTRUCTIVE_ACTIONS
-        )
+        # Nor does it outlive membership: someone removed from the pod keeps
+        # their `created_by`, and must not keep the delete that came with it.
+        workload_destructive = ctx.is_delegated and permission_id in DESTRUCTIVE_ACTIONS
         if (
             not workload_destructive
+            and ctx.belongs_to_its_pod()
             and ctx.user_id is not None
             and resource.resource_id is not None
         ):

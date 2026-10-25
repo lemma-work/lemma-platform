@@ -17,6 +17,9 @@ _NAME_TO_MODULE = {
     'AccountCredentialsUpdateSchemaCredentials': 'account_credentials_update_schema_credentials',
     'AccountInstallationsSchema': 'account_installations_schema',
     'AccountListResponseSchema': 'account_list_response_schema',
+    'AccountOption': 'account_option',
+    'AccountPodUsage': 'account_pod_usage',
+    'AccountPodUsageResponse': 'account_pod_usage_response',
     'AccountResponseSchema': 'account_response_schema',
     'AccountResponseSchemaPreferencesType0': 'account_response_schema_preferences_type_0',
     'AddColumnRequest': 'add_column_request',
@@ -86,8 +89,11 @@ _NAME_TO_MODULE = {
     'AppTriggerResponseSchemaPayloadSchemaType0': 'app_trigger_response_schema_payload_schema_type_0',
     'AppTriggerSummaryResponseSchema': 'app_trigger_summary_response_schema',
     'ApplyImportRequest': 'apply_import_request',
+    'ApplyImportRequestConnectors': 'apply_import_request_connectors',
     'ApplyImportRequestVariables': 'apply_import_request_variables',
     'ApprovalDecisionResponse': 'approval_decision_response',
+    'AskMembersRequest': 'ask_members_request',
+    'AskMembersResponse': 'ask_members_response',
     'AskablePodListResponse': 'askable_pod_list_response',
     'AskablePodResponse': 'askable_pod_response',
     'Attach': 'attach',
@@ -114,6 +120,10 @@ _NAME_TO_MODULE = {
     'BulkUpdateRecordsRequest': 'bulk_update_records_request',
     'BulkUpdateRecordsRequestRecordsItem': 'bulk_update_records_request_records_item',
     'BundleSourceKind': 'bundle_source_kind',
+    'CallConfigResponse': 'call_config_response',
+    'CallConfigResponseEnginesItem': 'call_config_response_engines_item',
+    'CallResponse': 'call_response',
+    'CallResponseEnginesItem': 'call_response_engines_item',
     'CaseEventResponse': 'case_event_response',
     'CaseEventResponseValue': 'case_event_response_value',
     'CaseResponse': 'case_response',
@@ -146,6 +156,7 @@ _NAME_TO_MODULE = {
     'ConnectedClientResponse': 'connected_client_response',
     'ConnectedClientsResponse': 'connected_clients_response',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete': 'connector_auth_config_delete_response_connector_auth_config_delete',
+    'ConnectorChoice': 'connector_choice',
     'ConnectorDetailResponseSchema': 'connector_detail_response_schema',
     'ConnectorDetailResponseSchemaOperations': 'connector_detail_response_schema_operations',
     'ConnectorKind': 'connector_kind',
@@ -154,6 +165,10 @@ _NAME_TO_MODULE = {
     'ConnectorKindResponseSchemaCredentialSchemaType0': 'connector_kind_response_schema_credential_schema_type_0',
     'ConnectorKindResponseSchemaInstallConfigSchemaType0': 'connector_kind_response_schema_install_config_schema_type_0',
     'ConnectorListResponseSchema': 'connector_list_response_schema',
+    'ConnectorPlan': 'connector_plan',
+    'ConnectorPlanMode': 'connector_plan_mode',
+    'ConnectorPlanStatus': 'connector_plan_status',
+    'ConnectorPlanVisibility': 'connector_plan_visibility',
     'ConnectorResponseSchema': 'connector_response_schema',
     'ConnectorSkillResponse': 'connector_skill_response',
     'ConnectorStatusResponse': 'connector_status_response',
@@ -319,6 +334,8 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'GenerationSettings': 'generation_settings',
+    'GranteeRef': 'grantee_ref',
+    'GranteeRefGranteeType': 'grantee_ref_grantee_type',
     'GroupPublicResponse': 'group_public_response',
     'HarnessKind': 'harness_kind',
     'HistoryMessage': 'history_message',
@@ -330,6 +347,8 @@ _NAME_TO_MODULE = {
     'IconUploadResponse': 'icon_upload_response',
     'IdentityKind': 'identity_kind',
     'IdentityStrength': 'identity_strength',
+    'ImpactedPod': 'impacted_pod',
+    'ImpactedPodConnector': 'impacted_pod_connector',
     'ImportPlanResponse': 'import_plan_response',
     'ImportStartRequest': 'import_start_request',
     'ImportStatus': 'import_status',
@@ -341,6 +360,10 @@ _NAME_TO_MODULE = {
     'InstallRequestResponseSchema': 'install_request_response_schema',
     'InstallationBindSchema': 'installation_bind_schema',
     'InstallationChoiceSchema': 'installation_choice_schema',
+    'InstallationImpactResponse': 'installation_impact_response',
+    'InstallationOperationExecutionRequest': 'installation_operation_execution_request',
+    'InstallationOperationExecutionRequestPayload': 'installation_operation_execution_request_payload',
+    'InstallationOption': 'installation_option',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
     'LineDelivery': 'line_delivery',
@@ -360,6 +383,8 @@ _NAME_TO_MODULE = {
     'ManualWorkflowStartInput': 'manual_workflow_start_input',
     'ManualWorkflowStartOutput': 'manual_workflow_start_output',
     'McpEndpointResponse': 'mcp_endpoint_response',
+    'MemberAwaited': 'member_awaited',
+    'MemberConnectStanding': 'member_connect_standing',
     'MemberRole': 'member_role',
     'MemberUpdateRequest': 'member_update_request',
     'MembersAddRequest': 'members_add_request',
@@ -384,6 +409,7 @@ _NAME_TO_MODULE = {
     'NotifyLevel': 'notify_level',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
+    'OpenCallRequest': 'open_call_request',
     'OpenTableRequest': 'open_table_request',
     'OpenTableSummary': 'open_table_summary',
     'OpenTablesResponse': 'open_tables_response',
@@ -400,6 +426,7 @@ _NAME_TO_MODULE = {
     'OperationExecutionResponse': 'operation_execution_response',
     'OperationSummary': 'operation_summary',
     'OrganizationCreateRequest': 'organization_create_request',
+    'OrganizationEffectivePermissionsResponse': 'organization_effective_permissions_response',
     'OrganizationHomeResponse': 'organization_home_response',
     'OrganizationInvitationListResponse': 'organization_invitation_list_response',
     'OrganizationInvitationRequest': 'organization_invitation_request',
@@ -426,7 +453,23 @@ _NAME_TO_MODULE = {
     'PersonRef': 'person_ref',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
+    'PodAccountCreateRequest': 'pod_account_create_request',
+    'PodAccountListResponse': 'pod_account_list_response',
+    'PodAccountResponse': 'pod_account_response',
+    'PodAccountShareAsRequest': 'pod_account_share_as_request',
+    'PodAccountSource': 'pod_account_source',
+    'PodAccountUpdateRequest': 'pod_account_update_request',
+    'PodAccountVisibility': 'pod_account_visibility',
     'PodConfig': 'pod_config',
+    'PodConnectorCoverage': 'pod_connector_coverage',
+    'PodConnectorCreateRequest': 'pod_connector_create_request',
+    'PodConnectorListResponse': 'pod_connector_list_response',
+    'PodConnectorMode': 'pod_connector_mode',
+    'PodConnectorResponse': 'pod_connector_response',
+    'PodConnectorSource': 'pod_connector_source',
+    'PodConnectorStatus': 'pod_connector_status',
+    'PodConnectorUpdateRequest': 'pod_connector_update_request',
+    'PodConnectorVisibility': 'pod_connector_visibility',
     'PodContactSettings': 'pod_contact_settings',
     'PodCreateRequest': 'pod_create_request',
     'PodEffectivePermissionsResponse': 'pod_effective_permissions_response',
@@ -535,6 +578,7 @@ _NAME_TO_MODULE = {
     'SessionResponse': 'session_response',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
     'SetOrganizationDefaultRuntimeRequest': 'set_organization_default_runtime_request',
+    'SharedAccountSummary': 'shared_account_summary',
     'SharedResourceBody': 'shared_resource_body',
     'SignInOutcomeResponse': 'sign_in_outcome_response',
     'SignedUrlListResponse': 'signed_url_list_response',
@@ -723,6 +767,9 @@ if TYPE_CHECKING:
     from .account_credentials_update_schema_credentials import AccountCredentialsUpdateSchemaCredentials
     from .account_installations_schema import AccountInstallationsSchema
     from .account_list_response_schema import AccountListResponseSchema
+    from .account_option import AccountOption
+    from .account_pod_usage import AccountPodUsage
+    from .account_pod_usage_response import AccountPodUsageResponse
     from .account_response_schema import AccountResponseSchema
     from .account_response_schema_preferences_type_0 import AccountResponseSchemaPreferencesType0
     from .add_column_request import AddColumnRequest
@@ -792,8 +839,11 @@ if TYPE_CHECKING:
     from .app_trigger_response_schema_payload_schema_type_0 import AppTriggerResponseSchemaPayloadSchemaType0
     from .app_trigger_summary_response_schema import AppTriggerSummaryResponseSchema
     from .apply_import_request import ApplyImportRequest
+    from .apply_import_request_connectors import ApplyImportRequestConnectors
     from .apply_import_request_variables import ApplyImportRequestVariables
     from .approval_decision_response import ApprovalDecisionResponse
+    from .ask_members_request import AskMembersRequest
+    from .ask_members_response import AskMembersResponse
     from .askable_pod_list_response import AskablePodListResponse
     from .askable_pod_response import AskablePodResponse
     from .attach import Attach
@@ -820,6 +870,10 @@ if TYPE_CHECKING:
     from .bulk_update_records_request import BulkUpdateRecordsRequest
     from .bulk_update_records_request_records_item import BulkUpdateRecordsRequestRecordsItem
     from .bundle_source_kind import BundleSourceKind
+    from .call_config_response import CallConfigResponse
+    from .call_config_response_engines_item import CallConfigResponseEnginesItem
+    from .call_response import CallResponse
+    from .call_response_engines_item import CallResponseEnginesItem
     from .case_event_response import CaseEventResponse
     from .case_event_response_value import CaseEventResponseValue
     from .case_response import CaseResponse
@@ -852,6 +906,7 @@ if TYPE_CHECKING:
     from .connected_client_response import ConnectedClientResponse
     from .connected_clients_response import ConnectedClientsResponse
     from .connector_auth_config_delete_response_connector_auth_config_delete import ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete
+    from .connector_choice import ConnectorChoice
     from .connector_detail_response_schema import ConnectorDetailResponseSchema
     from .connector_detail_response_schema_operations import ConnectorDetailResponseSchemaOperations
     from .connector_kind import ConnectorKind
@@ -860,6 +915,10 @@ if TYPE_CHECKING:
     from .connector_kind_response_schema_credential_schema_type_0 import ConnectorKindResponseSchemaCredentialSchemaType0
     from .connector_kind_response_schema_install_config_schema_type_0 import ConnectorKindResponseSchemaInstallConfigSchemaType0
     from .connector_list_response_schema import ConnectorListResponseSchema
+    from .connector_plan import ConnectorPlan
+    from .connector_plan_mode import ConnectorPlanMode
+    from .connector_plan_status import ConnectorPlanStatus
+    from .connector_plan_visibility import ConnectorPlanVisibility
     from .connector_response_schema import ConnectorResponseSchema
     from .connector_skill_response import ConnectorSkillResponse
     from .connector_status_response import ConnectorStatusResponse
@@ -1025,6 +1084,8 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .generation_settings import GenerationSettings
+    from .grantee_ref import GranteeRef
+    from .grantee_ref_grantee_type import GranteeRefGranteeType
     from .group_public_response import GroupPublicResponse
     from .harness_kind import HarnessKind
     from .history_message import HistoryMessage
@@ -1036,6 +1097,8 @@ if TYPE_CHECKING:
     from .icon_upload_response import IconUploadResponse
     from .identity_kind import IdentityKind
     from .identity_strength import IdentityStrength
+    from .impacted_pod import ImpactedPod
+    from .impacted_pod_connector import ImpactedPodConnector
     from .import_plan_response import ImportPlanResponse
     from .import_start_request import ImportStartRequest
     from .import_status import ImportStatus
@@ -1047,6 +1110,10 @@ if TYPE_CHECKING:
     from .install_request_response_schema import InstallRequestResponseSchema
     from .installation_bind_schema import InstallationBindSchema
     from .installation_choice_schema import InstallationChoiceSchema
+    from .installation_impact_response import InstallationImpactResponse
+    from .installation_operation_execution_request import InstallationOperationExecutionRequest
+    from .installation_operation_execution_request_payload import InstallationOperationExecutionRequestPayload
+    from .installation_option import InstallationOption
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
     from .line_delivery import LineDelivery
@@ -1066,6 +1133,8 @@ if TYPE_CHECKING:
     from .manual_workflow_start_input import ManualWorkflowStartInput
     from .manual_workflow_start_output import ManualWorkflowStartOutput
     from .mcp_endpoint_response import McpEndpointResponse
+    from .member_awaited import MemberAwaited
+    from .member_connect_standing import MemberConnectStanding
     from .member_role import MemberRole
     from .member_update_request import MemberUpdateRequest
     from .members_add_request import MembersAddRequest
@@ -1090,6 +1159,7 @@ if TYPE_CHECKING:
     from .notify_level import NotifyLevel
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
+    from .open_call_request import OpenCallRequest
     from .open_table_request import OpenTableRequest
     from .open_table_summary import OpenTableSummary
     from .open_tables_response import OpenTablesResponse
@@ -1106,6 +1176,7 @@ if TYPE_CHECKING:
     from .operation_execution_response import OperationExecutionResponse
     from .operation_summary import OperationSummary
     from .organization_create_request import OrganizationCreateRequest
+    from .organization_effective_permissions_response import OrganizationEffectivePermissionsResponse
     from .organization_home_response import OrganizationHomeResponse
     from .organization_invitation_list_response import OrganizationInvitationListResponse
     from .organization_invitation_request import OrganizationInvitationRequest
@@ -1132,7 +1203,23 @@ if TYPE_CHECKING:
     from .person_ref import PersonRef
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
+    from .pod_account_create_request import PodAccountCreateRequest
+    from .pod_account_list_response import PodAccountListResponse
+    from .pod_account_response import PodAccountResponse
+    from .pod_account_share_as_request import PodAccountShareAsRequest
+    from .pod_account_source import PodAccountSource
+    from .pod_account_update_request import PodAccountUpdateRequest
+    from .pod_account_visibility import PodAccountVisibility
     from .pod_config import PodConfig
+    from .pod_connector_coverage import PodConnectorCoverage
+    from .pod_connector_create_request import PodConnectorCreateRequest
+    from .pod_connector_list_response import PodConnectorListResponse
+    from .pod_connector_mode import PodConnectorMode
+    from .pod_connector_response import PodConnectorResponse
+    from .pod_connector_source import PodConnectorSource
+    from .pod_connector_status import PodConnectorStatus
+    from .pod_connector_update_request import PodConnectorUpdateRequest
+    from .pod_connector_visibility import PodConnectorVisibility
     from .pod_contact_settings import PodContactSettings
     from .pod_create_request import PodCreateRequest
     from .pod_effective_permissions_response import PodEffectivePermissionsResponse
@@ -1241,6 +1328,7 @@ if TYPE_CHECKING:
     from .session_response import SessionResponse
     from .set_default_surface_request import SetDefaultSurfaceRequest
     from .set_organization_default_runtime_request import SetOrganizationDefaultRuntimeRequest
+    from .shared_account_summary import SharedAccountSummary
     from .shared_resource_body import SharedResourceBody
     from .sign_in_outcome_response import SignInOutcomeResponse
     from .signed_url_list_response import SignedUrlListResponse
@@ -1442,6 +1530,9 @@ __all__ = [
     'AccountCredentialsUpdateSchemaCredentials',
     'AccountInstallationsSchema',
     'AccountListResponseSchema',
+    'AccountOption',
+    'AccountPodUsage',
+    'AccountPodUsageResponse',
     'AccountResponseSchema',
     'AccountResponseSchemaPreferencesType0',
     'AddColumnRequest',
@@ -1511,8 +1602,11 @@ __all__ = [
     'AppTriggerResponseSchemaPayloadSchemaType0',
     'AppTriggerSummaryResponseSchema',
     'ApplyImportRequest',
+    'ApplyImportRequestConnectors',
     'ApplyImportRequestVariables',
     'ApprovalDecisionResponse',
+    'AskMembersRequest',
+    'AskMembersResponse',
     'AskablePodListResponse',
     'AskablePodResponse',
     'Attach',
@@ -1539,6 +1633,10 @@ __all__ = [
     'BulkUpdateRecordsRequest',
     'BulkUpdateRecordsRequestRecordsItem',
     'BundleSourceKind',
+    'CallConfigResponse',
+    'CallConfigResponseEnginesItem',
+    'CallResponse',
+    'CallResponseEnginesItem',
     'CaseEventResponse',
     'CaseEventResponseValue',
     'CaseResponse',
@@ -1571,6 +1669,7 @@ __all__ = [
     'ConnectedClientResponse',
     'ConnectedClientsResponse',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete',
+    'ConnectorChoice',
     'ConnectorDetailResponseSchema',
     'ConnectorDetailResponseSchemaOperations',
     'ConnectorKind',
@@ -1579,6 +1678,10 @@ __all__ = [
     'ConnectorKindResponseSchemaCredentialSchemaType0',
     'ConnectorKindResponseSchemaInstallConfigSchemaType0',
     'ConnectorListResponseSchema',
+    'ConnectorPlan',
+    'ConnectorPlanMode',
+    'ConnectorPlanStatus',
+    'ConnectorPlanVisibility',
     'ConnectorResponseSchema',
     'ConnectorSkillResponse',
     'ConnectorStatusResponse',
@@ -1744,6 +1847,8 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'GenerationSettings',
+    'GranteeRef',
+    'GranteeRefGranteeType',
     'GroupPublicResponse',
     'HarnessKind',
     'HistoryMessage',
@@ -1755,6 +1860,8 @@ __all__ = [
     'IconUploadResponse',
     'IdentityKind',
     'IdentityStrength',
+    'ImpactedPod',
+    'ImpactedPodConnector',
     'ImportPlanResponse',
     'ImportStartRequest',
     'ImportStatus',
@@ -1766,6 +1873,10 @@ __all__ = [
     'InstallRequestResponseSchema',
     'InstallationBindSchema',
     'InstallationChoiceSchema',
+    'InstallationImpactResponse',
+    'InstallationOperationExecutionRequest',
+    'InstallationOperationExecutionRequestPayload',
+    'InstallationOption',
     'InstalledAppSummary',
     'JsonObject',
     'LineDelivery',
@@ -1785,6 +1896,8 @@ __all__ = [
     'ManualWorkflowStartInput',
     'ManualWorkflowStartOutput',
     'McpEndpointResponse',
+    'MemberAwaited',
+    'MemberConnectStanding',
     'MemberRole',
     'MemberUpdateRequest',
     'MembersAddRequest',
@@ -1809,6 +1922,7 @@ __all__ = [
     'NotifyLevel',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
+    'OpenCallRequest',
     'OpenTableRequest',
     'OpenTableSummary',
     'OpenTablesResponse',
@@ -1825,6 +1939,7 @@ __all__ = [
     'OperationExecutionResponse',
     'OperationSummary',
     'OrganizationCreateRequest',
+    'OrganizationEffectivePermissionsResponse',
     'OrganizationHomeResponse',
     'OrganizationInvitationListResponse',
     'OrganizationInvitationRequest',
@@ -1851,7 +1966,23 @@ __all__ = [
     'PersonRef',
     'PlanStepResponse',
     'PlanStepResponseDetail',
+    'PodAccountCreateRequest',
+    'PodAccountListResponse',
+    'PodAccountResponse',
+    'PodAccountShareAsRequest',
+    'PodAccountSource',
+    'PodAccountUpdateRequest',
+    'PodAccountVisibility',
     'PodConfig',
+    'PodConnectorCoverage',
+    'PodConnectorCreateRequest',
+    'PodConnectorListResponse',
+    'PodConnectorMode',
+    'PodConnectorResponse',
+    'PodConnectorSource',
+    'PodConnectorStatus',
+    'PodConnectorUpdateRequest',
+    'PodConnectorVisibility',
     'PodContactSettings',
     'PodCreateRequest',
     'PodEffectivePermissionsResponse',
@@ -1960,6 +2091,7 @@ __all__ = [
     'SessionResponse',
     'SetDefaultSurfaceRequest',
     'SetOrganizationDefaultRuntimeRequest',
+    'SharedAccountSummary',
     'SharedResourceBody',
     'SignInOutcomeResponse',
     'SignedUrlListResponse',

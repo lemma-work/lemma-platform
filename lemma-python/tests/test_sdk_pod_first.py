@@ -11,9 +11,6 @@ from lemma_sdk.openapi_client.models.datastore_count_response import (
     DatastoreCountResponse,
 )
 from lemma_sdk.openapi_client.models.function_run_response import FunctionRunResponse
-from lemma_sdk.openapi_client.models.operation_execution_response import (
-    OperationExecutionResponse,
-)
 from lemma_sdk.openapi_client.models.record_create_response_record_create import (
     RecordCreateResponseRecordCreate,
 )
@@ -79,12 +76,6 @@ class StubTransport:
                     "target_run_id": "88888888-8888-4888-8888-888888888888",
                     "updated_at": "2026-01-01T00:00:00Z",
                     "user_id": "55555555-5555-4555-8555-555555555555",
-                }
-            )
-        if endpoint.__name__.endswith("connector_operation_execute"):
-            return OperationExecutionResponse.from_dict(
-                {
-                    "result": {"sent": True},
                 }
             )
         return None
@@ -284,39 +275,6 @@ def test_pod_schedules_events_lists_the_pods_catalog():
     assert transport.calls[0]["path_args"] == (
         UUID("22222222-2222-4222-8222-222222222222"),
     )
-
-
-def test_pod_connectors_execute_uses_bound_org_id():
-    transport = StubTransport()
-    pod = Pod(
-        "22222222-2222-4222-8222-222222222222",
-        org_id="11111111-1111-4111-8111-111111111111",
-        token="token",
-        base_url="https://api.example.test",
-    )
-    pod._transport = transport
-    pod.connectors._transport = transport
-    pod.connectors.operations._parent._transport = transport
-
-    result = pod.connectors.execute(
-        "gmail",
-        "GMAIL_SEND_EMAIL",
-        {"to": "anukul@lemma.work", "subject": "Hi"},
-    )
-
-    assert isinstance(result, OperationExecutionResponse)
-    assert result.result == {"sent": True}
-    assert transport.calls[0]["path_args"] == (
-        UUID("11111111-1111-4111-8111-111111111111"),
-        "gmail",
-        "GMAIL_SEND_EMAIL",
-    )
-    # The pod travels with the call, so a file argument naming `/me/...` has a
-    # pod to resolve in -- an org-level route carries none of its own.
-    assert transport.calls[0]["body"] == {
-        "payload": {"to": "anukul@lemma.work", "subject": "Hi"},
-        "pod_id": "22222222-2222-4222-8222-222222222222",
-    }
 
 
 def test_connectors_triggers_list_uses_org_and_auth_config_path_args():

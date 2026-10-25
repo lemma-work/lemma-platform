@@ -25,6 +25,7 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.modules.agent.domain.private_notes import privacy_of, run_is_private
 from app.modules.agent.domain.entities import Conversation, Message
+from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.pausing_tools import (
     PARKED_IN_RUN_KEY,
@@ -324,6 +325,7 @@ class PauseResume:
                     organization_id=conversation.organization_id,
                     user_id=user_id,
                     agent_runtime=selected_agent_runtime,
+                    outside_audience=Audience.of(conversation).answers_outsiders,
                 )
         except UsageLimitExceededError as refused:
             self._report_refused_resume(

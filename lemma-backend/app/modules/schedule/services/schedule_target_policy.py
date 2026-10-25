@@ -117,6 +117,31 @@ def validate_global_workflow_is_unclaimed(
     )
 
 
+async def validate_global_workflow_unclaimed_after_update(
+    existing: ScheduleEntity, update_data: dict, resolver, repository
+) -> None:
+    """The one-per-user rule, for an update that points at a GLOBAL workflow.
+
+    Asked of the owner the schedule will have once the update lands: an edit
+    that changes what it does hands it to the editor, and it is the editor's
+    one schedule for that workflow it would then be.
+    """
+    workflow_id = update_data.get("workflow_id")
+    if workflow_id is None:
+        return
+    workflow = await resolver.get_workflow(workflow_id)
+    if workflow is None or not workflow.is_global_workflow:
+        return
+    claimed = await repository.find_active_by_workflow(
+        pod_id=existing.pod_id,
+        workflow_id=workflow_id,
+        user_id=update_data.get("user_id", existing.user_id),
+    )
+    validate_global_workflow_is_unclaimed(
+        [item for item in claimed if item.id != existing.id]
+    )
+
+
 def validate_target_instruction(agent, instruction: str | None) -> None:
     """A target that carries no purpose of its own must be given one here.
 

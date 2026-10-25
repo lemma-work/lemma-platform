@@ -2021,6 +2021,14 @@
     align-items: flex-start;
     gap: 8px;
 }
+/* Each thing in a turn is as wide as its content, and never wider than the
+   column. `flex-start` without this cap sizes a child to its min-content
+   once that is wider than the column: one long command in a step stretched
+   the steps, the thoughts beside it and the whole pane thousands of pixels
+   sideways. */
+.msg--reply .msg__body > * {
+    max-width: 100%;
+}
 
 /* One thing said, on its own surface — paper over the canvas. A teammate that
    sends four updates while it works sent four messages, and welding them into

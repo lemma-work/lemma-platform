@@ -6,7 +6,7 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.core.infrastructure.work import WorkWriter
 from app.modules.workflow.domain.context import ContextReader
-from app.modules.workflow.domain.ports import AgentPort, FunctionPort
+from app.modules.workflow.domain.ports import AgentAccessPort, AgentPort, FunctionPort
 
 
 @dataclass
@@ -29,3 +29,6 @@ class StepContext:
     function: FunctionPort
     work: WorkWriter
     authz_ctx: Context | None = None
+    #: Asked before an agent step starts anything. ``None`` refuses every
+    #: agent step rather than letting one through unchecked.
+    agent_access: AgentAccessPort | None = None

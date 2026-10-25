@@ -27,6 +27,7 @@ TAG_MODULES = {
     "Contact Outreach": "agent_surfaces",
     "Contacts": "contacts",
     "Decisions": "decisions",
+    "Calls": "calls",
     "Functions": "function",
     "MCP Access": "mcp_access",
     "Organizations": "identity",

@@ -23,7 +23,7 @@ from uuid import UUID
 
 from sqlalchemy import delete, select
 
-from app.core.authorization.context import ResourceType
+from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.grants import (
     NormalizedResourceGrant,
     delete_grantee_grants,
@@ -127,15 +127,20 @@ class PodLinkQueries:
 
     async def connect(
         self,
+        ctx: Context,
         *,
         answering_pod_id: UUID,
         asking_pod_id: UUID,
         shares: Sequence[NormalizedResourceGrant],
         steward_user_id: UUID,
     ) -> None:
-        """Write the link and what it shares, replacing whatever was there."""
+        """Write the link and what it shares, replacing whatever was there.
+
+        Bounded like any grant write: the steward hands the asking pod only
+        what they could use here themselves."""
         await replace_grantee_resource_grants(
             self.session,
+            ctx=ctx,
             pod_id=answering_pod_id,
             grantee_type=POD_PRINCIPAL_TYPE,
             grantee_id=asking_pod_id,
@@ -148,6 +153,7 @@ class PodLinkQueries:
                 *shares,
             ],
             created_by_user_id=steward_user_id,
+            action="share with another pod what you could not use",
         )
 
     async def disconnect(self, *, answering_pod_id: UUID, asking_pod_id: UUID) -> None:

@@ -250,6 +250,35 @@ class ConnectRequestIdentityMismatchError(ConnectorValidationError):
         self.code = "CONNECT_REQUEST_IDENTITY_MISMATCH"
 
 
+class ConnectRequestBrowserMismatchError(ConnectorDomainError):
+    """The browser finishing a connect is not the person who started it.
+
+    The callback used to complete on ``state`` alone. Mallory could mint a
+    connect link and send it to Alice; Alice's consent landed her mailbox on
+    Mallory's Lemma account (audit H2). So the person signed in to the
+    returning browser must be the one the request was made for -- and a
+    browser signed in to nobody is refused too, since it proves nothing.
+    """
+
+    def __init__(self, *, signed_in: bool) -> None:
+        super().__init__(
+            message=(
+                "This connection link was started for a different Lemma account "
+                "than the one signed in here. Nothing was connected. Start the "
+                "connection again from your own account."
+                if signed_in
+                else "Sign in to Lemma in this browser, then open the connection "
+                "link again. Nothing was connected."
+            ),
+            code=(
+                "CONNECT_REQUEST_BROWSER_MISMATCH"
+                if signed_in
+                else "CONNECT_REQUEST_SIGN_IN_REQUIRED"
+            ),
+            status_code=403 if signed_in else 401,
+        )
+
+
 class OAuthWorkflowError(ConnectorValidationError):
     def __init__(self, message: str, details: object | None = None):
         ConnectorDomainError.__init__(
@@ -306,26 +335,6 @@ class ConnectorReauthRequiredError(ConnectorDomainError):
             details=details,
         )
         self.reason = reason
-
-
-class PodConnectorNotFoundError(_ConnectorNotFoundBase):
-    def __init__(self, alias: str):
-        super().__init__(f"Pod connector '{alias}' not found")
-        self.code = "POD_CONNECTOR_NOT_FOUND"
-
-
-class PodConnectorConflictError(ConnectorConflictError):
-    def __init__(self, alias: str):
-        super().__init__(
-            f"Connector with alias '{alias}' is already installed in this pod"
-        )
-        self.code = "POD_CONNECTOR_CONFLICT"
-
-
-class PodAccountNotFoundError(_ConnectorNotFoundBase):
-    def __init__(self):
-        super().__init__("Account not found or access denied")
-        self.code = "POD_ACCOUNT_NOT_FOUND"
 
 
 class OperationNotFoundError(_ConnectorNotFoundBase):

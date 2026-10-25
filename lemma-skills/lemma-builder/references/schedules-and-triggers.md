@@ -19,8 +19,9 @@ event** (`WEBHOOK`):
   "once on 2026-06-14".*
 - **`DATASTORE`** — a row created/updated/deleted on a named table. The changed row
   starts the run. *"When a ticket is inserted, triage it."*
-- **`WEBHOOK`** — a connector event (new email, message posted). Needs a connected
-  account and a kind-qualified trigger id. *"When mail arrives, intake it."*
+- **`WEBHOOK`** — a connector event (new email, message posted). Needs a pod
+  connector (by slug) and a kind-qualified trigger id. *"When mail arrives, intake
+  it."*
 
 ## Whose identity does a fired run use?
 
@@ -86,12 +87,12 @@ lemma schedules create --workflow ticket-intake --datastore tickets --on all   #
 # --webhook-source names the inbound ENDPOINT (composio | github), not the app.
 # (find the trigger id via `lemma connectors triggers list <auth-config>`)
 lemma schedules create --agent mail-triage \
-  --webhook-source composio --connector-trigger gmail:composio:new_message --account <account-id>
+  --webhook-source composio --connector-trigger gmail:composio:new_message --connector gmail
 
 # WEBHOOK on a WORKFLOW — the trigger comes from the workflow's EVENT start.
 # Passing --connector-trigger here is rejected.
 lemma schedules create --workflow ticket-intake \
-  --webhook-source composio --account <account-id>
+  --webhook-source composio --connector gmail
 ```
 
 Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key:
@@ -129,14 +130,15 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   `DELETE` (`--on all` expands to all three). A datastore schedule without
   operations is rejected. Add an optional `when` block to match on column values
   (see *Match conditions*).
-- `WEBHOOK` — an `account_id` plus a connector trigger, and the trigger id is
+- `WEBHOOK` — a `pod_connector` (the pod connector's slug) plus a connector
+  trigger, and the trigger id is
   **kind-qualified** (`{app}:{kind}:{slug}`, e.g. `gmail:composio:new_message`);
   get it from `lemma connectors triggers list <auth-config>` (see
   `connectors.md`).
 
   **`source` is not the connector.** It names the **inbound webhook endpoint**
   (`POST /webhooks/{source}`), and this deployment answers on exactly two:
-  **`composio`** and **`github`**. On a schedule that is bound to an account *and* a
+  **`composio`** and **`github`**. On a schedule that is bound to a pod connector *and* a
   connector trigger — every schedule you create the normal way — `source` is
   **decorative**: provisioning writes the real routing key (a Composio
   `provider_trigger_id`, or GitHub's `{installation_id, event}` — which overwrites
@@ -145,7 +147,7 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   makes it Gmail.
 
   On an **unprovisioned** schedule — one whose stored config *is* the whole routing
-  key, with no account and trigger to bind — `source` is load-bearing, and a name the
+  key, with no connector and trigger to bind — `source` is load-bearing, and a name the
   registry does not know is **refused at create**: *"No webhook source named 'x'
   delivers to this deployment, so a schedule listening for it could never fire."*
   That refusal is the reason to stop thinking of `source` as "which app": the useful
@@ -168,9 +170,21 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   of these narrows a trigger that already works, so none is required.
 
   Some keys are **bound for you** and must not be written by hand. A GitHub
-  schedule's `installation_id` comes from the connected account when the
-  schedule is created — it is not something to copy out of a URL, and a wrong
-  one routes another organization's events at your pod.
+  schedule's `installation_id` comes from the account its pod connector
+  resolves to when the schedule is created — it is not something to copy out of
+  a URL, and a wrong one routes another organization's events at your pod.
+
+  **Which account a schedule listens through is the connector's decision**, and
+  it is made again on every use, as the schedule's **owner**: a per-member
+  connector means the owner's own account, a shared connector the account its
+  owner shared. Creating the schedule is your own use of the connector — the
+  same checks as running one of its operations, with the same typed refusals
+  (`CONNECTION_REQUIRED` with a `connect_url`, `CONNECTOR_NEEDS_ACCOUNT`, …).
+  Afterwards, a delivery only fires the schedule while the connector still
+  resolves: when the owner leaves the pod or a shared account is withdrawn it
+  stops, and an MCP event schedule is turned off with the reason on it. Whoever
+  changes what a schedule does becomes its owner, on their own use of the
+  connector, and its subscription is made again as them.
 
   **A triggered agent needs its own connector grant.** Connecting the account
   authorizes the *person*; a scheduled run is a delegated workload and is
@@ -321,7 +335,7 @@ their answers reach the target at `start.llm_output.*`:
   "name": "important-mail",
   "schedule_type": "WEBHOOK",
   "config": { "source": "composio" },
-  "account_id": "${gmail_account}",
+  "pod_connector": "gmail",
   "workflow_name": "ticket-intake",
   "filter_instruction": "Only process emails from external customers describing a problem or request. Ignore newsletters, receipts, and internal mail.",
   "is_active": true
@@ -402,9 +416,11 @@ suspended execution — invisible in `schedules`, resolves exactly once, and cap
 - **Concurrency.** Firings are not serialized — overlapping runs of the same target
   can be in flight at once. Make targets idempotent; don't assume the previous run
   finished.
-- **Webhook prerequisites.** A WEBHOOK schedule needs the connector account
-  connected first (`connectors.md`) and a publicly reachable backend to receive the
-  POST (local stacks may not get webhook deliveries).
+- **Webhook prerequisites.** A WEBHOOK schedule needs a pod connector declared
+  in the pod, and an account it resolves to for you — your own connected for a
+  per-member one, a shared one for a shared one (`connectors.md`) — plus a
+  publicly reachable backend to receive the POST (local stacks may not get
+  webhook deliveries).
 - **Internal schedules.** Workflow `WAIT_UNTIL` nodes create their own schedules
   that show up in `list` — don't touch them.
 

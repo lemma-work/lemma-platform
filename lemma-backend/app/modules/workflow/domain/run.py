@@ -258,15 +258,22 @@ class WorkflowRunEntity(AggregateRoot):
         self.failed_node_id = failed_node
         self.completed_at = datetime.now(timezone.utc)
 
-    def reopen_at_failed_node(self) -> str:
+    def reopen_at_failed_node(self, *, by_user_id: UUID | None = None) -> str:
         """Back to RUNNING at the node that failed, keeping all that came before.
 
         The execution context already holds every earlier node's output -- an
         agent's answer among them -- so continuing from here redoes only the
         failed step. Its failed step stays in the history; the retry is a new one.
+
+        ``by_user_id`` is the person retrying it, when a person is: the rest of
+        the run is theirs and runs with their access. Finishing someone else's
+        run as them would let anyone who may retry it borrow their authority
+        for the steps still to come.
         """
         if self.status != WorkflowRunStatus.FAILED or self.failed_node_id is None:
             raise ValueError("Only a run that failed at a node can be retried")
+        if by_user_id is not None:
+            self.user_id = by_user_id
         node_id = self.failed_node_id
         self.status = WorkflowRunStatus.RUNNING
         self.current_node_id = node_id

@@ -37,6 +37,11 @@ class RunIdentity:
     #: Carried here so the terminal write records it the same way the
     #: in-flight requests were.
     usage_source: str = "agent_run"
+    #: The run was told its memory is kept after it ends, so its terminal write
+    #: owes it the memory pass. Carried from the run's context rather than
+    #: re-derived at the finish, so the pass follows exactly the runs whose
+    #: prompt promised one.
+    memory_after_turn: bool = False
 
     def with_reservation(self, reservation: UsageReservation | None) -> "RunIdentity":
         """The same run, once usage has been reserved for it.
@@ -51,3 +56,7 @@ class RunIdentity:
     ) -> "RunIdentity":
         """The same run, once its runtime profile has been resolved."""
         return replace(self, runtime_profile=snapshot)
+
+    def with_memory_after_turn(self, memory_after_turn: bool) -> "RunIdentity":
+        """The same run, once its context has said where its memory is kept."""
+        return replace(self, memory_after_turn=memory_after_turn)

@@ -91,6 +91,11 @@ from app.modules.usage.contracts.contacts_cap import contacts_cap_reached
 from app.modules.usage.contracts.metering import check_run_budget
 from app.modules.usage.domain.accounting import CONTACT_RUN
 from app.modules.usage.infrastructure.models import UsageRecord
+from app.modules.test_support.query_counting import (
+    counted_queries,
+    format_statements,
+    statements_touching,
+)
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
     auth_headers,
@@ -897,17 +902,19 @@ async def test_the_default_cap_holds_until_an_owner_removes_it(
     )
     await db_session.commit()
 
+    # Asked in a unit of its own, as a surface asks it: a first ask counts the
+    # month, and holds the counter it made until its unit ends.
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         assert await contacts_cap_reached(uow, organization_id=org_id)
-        # The pre-run check every outside run makes refuses it too.
-        with pytest.raises(UsageLimitExceededError):
-            await check_run_budget(
-                factory=SessionUnitOfWorkFactory(async_session_maker),
-                organization_id=org_id,
-                user_id=UUID(fixed_test_user["id"]),
-                profile_scope="SYSTEM",
-                outside_audience=True,
-            )
+    # The pre-run check every outside run makes refuses it too.
+    with pytest.raises(UsageLimitExceededError):
+        await check_run_budget(
+            factory=SessionUnitOfWorkFactory(async_session_maker),
+            organization_id=org_id,
+            user_id=UUID(fixed_test_user["id"]),
+            profile_scope="SYSTEM",
+            outside_audience=True,
+        )
 
     removed = await authenticated_client.put(
         f"/usage/organizations/{org_id}/contacts-cap",
@@ -918,6 +925,49 @@ async def test_the_default_cap_holds_until_an_owner_removes_it(
 
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         assert not await contacts_cap_reached(uow, organization_id=org_id)
+
+
+async def test_past_the_cap_her_message_is_held_without_a_ledger_sum(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_org,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """Each message she writes asks the cap before a turn starts, and reads it
+    from the running total her run would be admitted on: once the month is
+    counted, being held costs no sum over the month's spend."""
+    _channel_id, write, runs = await _contact_writes_on(
+        authenticated_client,
+        db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fake_resend=fake_resend,
+        monkeypatch=monkeypatch,
+    )
+    capped = await authenticated_client.put(
+        f"/usage/organizations/{fixed_test_org['id']}/contacts-cap",
+        json={"monthly_limit_usd": 0},
+    )
+    assert capped.status_code == 200, capped.text
+    before = await runs()
+
+    # The first ask under the new cap counts the month again.
+    await write("step-2", "Hello again?")
+    with counted_queries() as held:
+        await write("step-3", "Anyone there?")
+
+    assert await runs() == before
+    sums = [
+        statement
+        for statement in held
+        if "sum(" in statement.lower()
+        and ("usage_records" in statement or "usage_limit_counters" in statement)
+    ]
+    assert not sums, format_statements(sums)
+    assert statements_touching(held, "usage_limit_counters"), format_statements(held)
 
 
 async def test_only_an_owner_sets_the_contacts_cap(

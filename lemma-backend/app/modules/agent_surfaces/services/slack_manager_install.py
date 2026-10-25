@@ -4,11 +4,9 @@ Authorising Lemma's app makes a connector account like any other. Binding it as
 the manager is what turns that into a workspace Lemma's teammates live in: the
 workspace becomes the organization's (one organization per workspace), and the
 person who authorised it is known in Slack from then on -- Slack's grant names
-them (``authed_user``). That is proof only when the browser that came back from
-Slack carried that person's own Lemma session; a consent link somebody was sent
-would otherwise bind the sender's organization to the recipient's workspace and
-the recipient's Slack user to the sender. So a grant that was not
-browser-bound is refused here.
+them (``authed_user``). That is proof because the OAuth callback refuses a
+browser that is not the starter's own before it stores any grant: a consent
+link somebody was sent never becomes an account to bind.
 
 A workspace held by one organization is freed by removing Lemma's app from it
 in Slack (``app_uninstalled``), which deletes the binding.
@@ -37,7 +35,6 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 from app.modules.agent_surfaces.services.slack_manager_messages import stage_welcome
 from app.modules.agent_surfaces.services.slack_person_proof import record_proof
 from app.modules.connectors.contracts.own_apps import (
-    grant_is_browser_bound,
     may_manage_installs,
 )
 from app.modules.connectors.contracts.retirement import retire_accounts
@@ -172,11 +169,6 @@ async def bind_manager(
     raw = await _lemma_app_grant(
         uow, user_id=user_id, organization_id=organization_id, account_id=account_id
     )
-    if not await grant_is_browser_bound(uow, account_id=account_id):
-        raise AgentSurfaceValidationError(
-            "Slack's Allow finished in a browser that wasn't signed in to Lemma "
-            "as you. Connect Lemma's app again from this browser."
-        )
     team_id, team_name, bot_user_id = _workspace_of(raw)
     repo = SlackManagerRepository(uow.session)
     claimed = await repo.claim_install(
@@ -188,10 +180,8 @@ async def bind_manager(
         installed_by_user_id=user_id,
     )
     superseded = claimed.superseded_account_id
-    if superseded is not None and not await SurfaceRepository(
-        uow
-    ).get_by_platform_and_account_id(
-        platform=SurfacePlatform.SLACK.value, account_id=superseded
+    if superseded is not None and not await SurfaceRepository(uow).get_bound_to_account(
+        superseded, platform=SurfacePlatform.SLACK.value
     ):
         # The workspace's earlier grant of Lemma's app, which only the
         # binding used: its token goes with it. One a pod still answers

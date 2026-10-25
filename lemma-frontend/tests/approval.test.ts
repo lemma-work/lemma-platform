@@ -192,3 +192,35 @@ test("no tool's card is Lemma's own any more: the retired outside-answer tool re
     assert.notEqual(details.title, "Send this answer outside the pod?");
     assert.ok(details.title.includes("Log the call"));
 });
+
+test("the conversation-long option says it covers the permission, not the call", () => {
+    // A session approval is permission-wide: one record's delete approved for
+    // the conversation lets the agent delete records in any table.
+    const details = approvalDetails({
+        tool_name: "pod_write_record",
+        args: { action: "delete", table_name: "chores", record_id: "r1" },
+        permission_ids: ["datastore.record.delete"],
+    });
+    assert.equal(details.canApproveForSession, true);
+    assert.equal(details.sessionScope, "Delete records in any table for the rest of this conversation");
+    assert.equal(details.grantNote, undefined);
+});
+
+test("with no permission named, the conversation-long option repeats the exact call", () => {
+    const details = approvalDetails({ tool_name: "exec_command", args: { cmd: "python job.py" } });
+    assert.equal(details.sessionScope, "Run this exact command again without asking, for the rest of this conversation");
+});
+
+test("a named agent asking for a connector is told approving gives it for good", () => {
+    const details = approvalDetails({
+        tool_name: "run_connector_operation",
+        args: { connector: "gmail", operation: "send_email", payload: {} },
+        permission_ids: ["connector.use"],
+        title: "Let triage use gmail (your own account)?",
+    });
+    assert.equal(details.canApproveForSession, false);
+    assert.equal(
+        details.grantNote,
+        "Approving gives this agent the gmail connector from now on, in every conversation, until someone removes it.",
+    );
+});

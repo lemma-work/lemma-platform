@@ -18,6 +18,7 @@ from pydantic_ai import ToolReturn
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.tools.approval_denials import remember_denial
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.pod_data_access import PodServices, pod_services
 from app.modules.agent.tools.pod.pod_paths import to_me_path
@@ -66,17 +67,29 @@ async def run_pod_tool(
     tool_name: str,
     args: JsonObject,
     op: Callable[[PodServices], Awaitable["JsonObject | ToolReturn"]],
+    needs: frozenset[str] = frozenset(),
 ) -> "JsonObject | ToolReturn":
     """Run a pod operation, mapping authorization 403s to ``needs_approval``.
 
     Most ops return a ``JsonObject``; image tools return a ``ToolReturn`` so the
     model receives inline image content while only a reference is persisted.
+
+    ``needs`` is every permission the operation will ask for, when the tool
+    knows them. The authorizer stops at the first one missing, so without it a
+    record delete came back refused for the table read, was approved, ran, and
+    came back refused for the write: two cards for one action. With it, the
+    refusal names everything the person must approve, once.
     """
     try:
         async with pod_services(deps) as services:
+            services.ctx.action_requirements = needs
             return await op(services)
     except DomainError as exc:
-        return approval_error_result(exc, tool_name=tool_name, args=args)
+        result = approval_error_result(exc, tool_name=tool_name, args=args)
+        # Written down server-side, so the approval this leads to unlocks what
+        # was refused here rather than what the model copies into its request.
+        await remember_denial(deps, result)
+        return result
 
 
 def file_summary(entity: Any, user_id: Any) -> JsonObject:

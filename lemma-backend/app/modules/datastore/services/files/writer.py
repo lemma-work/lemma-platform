@@ -454,6 +454,17 @@ class FileWriter(FolderCreationMixin):
             requester_user_id=requester_user_id,
             ctx=ctx,
         )
+        # Moving a file somewhere is writing it there. Only the source was
+        # checked, so a member could move a file into a folder they may not
+        # write -- a RESTRICTED one, or a colleague's -- as creating it there
+        # would have been refused.
+        await self.authorizer.require_path_write_permission(
+            requester_user_id=requester_user_id,
+            pod_id=pod_id,
+            path=normalized_path,
+            resource_id=parent.id if parent is not None else None,
+            ctx=ctx,
+        )
         await self.lookup.ensure_path_available(
             pod_id=pod_id,
             path=normalized_path,

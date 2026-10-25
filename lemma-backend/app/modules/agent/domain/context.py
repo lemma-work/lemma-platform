@@ -11,13 +11,21 @@ from app.modules.agent.domain.value_objects import AgentToolset, JsonObject
 
 
 class ApprovedExecution(BaseModel):
-    """One tool call a person approved, running with that person's authority.
+    """One tool call a person approved, and exactly what the approval lends it.
 
     Approval is how an agent does what its own grants do not allow: a missing
     grant, a destructive action, an auth-required step all come back as
-    ``needs_approval``, and the person the agent works for lends their authority
-    to exactly one described call. It is never standing access -- the agent's
-    next call is judged on its own grants again.
+    ``needs_approval``, and the person the agent works for approves exactly one
+    described call. It is never standing access -- the agent's next call is
+    judged on its own grants again.
+
+    The call still runs as the agent: the same delegated context it would have
+    had, plus ``permission_ids`` -- the permissions the server refused this
+    exact call for -- answered as approved. It used to run as the approver's
+    whole user context, so approving "delete this row" handed the agent
+    everything the person could do for the length of the call: an approved
+    subagent spawn, connector call or sign-in ran with all of it (H7). The
+    person's ceiling applies either way; an approver lends only what they hold.
 
     Carried on the tool context of the approved call only, so every tool builds
     its authorization context from it explicitly (``tool_authorization_context``)
@@ -37,6 +45,13 @@ class ApprovedExecution(BaseModel):
     #: The ``request_approval`` call id, or ``None`` when an earlier session
     #: approval covered this exact call.
     approval_id: str | None = None
+    #: What the approval lends: what its card showed -- the refusals the
+    #: server had recorded when the card went up (``tools/approval_denials``).
+    #: Never the ``permission_ids`` the model put in its ``request_approval``
+    #: -- those are whatever it wrote -- nor a refusal recorded since. Empty
+    #: when nothing was pending: the call then runs with exactly the agent's
+    #: own authority.
+    permission_ids: frozenset[str] = frozenset()
 
 
 class AgentContext(BaseModel):
@@ -71,6 +86,11 @@ class AgentContext(BaseModel):
     # `memory_is_active`, which the run-context builder resolves once here so
     # the capability assembler and the brief builder cannot disagree about it.
     memory_enabled: bool = False
+    # Whether this run is told to write memory only when asked, its memory
+    # being kept by a pass after it ends (`memory_kept_after_turn`). Resolved
+    # with `memory_enabled`; the prompt reads it, and the run's terminal write
+    # queues the pass from the same value, so the two cannot disagree.
+    memory_after_turn: bool = False
     # This agent's grant summary, loaded once for the run. Toolset selection
     # derives POD and CONNECTORS from it, and the tool assembler reuses it
     # rather than reading the same rows a second time. Typed loosely here to

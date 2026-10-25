@@ -21,6 +21,7 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.tests.e2e import surface_journey
 from app.modules.agent_surfaces.tests.e2e.helpers import (
+    _bound_through_installation,
     _create_agent_surface,
     _ensure_connector_account,
 )
@@ -88,6 +89,16 @@ async def test_the_slack_setup_modal_opens_and_saves_in_the_request(
         authenticated_client,
         pod_id,
         config={"type": "SLACK", "account_id": str(account.id)},
+    )
+    # Proven to this installation: a Slack profile email names nobody, since a
+    # workspace admin can set it, so the person configuring has to be bound.
+    await _bound_through_installation(
+        db_session,
+        platform="SLACK",
+        tenant_id="T0123456",
+        installation_id=account.id,
+        sender="U0123456",
+        user_id=fixed_test_user["id"],
     )
 
     def signed(payload: dict) -> dict:

@@ -428,7 +428,10 @@ async def test_two_new_contacts_at_once_cannot_both_take_the_last_place(
     import asyncio
 
     from app.core.api.dependencies import get_uow_factory
-    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.agent_surfaces.services.outside_cap import (
+        held_for_a_person,
+        organization_capped,
+    )
     from app.modules.contacts.contracts import (
         IdentityKind,
         IdentityStrength,
@@ -465,9 +468,10 @@ async def test_two_new_contacts_at_once_cannot_both_take_the_last_place(
     ]
 
     async def admit(conversation_id: UUID) -> bool:
+        capped = await organization_capped(get_uow_factory(), pod_id=pod_id)
         async with get_uow_factory()() as uow:
             held = await held_for_a_person(
-                uow, pod_id=pod_id, conversation_id=conversation_id
+                uow, pod_id=pod_id, conversation_id=conversation_id, capped=capped
             )
             await uow.commit()
             return held
@@ -485,7 +489,10 @@ async def test_with_no_count_kept_new_contacts_are_marked_without_waiting(
     import asyncio
 
     from app.core.api.dependencies import get_uow_factory
-    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.agent_surfaces.services.outside_cap import (
+        held_for_a_person,
+        organization_capped,
+    )
     from app.modules.contacts.contracts import (
         IdentityKind,
         IdentityStrength,
@@ -520,9 +527,10 @@ async def test_with_no_count_kept_new_contacts_are_marked_without_waiting(
             conversations.append(conversation.id)
 
     async def admit(conversation_id: UUID) -> bool:
+        capped = await organization_capped(get_uow_factory(), pod_id=pod_id)
         async with get_uow_factory()() as uow:
             held = await held_for_a_person(
-                uow, pod_id=pod_id, conversation_id=conversation_id
+                uow, pod_id=pod_id, conversation_id=conversation_id, capped=capped
             )
             await uow.commit()
             return held
@@ -542,7 +550,10 @@ async def test_two_turns_of_one_new_contact_at_once_both_run(
     import asyncio
 
     from app.core.api.dependencies import get_uow_factory
-    from app.modules.agent_surfaces.services.outside_cap import held_for_a_person
+    from app.modules.agent_surfaces.services.outside_cap import (
+        held_for_a_person,
+        organization_capped,
+    )
     from app.modules.contacts.contracts import (
         IdentityKind,
         IdentityStrength,
@@ -570,9 +581,10 @@ async def test_two_turns_of_one_new_contact_at_once_both_run(
         await uow.commit()
 
     async def admit() -> bool:
+        capped = await organization_capped(get_uow_factory(), pod_id=pod_id)
         async with get_uow_factory()() as uow:
             held = await held_for_a_person(
-                uow, pod_id=pod_id, conversation_id=conversation.id
+                uow, pod_id=pod_id, conversation_id=conversation.id, capped=capped
             )
             await uow.commit()
             return held
@@ -721,7 +733,7 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
     from sqlalchemy import text
 
     from app.modules.datastore.api.dependencies import get_schema_manager
-    from app.modules.datastore.config import datastore_settings
+    from app.modules.datastore.infrastructure.query_role import pod_query_role_name
 
     pod_id = test_pod["id"]
     created = await authenticated_client.post(
@@ -748,8 +760,8 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
         assert response.status_code == 201, response.text
 
     schema = get_schema_manager()
-    await schema.ensure_query_role()
     schema_name = schema.get_schema_name(UUID(pod_id))
+    await schema.ensure_query_role(schema_name)
 
     async def subjects(**settings: str) -> list[str]:
         async with schema.session_factory() as session:
@@ -759,7 +771,7 @@ async def test_the_database_holds_a_contact_to_their_own_rows_without_a_filter(
                     {"name": f"app.{name}", "value": value},
                 )
             await session.execute(
-                text(f'SET LOCAL ROLE "{datastore_settings.datastore_query_role}"')
+                text(f'SET LOCAL ROLE "{pod_query_role_name(schema_name)}"')
             )
             rows = (
                 await session.execute(

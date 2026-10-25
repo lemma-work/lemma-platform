@@ -23,10 +23,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
     schema_name_for_pod,
 )
+from app.modules.datastore.infrastructure.query_role import pod_query_role_name
 from app.modules.datastore.infrastructure.session import get_datastore_engine
 from app.modules.datastore.services.wiring import get_schema_manager
 
@@ -35,10 +35,10 @@ def _grants(schema: str, role: str) -> list[str]:
     """What the API's own role holds on a pod schema, short of owning it.
 
     Default privileges too, so the change log a first write creates is the
-    role's to append to. And the query role, which a contact's read sets
+    role's to append to. And the pod's query role, which a contact's read sets
     itself to.
     """
-    query_role = datastore_settings.datastore_query_role
+    query_role = pod_query_role_name(schema)
     return [
         f'GRANT USAGE ON SCHEMA "{schema}" TO "{role}"',
         f'GRANT ALL ON ALL TABLES IN SCHEMA "{schema}" TO "{role}"',
@@ -61,7 +61,8 @@ async def row_bound_records(pod_id: UUID) -> AsyncIterator[None]:
     owner. Open it once the pod's schema exists: after its first table.
     """
     schema_manager = get_schema_manager()
-    await schema_manager.ensure_query_role()
+    schema_name = schema_name_for_pod(pod_id)
+    await schema_manager.ensure_query_role(schema_name)
     role = f"lemma_row_bound_{secrets.token_hex(6)}"
     password = secrets.token_hex(16)
     admin = get_datastore_engine()
@@ -72,7 +73,7 @@ async def row_bound_records(pod_id: UUID) -> AsyncIterator[None]:
                 "NOSUPERUSER NOBYPASSRLS"
             )
         )
-        for grant in _grants(schema_name_for_pod(pod_id), role):
+        for grant in _grants(schema_name, role):
             await conn.execute(text(grant))
     engine = create_async_engine(
         admin.url.set(username=role, password=password),

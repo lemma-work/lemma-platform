@@ -9,16 +9,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from typing import Any, NamedTuple
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import Uuid, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 from app.core.authorization.context import ResourceType
-from app.modules.connectors.infrastructure.models.account import Account
-from app.modules.connectors.infrastructure.models.connector import Connector
 from app.core.domain.errors import BadRequestError
 
 logger = structlog.get_logger(__name__)
@@ -64,10 +62,24 @@ _POD_WIDE_GRANT_NAME = "/"
 _PREFIX_GRANT_RESOURCE_TYPES = (ResourceType.FOLDER, ResourceType.DOCUMENT)
 
 
-_CONNECTOR_RESOURCE_NAMESPACE = uuid5(
-    NAMESPACE_URL,
-    "lemma.connector.resource",
-)
+def _queryable_names(entry: ResourceNameTable, names: Iterable[str]) -> set[str]:
+    """The names that could be in the name column at all.
+
+    A type named by its id (a pod account) compares the name against a uuid
+    column, and a string that is not a UUID made Postgres refuse the whole
+    query -- a 500 for what is only a name nothing has. Such a name is left
+    out, so it resolves to nothing like any other unknown name.
+    """
+    if not isinstance(entry.name_column.type, Uuid):
+        return set(names)
+    queryable = set()
+    for name in names:
+        try:
+            UUID(name)
+        except ValueError:
+            continue
+        queryable.add(name)
+    return queryable
 
 
 def _require_registry() -> None:
@@ -88,11 +100,6 @@ def _require_registry() -> None:
         )
 
 
-def connector_resource_id(connector_id: str) -> UUID:
-    """Return the stable internal resource id for a global connector app."""
-    return uuid5(_CONNECTOR_RESOURCE_NAMESPACE, connector_id)
-
-
 async def resolve_resource_id_by_name(
     session: AsyncSession,
     *,
@@ -103,26 +110,13 @@ async def resolve_resource_id_by_name(
     """Resolve one name to an id; returns None for unknown names or
     resource types that are not name-addressable."""
     _require_registry()
-    if resource_type == ResourceType.CONNECTOR:
-        connector = await session.get(Connector, resource_name)
-        if connector is None or not connector.is_active:
-            return None
-        return connector_resource_id(resource_name)
-    if resource_type == ResourceType.CONNECTOR_ACCOUNT:
-        try:
-            account_id = UUID(resource_name)
-        except ValueError:
-            return None
-        return (
-            await session.execute(select(Account.id).where(Account.id == account_id))
-        ).scalar_one_or_none()
     if (
         resource_type in _PREFIX_GRANT_RESOURCE_TYPES
         and resource_name == _POD_WIDE_GRANT_NAME
     ):
         return pod_id
     entry = _NAME_REGISTRY.get(resource_type)
-    if entry is None:
+    if entry is None or not _queryable_names(entry, [resource_name]):
         return None
     id_col, pod_col, name_col, extra_filters = entry
     stmt = select(id_col).where(
@@ -152,35 +146,11 @@ async def resolve_resource_ids_by_names(
     resolved: dict[tuple[ResourceType, str], UUID] = {}
     unsupported: set[ResourceType] = set()
     for resource_type, names in names_by_type.items():
-        if resource_type == ResourceType.CONNECTOR:
-            stmt = select(Connector.id).where(
-                Connector.id.in_(names),
-                Connector.is_active.is_(True),
-            )
-            for connector_id in (await session.execute(stmt)).scalars():
-                resolved[(resource_type, connector_id)] = connector_resource_id(
-                    connector_id
-                )
-            continue
-        if resource_type == ResourceType.CONNECTOR_ACCOUNT:
-            account_ids_by_name = {}
-            for name in names:
-                try:
-                    account_ids_by_name[UUID(name)] = name
-                except ValueError:
-                    continue
-            if account_ids_by_name:
-                stmt = select(Account.id).where(Account.id.in_(account_ids_by_name))
-                for account_id in (await session.execute(stmt)).scalars():
-                    resolved[(resource_type, account_ids_by_name[account_id])] = (
-                        account_id
-                    )
-            continue
         entry = _NAME_REGISTRY.get(resource_type)
         if entry is None:
             unsupported.add(resource_type)
             continue
-        query_names = set(names)
+        query_names = _queryable_names(entry, names)
         if (
             resource_type in _PREFIX_GRANT_RESOURCE_TYPES
             and _POD_WIDE_GRANT_NAME in query_names
@@ -196,7 +166,7 @@ async def resolve_resource_ids_by_names(
             *extra_filters,
         )
         for name, resource_id in (await session.execute(stmt)).all():
-            resolved[(resource_type, name)] = resource_id
+            resolved[(resource_type, str(name))] = resource_id
 
     if unsupported:
         raise BadRequestError(
@@ -236,19 +206,6 @@ async def resolve_resource_names_by_ids(
 
     resolved: dict[tuple[ResourceType, UUID], str] = {}
     for resource_type, resource_ids in ids_by_type.items():
-        if resource_type == ResourceType.CONNECTOR_ACCOUNT:
-            stmt = select(Account.id).where(Account.id.in_(resource_ids))
-            for account_id in (await session.execute(stmt)).scalars():
-                resolved[(resource_type, account_id)] = str(account_id)
-            continue
-        if resource_type == ResourceType.CONNECTOR:
-            # uuid5 mapping is one-way; scan the (small) active app catalog.
-            stmt = select(Connector.id).where(Connector.is_active.is_(True))
-            for connector_id in (await session.execute(stmt)).scalars():
-                resource_id = connector_resource_id(connector_id)
-                if resource_id in resource_ids:
-                    resolved[(resource_type, resource_id)] = connector_id
-            continue
         entry = _NAME_REGISTRY.get(resource_type)
         if entry is None:
             continue
@@ -266,7 +223,8 @@ async def resolve_resource_names_by_ids(
         )
         for resource_id, name in (await session.execute(stmt)).all():
             if name is not None:
-                resolved[(resource_type, resource_id)] = name
+                # str(): a type named by its id (a pod account) hands back a UUID.
+                resolved[(resource_type, resource_id)] = str(name)
 
     dangling = {(t, i) for t, i in refs} - set(resolved)
     if dangling:

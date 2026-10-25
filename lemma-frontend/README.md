@@ -17,14 +17,11 @@ npm run dev
 Open http://localhost:3000. Set `NEXT_PUBLIC_API_URL` for live data, or
 `NEXT_PUBLIC_DATA=sample` for a local demo without a backend.
 
-See [.env.example](.env.example) for configuration. Voice calls require the
-server-only `GEMINI_API_KEY` (or `OPENAI_API_KEY` with
-`NEXT_PUBLIC_VOICE_PROVIDER=gpt-live`); never expose secrets through
-`NEXT_PUBLIC_*` variables. What a caller says is routed by the backend's
-decisions API through the SDK, so routing has no key here: the backend's
-`DECISION_PROVIDER` decides, and `typesafe` is the fast one (see
-[Decisions](../docs/configuration.md#decisions)). `/auth` provides sign-in;
-`/connect` supports manual token sign-in.
+See [.env.example](.env.example) for configuration; never expose secrets
+through `NEXT_PUBLIC_*` variables. Voice calls are the backend's: the browser
+opens a socket to the API, which holds the voice and the agents behind it, so
+calls need no key here (see [Calls](../docs/configuration.md#calls)). `/auth`
+provides sign-in; `/connect` supports manual token sign-in.
 
 ## Checks
 
@@ -42,7 +39,7 @@ local WebSocket ports. Design conventions are in [DESIGN.md](DESIGN.md).
 - `src/app/`: Next.js routes and API handlers.
 - `src/data/`, `src/session/`: sample/live data and authentication.
 - `src/shell/`, `src/stage/`, `src/thread/`: workspace and conversations.
-- `src/call/`, `server/`: voice routing and WebSocket gateways.
+- `src/call/`: the call screen, its audio and its canvas, over the API's call socket.
 - `src/live/`: the pod's one live socket (`/pods/{pod}/live`), shared by every
   live view: channel timelines and the inbox, a conversation's run (read as
   the same SSE frames, with SSE as the fallback), and table rows. Polling is

@@ -22,7 +22,7 @@ Three properties follow, none of which had a test:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, Mock, create_autospec, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, create_autospec, patch
 from uuid import uuid4
 
 import pytest
@@ -81,6 +81,9 @@ class _Journal:
 def _uow(journal: _Journal) -> AsyncMock:
     uow = AsyncMock()
     uow.commit.side_effect = journal.record("commit")
+    # Reads that find nothing: an account in no pod has no pod references to
+    # clear before it is deleted.
+    uow.session.execute.return_value = MagicMock()
     return uow
 
 
@@ -108,7 +111,7 @@ def _auth_config(connector_id: str = "slack") -> AuthConfigEntity:
 
 def _service(**overrides) -> ConnectorService:
     deps = {
-        "uow": AsyncMock(),
+        "uow": _uow(_Journal()),
         "connector_repository": AsyncMock(get=AsyncMock(return_value=_connector())),
         "auth_config_repository": AsyncMock(),
         "account_repository": AsyncMock(),
@@ -161,6 +164,7 @@ async def test_the_oauth_callback_releases_before_the_token_exchange():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -174,7 +178,9 @@ async def test_the_oauth_callback_releases_before_the_token_exchange():
     )
 
     await service.handle_oauth_callback(
-        redirect_uri="https://cb?state=s&code=abc", state="s"
+        browser_user_id=connect_request.user_id,
+        redirect_uri="https://cb?state=s&code=abc",
+        state="s",
     )
 
     # The claim is spent by the same commit, which is what makes single-use
@@ -202,6 +208,7 @@ async def test_a_failed_exchange_scrubs_the_secrets_it_spent():
     provider.exchange_code_for_credentials.side_effect = RuntimeError("refused")
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -213,7 +220,9 @@ async def test_a_failed_exchange_scrubs_the_secrets_it_spent():
 
     with pytest.raises(OAuthWorkflowError):
         await service.handle_oauth_callback(
-            redirect_uri="https://cb?state=s&code=abc", state="s"
+            browser_user_id=connect_request.user_id,
+            redirect_uri="https://cb?state=s&code=abc",
+            state="s",
         )
 
     stored = connect_repo.update.await_args.args[0]

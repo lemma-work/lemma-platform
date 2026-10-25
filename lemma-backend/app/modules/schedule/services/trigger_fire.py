@@ -31,7 +31,7 @@ from pydantic_core import to_jsonable_python
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter
 from app.core.log.log import get_logger
-from app.modules.schedule.domain.schedule import ScheduleEntity
+from app.modules.schedule.domain.schedule import ScheduleEntity, runs_as_row_owner
 from app.modules.schedule.repositories.fire_ledger import FireLedger
 from app.modules.schedule.services.fire_cap import at_daily_ceiling, pause_at_fire_cap
 from app.modules.schedule.services.run_admission import admit_fire
@@ -66,9 +66,27 @@ class TriggerEvent:
     source_event_id: str
     payload: Mapping[str, JsonValue] = field(default_factory=dict)
     metadata: Mapping[str, JsonValue] = field(default_factory=dict)
-    #: Who the run is for when it is not the schedule's owner (a row owner).
-    user_id: UUID | None = None
+    #: The person who owns the changed row, for a table change that has one.
+    row_owner_user_id: UUID | None = None
     source_occurred_at: datetime | None = None
+
+
+def run_person(schedule: ScheduleEntity, row_owner_user_id: UUID | None) -> UUID | None:
+    """Whose authority a fire runs with.
+
+    A table change on an RLS table runs as the person who owns the row,
+    unless the schedule says to run as its owner: the run then sees what
+    that person sees, bounded by the target, as if they had asked the agent
+    themselves -- running it as the schedule's owner instead handed every
+    member who can write a row the owner's access, through the row's text.
+    The other direction, a schedule's author borrowing whoever writes, is
+    closed where the schedule is made: running as row owners takes edit
+    access to the target (``schedule_ownership``). Everything else -- time,
+    webhooks, rows nobody in the pod owns, batches -- runs as the owner.
+    """
+    if row_owner_user_id is not None and runs_as_row_owner(schedule):
+        return row_owner_user_id
+    return schedule.user_id
 
 
 class FireTrigger(Protocol):
@@ -145,7 +163,7 @@ async def _fire_trigger(
                 source_event_id=event.source_event_id,
                 payload=dict(event.payload),
                 metadata=dict(event.metadata),
-                user_id=event.user_id,
+                row_owner_user_id=event.row_owner_user_id,
                 source_occurred_at=event.source_occurred_at,
             ),
             dedup_key=f"filter:{schedule.id}:{event.source_event_id}",
@@ -158,18 +176,18 @@ async def _fire_trigger(
             uow, schedule, source_event_id=event.source_event_id, work=writer
         )
         return FireOutcome.FIRE_CAP
-    owner = event.user_id or schedule.user_id
+    person = run_person(schedule, event.row_owner_user_id)
     if not await admit_fire(
         uow,
         schedule,
         source_event_id=event.source_event_id,
-        user_id=owner,
+        user_id=person,
         metadata=event.metadata,
     ):
         return FireOutcome.AT_CAPACITY
     reservation = await FireLedger(uow.session).reserve(
         schedule_id=schedule.id,
-        user_id=owner,
+        user_id=person,
         source_event_id=event.source_event_id,
         target_kind=target_kind_of(schedule),
         payload=event.payload,

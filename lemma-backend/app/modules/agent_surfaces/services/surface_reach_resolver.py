@@ -26,7 +26,6 @@ from functools import partial
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
-from uuid import UUID
 
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -57,9 +56,9 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Reads the connected account behind a surface. Bound to a unit of work by the
-# caller; ``None`` when the account is gone.
-FindAccount = Callable[[UUID], Awaitable[SurfaceAccount | None]]
+# Reads the connected account a surface runs as, through its pod connector.
+# Bound to a unit of work by the caller; ``None`` when it runs as none.
+FindAccount = Callable[[AgentSurfaceEntity], Awaitable[SurfaceAccount | None]]
 
 # Hard ceiling on a single surface's live identity lookup so one slow/hung
 # provider (notably the Teams Graph call, which has no client-level timeout) can
@@ -312,9 +311,9 @@ class SurfaceReachResolver:
         find_account: FindAccount | None,
     ) -> str | None:
         """account.display_name → surface_identity_email → None."""
-        if surface.account_id is not None and find_account is not None:
+        if surface.pod_connector_slug is not None and find_account is not None:
             try:
-                connected = await find_account(surface.account_id)
+                connected = await find_account(surface)
                 if connected and connected.display_name:
                     return connected.display_name
             except Exception:

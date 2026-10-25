@@ -11,6 +11,14 @@ class AgentExecutor:
     async def execute(self, node: AgentNode, step: StepContext) -> NodeOutcome:
         config = node.config
         input_data = step.context.resolve_inputs(config.input_mapping)
+        # As a function step re-checks ``function.execute``: the run's person
+        # must be able to run this agent themselves, now -- naming it in a
+        # workflow they may start is not a grant to run it.
+        if step.agent_access is None:
+            raise RuntimeError("Agent steps need an access check to run")
+        await step.agent_access.require_execute(
+            agent_name=config.agent_name, pod_id=step.pod_id, user_id=step.user_id
+        )
 
         conversation_id = await step.agent.run_agent(
             agent_name=config.agent_name,

@@ -26,6 +26,7 @@ from app.core.ports.widget_content import (
     WidgetContentReader,
     WidgetSourceUnavailable,
 )
+from app.modules.agent.tools.user_interaction.models import widget_data
 from app.modules.agent.infrastructure.widget_asset_repository import (
     WidgetAssetRepository,
 )
@@ -96,7 +97,8 @@ class WidgetAssetService(WidgetContentReader):
             name = tool_args.get("name")
             if isinstance(name, str):
                 title = name
-            data = tool_args.get("data")
+            # As shown: an object a model wrote as its JSON text is the object.
+            data = widget_data(tool_args.get("data"))
             break
 
         if content is None and path is None:

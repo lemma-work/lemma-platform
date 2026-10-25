@@ -32,7 +32,7 @@ from app.modules.agent.services.generation_settings import (
     compaction_generation_settings,
     record_generation_settings,
     run_generation_settings,
-    title_model_settings,
+    unreasoned_model_settings,
     validated_stored_settings,
 )
 from app.modules.agent.services.run_input_settings import (
@@ -185,10 +185,10 @@ class TestReasoningGate:
 
     def test_a_title_asks_every_model_for_no_effort_unless_told_not_to(self):
         none = {"openai_reasoning_effort": "none"}
-        assert title_model_settings(_resolved()) == none
+        assert unreasoned_model_settings(_resolved()) == none
         # An undeclared reasoning model is the one that would think at length.
-        assert title_model_settings(_resolved(capabilities=_PLAIN)) == none
-        assert title_model_settings(_resolved(), ask_no_reasoning=False) == {}
+        assert unreasoned_model_settings(_resolved(capabilities=_PLAIN)) == none
+        assert unreasoned_model_settings(_resolved(), ask_no_reasoning=False) == {}
 
 
 class TestValidation:

@@ -6,7 +6,6 @@ which is authorized on its own so the folders above it are not a second gate."""
 from __future__ import annotations
 
 from dataclasses import replace
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -15,7 +14,10 @@ import pytest
 from app.core.authorization.context import (
     ActorType,
     Context,
+    Person,
     ResourceVisibility,
+    Workload,
+    WorkloadKind,
 )
 from app.core.authorization.authorizer import Authorizer
 from app.core.domain.errors import DomainError
@@ -30,6 +32,24 @@ from app.modules.datastore.services.files.path_resolver import PathResolver
 
 #: Signed in, but in no pod and no organization of the pod under test.
 OUTSIDER_ID = uuid4()
+
+
+def _actor_ctx(actor_type: ActorType, user_id) -> Context:
+    """A real context for the actor the label names, acting in no pod."""
+    match actor_type:
+        case ActorType.USER:
+            actor = Person(user_id=user_id)
+        case ActorType.AGENT:
+            actor = Workload(kind=WorkloadKind.AGENT, workload_id=uuid4())
+        case ActorType.FUNCTION:
+            actor = Workload(kind=WorkloadKind.FUNCTION, workload_id=uuid4())
+        case ActorType.DELEGATED_USER_WORKLOAD:
+            actor = Workload(
+                kind=WorkloadKind.AGENT, workload_id=uuid4(), for_user_id=user_id
+            )
+        case _:
+            raise AssertionError(f"no actor for {actor_type}")
+    return Context(actor=actor, actor_id="actor", user_id=user_id, authorizer=object())
 
 
 def _file(pod_id, path: str) -> DatastoreFileEntity:
@@ -64,7 +84,7 @@ async def test_workload_authorizes_file_only_so_deep_folder_grant_works():
     authorizer = FileAuthorizer(authz, file_repo, PathResolver())
 
     file_entity = _file(pod_id, "/docs/eng/runbooks/guide.md")
-    ctx = SimpleNamespace(actor_type=ActorType.AGENT, user_id=user_id)
+    ctx = _actor_ctx(ActorType.AGENT, user_id)
     await authorizer._ensure_pod_document_path_access(file_entity, user_id, ctx=ctx)
 
     # Exactly one check — the file itself. The grant cascade matches a grant on
@@ -89,7 +109,7 @@ async def test_human_still_walks_the_ancestor_chain():
     authorizer = FileAuthorizer(authz, file_repo, PathResolver())
 
     file_entity = _file(pod_id, "/docs/eng/runbooks/guide.md")
-    ctx = SimpleNamespace(actor_type=ActorType.USER, user_id=user_id)
+    ctx = _actor_ctx(ActorType.USER, user_id)
     await authorizer._ensure_pod_document_path_access(file_entity, user_id, ctx=ctx)
 
     # 3 ancestor folders + the file itself.
@@ -127,7 +147,7 @@ class TestListingAgreesWithOpening:
         items = [bench, frames, guide]
 
         authorizer = self._authorizer(visible_paths, items)
-        ctx = SimpleNamespace(actor_type=actor_type, user_id=user_id)
+        ctx = _actor_ctx(actor_type, user_id)
         visible = await authorizer.get_visible_file_ids_for_items(
             pod_id=pod_id, requester_user_id=user_id, items=items, ctx=ctx
         )
@@ -198,7 +218,7 @@ class TestAPublicDocumentIsNotGatedByItsFolders:
         authorizer = FileAuthorizer(authz, file_repo, PathResolver())
 
         file_entity = self._public(pod_id, "/library/brand-directions.md")
-        ctx = SimpleNamespace(actor_type=ActorType.USER, user_id=user_id)
+        ctx = _actor_ctx(ActorType.USER, user_id)
         await authorizer._ensure_pod_document_path_access(file_entity, user_id, ctx=ctx)
 
         assert authz.require_document_read.await_count == 1
@@ -218,7 +238,7 @@ class TestAPublicDocumentIsNotGatedByItsFolders:
         authorizer = FileAuthorizer(authz, file_repo, PathResolver())
 
         file_entity = _file(pod_id, "/library/brand-directions.md")
-        ctx = SimpleNamespace(actor_type=ActorType.USER, user_id=user_id)
+        ctx = _actor_ctx(ActorType.USER, user_id)
         await authorizer._ensure_pod_document_path_access(file_entity, user_id, ctx=ctx)
 
         # The folder and the file.
@@ -253,7 +273,7 @@ class TestANonMemberActuallyGetsIn:
 
         authorizer._hydrate_resource = _hydrate
         return Context(
-            actor_type=ActorType.USER,
+            actor=Person(user_id=OUTSIDER_ID),
             actor_id=str(OUTSIDER_ID),
             user_id=OUTSIDER_ID,
             organization_id=uuid4(),

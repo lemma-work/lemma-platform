@@ -16,7 +16,7 @@ from uuid import UUID
 from app.core.log.log import get_logger
 
 if TYPE_CHECKING:
-    from app.core.authorization.context import ResourceType
+    from app.core.authorization.context import Context, ResourceType
 
 logger = get_logger(__name__)
 
@@ -88,6 +88,7 @@ def has_grants(payload: dict[str, Any]) -> bool:
 async def apply_grants(
     session: Any,
     *,
+    ctx: Context,
     pod_id: UUID,
     grantee_type: str,
     grantee_id: UUID,
@@ -101,7 +102,11 @@ async def apply_grants(
 
     An empty ``grants`` is a real write — "this workload holds nothing" — and
     clears the grantee's existing grants; callers decide whether the manifest
-    said anything at all by asking :func:`has_grants` first."""
+    said anything at all by asking :func:`has_grants` first.
+
+    The importer may hand a workload only what they could use themselves: the
+    shared writer bounds it by ``ctx``, as it bounds the permissions routes, so
+    a bundle is not a way round that, whoever wrote it."""
     from app.core.authorization.grants import (
         normalize_pod_resource_grants,
         replace_grantee_resource_grants,
@@ -114,9 +119,11 @@ async def apply_grants(
     )
     await replace_grantee_resource_grants(
         session,
+        ctx=ctx,
         pod_id=pod_id,
         grantee_type=grantee_type,
         grantee_id=grantee_id,
         grants=normalized,
         created_by_user_id=created_by_user_id,
+        action=f"grant a bundled {grantee_type.lower()} what you could not use",
     )

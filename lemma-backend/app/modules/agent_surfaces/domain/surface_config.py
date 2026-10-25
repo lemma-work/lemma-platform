@@ -103,6 +103,10 @@ class SurfaceSlackConfig(BaseModel):
     because one Slack app could serve several agents and ``surface.agent_id``
     could not say which of them it really was. One app is one agent now, so the
     question has one answer and neither field has anything left to decide.
+
+    Whether Lemma made the app is not here: it is a fact about the app, so it
+    is on the app's install (``SurfaceAuthConfig.made_by_lemma``), where a
+    surface re-pointed at another app cannot carry it along.
     """
 
     app_name: str | None = None

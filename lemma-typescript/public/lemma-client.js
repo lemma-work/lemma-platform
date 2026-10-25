@@ -9094,6 +9094,7 @@ var LemmaClient = (() => {
   __export(browser_exports, {
     ApiError: () => ApiError,
     AuthManager: () => AuthManager,
+    ConnectionRequiredError: () => ConnectionRequiredError,
     LEMMA_APP_THEME_MESSAGE_TYPE: () => LEMMA_APP_THEME_MESSAGE_TYPE,
     LEMMA_COMPOSE_MESSAGE_TYPE: () => LEMMA_COMPOSE_MESSAGE_TYPE,
     LEMMA_COMPOSE_RESULT_MESSAGE_TYPE: () => LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
@@ -9108,6 +9109,7 @@ var LemmaClient = (() => {
     composeInConversation: () => composeInConversation,
     getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
+    isConnectionRequiredError: () => isConnectionRequiredError,
     isEmbeddedInHost: () => isEmbeddedInHost,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
     setTestingToken: () => setTestingToken,
@@ -10307,6 +10309,14 @@ var LemmaClient = (() => {
   }
 
   // src/http.ts
+  var DEPRECATION_HEADER = "x-lemma-deprecation";
+  var warnedDeprecations = /* @__PURE__ */ new Set();
+  function noteDeprecation(headers) {
+    const message = headers.get(DEPRECATION_HEADER);
+    if (!message || warnedDeprecations.has(message)) return;
+    warnedDeprecations.add(message);
+    console.warn(`[lemma] ${message}`);
+  }
   var DEFAULT_TIMEOUT_MS = 3e4;
   var DEFAULT_MAX_RETRIES = 2;
   var ApiError = class extends Error {
@@ -10365,7 +10375,68 @@ var LemmaClient = (() => {
       __publicField(this, "name", "NetworkError");
     }
   };
+  var CONNECTION_ERROR_CODES = [
+    "CONNECTION_REQUIRED",
+    "REAUTH_REQUIRED",
+    "CONNECTOR_NEEDS_ACCOUNT",
+    "CONNECTOR_UNAVAILABLE",
+    "CONNECTION_REQUIRES_PERSON"
+  ];
+  function detailString(details, key) {
+    if (!details || typeof details !== "object") return null;
+    const value = details[key];
+    return typeof value === "string" && value ? value : null;
+  }
+  var ConnectionRequiredError = class extends ApiError {
+    constructor(status, message, code, details, rawResponse) {
+      super(status, message, code, details, rawResponse);
+      __publicField(this, "name", "ConnectionRequiredError");
+      /** Where to connect or reconnect: the pod's Connections page, on this connector. */
+      __publicField(this, "connectUrl");
+      /** The pod connector's slug. */
+      __publicField(this, "podConnector");
+      /** The catalog connector behind it, e.g. `gmail`, when the server named it. */
+      __publicField(this, "connectorId");
+      this.connectUrl = detailString(details, "connect_url");
+      this.podConnector = detailString(details, "pod_connector");
+      this.connectorId = detailString(details, "connector_id");
+    }
+    /** Reconnecting an expired sign-in, as against connecting for the first time. */
+    get isReauth() {
+      return this.code === "REAUTH_REQUIRED";
+    }
+    /**
+     * Go and fix it: open `connectUrl`. Inside an embedded app the page leaves
+     * the frame for a new tab, since a pod app's frame may not navigate the
+     * window above it; elsewhere the current page goes there, and the
+     * Connections page returns the person once connected. Returns false when
+     * there is nowhere to go (no `connectUrl`, or no browser).
+     */
+    connect(options = {}) {
+      if (!this.connectUrl) return false;
+      const view = globalThis.window;
+      if (!view) return false;
+      let framed = false;
+      try {
+        framed = view.top !== view;
+      } catch {
+        framed = true;
+      }
+      if (options.newTab || framed) {
+        view.open(this.connectUrl, "_blank", "noopener");
+        return true;
+      }
+      view.location.assign(this.connectUrl);
+      return true;
+    }
+  };
+  function isConnectionRequiredError(error) {
+    return error instanceof ConnectionRequiredError;
+  }
   function apiErrorFromStatus(status, message, code, details, rawResponse, retryAfterMsValue) {
+    if (code && CONNECTION_ERROR_CODES.includes(code)) {
+      return new ConnectionRequiredError(status, message, code, details, rawResponse);
+    }
     switch (status) {
       case 401:
         return new UnauthorizedError(status, message, code, details, rawResponse);
@@ -10551,6 +10622,7 @@ var LemmaClient = (() => {
         if (!response.ok) {
           throw await this.failure(response);
         }
+        noteDeprecation(response.headers);
         if (response.status === 204) {
           return void 0;
         }
@@ -13706,6 +13778,24 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Where One Of My Accounts Is Used
+     * @param accountId
+     * @returns AccountPodUsageResponse Successful Response
+     * @throws ApiError
+     */
+    static connectorAccountPods(accountId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/me/connectors/accounts/{account_id}/pods",
+        path: {
+          "account_id": accountId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Search Connector Operations Across Installs
      * Search operations across every connector installed in the org. Each hit carries the `auth_config` to execute it against, so a caller that knows what it wants to do — but not which connector provides it — needs one request instead of one per install.
      * @param organizationId
@@ -14158,7 +14248,9 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Execute Connector Operation
+     * @deprecated
+     * Execute Connector Operation (deprecated)
+     * Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's pod declares for this installation; a person outside any pod uses their own account.
      * @param organizationId
      * @param authConfigName
      * @param operationName
@@ -14230,6 +14322,354 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * What Removing An Installation Would Stop
+     * Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP event subscriptions that run through them: organization-wide counts, and per pod for the pods the caller can open. If the second half cannot be read just now the first is still returned, with `complete: false`.
+     * @param organizationId
+     * @param authConfigId
+     * @returns InstallationImpactResponse Successful Response
+     * @throws ApiError
+     */
+    static connectorInstallationImpact(organizationId, authConfigId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/installations/{auth_config_id}/impact",
+        path: {
+          "organization_id": organizationId,
+          "auth_config_id": authConfigId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Accounts In Use In The Pod
+     * @param podId
+     * @returns PodAccountListResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorAccountList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/connector-accounts",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Add One Of Your Accounts To The Pod
+     * @param podId
+     * @param requestBody
+     * @returns PodAccountResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorAccountAdd(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/connector-accounts",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Remove An Account From The Pod
+     * @param podId
+     * @param podAccountId
+     * @returns void
+     * @throws ApiError
+     */
+    static podConnectorAccountRemove(podId, podAccountId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/connector-accounts/{pod_account_id}",
+        path: {
+          "pod_id": podId,
+          "pod_account_id": podAccountId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Share Or Withdraw Your Account In The Pod
+     * @param podId
+     * @param podAccountId
+     * @param requestBody
+     * @returns PodAccountResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorAccountUpdate(podId, podAccountId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/connector-accounts/{pod_account_id}",
+        path: {
+          "pod_id": podId,
+          "pod_account_id": podAccountId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Share Your Account As A Pod Connector
+     * Owner only, and the caller must also manage the pod's connectors: share this pod account with the pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing one, or declaring it. Checked in full before anything changes, and done in one transaction: a refusal leaves the account as it was.
+     * @param podId
+     * @param podAccountId
+     * @param requestBody
+     * @returns PodConnectorResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorAccountShareAs(podId, podAccountId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/connector-accounts/{pod_account_id}/share-as",
+        path: {
+          "pod_id": podId,
+          "pod_account_id": podAccountId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Pod Connectors
+     * @param podId
+     * @returns PodConnectorListResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorList(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/connectors",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Declare A Pod Connector
+     * @param podId
+     * @param requestBody
+     * @returns PodConnectorResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/connectors",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Remove Pod Connector
+     * @param podId
+     * @param slug
+     * @returns void
+     * @throws ApiError
+     */
+    static podConnectorDelete(podId, slug) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/connectors/{slug}",
+        path: {
+          "pod_id": podId,
+          "slug": slug
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Pod Connector
+     * @param podId
+     * @param slug
+     * @returns PodConnectorResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorGet(podId, slug) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/connectors/{slug}",
+        path: {
+          "pod_id": podId,
+          "slug": slug
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Pod Connector
+     * @param podId
+     * @param slug
+     * @param requestBody
+     * @returns PodConnectorResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorUpdate(podId, slug, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/pods/{pod_id}/connectors/{slug}",
+        path: {
+          "pod_id": podId,
+          "slug": slug
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Ask Members To Connect
+     * Post one line, "This pod uses <connector> — connect yours: <connect_url>", in the own channel of each member a PER_MEMBER connector is waiting on (as `coverage` counts them). A member is asked about one connector at most once a day; those asked already are returned as `asked_recently`, and those whose line could not be posted, or whose last ask could not be checked, as `not_asked`.
+     * @param podId
+     * @param slug
+     * @param requestBody
+     * @returns AskMembersResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorAskMembers(podId, slug, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/connectors/{slug}/ask-members",
+        path: {
+          "pod_id": podId,
+          "slug": slug
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Who A Per-Member Connector Is Waiting On
+     * For someone who may manage the pod's connectors: of the members who may use this PER_MEMBER connector, how many have connected a working account, and who has not. Viewers, and anyone a RESTRICTED connector leaves out, are not counted. Asked for one connector at a time, because it weighs each member's own access; listings leave it out.
+     * @param podId
+     * @param slug
+     * @returns PodConnectorCoverage Successful Response
+     * @throws ApiError
+     */
+    static podConnectorCoverage(podId, slug) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/connectors/{slug}/coverage",
+        path: {
+          "pod_id": podId,
+          "slug": slug
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Discover Pod Connector Operations
+     * @param podId
+     * @param slug
+     * @param query
+     * @param limit
+     * @returns OperationDiscoverResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorOperationList(podId, slug, query, limit = 100) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/connectors/{slug}/operations",
+        path: {
+          "pod_id": podId,
+          "slug": slug
+        },
+        query: {
+          "query": query,
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Pod Connector Operation
+     * @param podId
+     * @param slug
+     * @param operationName
+     * @returns OperationDetail Successful Response
+     * @throws ApiError
+     */
+    static podConnectorOperationGet(podId, slug, operationName) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/connectors/{slug}/operations/{operation_name}",
+        path: {
+          "pod_id": podId,
+          "slug": slug,
+          "operation_name": operationName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Execute Pod Connector Operation
+     * Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`.
+     * @param podId
+     * @param slug
+     * @param operationName
+     * @param requestBody
+     * @returns OperationExecutionResponse Successful Response
+     * @throws ApiError
+     */
+    static podConnectorOperationExecute(podId, slug, operationName, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute",
+        path: {
+          "pod_id": podId,
+          "slug": slug,
+          "operation_name": operationName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/connectors.ts
@@ -14237,9 +14677,10 @@ var LemmaClient = (() => {
     return encodeURIComponent(value);
   }
   var ConnectorsNamespace = class {
-    constructor(client, http) {
+    constructor(client, http, podId) {
       __publicField(this, "client", client);
       __publicField(this, "http", http);
+      __publicField(this, "podId", podId);
       __publicField(this, "operations", {
         discover: (scope, options = {}) => this.client.request(() => {
           var _a;
@@ -14276,18 +14717,107 @@ var LemmaClient = (() => {
             body
           ));
         },
+        /**
+         * @deprecated Use `connectors.pod.execute(slug, operationName, payload)`:
+         * the pod connector decides the account, so drop `accountId`. Still served
+         * -- through the connectors the pod declares for this installation -- and
+         * each response says so, which this client logs once as a warning.
+         */
         execute: (scope, operationName, payload, accountId) => {
-          const body = {
-            payload,
-            account_id: accountId,
-            ...scope.podId ? { pod_id: scope.podId } : {}
-          };
-          return this.client.request(() => ConnectorsService.connectorOperationExecute(
-            scope.organizationId,
-            scope.authConfigName,
+          var _a;
+          const podId = (_a = scope.podId) != null ? _a : this.currentPodId();
+          return this.http.request(
+            "POST",
+            `/organizations/${encodePath(scope.organizationId)}/connectors/${encodePath(scope.authConfigName)}/operations/${encodePath(operationName)}/execute`,
+            {
+              body: {
+                payload,
+                ...accountId ? { account_id: accountId } : {},
+                ...podId ? { pod_id: podId } : {}
+              }
+            }
+          );
+        }
+      });
+      /**
+       * The connectors this pod declares, addressed by slug. Running an operation
+       * always goes through one: the pod connector decides whose account it runs
+       * as (the caller's own, or the one the pod shares), so a call never names an
+       * account. A missing or expired account comes back as a typed error carrying
+       * `connect_url`, where the caller can fix it.
+       */
+      __publicField(this, "pod", {
+        list: () => this.client.request(() => ConnectorsService.podConnectorList(this.podId())),
+        get: (slug) => this.client.request(() => ConnectorsService.podConnectorGet(this.podId(), slug)),
+        create: (payload) => this.client.request(() => ConnectorsService.podConnectorCreate(this.podId(), payload)),
+        update: (slug, payload) => this.client.request(() => ConnectorsService.podConnectorUpdate(this.podId(), slug, payload)),
+        delete: (slug) => this.client.request(() => ConnectorsService.podConnectorDelete(this.podId(), slug)),
+        /**
+         * Who of the members allowed to use a required per-member connector has
+         * connected an account, and who it is still waiting on. Needs
+         * `pod.connector.manage`.
+         */
+        coverage: (slug) => this.http.request(
+          "GET",
+          `/pods/${encodePath(this.podId())}/connectors/${encodePath(slug)}/coverage`
+        ),
+        /**
+         * Ask the members a per-member connector is waiting on to connect: one
+         * line each in their own channel with the pod. Each member is asked about
+         * one connector at most once a day; `asked_recently` names the rest.
+         * Needs `pod.connector.manage`. `userIds` asks only those of them.
+         */
+        askMembers: (slug, options = {}) => this.http.request(
+          "POST",
+          `/pods/${encodePath(this.podId())}/connectors/${encodePath(slug)}/ask-members`,
+          { body: options.userIds ? { user_ids: options.userIds } : {} }
+        ),
+        operations: async (slug, options = {}) => {
+          var _a;
+          const response = await this.client.request(() => {
+            var _a2;
+            return ConnectorsService.podConnectorOperationList(
+              this.podId(),
+              slug,
+              options.query,
+              (_a2 = options.limit) != null ? _a2 : 100
+            );
+          });
+          return (_a = response.items) != null ? _a : [];
+        },
+        operation: (slug, operationName) => this.client.request(() => ConnectorsService.podConnectorOperationGet(
+          this.podId(),
+          slug,
+          operationName
+        )),
+        execute: (slug, operationName, payload) => {
+          const body = { payload };
+          return this.client.request(() => ConnectorsService.podConnectorOperationExecute(
+            this.podId(),
+            slug,
             operationName,
             body
           ));
+        },
+        accounts: {
+          list: () => this.client.request(() => ConnectorsService.podConnectorAccountList(this.podId())),
+          add: (payload) => this.client.request(() => ConnectorsService.podConnectorAccountAdd(this.podId(), payload)),
+          update: (podAccountId, payload) => this.client.request(() => ConnectorsService.podConnectorAccountUpdate(
+            this.podId(),
+            podAccountId,
+            payload
+          )),
+          remove: (podAccountId) => this.client.request(() => ConnectorsService.podConnectorAccountRemove(this.podId(), podAccountId)),
+          /**
+           * Share one of your own pod accounts as the SHARED connector `slug`,
+           * in one step: the connector is pointed at it or declared, and the
+           * account shared with the pod, or neither happens.
+           */
+          shareAs: (podAccountId, slug, options = {}) => this.http.request(
+            "POST",
+            `/pods/${encodePath(this.podId())}/connector-accounts/${encodePath(podAccountId)}/share-as`,
+            { body: { slug, ...options.purpose ? { purpose: options.purpose } : {} } }
+          )
         }
       });
       __publicField(this, "triggers", {
@@ -14393,6 +14923,29 @@ var LemmaClient = (() => {
     }
     get(connectorId) {
       return this.client.request(() => ConnectorsService.connectorGet(connectorId));
+    }
+    /** The client's pod when it has one; the deprecated execute works without. */
+    currentPodId() {
+      try {
+        return this.podId();
+      } catch {
+        return void 0;
+      }
+    }
+    /**
+     * Every pod one of my accounts is in: its visibility there, the SHARED pod
+     * connectors that run as it, and when it was last used.
+     */
+    accountPods(accountId) {
+      return this.client.request(() => ConnectorsService.connectorAccountPods(accountId));
+    }
+    /**
+     * What removing an installation would stop -- its accounts and every pod
+     * connector declared on it, and what runs through those -- for the
+     * confirmation shown before it goes. Installation managers only.
+     */
+    installationImpact(organizationId, authConfigId) {
+      return this.client.request(() => ConnectorsService.connectorInstallationImpact(organizationId, authConfigId));
     }
     /**
      * Enable a connector for an organization, reusing an existing install only
@@ -14862,6 +15415,25 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * My Permissions In An Organization
+     * The organization-level permission ids the caller holds here, such as `org.installation.manage`. Pod permissions are `/pods/{pod_id}/permissions/me`.
+     * @param organizationId
+     * @returns OrganizationEffectivePermissionsResponse Successful Response
+     * @throws ApiError
+     */
+    static orgPermissionsMe(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/permissions/me",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/organizations.ts
@@ -14955,6 +15527,17 @@ var LemmaClient = (() => {
      */
     navigation() {
       return this.client.request(() => OrganizationsService.orgNavigation());
+    }
+    /**
+     * The organization-level permission ids you hold in it, such as
+     * `org.installation.manage`. Ask for a permission, not a role: the server
+     * decides who holds what.
+     */
+    permissionsMe(orgId) {
+      return this.http.request(
+        "GET",
+        `/organizations/${encodeURIComponent(orgId)}/permissions/me`
+      );
     }
     /** One organization's pods, with their apps, agents and your roles. */
     home(orgId) {
@@ -16001,9 +16584,9 @@ var LemmaClient = (() => {
      * Partially update a surface. Only fields present in the request are
      * applied; the surface's platform and name are immutable.
      *
-     * Passing ``account_id`` rebinds the surface to a different connected account
-     * — the repair when the account it runs on expires, or its owner leaves the
-     * pod. It must be an account the caller owns.
+     * Passing ``pod_connector`` rebinds the surface to a different SHARED pod
+     * connector -- the repair when the account it runs as is withdrawn or
+     * expires. The caller must be able to use that connector and its account.
      * @param podId
      * @param surfaceName
      * @param requestBody
@@ -19253,6 +19836,70 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/CallsService.ts
+  var CallsService = class {
+    /**
+     * Open a call
+     * Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.
+     * @param podId
+     * @param requestBody
+     * @returns CallResponse Successful Response
+     * @throws ApiError
+     */
+    static callOpen(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/calls",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          403: `The caller may not run this agent.`,
+          404: `The agent was not found.`,
+          422: `Validation Error`,
+          503: `No voice engine is configured.`
+        }
+      });
+    }
+    /**
+     * Call configuration
+     * Which voice engines this server can open a call with.
+     * @param podId
+     * @returns CallConfigResponse Successful Response
+     * @throws ApiError
+     */
+    static callConfig(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/calls/config",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/calls.ts
+  var CallsNamespace = class {
+    constructor(client, podId) {
+      __publicField(this, "client", client);
+      __publicField(this, "podId", podId);
+    }
+    /** The voice engines this server can open a call with, the default first. */
+    config() {
+      return this.client.request(() => CallsService.callConfig(this.podId()));
+    }
+    /** Open a call with `agent_name`, or the pod's default agent. */
+    open(payload = {}) {
+      return this.client.request(() => CallsService.callOpen(this.podId(), payload));
+    }
+  };
+
   // src/openapi_client/services/DecisionsService.ts
   var DecisionsService = class {
     /**
@@ -19305,8 +19952,8 @@ var LemmaClient = (() => {
     /**
      * List Events
      * What standing work here can start on: the platform's own events, then
-     * every event on an MCP server the caller connected in this organization.
-     * A connected app's catalog triggers are listed per install
+     * every event on an MCP server behind one of the pod's connectors the caller
+     * may use. A connected app's catalog triggers are listed per install
      * (`connector.trigger.list`).
      * @param podId
      * @returns EventCatalogResponse Successful Response
@@ -21311,6 +21958,7 @@ var LemmaClient = (() => {
       __publicField(this, "connectors");
       __publicField(this, "resourceAccess");
       __publicField(this, "schedules");
+      __publicField(this, "calls");
       __publicField(this, "decisions");
       __publicField(this, "datastore");
       /** Alias of {@link datastore}, matching the Python SDK's `pod.queries`. */
@@ -21368,9 +22016,10 @@ var LemmaClient = (() => {
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
       this.workspace = new WorkspaceNamespace(this._http);
       this.webLogins = new WebLoginsNamespace(this._http);
-      this.connectors = new ConnectorsNamespace(this._generated, this._http);
+      this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
       this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
       this.schedules = new SchedulesNamespace(this._generated, podIdFn);
+      this.calls = new CallsNamespace(this._generated, podIdFn);
       this.decisions = new DecisionsNamespace(this._generated, podIdFn);
       this.datastore = new DatastoreNamespace(
         this._generated,
@@ -21646,6 +22295,8 @@ var LemmaClient = (() => {
       resolveSafeRedirectUri,
       setTestingToken,
       ApiError,
+      ConnectionRequiredError,
+      isConnectionRequiredError,
       POD_DEFAULT_AGENT_SELECTOR,
       LEMMA_APP_THEME_MESSAGE_TYPE,
       LEMMA_THEME_EVENT,

@@ -34,9 +34,10 @@ def test_every_layer_defaults_to_the_person():
     """
     assert ExecutionRequest.__dataclass_fields__["act_as"].default == "user"
     assert ResolvedConnectorExecution.__dataclass_fields__["act_as"].default == "user"
-    for name in ("resolve_execution", "resolve_execution_for_auth_config"):
-        signature = inspect.signature(getattr(ConnectorOperationService, name))
-        assert signature.parameters["act_as"].default == "user", name
+    signature = inspect.signature(
+        ConnectorOperationService.resolve_pod_connector_execution
+    )
+    assert signature.parameters["act_as"].default == "user"
 
 
 def _callers_asking_to_be_the_app() -> set[str]:

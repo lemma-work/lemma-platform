@@ -61,6 +61,7 @@ from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.platforms import attachment_limits
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
+    _known_slack_sender,
     _ensure_connector_account,
     _messages_for_conversation,
     _resend_payload,
@@ -232,6 +233,8 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
             user_id: UUID,
             *,
             ttl_seconds: int,
+            pod_id: UUID | None = None,
+            actor_id: UUID | None = None,
         ) -> PortAccessGrant:
             browser_access_calls.append((user_id, ttl_seconds))
             return PortAccessGrant(
@@ -275,6 +278,7 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
         toolsets=["USER_INTERACTION"],
     )
 
+    await _known_slack_sender(db_session, user_id=fixed_test_user["id"])
     long_query = "SELECT * FROM incidents WHERE summary ILIKE '%outage%' " + (
         "AND resolved_at IS NULL " * 12
     )

@@ -210,8 +210,10 @@ class ResumeToolReturnBuilder:
             # workload can keep performing this action type in this
             # conversation (the authorizer honors it as an ephemeral grant,
             # which is the only unlock for DESTRUCTIVE_ACTIONS besides an
-            # explicit grant). The permission ids ride in the request_approval
-            # args, copied by the agent from the denied tool result.
+            # explicit grant). The permissions are what the card showed: the
+            # server's record of what it refused when the card went up -- not
+            # the request_approval's own `permission_ids`, which are the
+            # model's words, nor anything refused since (H6).
             # Queued, not awaited: a Redis write inline holds a connection
             # inside an open write transaction, and a rollback must not leave an
             # approval standing. Lands before the tool runs because
@@ -225,6 +227,7 @@ class ResumeToolReturnBuilder:
                     pod_id=conversation.pod_id,
                     tool_args=tool_args,
                     user_id=user_id,
+                    approval_id=tool_call_id,
                 )
             )
 

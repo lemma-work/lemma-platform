@@ -162,7 +162,7 @@ def _slack_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
         name="slack",
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.SLACK,
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         external_workspace_id="T123",
         surface_identity_id="U-BOT",
         config=SurfaceConfig(),
@@ -177,7 +177,7 @@ def _teams_surface() -> AgentSurfaceEntity:
         name="teams",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.TEAMS,
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         external_tenant_id="tenant-123",
         external_channel_id="19:channel",
         config=SurfaceConfig(),
@@ -192,7 +192,7 @@ def _telegram_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
         name="telegram",
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.TELEGRAM,
-        account_id=None,
+        pod_connector_slug=None,
         config=SurfaceConfig(),
         is_active=True,
     )
@@ -500,6 +500,7 @@ def build_ingress_service(
     credentials = SimpleNamespace(
         for_surface=AsyncMock(return_value={}),
         for_platform=AsyncMock(return_value={}),
+        installation_identity=AsyncMock(side_effect=lambda surface: surface.id),
     )
     # Real objects over doubled collaborators, and the two it reaches into are
     # constructor arguments now rather than bases it inherited -- so a test can

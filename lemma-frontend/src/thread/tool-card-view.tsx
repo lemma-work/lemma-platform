@@ -23,7 +23,7 @@ import {
     TreeIcon,
 } from "@/ui/icons";
 import { Mark } from "@/shell/mark";
-import { source } from "@/data";
+import { connectLinkLabel, source } from "@/data";
 import { live } from "@/usage/queries";
 import { Modal } from "@/shell/modal";
 import { SignInPane } from "@/computer/sign-in-pane";
@@ -872,12 +872,16 @@ function ConnectorCard({ run }: { run: ConnectorRun }) {
                     {/* Said again, because the head drops it on a narrow
                         screen and the operation is the thing that was run. */}
                     <p className="toolcard__where">{run.operation}</p>
-                    {run.account && <p className="toolcard__where">as account {run.account}</p>}
                     {run.error && <p className="toolcard__note" data-tone={run.failed ? "bad" : undefined}>{run.error}</p>}
-                    {/* A failed call is most often an account that needs
-                        connecting again, and Connectors was somewhere nobody
-                        could find from here. */}
-                    {run.failed && (
+                    {/* The connector said where its account is connected:
+                        that link is the fix, and it is the reader's own. */}
+                    {run.failed && run.connectUrl && (
+                        <a className="linkish toolcard__where" href={run.connectUrl}>{connectLinkLabel(run.code)}</a>
+                    )}
+                    {/* Otherwise a failed call is most often an account that
+                        needs connecting again, and Connectors was somewhere
+                        nobody could find from here. */}
+                    {run.failed && !run.connectUrl && (
                         <button type="button" className="linkish toolcard__where" onClick={() => openSettings("connectors")}>
                             Check {run.connector} in Connectors
                         </button>

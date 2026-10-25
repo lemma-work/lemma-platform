@@ -44,6 +44,12 @@ def _secret(monkeypatch):
     )
 
 
+async def _bound(_payload):
+    """Bound to an organization: an unbound installation routes nowhere, which
+    is covered with the source itself."""
+    return "0199a1f6-0000-7000-8000-000000000001"
+
+
 async def _delivered_key(event: str, payload: dict) -> dict:
     raw = json.dumps(payload).encode()
     delivery = WebhookDelivery(
@@ -55,7 +61,7 @@ async def _delivered_key(event: str, payload: dict) -> dict:
             "X-GitHub-Event": event,
         },
     )
-    source = GitHubWebhookSource()
+    source = GitHubWebhookSource(bound_organization=_bound)
     normalized = source.normalize(await source.verify(delivery))
     assert normalized is not None and normalized.match is not None
     return normalized.match

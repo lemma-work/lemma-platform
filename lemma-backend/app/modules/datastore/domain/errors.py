@@ -165,14 +165,15 @@ class DatastoreQueryUnavailableError(DatastoreDomainError):
     """Direct querying is not available on this deployment.
 
     `PS-DATA-021`: a person who wrote perfectly good SQL must not be told their
-    query was the problem. Ad-hoc SQL runs as a dedicated Postgres role
-    (`datastore_query_role`), and a managed Postgres that never provisioned it
-    leaves every query with nowhere to run — a fact about the deployment that
-    no amount of rewriting the query will change.
+    query was the problem. Ad-hoc SQL runs as a Postgres role of the pod's own
+    (``datastore_query_role`` plus the pod's id), which the app creates; an app
+    role that may not create roles leaves every query with nowhere to run — a
+    fact about the deployment that no amount of rewriting the query will change.
 
     503 rather than 400 for exactly that reason, and rather than 500 because
     the platform is not broken: this one facility is absent, everything else in
-    the datastore works, and an operator can fix it by granting the role.
+    the datastore works, and an operator can fix it by granting the app's
+    database role CREATEROLE.
     """
 
     def __init__(self, message: str, details: object | None = None):

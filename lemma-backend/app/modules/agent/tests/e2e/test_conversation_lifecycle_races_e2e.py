@@ -34,6 +34,7 @@ from app.modules.agent.services.approval_reconciliation import (
 from app.modules.test_support.e2e.agent_work import run_approval_work
 from app.modules.agent.services.mcp_pausing_calls import record_pausing_tool_call
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
+    RECORD_DELETE_REFUSALS,
     Seeded,
     conversation,
     conversation_service,
@@ -42,6 +43,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     owner_uow,
     pausing_call,
     queued_message,
+    refused_before_asking,
     running_run,
     runs,
     seeded_conversation,
@@ -128,6 +130,13 @@ async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
         assert created.status_code == status.HTTP_201_CREATED, created.text
         rows[title] = created.json()["id"]
 
+    delete = {"action": "delete", "table_name": _TABLE, "record_id": rows["first"]}
+    await refused_before_asking(
+        seeded,
+        tool_name="pod_write_record",
+        args=delete,
+        permission_ids=RECORD_DELETE_REFUSALS,
+    )
     paused = await running_run(seeded)
     approval_id = await pausing_call(
         seeded,
@@ -135,11 +144,7 @@ async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
         tool_name="request_approval",
         tool_args={
             "tool_name": "pod_write_record",
-            "args": {
-                "action": "delete",
-                "table_name": _TABLE,
-                "record_id": rows["first"],
-            },
+            "args": delete,
             "title": "Delete the first chore",
         },
     )
@@ -367,15 +372,9 @@ async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
 class _ExhaustedUsage:
     """An account with no headroom left on any window."""
 
-    async def get_usage_limits(self, *, organization_id, user_id):
-        del organization_id, user_id
-        exhausted = {"allowed": False}
-        return {
-            "allowed": False,
-            "org_monthly": exhausted,
-            "user_weekly": exhausted,
-            "user_monthly": exhausted,
-        }
+    async def spent_windows(self, *, organization_id, user_id, outside_audience):
+        del organization_id, user_id, outside_audience
+        return ("org_month", "user_week", "user_month")
 
 
 async def test_resuming_a_pause_is_held_to_the_usage_limit(scenario) -> None:

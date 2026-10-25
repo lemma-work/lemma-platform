@@ -5,6 +5,11 @@ schema at the latest version stays there until this process is replaced by one
 whose code knows a newer version, or until the schema is dropped -- and both
 places that drop one call ``forget``. Only the latest version is remembered,
 because a lower one can be migrated by another process at any moment.
+
+It also remembers which pod schemas' query roles (``query_role``) this process
+has seen exist and be enterable, so an ad-hoc query does not probe the catalog
+for them every time. The role is dropped with its schema, by the same two
+places, so ``forget`` is when that stops being true as well.
 """
 
 from __future__ import annotations
@@ -40,6 +45,22 @@ def remember_change_log(schema_name: str) -> None:
     _change_log_ready[schema_name] = True
 
 
+#: Pod schema -> the query role this process has seen exist and be enterable.
+#: The role is the value, not just a flag, because its name is derived from a
+#: setting: a memo that outlived a change to it would vouch for another role.
+_query_role_ready: BoundedDict[str, str] = BoundedDict(
+    8192, name="datastore.pod_query_roles"
+)
+
+
+def query_role_ready(schema_name: str, role: str) -> bool:
+    return _query_role_ready.get(schema_name) == role
+
+
+def remember_query_role(schema_name: str, role: str) -> None:
+    _query_role_ready[schema_name] = role
+
+
 def known_version(schema_name: str) -> int:
     return _at_latest.get(schema_name, 0) or 0
 
@@ -51,8 +72,10 @@ def remember(schema_name: str, version: int) -> None:
 def forget(schema_name: str) -> None:
     _at_latest.pop(schema_name, None)
     _change_log_ready.pop(schema_name, None)
+    _query_role_ready.pop(schema_name, None)
 
 
 def forget_all() -> None:
     _at_latest.clear()
     _change_log_ready.clear()
+    _query_role_ready.clear()

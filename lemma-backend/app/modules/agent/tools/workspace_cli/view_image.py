@@ -13,6 +13,7 @@ from pydantic_ai import BinaryContent, ToolReturn
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.vision import AgentVisionMode
+from app.modules.agent.tools.approval_denials import remember_denial
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.image_payload import downscale_for_vision
 from app.modules.agent.tools.vision_delegation import describe_single_image
@@ -69,9 +70,11 @@ async def view_image_internal(
     except DomainError as exc:
         # Datastore reads are grant-checked; surface a missing grant as
         # needs_approval so the agent can request access, like the pod tools.
-        return approval_error_result(
+        result = approval_error_result(
             exc, tool_name="view_image", args=request.model_dump()
         )
+        await remember_denial(ctx, result)
+        return result
     except Exception as exc:
         return ExecCommandResult(success=False, error=safe_error_text(exc))
 
