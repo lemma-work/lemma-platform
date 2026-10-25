@@ -91,9 +91,12 @@ def user_prompt_text(msg: object, *, with_roster: bool = True) -> str:
     pieces = [
         label,
         sender_label(metadata, platform),
-        # Only a message Lemma labelled is known to be a member's; any other
-        # body could be a stranger's imitating that label.
-        body if label else defuse_lemma_labels(body),
+        # Only a message Lemma labelled is known to be a member's, and only a
+        # notice history assembly wrote is known to be Lemma's own; any other
+        # body could be a stranger's imitating either.
+        body
+        if label or metadata.get("synthetic") is True
+        else defuse_lemma_labels(body),
         quoted_message_block(metadata),
         participants_block(metadata) if with_roster else None,
         channel_context_block(metadata),

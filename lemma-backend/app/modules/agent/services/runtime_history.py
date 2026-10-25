@@ -31,12 +31,9 @@ import json
 from typing import Protocol
 from uuid import UUID
 
-from app.modules.agent.domain.folded_turns import (
-    folded_from,
-    framed_folds,
-    newest_folds,
-)
+from app.modules.agent.domain.folded_turns import framed_folds, newest_folds
 from app.modules.agent.domain.history_notices import SYNTHETIC_NOTICE_PREFIX
+from app.modules.agent.domain.unattached_cut import newest_unattached
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
 from app.modules.agent.domain.value_objects import AgentRunStatus
@@ -222,53 +219,6 @@ def unattached_message_window(
     return after, first_sequence_of_run(runs, run_id)
 
 
-def _newest_unattached(messages: list[Message]) -> list[Message]:
-    """``messages`` with only the newest ``MAX_UNATTACHED_MESSAGES`` that are
-    not copies, and a notice in front of the oldest kept when any went.
-
-    Copies have their own bound and notice (``newest_folds``).
-    """
-    own = [
-        index
-        for index, message in enumerate(messages)
-        if folded_from(message.metadata) is None
-    ]
-    if len(own) <= MAX_UNATTACHED_MESSAGES:
-        return messages
-    left_out = set(own[: len(own) - MAX_UNATTACHED_MESSAGES])
-    oldest_kept = own[len(own) - MAX_UNATTACHED_MESSAGES]
-    kept: list[Message] = []
-    for index, message in enumerate(messages):
-        if index in left_out:
-            continue
-        if index == oldest_kept:
-            kept.append(_unattached_cut_notice(message))
-        kept.append(message)
-    return kept
-
-
-def _unattached_cut_notice(oldest_kept: Message) -> Message:
-    """Say that run-less messages before ``oldest_kept`` are not shown.
-
-    It takes the sequence of the message it precedes, which is that message's
-    alone, and sits before it in the list, so the harness's stable sort keeps
-    it in front.
-    """
-    return Message(
-        conversation_id=oldest_kept.conversation_id,
-        sequence=oldest_kept.sequence,
-        agent_run_id=None,
-        role=MessageRole.USER,
-        kind=MessageKind.NOTIFICATION,
-        text=(
-            f"{SYNTHETIC_NOTICE_PREFIX} Earlier messages written outside a run "
-            "in this conversation are older than what is carried here and are "
-            "not shown."
-        ),
-        metadata={"synthetic": True, "summary_kind": "unattached_messages_cut"},
-    )
-
-
 class ChannelReader(Protocol):
     """Reads the channel a history's messages refer to into them
     (``channel_background``): the background of the runs named, and every
@@ -345,7 +295,7 @@ async def assemble_runtime_history(
         ),
         keep=MAX_FOLDED_MESSAGES,
     )
-    messages.extend(_newest_unattached(unattached))
+    messages.extend(newest_unattached(unattached, keep=MAX_UNATTACHED_MESSAGES))
     if read_channel is not None:
         # A run cut to its requests keeps none of what it was shown around them.
         messages = await read_channel(
