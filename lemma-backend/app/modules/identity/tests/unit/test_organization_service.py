@@ -51,7 +51,7 @@ async def test_create_organization_accepts_a_carried_name(
 ):
     """A name another organization carries is a label, not a conflict."""
     organization_repository_mock.get_by_slug.return_value = None
-    organization_repository_mock.create.side_effect = lambda entity: entity
+    organization_repository_mock.create.side_effect = lambda entity, **_: entity
 
     created = await organization_service.create_organization(
         OrganizationEntity(name="Acme", slug="acme"),
@@ -94,6 +94,12 @@ async def test_create_organization_success_adds_owner_member(
     assert member_arg.organization_id == org.id
     assert member_arg.user_id == owner_id
     assert member_arg.role == OrganizationRole.ORG_OWNER
+    # Who made it is said where the organization is written, so its created
+    # event lands on that person rather than on nobody.
+    assert (
+        organization_repository_mock.create.await_args.kwargs["created_by_user_id"]
+        == owner_id
+    )
 
 
 @pytest.mark.asyncio
@@ -147,7 +153,7 @@ async def test_create_organization_conflicts_slug_the_field_that_lost(
 ):
     """Names may be shared; the slug is the handle, and it must be free."""
     organization_repository_mock.get_by_slug.return_value = None
-    organization_repository_mock.create.side_effect = lambda entity: entity
+    organization_repository_mock.create.side_effect = lambda entity, **_: entity
 
     # A taken name no longer refuses: display names are labels.
     created = await organization_service.create_organization(
@@ -1355,7 +1361,7 @@ async def test_resolving_names_keeps_the_first_choice_when_it_is_free(
     organization_repository_mock: AsyncMock,
 ):
     organization_repository_mock.get_by_slug.return_value = None
-    organization_repository_mock.create.side_effect = lambda entity: entity
+    organization_repository_mock.create.side_effect = lambda entity, **_: entity
 
     organization = await organization_service.create_organization(
         OrganizationEntity(name="Acme", slug=""),
@@ -1374,7 +1380,7 @@ async def test_resolving_names_keeps_a_name_another_org_carries(
 ):
     """Display names are not unique, so a carried name does not move the walk."""
     organization_repository_mock.get_by_slug.return_value = None
-    organization_repository_mock.create.side_effect = lambda entity: entity
+    organization_repository_mock.create.side_effect = lambda entity, **_: entity
 
     organization = await organization_service.create_organization(
         OrganizationEntity(name="Acme", slug=""),
@@ -1395,7 +1401,7 @@ async def test_resolving_names_steps_past_a_taken_slug_too(
     organization_repository_mock.get_by_slug.side_effect = lambda slug: (
         OrganizationEntity(name="Other", slug=slug) if slug == "acme" else None
     )
-    organization_repository_mock.create.side_effect = lambda entity: entity
+    organization_repository_mock.create.side_effect = lambda entity, **_: entity
 
     organization = await organization_service.create_organization(
         OrganizationEntity(name="Acme", slug=""),
@@ -1416,7 +1422,7 @@ async def test_resolving_names_falls_back_to_a_suffix_it_cannot_lose(
     organization_repository_mock.get_by_slug.side_effect = lambda slug: (
         OrganizationEntity(name="Other", slug=slug) if slug in readable else None
     )
-    organization_repository_mock.create.side_effect = lambda entity: entity
+    organization_repository_mock.create.side_effect = lambda entity, **_: entity
 
     organization = await organization_service.create_organization(
         OrganizationEntity(name="Acme", slug=""),
@@ -1436,7 +1442,7 @@ async def test_a_typed_name_is_accepted_whatever_it_says(
     """Display names are not unique, so a typed name is never refused — even
     one another organization already carries. The slug is the handle."""
     organization_repository_mock.get_by_slug.return_value = None
-    organization_repository_mock.create.side_effect = lambda entity: entity
+    organization_repository_mock.create.side_effect = lambda entity, **_: entity
 
     created = await organization_service.create_organization(
         OrganizationEntity(name="Acme", slug="acme"),

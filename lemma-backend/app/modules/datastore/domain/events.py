@@ -97,6 +97,8 @@ class DatastoreFileCreatedEvent(DatastoreDomainEvent):
     file_id: UUID
     path: str | None = None
     metadata: dict | None = None
+    #: The stored content's size. ``None`` on events from before it was carried.
+    size_bytes: int | None = None
 
 
 class DatastoreFileUpdatedEvent(DatastoreDomainEvent):

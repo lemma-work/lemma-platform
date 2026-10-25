@@ -79,6 +79,17 @@ class CallLimits:
     quiet_window_ms: int
 
 
+@dataclass(slots=True)
+class CallStats:
+    """What a call carried, for the log line that says how it ended: a call
+    that "stopped answering" reads differently with no audio arriving than
+    with audio and no turns heard."""
+
+    audio_in_bytes: int = 0
+    caller_turns: int = 0
+    voice_lines: int = 0
+
+
 class CallSession:
     def __init__(
         self,
@@ -108,6 +119,7 @@ class CallSession:
         self._titles: dict[str, str] = {}
         self._failures_reported: set[str] = set()
         self.end_reason: str | None = None
+        self.stats = CallStats()
 
     def _now_ms(self) -> float:
         return self._clock() * 1000
@@ -156,6 +168,7 @@ class CallSession:
                 return
             if isinstance(message, bytes):
                 if not self._muted:
+                    self.stats.audio_in_bytes += len(message)
                     await self._engine.push_audio(message)
                 continue
             if len(message) > _MAX_CONTROL_CHARS:
@@ -255,6 +268,7 @@ class CallSession:
                     }
                 )
                 if final:
+                    self.stats.voice_lines += 1
                     self._remember(f"Voice: {text}")
             case Interrupted():
                 await self.send({"type": "clear"})
@@ -273,6 +287,7 @@ class CallSession:
         return self._said_count
 
     def _finished_turn(self, text: str) -> None:
+        self.stats.caller_turns += 1
         recent = self._lines[-_RECENT_LINES:]
         number = self._remember(f"Caller: {text}")
         create_inherited_task(

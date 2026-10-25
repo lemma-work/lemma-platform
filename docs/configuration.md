@@ -811,8 +811,11 @@ configured above.
 ```dotenv
 CALL_VOICE_ENGINE=gemini_live      # gemini_live | openai_realtime | cascade
 
-# gemini_live: one native-audio session.
+# gemini_live: one native-audio session, with a Gemini API key or through
+# Vertex AI as this server's own service account (no key; see below).
 GEMINI_API_KEY=
+GEMINI_VERTEX_PROJECT=                   # set it to use Vertex AI instead of the key
+GEMINI_VERTEX_LOCATION=us-central1       # or global
 GEMINI_LIVE_MODEL=gemini-3.8-live
 GEMINI_LIVE_VOICE=
 
@@ -838,6 +841,15 @@ CALL_MAX_MINUTES=60
 CALLS_PER_USER=2
 CALL_QUIET_WINDOW_MS=700
 ```
+
+With `GEMINI_VERTEX_PROJECT` set, `gemini_live` connects to Vertex AI's Live
+API with the token of the service account the server runs as, read from the
+metadata server GKE (Workload Identity) and Compute Engine provide; nothing is
+stored, and it takes the place of `GEMINI_API_KEY`. Grant that account
+`roles/aiplatform.user` in the project, and set `GEMINI_LIVE_MODEL` to a Live
+model Vertex AI serves in that location, which is not always named as the
+Gemini API names it. Outside Google Cloud there is no metadata server, so use
+the key.
 
 The cascade talker answers every turn, so pick a model that can answer without
 reasoning first: a thinking-only model spends the caller's silence on tokens

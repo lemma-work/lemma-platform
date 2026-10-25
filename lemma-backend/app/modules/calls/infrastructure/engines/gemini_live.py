@@ -12,6 +12,9 @@ Two channels carry text in, and which one decides whether the voice talks:
 - ``realtimeInput.text`` is spoken to: the model responds to it at once, in its
   own words, which is what an update the agents want said needs.
 
+The same protocol is served by the Gemini API, with a key, and by Vertex AI,
+with the workload's service account; ``google_auth`` builds either.
+
 A connection lasts about ten minutes. The server warns with ``goAway`` and keeps
 handing out resumption handles; the engine reconnects with the latest one and
 the conversation carries on where it was.
@@ -53,6 +56,8 @@ from app.modules.calls.domain.voice import (
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
 
+    from app.modules.calls.infrastructure.engines.google_auth import Headers
+
 logger = get_logger(__name__)
 
 _ENDPOINT = (
@@ -77,14 +82,16 @@ class GeminiLiveEngine:
     def __init__(
         self,
         *,
-        api_key: str,
+        headers: Headers,
         model: str,
         instructions: str,
         voice: str | None = None,
         endpoint: str = _ENDPOINT,
     ) -> None:
-        self._api_key = api_key
-        self._model = model if model.startswith("models/") else f"models/{model}"
+        self._headers = headers
+        self._model = (
+            model if model.startswith(("models/", "projects/")) else f"models/{model}"
+        )
         self._instructions = instructions
         self._voice = voice
         self._endpoint = endpoint
@@ -123,10 +130,12 @@ class GeminiLiveEngine:
     async def _connect(self) -> None:
         import websockets
 
+        # Asked on every connect: a service account's token outlives no call.
+        headers = await self._headers()
         try:
             socket = await websockets.connect(
                 self._endpoint,
-                additional_headers={"x-goog-api-key": self._api_key},
+                additional_headers=dict(headers),
                 max_size=MAX_PROVIDER_FRAME_BYTES,
                 open_timeout=_SETUP_TIMEOUT_SECONDS,
             )
