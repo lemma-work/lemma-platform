@@ -51,6 +51,10 @@ WARM_MODULES: tuple[str, ...] = (
 TURN_WARM_MODULES: tuple[str, ...] = (
     *WARM_MODULES,
     "app.modules.agent.services.agent_runner_service",
+    # The Anthropic SDK, which metering no longer pulls in. The API leaves it to
+    # the first Anthropic-profile request; a worker pays it here, before it
+    # claims a turn, so that turn does not import it on the event loop.
+    "app.modules.agent.services.anthropic_thinking",
 )
 #: How long a stopping worker waits for a tokenizer warm-up it cancelled.
 _TOKENIZER_SHUTDOWN_WAIT_SECONDS = 2.0

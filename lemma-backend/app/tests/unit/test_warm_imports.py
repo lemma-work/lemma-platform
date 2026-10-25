@@ -140,7 +140,11 @@ def test_a_worker_that_runs_turns_loads_them_before_it_claims_one() -> None:
     so the interpreter is paid for once.
     """
     completed = subprocess.run(
-        [sys.executable, "-c", _WORKER_PROBE.format(watched=list(TURN_WARM_MODULES))],
+        [
+            sys.executable,
+            "-c",
+            _WORKER_PROBE.format(watched=[*TURN_WARM_MODULES, "anthropic"]),
+        ],
         capture_output=True,
         text=True,
         cwd=ROOT,
@@ -152,8 +156,10 @@ def test_a_worker_that_runs_turns_loads_them_before_it_claims_one() -> None:
 
     assert boots["local"] == {"loaded": [], "tokenizer": False}
     assert boots["ingestion_only"] == {"loaded": [], "tokenizer": False}
+    # The Anthropic SDK too: metering no longer imports it, so a turn-running
+    # worker warms it rather than leaving it to its first Anthropic turn.
     assert boots["runs_turns"] == {
-        "loaded": sorted(TURN_WARM_MODULES),
+        "loaded": sorted([*TURN_WARM_MODULES, "anthropic"]),
         "tokenizer": True,
     }
 
