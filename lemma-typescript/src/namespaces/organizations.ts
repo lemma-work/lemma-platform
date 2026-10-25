@@ -51,6 +51,56 @@ export class OrganizationsNamespace {
     return this.client.request(() => OrganizationsService.orgHome(orgId));
   }
 
+  /**
+   * Everything waiting on you in every pod you may open in one organization,
+   * oldest first: questions, approvals and permission requests in your
+   * conversations, workflow forms and decisions assigned to you, and contacts
+   * waiting on a person where you look after contacts. One request instead of
+   * one per pod per kind.
+   */
+  needsYou(orgId: string, options: { limit?: number } = {}) {
+    return this.client.request(() =>
+      OrganizationsService.orgNeedsYouList(orgId, options.limit ?? 100),
+    );
+  }
+
+  /**
+   * What moved lately in each pod you may open in one organization: your
+   * latest chats, the workflows and schedules that ran, and your conversations
+   * per day, split by whether an agent or a person started them. Pass your
+   * IANA `timezone` so the days are your days.
+   */
+  recents(orgId: string, options: { days?: number; chats?: number; timezone?: string } = {}) {
+    return this.client.request(() =>
+      OrganizationsService.orgRecentsGet(
+        orgId,
+        options.days ?? 14,
+        options.chats ?? 10,
+        options.timezone ?? "UTC",
+      ),
+    );
+  }
+
+  /** Every app you may open across one organization's pods, newest first. */
+  apps(orgId: string) {
+    return this.client.request(() => OrganizationsService.orgAppsList(orgId));
+  }
+
+  /** When you last looked at an organization's Home, kept for you by the server. */
+  readonly homeSeen = {
+    get: (orgId: string) =>
+      this.client.request(() => OrganizationsService.orgHomeSeenGet(orgId)),
+
+    /**
+     * Mark Home seen as of `seenAt` (an ISO time with its offset -- typically
+     * when the page loaded), or now. The mark never moves back.
+     */
+    mark: (orgId: string, seenAt?: string) =>
+      this.client.request(() =>
+        OrganizationsService.orgHomeSeenSet(orgId, seenAt ? { seen_at: seenAt } : null),
+      ),
+  };
+
   create(payload: OrganizationCreateRequest) {
     return this.client.request(() => OrganizationsService.orgCreate(payload));
   }

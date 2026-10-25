@@ -70,6 +70,13 @@ class OrganizationMember(UUIDAuditBase):
         ForeignKey("organizations.id", ondelete="CASCADE")
     )
     role: Mapped[OrganizationRole] = mapped_column(String(50))
+    #: When the member last looked at the organization's Home, so it can say
+    #: what moved since. Theirs alone, kept here so it follows them from one
+    #: browser to the next, and only ever moved forward
+    #: (``organization_home_seen``).
+    home_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     organization: Mapped[Organization] = relationship(
         "Organization", back_populates="members"

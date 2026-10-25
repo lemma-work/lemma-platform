@@ -18,6 +18,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     ColumnElement,
+    Select,
     and_,
     exists,
     func,
@@ -36,6 +37,7 @@ from app.modules.agent.domain.pending_interactions import (
     PendingInteraction,
     PendingInteractionCursor,
     PendingInteractionKind,
+    PodPendingInteraction,
     clipped_summary,
 )
 from app.modules.agent.domain.value_objects import ConversationStatus, MessageKind
@@ -119,18 +121,20 @@ def has_pending_interaction_column() -> ColumnElement[bool]:
     return exists().where(*pending_pause_conditions())
 
 
-async def list_pending_interactions(
-    session: AsyncSession,
+def _pending_page(
     *,
     user_id: UUID,
-    pod_id: UUID,
-    cursor: PendingInteractionCursor | None = None,
-    limit: int = 50,
-) -> tuple[list[PendingInteraction], PendingInteractionCursor | None]:
-    """This person's pauses in this pod, longest-waiting first.
+    in_pods: ColumnElement[bool],
+    after: PendingInteractionCursor | None,
+    limit: int,
+) -> Select:
+    """This person's pauses in the pods ``in_pods`` names, longest-waiting first.
 
     Their own conversations only, sub-agents' included: a child's question
     sits in a conversation they own and would otherwise be found by nobody.
+    One statement for one pod and for many, so the two lists cannot disagree
+    about what counts. One row past ``limit``, so the caller can tell a full
+    page from the last one.
     """
     stmt = (
         select(
@@ -141,6 +145,7 @@ async def list_pending_interactions(
             _is_host_permission().label("is_host_permission"),
             _summary_text().label("summary"),
             ConversationModel.id.label("conversation_id"),
+            ConversationModel.pod_id,
             ConversationModel.title,
             ConversationModel.status,
             ConversationModel.agent_id,
@@ -151,23 +156,42 @@ async def list_pending_interactions(
         .outerjoin(AgentModel, AgentModel.id == ConversationModel.agent_id)
         .where(
             ConversationModel.user_id == user_id,
-            ConversationModel.pod_id == pod_id,
+            in_pods,
             # Archiving is how a person says "not this one" -- Home's dismiss
             # does exactly that -- and a list that brought it straight back
             # would have no way to be cleared. A new message unarchives.
             ConversationModel.is_archived.is_(False),
             *pending_pause_conditions(),
         )
+        .order_by(MessageModel.created_at, MessageModel.id)
+        .limit(limit + 1)
     )
-    if cursor is not None:
+    if after is not None:
         stmt = stmt.where(
             tuple_(MessageModel.created_at, MessageModel.id)
             > tuple_(
-                literal(cursor.created_at, MessageModel.created_at.type),
-                literal(cursor.message_id, MessageModel.id.type),
+                literal(after.created_at, MessageModel.created_at.type),
+                literal(after.message_id, MessageModel.id.type),
             )
         )
-    stmt = stmt.order_by(MessageModel.created_at, MessageModel.id).limit(limit + 1)
+    return stmt
+
+
+async def list_pending_interactions(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    pod_id: UUID,
+    cursor: PendingInteractionCursor | None = None,
+    limit: int = 50,
+) -> tuple[list[PendingInteraction], PendingInteractionCursor | None]:
+    """This person's pauses in this pod, longest-waiting first."""
+    stmt = _pending_page(
+        user_id=user_id,
+        in_pods=ConversationModel.pod_id == pod_id,
+        after=cursor,
+        limit=limit,
+    )
     rows = list((await session.execute(stmt)).all())
     page = [_pending(row) for row in rows[:limit]]
     next_cursor = (
@@ -178,6 +202,35 @@ async def list_pending_interactions(
         else None
     )
     return page, next_cursor
+
+
+async def list_pending_interactions_in_pods(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    pod_ids: Sequence[UUID],
+    limit: int,
+) -> tuple[list[PodPendingInteraction], bool]:
+    """This person's pauses across these pods, longest-waiting first.
+
+    The pods are the caller's to choose -- the ones it has already found this
+    person may open -- and the conversations are this person's own in any of
+    them, so nothing here widens what the per-pod list shows. Whether more
+    were waiting than ``limit`` comes back beside the page.
+    """
+    if not pod_ids:
+        return [], False
+    stmt = _pending_page(
+        user_id=user_id,
+        in_pods=ConversationModel.pod_id.in_(list(pod_ids)),
+        after=None,
+        limit=limit,
+    )
+    rows = list((await session.execute(stmt)).all())
+    return [
+        PodPendingInteraction(pod_id=row.pod_id, pending=_pending(row))
+        for row in rows[:limit]
+    ], len(rows) > limit
 
 
 async def conversations_with_pending_interaction(
@@ -216,5 +269,6 @@ __all__ = [
     "conversations_with_pending_interaction",
     "has_pending_interaction_column",
     "list_pending_interactions",
+    "list_pending_interactions_in_pods",
     "pending_pause_conditions",
 ]

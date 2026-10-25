@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 176 |
 | `gap` | 4 |
 | `manual` | 24 |
-| `planned` | 24 |
+| `planned` | 25 |
 | `withdrawn` | 0 |
-| **total** | **228** |
+| **total** | **229** |
 
 Scenario tests declaring a promise: 454.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 259 | 364 |
+| OpenAPI operations | 259 | 369 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -124,6 +124,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-022` Approving a request cannot be used to gain authority | `covered` | `test_approving_cannot_confer_a_higher_organization_role`, `test_approving_within_your_own_authority_is_allowed`, `test_approving_cannot_confer_unheld_pod_permissions`, `test_an_organization_editor_cannot_make_themselves_a_pod_administrator`, `test_an_invitation_cannot_smuggle_a_pod_administrator` |
 | `PS-POD-030` A person sees exactly the pods they may open | `covered` | `test_a_non_member_cannot_open_the_pod`, `test_an_outsider_cannot_open_the_pod`, `test_the_cli_lists_pods`, `test_the_python_sdk_lists_pods`, `test_the_typescript_sdk_lists_pods` |
 | `PS-POD-031` A person sees their pods across every organization at once | `covered` | `test_an_organization_has_a_home` |
+| `PS-POD-032` A person sees what waits on them, and what moved, across every pod at once | `planned` | — |
 | `PS-POD-040` Removing someone from a pod takes their access away immediately | `covered` | `test_removing_a_member_revokes_access`, `test_a_non_admin_cannot_remove_members` |
 | `PS-POD-041` A pod always has at least one admin | `covered` | `test_the_last_pod_admin_cannot_step_down`, `test_the_last_pod_admin_cannot_remove_themselves`, `test_an_organization_owner_cannot_be_the_admin_who_steps_down` |
 | `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_repeated_deletion_still_reports_success`, `test_a_non_admin_cannot_delete_the_pod` |

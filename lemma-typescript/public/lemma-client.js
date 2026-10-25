@@ -15259,6 +15259,25 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Apps Across The Organization
+     * Every app the current user may open in every pod they may open in the organization, most recently updated first. Each app is filtered by its own visibility against the user's permissions in its pod.
+     * @param organizationId
+     * @returns OrganizationAppListResponse Successful Response
+     * @throws ApiError
+     */
+    static orgAppsList(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/apps",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Organization Home
      * One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.
      * @param organizationId
@@ -15272,6 +15291,47 @@ var LemmaClient = (() => {
         path: {
           "organization_id": organizationId
         },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get When You Last Looked At Home
+     * When the current user last marked the organization's Home seen, so it can say what moved since. Per user and per organization.
+     * @param organizationId
+     * @returns HomeSeenResponse Successful Response
+     * @throws ApiError
+     */
+    static orgHomeSeenGet(organizationId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/home/seen",
+        path: {
+          "organization_id": organizationId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Mark Home Seen
+     * Mark the organization's Home seen by the current user, as of `seen_at` (now when omitted; a future moment is read as now). The mark only moves forward, so an older tab cannot undo a newer one. Returns the mark and what it was before.
+     * @param organizationId
+     * @param requestBody
+     * @returns HomeSeenResponse Successful Response
+     * @throws ApiError
+     */
+    static orgHomeSeenSet(organizationId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/organizations/{organization_id}/home/seen",
+        path: {
+          "organization_id": organizationId
+        },
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -15416,6 +15476,29 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List What Waits On You Across The Organization
+     * Everything waiting on the current user in every pod they may open in the organization, as one list, oldest first: questions, approvals and Agent Host permission requests in their own conversations (one item per conversation); workflow forms and decisions assigned to them; and contacts waiting on a person, in pods where they hold `channel.read` and `contact.read`. Each item names its pod and what to open: a conversation, a workflow run or a channel.
+     * @param organizationId
+     * @param limit
+     * @returns NeedsYouResponse Successful Response
+     * @throws ApiError
+     */
+    static orgNeedsYouList(organizationId, limit = 100) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/needs-you",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * My Permissions In An Organization
      * The organization-level permission ids the caller holds here, such as `org.installation.manage`. Pod permissions are `/pods/{pod_id}/permissions/me`.
      * @param organizationId
@@ -15434,6 +15517,33 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Get What Moved Lately In Each Pod
+     * For every pod the current user may open in the organization, quiet ones included: their latest chats (conversations of no channel that they talk in, or that wait on them), the workflows and schedules that ran in the window -- one each, with the newest run and a count -- and a count per day of their conversations by the day each was last active, split into started by an agent (a schedule, a workflow, a notification, a task or another pod's ask) and by a person. Days are calendar days in `timezone`, the window ending today.
+     * @param organizationId
+     * @param days
+     * @param chats Chats listed per pod.
+     * @param timezone IANA time zone the days are counted in, e.g. Europe/Berlin.
+     * @returns OrganizationRecentsResponse Successful Response
+     * @throws ApiError
+     */
+    static orgRecentsGet(organizationId, days = 14, chats = 10, timezone = "UTC") {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/recents",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "days": days,
+          "chats": chats,
+          "timezone": timezone
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/organizations.ts
@@ -15441,6 +15551,17 @@ var LemmaClient = (() => {
     constructor(client, http) {
       __publicField(this, "client", client);
       __publicField(this, "http", http);
+      /** When you last looked at an organization's Home, kept for you by the server. */
+      __publicField(this, "homeSeen", {
+        get: (orgId) => this.client.request(() => OrganizationsService.orgHomeSeenGet(orgId)),
+        /**
+         * Mark Home seen as of `seenAt` (an ISO time with its offset -- typically
+         * when the page loaded), or now. The mark never moves back.
+         */
+        mark: (orgId, seenAt) => this.client.request(
+          () => OrganizationsService.orgHomeSeenSet(orgId, seenAt ? { seen_at: seenAt } : null)
+        )
+      });
       __publicField(this, "members", {
         list: (orgId, options = {}) => this.client.request(
           () => {
@@ -15542,6 +15663,44 @@ var LemmaClient = (() => {
     /** One organization's pods, with their apps, agents and your roles. */
     home(orgId) {
       return this.client.request(() => OrganizationsService.orgHome(orgId));
+    }
+    /**
+     * Everything waiting on you in every pod you may open in one organization,
+     * oldest first: questions, approvals and permission requests in your
+     * conversations, workflow forms and decisions assigned to you, and contacts
+     * waiting on a person where you look after contacts. One request instead of
+     * one per pod per kind.
+     */
+    needsYou(orgId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return OrganizationsService.orgNeedsYouList(orgId, (_a = options.limit) != null ? _a : 100);
+        }
+      );
+    }
+    /**
+     * What moved lately in each pod you may open in one organization: your
+     * latest chats, the workflows and schedules that ran, and your conversations
+     * per day, split by whether an agent or a person started them. Pass your
+     * IANA `timezone` so the days are your days.
+     */
+    recents(orgId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b, _c;
+          return OrganizationsService.orgRecentsGet(
+            orgId,
+            (_a = options.days) != null ? _a : 14,
+            (_b = options.chats) != null ? _b : 10,
+            (_c = options.timezone) != null ? _c : "UTC"
+          );
+        }
+      );
+    }
+    /** Every app you may open across one organization's pods, newest first. */
+    apps(orgId) {
+      return this.client.request(() => OrganizationsService.orgAppsList(orgId));
     }
     create(payload) {
       return this.client.request(() => OrganizationsService.orgCreate(payload));

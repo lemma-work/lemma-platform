@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
@@ -117,6 +117,36 @@ class ContactRepository:
             )
         )
         return dict(rows.tuples().all())
+
+    async def names_across(
+        self, *, contact_ids_by_pod: Mapping[UUID, Sequence[UUID]]
+    ) -> dict[UUID, str | None]:
+        """``names`` for several pods' contacts in one read.
+
+        Each contact is named only under the pod it was asked for: a contact
+        id that belongs to another pod than the one it came with is left out,
+        exactly as ``names`` would leave it out.
+        """
+        wanted = {
+            (pod_id, contact_id)
+            for pod_id, contact_ids in contact_ids_by_pod.items()
+            for contact_id in contact_ids
+        }
+        if not wanted:
+            return {}
+        rows = await self.session.execute(
+            select(ContactModel.pod_id, ContactModel.id, ContactModel.display_name)
+            .where(
+                ContactModel.pod_id.in_(sorted({pod_id for pod_id, _ in wanted})),
+                ContactModel.id.in_(sorted({contact_id for _, contact_id in wanted})),
+            )
+            .limit(len(wanted))
+        )
+        return {
+            contact_id: name
+            for pod_id, contact_id, name in rows.tuples()
+            if (pod_id, contact_id) in wanted
+        }
 
     async def find_by_handle(
         self, *, pod_id: UUID, kind: IdentityKind, value: str
