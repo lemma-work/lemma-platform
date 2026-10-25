@@ -44,15 +44,15 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories.run_last_words import (
     mark_final_answer,
 )
-from app.modules.agent.services.realtime import (
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import (
     completed_payload,
     error_payload,
     message_payload,
-    publish_conversation_event,
 )
 from app.modules.agent.services.run_followups import stage_run_followups
 from app.modules.agent.services.run_identity import RunIdentity
-from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.usage.contracts.execution import usage_context_from_agent_context
 from app.modules.agent.tools.context import ConversationContext
 

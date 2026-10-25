@@ -302,11 +302,8 @@ async def on_turn_dead(ctx: DeadContext) -> None:
     """The turn gave up: its run FAILED, and everything waiting on it hears."""
     from app.modules.agent.domain.value_objects import AgentRunStatus
     from app.modules.agent.infrastructure.db.runs import Runs
-    from app.modules.agent.services.realtime import (
-        completed_payload,
-        error_payload,
-        publish_conversation_event,
-    )
+    from app.modules.agent.infrastructure.live import publish_conversation_event
+    from app.modules.agent.domain.live_events import completed_payload, error_payload
     from app.modules.agent.services.run_followups import stage_run_followups
 
     try:

@@ -32,9 +32,6 @@ from app.modules.agent.domain.value_objects import (
     ConversationAgentSelection,
     JsonObject,
 )
-from app.modules.agent.services.realtime import (
-    conversation_channel as conversation_channel,
-)
 
 ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 

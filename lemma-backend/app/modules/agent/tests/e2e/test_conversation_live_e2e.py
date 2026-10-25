@@ -13,10 +13,8 @@ import pytest
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.work import WorkClass, facts
-from app.modules.agent.services.realtime import (
-    publish_conversation_event,
-    token_payload,
-)
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import token_payload
 from app.modules.agent.tests.e2e.lifecycle_helpers import runs
 from app.modules.agent.tests.e2e.test_channel_answers_e2e import (
     _answering_conversation,

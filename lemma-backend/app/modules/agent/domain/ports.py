@@ -62,6 +62,18 @@ class ModelProvider(Protocol):
         ...
 
 
+class LiveEvents(Protocol):
+    """The transport boundary for a conversation's live events.
+
+    One publish feeds every transport (SSE, the live socket, a visitor's page);
+    a fake is a list.
+    """
+
+    async def publish(self, conversation_id: UUID, event: dict[str, object]) -> None:
+        """Publish one frame (``domain/live_events``), best effort."""
+        ...
+
+
 class AgentRepository(Protocol):
     async def get(self, agent_id: UUID, ctx: Context | None = None) -> Agent | None: ...
 

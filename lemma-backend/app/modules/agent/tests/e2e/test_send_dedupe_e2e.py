@@ -19,7 +19,7 @@ from starlette import status
 
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.channels.channel_service import get_channel_service
-from app.modules.agent.api.controllers.shared import conversation_channel
+from app.modules.agent.infrastructure.live import conversation_channel
 from app.modules.agent.domain.value_objects import AgentRunStatus, MessageRole
 from app.modules.agent.services.send_window import WINDOW_SECONDS, SendWindow
 from app.modules.agent.tests.e2e.lifecycle_helpers import (

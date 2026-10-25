@@ -32,10 +32,10 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
 )
 from app.modules.agent.services.run_message_writer import split_reasoning_drafts
-from app.modules.agent.services.serialization import message_to_payload
-from app.modules.agent.services.realtime import (
+from app.modules.agent.domain.live_events import message_to_payload
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import (
     message_payload,
-    publish_conversation_event,
     status_payload,
     token_payload,
 )

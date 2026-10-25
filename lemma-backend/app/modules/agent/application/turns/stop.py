@@ -35,12 +35,10 @@ from app.modules.agent.services.conversation_access import (
     validate_conversation_access,
 )
 from app.modules.agent.services.pause_resume import append_pause_tool_return
-from app.modules.agent.services.realtime import (
-    message_payload,
-    publish_conversation_event,
-)
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import message_payload
 from app.modules.agent.services.run_stop import stop_run
-from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.agent.services.wait_timers import disarm_wait
 from app.modules.agent.tools.waiting.models import (
     build_wait_result,

@@ -21,7 +21,7 @@ from app.modules.agent.services.agent_host_link_tool_calls import (
     ToolCallOutcome,
     tool_call_key,
 )
-from app.modules.agent.services.realtime import conversation_channel
+from app.modules.agent.infrastructure.live import conversation_channel
 from app.modules.agent.tests.unit.agent_host_link_fakes import (
     TOKEN,
     FakeConversationMcp,

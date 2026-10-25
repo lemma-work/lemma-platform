@@ -34,11 +34,9 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
 )
 from app.modules.agent.infrastructure.harnesses.remote_payload import steer_prompt
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
-from app.modules.agent.services.realtime import (
-    message_payload,
-    publish_conversation_event,
-)
-from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import message_payload
+from app.modules.agent.domain.live_events import message_to_payload
 
 logger = get_logger(__name__)
 

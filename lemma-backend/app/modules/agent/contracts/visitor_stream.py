@@ -18,18 +18,17 @@ member's frames later reaches no visitor by accident.
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
-from app.modules.agent.services.realtime import conversation_channel
+from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.infrastructure.live import live_events
 from app.modules.agent.tools.form_tools import FILL_FORM_TOOL
 
 __all__ = [
@@ -170,9 +169,8 @@ async def visitor_frames(
     """
     is_private = _private_run_lookup(uow_factory)
     deadline = time.monotonic() + max_seconds
-    service = await get_channel_service()
-    async with service.subscribe([conversation_channel(conversation_id)]) as source:
-        pending: asyncio.Task[str | bytes] | None = None
+    async with live_events().subscribe(conversation_id) as source:
+        pending: asyncio.Task[JsonObject] | None = None
         try:
             while (left := deadline - time.monotonic()) > 0:
                 if pending is None:
@@ -184,12 +182,12 @@ async def visitor_frames(
                     yield None
                     continue
                 try:
-                    raw = pending.result()
+                    event = pending.result()
                 except StopAsyncIteration:
                     return
                 finally:
                     pending = None
-                frame = await _translate(raw, is_private)
+                frame = await _translate(event, is_private)
                 if frame is not None:
                     yield frame
                 if frame is ERROR:
@@ -201,21 +199,9 @@ async def visitor_frames(
 
 
 async def _translate(
-    raw: str | bytes, is_private: Callable[[str], Awaitable[bool]]
+    payload: Mapping[str, object], is_private: Callable[[str], Awaitable[bool]]
 ) -> VisitorFrame | None:
-    payload = _parsed(raw)
-    if payload is None:
-        return None
     run_id = payload.get("agent_run_id")
     if isinstance(run_id, str) and await is_private(run_id):
         return None
     return visitor_frame(payload)
-
-
-def _parsed(raw: str | bytes) -> Mapping[str, object] | None:
-    """One published frame, decoded. Frames are a few hundred bytes at most."""
-    try:
-        payload = json.loads(raw)
-    except ValueError:
-        return None
-    return payload if isinstance(payload, Mapping) else None

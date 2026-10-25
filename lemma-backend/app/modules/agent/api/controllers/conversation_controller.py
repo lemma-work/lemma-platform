@@ -32,12 +32,12 @@ from app.modules.agent.api.controllers.shared import (
     PERSON_ANSWERS,
     _parse_message_page_token,
     _parse_metadata_filters,
-    conversation_channel,
     member_unit_of_work,
     iter_subscription,
     parse_conversation_agent_selection,
     with_keepalive,
 )
+from app.modules.agent.infrastructure.live import conversation_channel
 from app.modules.agent.api.controllers.conversation_page_token import (
     encode_conversation_page_token,
     parse_conversation_page_token,

@@ -2,7 +2,7 @@
 
 The web app watches a conversation's runs here rather than over the SSE
 stream, which stays for the CLI, the SDKs and the Agent Host. The events are
-the stream's own -- what ``realtime.publish_conversation_event`` publishes
+the stream's own -- what the one publisher (``infrastructure/live``) publishes
 (``token``, ``message``, ``status``, ``completed``, ``error``, ``stopped``,
 ``title`` …) -- each sent as one event of the subscription, unchanged, so a
 client reads the same shapes either way.
@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -50,7 +49,6 @@ from app.core.authorization.dependencies import assert_pod_membership
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.scope import context_scope
 from app.core.domain.errors import DomainError
-from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.live.access_clock import AccessClock
@@ -75,10 +73,8 @@ from app.modules.agent.domain.errors import (
 )
 from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.services.realtime import (
-    conversation_channel,
-    run_ending_payload,
-)
+from app.modules.agent.infrastructure.live import live_events
+from app.modules.agent.domain.live_events import run_ending_payload
 from app.modules.agent.application.conversations.read import ConversationReads
 
 logger = get_logger(__name__)
@@ -89,29 +85,11 @@ CONVERSATION_STREAM = "agent.conversation"
 _LISTEN_TIMEOUT = 5.0
 
 
-def _decoded(message: str | bytes) -> JsonObject | None:
-    """One published event; small (a token, a status), so decoded in place."""
-    try:
-        payload = json.loads(message)
-    except ValueError, TypeError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 @asynccontextmanager
 async def conversation_events(key: str) -> AsyncIterator[AsyncIterator[JsonObject]]:
-    """A lease on one conversation's run events, decoded."""
-    conversation_id = UUID(key)
-    service = await get_channel_service()
-    async with service.subscribe([conversation_channel(conversation_id)]) as raw:
-
-        async def decoded() -> AsyncIterator[JsonObject]:
-            async for message in raw:
-                payload = _decoded(message)
-                if payload is not None:
-                    yield payload
-
-        yield decoded()
+    """A lease on one conversation's run events, decoded: the one publish's."""
+    async with live_events().subscribe(UUID(key)) as events:
+        yield events
 
 
 #: How long a watched run may be silent before it is read again.

@@ -13,7 +13,6 @@ from fastapi.responses import StreamingResponse
 from app.core.log.log import get_logger
 from app.modules.agent.api.controllers.shared import (
     ChannelServiceDep,
-    conversation_channel,
     encode_stream_chunk,
     iter_subscription,
     with_keepalive,
@@ -26,7 +25,8 @@ from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
 )
 from app.modules.agent.domain.value_objects import AgentRunStartResult
-from app.modules.agent.services.realtime import run_ending_payload
+from app.modules.agent.infrastructure.live import ConversationLiveEvents
+from app.modules.agent.domain.live_events import run_ending_payload
 
 logger = get_logger(__name__)
 
@@ -75,7 +75,8 @@ async def start_and_stream_run(
             )
             return
 
-    subscription = channel_service.subscribe([conversation_channel(conversation_id)])
+    # The one publish's events, decoded; this transport encodes them as SSE.
+    subscription = ConversationLiveEvents(channel_service).subscribe(conversation_id)
     iterator = await subscription.__aenter__()
     try:
         result = await send()

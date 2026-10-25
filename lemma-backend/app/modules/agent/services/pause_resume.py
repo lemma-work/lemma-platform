@@ -35,14 +35,11 @@ from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.conversation_access import resolve_agent
-from app.modules.agent.services.realtime import (
-    error_payload,
-    message_payload,
-    publish_conversation_event,
-)
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import error_payload, message_payload
 from app.modules.agent.services.runtime_availability import turn_runtime
 from app.modules.agent.services.runtime_owned_uow import RuntimeOwnedUnitOfWork
-from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.agent.services.usage_preflight import assert_usage_preflight_allowed
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import UsageService

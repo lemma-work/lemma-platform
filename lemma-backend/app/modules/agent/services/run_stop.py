@@ -24,10 +24,8 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.events.work_kinds import AGENT_TURN_KINDS, turn_key
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.services.realtime import (
-    completed_payload,
-    publish_conversation_event,
-)
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import completed_payload
 from app.modules.agent.services.run_followups import stage_run_followups
 
 

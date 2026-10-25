@@ -47,11 +47,9 @@ from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.services.realtime import (
-    message_payload,
-    publish_conversation_event,
-)
-from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import message_payload
+from app.modules.agent.domain.live_events import message_to_payload
 
 logger = get_logger(__name__)
 

@@ -1,53 +1,45 @@
-"""Transient realtime publishing for agent conversation streams."""
+"""What a conversation's live events say: the frames every transport carries.
+
+A run publishes these as it goes -- tokens, messages, status, its ending, a
+conversation's new title -- through the one publisher
+(``infrastructure/live.py``). The SSE stream, the web app's live socket and a
+visitor's page each subscribe to the same publish and encode a frame for their
+own wire, once, in the transport; the frames themselves are built here.
+"""
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.domain.realtime import RealtimeChannel
-from app.core.infrastructure.channels.channel_service import (
-    get_channel_service,
+from app.modules.agent.domain.entities import AgentRun, Message
+from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
+    JsonObject,
+    to_json_value,
 )
-from app.core.log.log import get_logger
-from app.modules.agent.domain.entities import AgentRun
-from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.core.observability.dependency_incident import DependencyIncident
-
-logger = get_logger(__name__)
-
-#: Every token, message and terminal frame a watching client sees goes through
-#: `publish_conversation_event`. When the channel is down the user-visible
-#: symptom is "the agent never answers" while runs complete normally in the
-#: database -- and at `logger.debug`, production (LOG_LEVEL=INFO) had nothing at
-#: all to distinguish that from a quiet day. One degraded/recovered pair, which
-#: is what the volume exemption in `docs/development.md` actually permits.
-_publish_incident = DependencyIncident("agent.realtime.publish", logger=logger)
+from app.modules.agent.domain.wire_metadata import message_wire_metadata
 
 
-def conversation_channel(conversation_id: UUID) -> str:
-    return f"agent:conversation:{conversation_id}"
-
-
-async def publish_conversation_event(
-    conversation_id: UUID,
-    payload: dict[str, object],
-    *,
-    channel_service: RealtimeChannel | None = None,
-) -> None:
-    """Publish a best-effort transient event to active SSE subscribers."""
-
-    try:
-        service = channel_service or await get_channel_service()
-        await service.publish(conversation_channel(conversation_id), payload)
-    except Exception as exc:
-        logger.debug(
-            "agent.realtime.publishing_agent_realtime_event.diagnostic",
-            conversation_id=str(conversation_id),
-            error_type=type(exc).__name__,
-        )
-        _publish_incident.record_failure(error_type=type(exc).__name__)
-    else:
-        _publish_incident.record_success()
+def message_to_payload(message: Message) -> JsonObject:
+    return {
+        "id": str(message.id),
+        "conversation_id": str(message.conversation_id),
+        "sequence": message.sequence,
+        "agent_run_id": str(message.agent_run_id) if message.agent_run_id else None,
+        "role": message.role,
+        "kind": message.kind.value,
+        "text": message.text,
+        "tool_name": message.tool_name,
+        "tool_call_id": message.tool_call_id,
+        "tool_args": to_json_value(message.tool_args)
+        if message.tool_args is not None
+        else None,
+        "tool_result": to_json_value(message.tool_result)
+        if message.tool_result is not None
+        else None,
+        "metadata": to_json_value(message_wire_metadata(message)),
+        "created_at": message.created_at.isoformat(),
+    }
 
 
 def input_added_payload(

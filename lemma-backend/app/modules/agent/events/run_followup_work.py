@@ -92,11 +92,9 @@ async def start_queued_followup_for(
     """
     from app.modules.agent.application.turns.follow_up import StartQueuedFollowUp
     from app.modules.agent.infrastructure.db.conversations import Conversations
-    from app.modules.agent.services.realtime import (
-        message_payload,
-        publish_conversation_event,
-    )
-    from app.modules.agent.services.serialization import message_to_payload
+    from app.modules.agent.infrastructure.live import publish_conversation_event
+    from app.modules.agent.domain.live_events import message_payload
+    from app.modules.agent.domain.live_events import message_to_payload
 
     async with (uow_factory or _uow_factory())() as uow:
         conversations = Conversations(uow)

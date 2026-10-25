@@ -6,7 +6,7 @@ from app.modules.agent.services.run_finalizer import (
     run_failure_message,
     run_failure_reason,
 )
-from app.modules.agent.services.realtime import error_payload
+from app.modules.agent.domain.live_events import error_payload
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from uuid import uuid4
 

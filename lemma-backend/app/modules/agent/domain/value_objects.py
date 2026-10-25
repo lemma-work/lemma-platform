@@ -347,7 +347,7 @@ class AgentEventType(str, Enum):
     """Event type emitted by a harness while running an agent.
 
     Internal only: the SSE wire ``type`` strings are hardcoded in
-    ``services/realtime.py``; these values are never compared raw on the wire.
+    ``domain/live_events.py``; these values are never compared raw on the wire.
     """
 
     TOKEN = "TOKEN"

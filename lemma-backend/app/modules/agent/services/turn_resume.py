@@ -53,13 +53,11 @@ from app.modules.agent.domain.value_objects import (
     to_json_value,
 )
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.services.realtime import (
-    message_payload,
-    publish_conversation_event,
-)
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import message_payload
 from app.modules.agent.services.run_finalizer import RunFinalizer
 from app.modules.agent.services.run_identity import RunIdentity
-from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.tool_errors import (
     format_tool_error,

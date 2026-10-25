@@ -106,11 +106,9 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         metadata, so a client that drew one as queued redraws it as delivered.
         Best effort, like every live frame: a reload reads the same claim.
         """
-        from app.modules.agent.services.realtime import (
-            message_payload,
-            publish_conversation_event,
-        )
-        from app.modules.agent.services.serialization import message_to_payload
+        from app.modules.agent.infrastructure.live import publish_conversation_event
+        from app.modules.agent.domain.live_events import message_payload
+        from app.modules.agent.domain.live_events import message_to_payload
 
         for message in messages:
             await publish_conversation_event(

@@ -20,7 +20,7 @@ from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.agent.services.subagent_service import SubAgentError, SubAgentService
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.subagents.models import (

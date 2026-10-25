@@ -55,7 +55,7 @@ from app.modules.agent.infrastructure.providers.background import (
     PydanticAIModelProvider,
 )
 from app.modules.agent.services.background_model import BackgroundModel
-from app.modules.agent.services.realtime import title_updated_payload
+from app.modules.agent.domain.live_events import title_updated_payload
 from app.modules.usage.contracts.execution import current_usage_context
 from app.modules.usage.domain.accounting import CONTACT_RUN
 

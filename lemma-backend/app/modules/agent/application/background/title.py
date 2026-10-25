@@ -36,10 +36,8 @@ from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
 )
-from app.modules.agent.services.realtime import (
-    publish_conversation_event,
-    title_updated_payload,
-)
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import title_updated_payload
 from app.modules.agent.services.generation_settings import unreasoned_model_settings
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,

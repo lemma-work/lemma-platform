@@ -34,7 +34,7 @@ from app.modules.agent.services.agent_host_link_registry import (
     AgentHostLinkRegistry,
 )
 from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
-from app.modules.agent.services.realtime import conversation_channel
+from app.modules.agent.infrastructure.live import conversation_channel
 from app.modules.agent.tests.unit.agent_host_link_fakes import (
     PAIRING_CODE,
     SECRET,

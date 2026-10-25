@@ -46,17 +46,14 @@ from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.conversation_access import resolve_agent
-from app.modules.agent.services.realtime import (
-    input_added_payload,
-    message_payload,
-    publish_conversation_event,
-)
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import input_added_payload, message_payload
 from app.modules.agent.services.runtime_availability import (
     TurnRuntimeCheck,
     ensure_turn_runtime_available,
     turn_runtime,
 )
-from app.modules.agent.services.serialization import message_to_payload
+from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.agent.services.usage_preflight import assert_turn_allowed
 from app.modules.usage.contracts.execution import UsageService, build_usage_service
 

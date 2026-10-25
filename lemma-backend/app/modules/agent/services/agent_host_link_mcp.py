@@ -46,7 +46,7 @@ from app.modules.agent.services.conversation_mcp_authorization import RelayingHo
 from app.modules.agent.services.conversation_mcp_service import (
     ConversationMCPService,
 )
-from app.modules.agent.services.realtime import conversation_channel
+from app.modules.agent.infrastructure.live import conversation_channel
 
 
 logger = get_logger(__name__)
