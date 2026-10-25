@@ -44,6 +44,9 @@ from app.modules.identity.services.email_challenges import (
 )
 from app.modules.identity.services.signup_gate import get_signup_gate
 
+#: ``UserSignedUpEvent.method`` for an account a mailbox code finished.
+EMAIL_CODE_SIGNUP = "email_code"
+
 #: Raises `SignupNotAllowedError` to refuse a new account. Injected so a test
 #: stands a gate in front of this function rather than patching the real one.
 AdmitSignup = Callable[[str], Awaitable[object]]
@@ -188,12 +191,12 @@ async def _record_completed_account(
         local_entity = await repository.get(user_id)
         if local_entity is None:
             local_entity = UserEntity(id=user_id, email=email, is_verified=False)
-            local_entity.mark_email_verified()
+            local_entity.mark_email_verified(signup_method=EMAIL_CODE_SIGNUP)
             await repository.create(local_entity)
         else:
             if not local_entity.is_active or local_entity.is_deleted:
                 raise ChallengeRejected("This account cannot sign in")
-            local_entity.mark_email_verified()
+            local_entity.mark_email_verified(signup_method=EMAIL_CODE_SIGNUP)
             await repository.update(local_entity)
         proof.completed_user_id = user_id
 

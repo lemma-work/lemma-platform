@@ -28,6 +28,10 @@ export function useHuddle({ pod, teammate, conversationId }: {
      *  just because you are looking at something else. */
     const [expanded, setExpanded] = useState(false);
     const [callId, setCallId] = useState<string | null>(null);
+    /** A call is being set up or is on: a second press opens it rather than
+     *  placing another, which would have no connection of its own. */
+    const busy = useRef(false);
+    const [starting, setStarting] = useState(false);
     const [setupError, setSetupError] = useState<string | null>(null);
     const setupAttempt = useRef(0);
     const queryClient = useQueryClient();
@@ -54,6 +58,9 @@ export function useHuddle({ pod, teammate, conversationId }: {
     const { start: startCall, end: endCall } = call;
 
     const start = useCallback(async () => {
+        if (busy.current || call.active) { setExpanded(true); return; }
+        busy.current = true;
+        setStarting(true);
         const attempt = ++setupAttempt.current;
         setSetupError(null);
         setExpanded(true);
@@ -72,14 +79,18 @@ export function useHuddle({ pod, teammate, conversationId }: {
             setCallId(null);
             setSetupError(problem instanceof Error ? problem.message : "Could not start the call.");
             setExpanded(false);
+        } finally {
+            if (attempt === setupAttempt.current) { busy.current = false; setStarting(false); }
         }
-    }, [pod.id, pod.name, teammate, context, startCall]);
+    }, [pod.id, pod.name, teammate, context, startCall, call.active]);
 
     /* The call's id goes with it: the shell adopts the call's conversation
        while one is set, and an ended call must not pull the person back to it
        when they open something else. */
     const end = useCallback(() => {
         setupAttempt.current++;
+        busy.current = false;
+        setStarting(false);
         setSetupError(null);
         setCallId(null);
         endCall();
@@ -104,6 +115,9 @@ export function useHuddle({ pod, teammate, conversationId }: {
         active: call.active,
         canvas: call.canvas,
         callConversationId: callId,
+        settled: call.settled,
+        /** A call is on or being set up: pressing call again should open it. */
+        inCall: starting || call.active,
         expanded: expanded && call.active,
         expand: useCallback(() => setExpanded(true), []),
         collapse: useCallback(() => setExpanded(false), []),

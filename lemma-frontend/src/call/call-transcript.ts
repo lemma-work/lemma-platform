@@ -24,7 +24,9 @@ const MAX_LINES = 24;
  *  thing can be tested without a browser or a provider.
  *
  *  The joining rule is the only decision here: fragments from one speaker run
- *  together into a line until that speaker's line is closed. Fragments do not
+ *  together into a line until that speaker's line is closed, and the closing
+ *  chunk carries the whole line, which replaces the fragments rather than
+ *  being added to them (added, every line showed twice). Fragments do not
  *  arrive one per sentence — they arrive at whatever rhythm the recogniser
  *  emits, often mid-word — so a line per fragment would be a transcript one
  *  syllable wide. */
@@ -45,8 +47,8 @@ export function foldTranscript(
     }
 
     if (open) {
-        const joined = (open.text + text).replace(/\s+/g, " ").trimStart();
-        return [...lines.slice(0, -1), { ...open, text: joined, done: Boolean(chunk.final) }];
+        const whole = chunk.final ? text : open.text + text;
+        return [...lines.slice(0, -1), { ...open, text: whole.replace(/\s+/g, " ").trim(), done: Boolean(chunk.final) }];
     }
 
     const next = [

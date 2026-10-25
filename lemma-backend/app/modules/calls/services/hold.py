@@ -16,7 +16,7 @@ from app.modules.agent.contracts.calls import owned_call
 from app.modules.calls.config import VoiceEngineName, calls_settings
 from app.modules.calls.domain.frames import decode
 from app.modules.calls.domain.party import CallParty
-from app.modules.calls.domain.voice import EngineUnavailable
+from app.modules.calls.domain.voice import INPUT_SAMPLE_RATE, EngineUnavailable
 from app.modules.calls.domain.voice_brief import voice_brief
 from app.modules.calls.services.agents import CallAgents, Party, as_caller
 from app.modules.calls.services.engines import build_engine, engines_offered
@@ -143,7 +143,14 @@ async def _hold_call(
         if transcript:
             await agents.record("Call transcript\n\n" + transcript)
         logger.info(
-            "calls.socket.ended.observed", call_id=str(call_id), reason=call.end_reason
+            "calls.socket.ended.observed",
+            call_id=str(call_id),
+            reason=call.end_reason,
+            caller_audio_seconds=round(
+                call.stats.audio_in_bytes / (INPUT_SAMPLE_RATE * 2), 1
+            ),
+            caller_turns=call.stats.caller_turns,
+            voice_lines=call.stats.voice_lines,
         )
     with contextlib.suppress(RuntimeError, WebSocketDisconnect):
         await websocket.close()
