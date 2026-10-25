@@ -39,7 +39,7 @@ from app.modules.agent.services.runtime_model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
     usage_limits_for,
 )
-from app.modules.agent.services.workspace_model_fallback import (
+from app.modules.agent.services.runtime_resolution import (
     resolve_system_or_workspace_runtime,
 )
 
@@ -72,7 +72,7 @@ async def resolve_system_runtime(
     per-user resolution would find when the workspace has not overridden it.
 
     A deployment without a system model falls back to the workspace's own (see
-    `workspace_model_fallback`), which needs the organization -- and the pod,
+    `runtime_resolution`), which needs the organization -- and the pod,
     when there is one, so its chosen default wins. Without an organization that
     case raises `model_not_configured`, as it always did.
 

@@ -2880,7 +2880,7 @@ class TestAgentRuntimeConfigApis:
         and it is also the answer that matters: the model this pod's owner
         picked.
         """
-        from app.modules.agent.services.workspace_model_fallback import (
+        from app.modules.agent.services.runtime_resolution import (
             resolve_workspace_runtime,
         )
 
@@ -2947,7 +2947,7 @@ class TestAgentRuntimeConfigApis:
         model; on a deployment without one, every message then failed with
         "no model is set up" beside a provider that was.
         """
-        from app.modules.agent.services.pod_runtime_defaults import (
+        from app.modules.agent.services.runtime_resolution import (
             default_agent_runtime_for_pod,
         )
 

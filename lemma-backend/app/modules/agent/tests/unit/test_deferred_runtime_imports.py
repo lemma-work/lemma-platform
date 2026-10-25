@@ -34,7 +34,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 
@@ -46,7 +46,7 @@ def _a_system_model_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every path here is the system-model one.
 
     Without a system provider these settings resolve against the workspace
-    instead, which `test_workspace_model_fallback.py` covers; pinning it here
+    instead, which `test_runtime_resolution.py` covers; pinning it here
     keeps these tests about the imports rather than about whichever provider
     keys the machine running them happens to have.
     """

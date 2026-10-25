@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
 from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.config import agent_settings
-from app.modules.agent.defaults import default_agent_runtime_profile_id
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
@@ -27,16 +26,12 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     HarnessKind,
 )
-from app.modules.agent.agent_runtime_defaults import (
-    AgentRuntimeDefaultError,
-    AgentRuntimeDefaultService,
-)
 from app.modules.agent.services import runtime_system_profiles as system_profiles
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
 )
-from app.modules.agent.services.runtime_resolution import (
+from app.modules.agent.services.runtime_profile_service import (
     selected_model as _selected_model,
 )
 from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
@@ -1198,35 +1193,6 @@ def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
     assert isinstance(model.wrapped, AnthropicModel)
 
 
-def test_default_runtime_uses_system_profile(monkeypatch, tmp_path):
-    from app.core.config import settings
-    from app.modules.agent.config import agent_settings
-
-    monkeypatch.setattr(
-        agent_settings,
-        "local_agent_runtime_config_path",
-        str(tmp_path / "missing-runtime.json"),
-    )
-
-    monkeypatch.setattr(settings, "environment", "local")
-    assert default_agent_runtime_profile_id() == DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
-
-    monkeypatch.setattr(settings, "environment", "development")
-    assert default_agent_runtime_profile_id() == DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
-
-
-def test_local_default_runtime_can_be_file_backed(tmp_path):
-    service = AgentRuntimeDefaultService(
-        environment="local",
-        config_path=tmp_path / "agent-runtime.json",
-    )
-
-    updated = service.set_default(AgentRuntimeConfig(profile_id="user-profile"))
-
-    assert updated.profile_id == "user-profile"
-    assert service.get_default() == updated
-
-
 def test_agent_runtime_config_rejects_empty_profile_id():
     with pytest.raises(ValueError):
         AgentRuntimeConfig(profile_id=" ")
@@ -1235,16 +1201,6 @@ def test_agent_runtime_config_rejects_empty_profile_id():
 def test_agent_runtime_config_rejects_empty_model_name():
     with pytest.raises(ValueError):
         AgentRuntimeConfig(profile_id="system:lemma", model_name=" ")
-
-
-def test_default_runtime_cannot_be_changed_outside_local(tmp_path):
-    service = AgentRuntimeDefaultService(
-        environment="development",
-        config_path=tmp_path / "agent-runtime.json",
-    )
-
-    with pytest.raises(AgentRuntimeDefaultError):
-        service.set_default(AgentRuntimeConfig(profile_id="system:lemma"))
 
 
 def test_selected_model_returns_requested_when_in_catalog():

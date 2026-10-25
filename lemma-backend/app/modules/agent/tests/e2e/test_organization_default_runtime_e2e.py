@@ -30,7 +30,7 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.organization_default_service import (
     OrganizationDefaultService,
 )
-from app.modules.agent.services.pod_runtime_defaults import (
+from app.modules.agent.services.runtime_resolution import (
     default_agent_runtime_for_pod,
 )
 from app.modules.test_support.e2e_authz import (

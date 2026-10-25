@@ -22,6 +22,7 @@ from app.modules.agent.domain.agent_host import (
     effective_agent_host_status,
 )
 from app.modules.agent.domain.runtime_profiles import (
+    RuntimeModelCatalogEntry,
     DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
     RuntimeProfileScope,
     AgentRuntimeProfile,
@@ -56,9 +57,10 @@ from app.modules.agent.services.runtime_system_profiles import (
     system_lemma_profile,
     system_profile_by_id,
 )
-from app.modules.agent.services.runtime_resolution import (
-    ResolvedAgentRuntime as ResolvedAgentRuntime,
-    selected_model,
+from app.modules.agent.domain.resolved_runtime import (
+    ResolvedAgentRuntime,
+    RuntimeHolder,
+    model_unavailable_error,
 )
 from app.modules.agent.services.runtime_capabilities import (
     unselected_capabilities,
@@ -463,6 +465,44 @@ class AgentRuntimeProfileService:
             organization_id=organization_id,
             user_id=user_id,
         )
+
+
+def selected_model(
+    profile: AgentRuntimeProfile,
+    requested_model_name: str | None,
+    *,
+    saving_for: RuntimeHolder | None = None,
+) -> RuntimeModelCatalogEntry | None:
+    """The catalog entry a run uses, or ``None`` when nothing is pinned.
+
+    Never a substitute. A model the profile no longer offers used to be
+    swapped for its default, or its first entry, with only a log line: a
+    teammate pinned to one model ran -- and was billed -- on another, with
+    different behaviour, indefinitely and invisibly. Now the run is refused
+    with the reason, and the person picks the model.
+
+    The one ``None`` that is not a refusal: a coding agent whose catalog is
+    empty publishes no list to check against, and an unpinned profile there
+    means "the agent's own default".
+
+    ``saving_for`` names what the runtime is being saved on, when it is. A
+    save may name a model the profile never offered at all, so only a turn --
+    on a pin a save already accepted -- can say the model went away.
+    """
+    model_name = requested_model_name or profile.default_model_name
+    if not model_name:
+        return None
+    for model in profile.model_catalog:
+        if model_name == model.name:
+            return model
+    if profile.harness_id is not None and not profile.model_catalog:
+        return None
+    logger.warning(
+        "agent.runtime_profile.model_unavailable.refused",
+        profile_id=profile.id,
+        requested_model_name=model_name,
+    )
+    raise model_unavailable_error(profile.name, model_name, saving_for=saving_for)
 
 
 def runtime_profile_service_for(

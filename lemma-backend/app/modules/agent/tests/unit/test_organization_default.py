@@ -36,7 +36,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileStatus,
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, HarnessKind
-from app.modules.agent.services.runtime_profile_service import ResolvedAgentRuntime
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.services.runtime_provider_check import (
     ProviderCheckCollaborators,
     ProviderCheckResult,
@@ -48,7 +48,7 @@ from app.modules.agent.services.runtime_provider_discovery import (
     ProviderListingError,
     ProviderUnreachableError,
 )
-from app.modules.agent.services.workspace_model_fallback import (
+from app.modules.agent.domain.runtime_choice import (
     choose_organization_runtime,
     choose_workspace_runtime,
 )

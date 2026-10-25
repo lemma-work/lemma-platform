@@ -22,6 +22,7 @@ from pydantic_ai.models import Model
 
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.runtime_choice import RuntimePurpose
 from app.modules.agent.domain.value_objects import JsonObject
 
 logger = get_logger(__name__)
@@ -118,7 +119,7 @@ async def resolve_summarization_model[T](
         organization_id=organization_id,
         user_id=user_id,
         fallback=fallback,
-        purpose="summarization",
+        purpose=RuntimePurpose.COMPACTION,
     )
 
 
@@ -128,11 +129,10 @@ async def resolve_system_model[T](
     organization_id: UUID | None,
     user_id: UUID,
     fallback: T,
-    purpose: str,
+    purpose: RuntimePurpose,
 ) -> Model | T:
     """``model_name`` on the system provider, or ``fallback`` when it is unset,
-    there is no system provider, or it cannot be resolved (logged, with
-    ``purpose`` naming the setting's job).
+    there is no system provider, or it cannot be resolved or built.
 
     For the side jobs a deployment may move off the run's own model --
     compaction, the memory pass -- each named by its own setting.
@@ -142,50 +142,34 @@ async def resolve_system_model[T](
 
     # Imported here: this module is pulled in by the harness, and the profile
     # service reaches back into services that import the harness.
-    from app.core.domain.runtime import AgentRuntimeConfig
     from app.modules.agent.services.runtime_model_factory import (
         pydantic_ai_model_from_runtime_profile,
     )
-    from app.modules.agent.services.runtime_profile_service import (
-        DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-        AgentRuntimeProfileService,
-    )
-    from app.modules.agent.services.runtime_system_profiles import (
-        system_profile_configured,
+    from app.modules.agent.services.runtime_resolution import (
+        RuntimeRequest,
+        resolve_runtime,
     )
 
-    if not system_profile_configured():
-        # The setting names a model on the system provider, and there is none.
-        # The run's own model is then the workspace's model -- the one this
-        # pod or agent was set up to run on -- so it is the fallback the
-        # module docstring promises, not a failure worth a warning on every
-        # compaction.
+    resolved = await resolve_runtime(
+        RuntimeRequest(
+            organization_id=organization_id, user_id=user_id, model_name=model_name
+        ),
+        purpose=purpose,
+    )
+    if resolved is None:
         return fallback
-
     try:
-        resolved = await AgentRuntimeProfileService().resolve(
-            runtime=AgentRuntimeConfig(
-                profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-                model_name=model_name,
-            ),
-            organization_id=organization_id,
-            user_id=user_id,
-        )
         model = pydantic_ai_model_from_runtime_profile(
             runtime_profile=resolved.runtime_snapshot().as_payload(),
             runtime_credentials=resolved.credentials,
         )
     except Exception:
-        # Warning, not debug. Falling back is silent but not free: compaction
-        # then runs on the run's own model, which is the expensive one this
-        # setting exists to avoid, on ~70k-token requests. A broken import here
-        # (AgentRuntimeConfig was imported from the wrong module and raised
-        # ImportError on every call) looked exactly like "no model configured"
-        # at debug level, so the operator saw a setting that did nothing.
+        # Warning, not debug: falling back runs the side job on the run's own,
+        # expensive, model.
         logger.warning(
             "agent.system_model.resolution_failed.observed",
             model_name=model_name,
-            purpose=purpose,
+            purpose=purpose.value,
             exc_info=True,
         )
         return fallback

@@ -179,7 +179,7 @@ async def mcp_payload[DepsT: AgentContext](
     Publishing the real expiry lets the dispatcher bound the run by it instead.
     """
     if run_audience(ctx).answers_outsiders:
-        # Dispatch keeps such a run in this process (services/outsider_runtime).
+        # Dispatch keeps such a run in this process (services/runtime_resolution).
         # Were one to arrive here, the token below would be the member's, given
         # to a shell a stranger in the group can steer -- so it is refused twice.
         raise OutsiderRunRefused(

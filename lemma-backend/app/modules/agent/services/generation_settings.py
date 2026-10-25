@@ -43,7 +43,7 @@ from app.modules.agent.services.run_input_settings import (
     COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
     with_light_reasoning,
 )
-from app.modules.agent.services.runtime_resolution import ResolvedAgentRuntime
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 
 PORTABLE_KEYS = frozenset(GenerationSettings.model_fields)
 

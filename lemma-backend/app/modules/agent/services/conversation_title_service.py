@@ -31,13 +31,10 @@ from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models import Model
 
 from app.modules.agent.config import agent_settings
-from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
@@ -53,17 +50,14 @@ from app.modules.agent.services.runtime_model_factory import (
     usage_limits_for,
 )
 from app.modules.agent.services.runtime_profile_service import (
-    DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
-    ResolvedAgentRuntime,
 )
-from app.modules.agent.services.runtime_system_profiles import (
-    is_model_not_configured,
-    model_not_configured_error,
-)
-from app.modules.agent.services.workspace_model_fallback import (
+from app.modules.agent.domain.runtime_choice import RuntimePurpose
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
+from app.modules.agent.services.runtime_resolution import (
+    RuntimeRequest,
     WorkspaceRuntimeResolver,
-    resolve_workspace_runtime,
+    resolve_runtime,
 )
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.services.run_usage_recorder import outside_source_for
@@ -267,53 +261,22 @@ class ConversationTitleGenerator:
         user_id: UUID,
         pod_id: UUID,
     ) -> ResolvedAgentRuntime:
-        try:
-            return await self._resolve_system_runtime(
-                organization_id=organization_id, user_id=user_id
-            )
-        except DomainError as error:
-            if not is_model_not_configured(error):
-                raise
-        # No system model at all: title on the model this pod already runs on,
-        # rather than failing every title on a deployment set up through
-        # Organization -> Models. `None` falls through to the same error.
-        resolved = await (self._workspace_runtime or resolve_workspace_runtime)(
-            organization_id=organization_id,
-            user_id=user_id,
-            model_name=agent_settings.conversation_title_model,
-            pod_id=pod_id,
+        # The configured title model on the system profile, its default when
+        # the catalog lacks it, and with no system model at all the model this
+        # pod already runs on.
+        resolved = await resolve_runtime(
+            RuntimeRequest(
+                organization_id=organization_id,
+                user_id=user_id,
+                pod_id=pod_id,
+                model_name=agent_settings.conversation_title_model,
+            ),
+            purpose=RuntimePurpose.TITLE,
+            profiles=self._runtime_profiles or AgentRuntimeProfileService,
+            workspace_runtime=self._workspace_runtime,
         )
-        if resolved is None:
-            raise model_not_configured_error()
+        assert resolved is not None  # a title resolves or raises
         return resolved
-
-    async def _resolve_system_runtime(
-        self,
-        *,
-        organization_id: UUID | None,
-        user_id: UUID,
-    ) -> ResolvedAgentRuntime:
-        service = (self._runtime_profiles or AgentRuntimeProfileService)()
-        try:
-            return await service.resolve(
-                runtime=AgentRuntimeConfig(
-                    profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-                    model_name=agent_settings.conversation_title_model,
-                ),
-                organization_id=organization_id,
-                user_id=user_id,
-            )
-        except RuntimeUnavailableError:
-            # The configured title model is not in this deployment's catalog.
-            # A documented fallback for a background helper, not a teammate's
-            # pinned model: a title on the default model is still a title.
-            return await service.resolve(
-                runtime=AgentRuntimeConfig(
-                    profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
-                ),
-                organization_id=organization_id,
-                user_id=user_id,
-            )
 
 
 class ConversationTitleService:

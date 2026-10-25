@@ -18,7 +18,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.infrastructure.adapters.workflow_control import (
     AgentControlAdapter,
 )
-from app.modules.agent.services.pod_runtime_defaults import (
+from app.modules.agent.services.runtime_resolution import (
     default_agent_runtime_for_pod,
 )
 from app.modules.agent.services.run_stop import stop_run

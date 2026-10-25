@@ -30,7 +30,7 @@ from app.modules.agent.domain.runtime_profiles import (
 from app.modules.agent.domain.sentinels import UNSET
 from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.services.runtime_provider_patch import resolve_provider_patch
-from app.modules.agent.services.runtime_resolution import ResolvedAgentRuntime
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 
 pytestmark = pytest.mark.unit
 

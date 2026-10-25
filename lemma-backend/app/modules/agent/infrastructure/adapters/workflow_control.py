@@ -103,7 +103,7 @@ class RunStopper(Protocol):
 
 
 class PodDefaultRuntime(Protocol):
-    """This module's default runtime for a pod (``services/pod_runtime_defaults``)."""
+    """This module's default runtime for a pod (``services/runtime_resolution``)."""
 
     def __call__(
         self, uow: SqlAlchemyUnitOfWork, *, pod_id: UUID

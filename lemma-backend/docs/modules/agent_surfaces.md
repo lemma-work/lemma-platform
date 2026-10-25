@@ -493,7 +493,7 @@ is answered *for the pod*, in a group the pod has opened to them.
   - **Where it runs.** Only in process, on a model the organization or the
     system provides -- never a coding agent's shell holding a token minted for
     the owner, and never the owner's personal model (the agent module's
-    `services/outsider_runtime`).
+    `services/runtime_resolution`).
 - **A contact who needs a person gets one, in their own channel.** Their run
   never forwards their words into a member's inbox; it calls `ask_a_person`,
   and a member answers in the contact's channel, which goes back to the place

@@ -44,12 +44,13 @@ from app.modules.agent.capabilities import build_lemma_harness_tooling
 from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
-    ResolvedAgentRuntime,
     runtime_profile_service_for,
 )
-from app.modules.agent.services.outsider_runtime import (
-    default_runtimes,
-    in_process_runtime,
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
+from app.modules.agent.domain.runtime_choice import RuntimePurpose
+from app.modules.agent.services.runtime_resolution import (
+    RuntimeRequest,
+    resolve_runtime,
 )
 from app.modules.agent.services.run_limits import (
     budget_for_run,
@@ -513,26 +514,25 @@ class AgentRunnerService:
 
         A stranger's turn never reaches a coding agent's shell, which would hold
         a token minted for the member who answers for the group; see
-        ``outsider_runtime``.
+        ``runtime_resolution``.
         """
-        resolved = await self._resolve_agent_runtime(
-            agent_run.agent_runtime,
-            user_id=user_id,
-            organization_id=conversation.organization_id,
-        )
-        if not Audience.of(conversation).answers_outsiders:
-            return resolved
-        return await in_process_runtime(
-            resolved,
-            fallbacks=await default_runtimes(
-                self.uow_factory, conversation.organization_id
+        resolved = await resolve_runtime(
+            RuntimeRequest(
+                organization_id=conversation.organization_id,
+                user_id=user_id,
+                configured=agent_run.agent_runtime,
+                answers_outsiders=Audience.of(conversation).answers_outsiders,
             ),
+            purpose=RuntimePurpose.TURN,
             resolve=partial(
                 self._resolve_agent_runtime,
                 user_id=user_id,
                 organization_id=conversation.organization_id,
             ),
+            uow_factory=self.uow_factory,
         )
+        assert resolved is not None  # a turn always resolves or raises
+        return resolved
 
     async def _resolve_agent_runtime(
         self,

@@ -29,7 +29,7 @@ from app.modules.agent.infrastructure.unavailable_models import (
     UnavailableModels,
     unavailable_models,
 )
-from app.modules.agent.services.pod_runtime_defaults import (
+from app.modules.agent.services.runtime_resolution import (
     organization_or_system_runtime,
     pod_default_runtime,
 )
@@ -38,10 +38,8 @@ from app.modules.agent.services.runtime_profile_service import (
     runtime_profile_service_for,
     runtime_profile_unavailable_error,
 )
-from app.modules.agent.services.runtime_resolution import (
-    RuntimeHolder,
-    selected_model,
-)
+from app.modules.agent.services.runtime_profile_service import selected_model
+from app.modules.agent.domain.resolved_runtime import RuntimeHolder
 from app.modules.agent.services.runtime_selection_check import (
     check_runtime_config_selections,
 )

@@ -199,7 +199,7 @@ class TestPdfPagesRespectTheMode:
         monkeypatch.setattr(agent_settings, "vision_model", None)
         # A deployment with its own model and no VISION_MODEL: the message says
         # no image model is set up (the log names the setting). Without a system
-        # model the workspace is asked instead (test_workspace_model_fallback.py).
+        # model the workspace is asked instead (test_runtime_resolution.py).
         monkeypatch.setattr(
             "app.modules.agent.services.runtime_system_profiles."
             "system_profile_configured",

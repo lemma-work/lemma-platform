@@ -13,7 +13,7 @@ goes again.
 
 Held messages (``held_turns``) are not here: they are written only into a
 conversation that answers somebody outside the pod, and every run there runs in
-this process (``outsider_runtime``), never on an Agent Host.
+this process (``runtime_resolution``), never on an Agent Host.
 """
 
 from __future__ import annotations

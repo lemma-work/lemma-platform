@@ -50,6 +50,7 @@ from app.modules.agent.domain.memory_pass_turn import (
 )
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.prompts import load_memory_pass_prompt
+from app.modules.agent.domain.runtime_choice import RuntimePurpose
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentToolset,
@@ -149,7 +150,7 @@ async def configured_pass_model(
         organization_id=organization_id,
         user_id=user_id,
         fallback=run_model,
-        purpose="memory_pass",
+        purpose=RuntimePurpose.MEMORY,
     )
 
 

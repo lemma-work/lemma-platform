@@ -42,7 +42,7 @@ from app.modules.agent.services.run_input_settings import (
 from app.modules.agent.services.runtime_profile_creation import (
     normalize_model_settings,
 )
-from app.modules.agent.services.runtime_resolution import ResolvedAgentRuntime
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 
 _REASONS = [RuntimeModelCapability.TEXT, RuntimeModelCapability.REASONING]
 _PLAIN = [RuntimeModelCapability.TEXT]

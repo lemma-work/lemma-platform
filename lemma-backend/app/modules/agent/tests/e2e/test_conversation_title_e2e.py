@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeProfileProtocol,

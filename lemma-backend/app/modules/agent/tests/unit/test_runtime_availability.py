@@ -38,7 +38,7 @@ from app.modules.agent.services.runtime_availability import (
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
-from app.modules.agent.services.runtime_resolution import RuntimeHolder
+from app.modules.agent.domain.resolved_runtime import RuntimeHolder
 
 pytestmark = pytest.mark.unit
 

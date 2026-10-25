@@ -30,7 +30,7 @@ from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.pause_resume import start_resume_run
-from app.modules.agent.services.pod_runtime_defaults import (
+from app.modules.agent.services.runtime_resolution import (
     default_agent_runtime_for_pod,
 )
 from app.modules.agent.services.run_dispatch import run_enqueue_suppressed

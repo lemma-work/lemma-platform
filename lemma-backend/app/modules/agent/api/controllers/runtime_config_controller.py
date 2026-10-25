@@ -25,7 +25,6 @@ from app.modules.agent.api.schemas import (
     UpdateAgentRuntimeProfileRequest,
     UpdateOpenAICompatibleRuntimeProfileRequest,
 )
-from app.modules.agent.agent_runtime_defaults import AgentRuntimeDefaultService
 from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
 from app.modules.agent.domain.agent_host import effective_agent_host_status
 from app.modules.agent.domain.organization_default import organization_default_of
@@ -36,9 +35,8 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileStatus,
 )
 from app.modules.agent.services import runtime_system_profiles
-from app.modules.agent.services.workspace_model_fallback import (
-    choose_organization_runtime,
-)
+from app.modules.agent.domain.runtime_choice import choose_organization_runtime
+from app.modules.agent.services.runtime_resolution import local_default_runtime
 from app.modules.agent.services.runtime_profile_editor import (
     AgentRuntimeProfileEditor,
 )
@@ -220,7 +218,7 @@ async def list_available_runtime_profiles(
         for profile, _availability in entries
         if profile.status is RuntimeProfileStatus.ACTIVE
     ]
-    default_runtime = AgentRuntimeDefaultService().get_default()
+    default_runtime = local_default_runtime()
     if default_runtime.profile_id == runtime_system_profiles.SYSTEM_LEMMA_PROFILE_ID:
         # The same answer run routing gives (`default_agent_runtime_for_pod`),
         # so "Organization default -- X" names the model a run will get rather

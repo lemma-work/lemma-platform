@@ -22,10 +22,13 @@ import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.modules.agent.services.runtime_system_profiles import (
+    DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
+)
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
-from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
     RuntimeProfileProtocol,
@@ -710,7 +713,7 @@ async def test_generator_asks_for_the_configured_title_model(
         "accounts/fireworks/models/test-title-model"
     )
     assert profiles.resolved[0]["profile_id"] == (
-        cts.DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
+        DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
     )
 
 

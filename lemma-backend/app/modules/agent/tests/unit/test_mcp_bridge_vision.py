@@ -19,7 +19,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.services.runtime_resolution import RuntimeSnapshot
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.agent.domain.vision import (
@@ -385,9 +385,7 @@ def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
         RuntimeProfileProtocol,
         RuntimeProfileScope,
     )
-    from app.modules.agent.services.runtime_profile_service import (
-        ResolvedAgentRuntime,
-    )
+    from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
     from app.modules.agent.domain.harness_options import HarnessOptions  # noqa: F401
 
     profile = SimpleNamespace(
