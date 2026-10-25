@@ -24,6 +24,7 @@ from uuid import UUID
 
 from app.core.authorization.authorizer import Authorizer
 from app.core.authorization.context import (
+    Context,
     ResourceRef,
     ResourceType,
     ResourceVisibility,
@@ -89,6 +90,7 @@ class PodLinkService:
 
     async def connect(
         self,
+        ctx: Context,
         *,
         answering_pod_id: UUID,
         asking_pod_id: UUID,
@@ -115,6 +117,7 @@ class PodLinkService:
         )
         await self._refuse_personal(normalized)
         await self.links.connect(
+            ctx,
             answering_pod_id=answering_pod_id,
             asking_pod_id=asking_pod_id,
             shares=normalized,

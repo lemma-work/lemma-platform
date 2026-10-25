@@ -37,10 +37,12 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE, approval_key
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
+    RECORD_DELETE_REFUSALS,
     Seeded,
     finish,
     messages,
     pausing_call,
+    refused_before_asking,
     running_run,
     runs,
     seeded_conversation,
@@ -65,6 +67,17 @@ async def _paused_on_a_delete(scenario: E2EScenario) -> tuple[Seeded, UUID, str]
         json={"data": {"title": "the chore"}},
     )
     assert created.status_code == status.HTTP_201_CREATED, created.text
+    delete = {
+        "action": "delete",
+        "table_name": _TABLE,
+        "record_id": created.json()["id"],
+    }
+    await refused_before_asking(
+        seeded,
+        tool_name="pod_write_record",
+        args=delete,
+        permission_ids=RECORD_DELETE_REFUSALS,
+    )
     paused = await running_run(seeded)
     approval_id = await pausing_call(
         seeded,
@@ -72,11 +85,7 @@ async def _paused_on_a_delete(scenario: E2EScenario) -> tuple[Seeded, UUID, str]
         tool_name="request_approval",
         tool_args={
             "tool_name": "pod_write_record",
-            "args": {
-                "action": "delete",
-                "table_name": _TABLE,
-                "record_id": created.json()["id"],
-            },
+            "args": delete,
             "title": "Delete the chore",
         },
     )

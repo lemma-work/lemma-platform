@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any
+from uuid import UUID
 
 from ..openapi_client.api.connectors import (
     connector_account_create,
@@ -93,12 +95,53 @@ from ..openapi_client.models.operation_details_batch_response import (
 from ..openapi_client.models.operation_discover_response import (
     OperationDiscoverResponse,
 )
-from ..openapi_client.models.operation_execution_request import (
-    OperationExecutionRequest,
-)
 from ..openapi_client.models.operation_execution_response import (
     OperationExecutionResponse,
 )
+from ..openapi_client.api.connectors import (
+    pod_connector_account_add,
+    pod_connector_account_list,
+    pod_connector_account_remove,
+    pod_connector_account_update,
+    pod_connector_create,
+    pod_connector_delete,
+    pod_connector_get,
+    pod_connector_list,
+    pod_connector_operation_execute,
+    pod_connector_operation_get,
+    pod_connector_operation_list,
+    pod_connector_update,
+    pod_connector_account_share_as,
+    pod_connector_ask_members,
+    pod_connector_coverage,
+)
+from ..openapi_client.models.installation_operation_execution_request import (
+    InstallationOperationExecutionRequest,
+)
+from ..openapi_client.models.operation_execution_request import (
+    OperationExecutionRequest,
+)
+from ..openapi_client.models.pod_account_create_request import PodAccountCreateRequest
+from ..openapi_client.models.pod_account_list_response import PodAccountListResponse
+from ..openapi_client.models.pod_account_response import PodAccountResponse
+from ..openapi_client.models.pod_account_update_request import PodAccountUpdateRequest
+from ..openapi_client.models.pod_connector_create_request import (
+    PodConnectorCreateRequest,
+)
+from ..openapi_client.models.pod_connector_list_response import (
+    PodConnectorListResponse,
+)
+from ..openapi_client.models.ask_members_request import AskMembersRequest
+from ..openapi_client.models.ask_members_response import AskMembersResponse
+from ..openapi_client.models.pod_account_share_as_request import (
+    PodAccountShareAsRequest,
+)
+from ..openapi_client.models.pod_connector_coverage import PodConnectorCoverage
+from ..openapi_client.models.pod_connector_response import PodConnectorResponse
+from ..openapi_client.models.pod_connector_update_request import (
+    PodConnectorUpdateRequest,
+)
+from ..errors import LemmaDeprecationWarning, LemmaNotFoundError
 from ..types import ConnectorPayload, JsonObject
 from .base import BoundResource, compact
 
@@ -311,10 +354,12 @@ class ConnectorOperations:
         account_id: str | None = None,
         pod_id: str | None = None,
     ) -> OperationExecutionResponse:
-        """Run ``operation``.
+        """Deprecated: run ``operation`` on an installation, by its name.
 
-        A file argument takes a reference -- ``lemma_sdk.pod_file("/me/a.pdf")``
-        -- which resolves in ``pod_id``: this client's pod unless one is given.
+        Use ``connectors.execute(slug, operation, payload)``, which runs through
+        the pod connector. This still works -- the server serves it through the
+        connectors the pod declares for ``auth_config`` -- and warns with
+        :class:`~lemma_sdk.LemmaDeprecationWarning` saying so.
         """
         pod = pod_id if pod_id is not None else self._parent.pod_id
         return self._parent._call(
@@ -329,7 +374,7 @@ class ConnectorOperations:
                     "pod_id": str(pod) if pod is not None else None,
                 }
             ),
-            body_model=OperationExecutionRequest,
+            body_model=InstallationOperationExecutionRequest,
         )
 
 
@@ -372,21 +417,206 @@ class BoundConnectors(BoundResource):
         self.operations = ConnectorOperations(self)
         self.triggers = ConnectorTriggers(self)
 
+    # -- the pod's connectors ------------------------------------------------
+    #
+    # Operations run through a pod connector, named by its pod-local slug
+    # (`gmail`, `support-inbox`). The connector decides the account: the
+    # caller's own for a PER_MEMBER connector, the one its owner shared for a
+    # SHARED one -- so nothing here takes an account.
+
     def execute(
         self,
-        auth_config: str,
+        connector: str,
         operation: str,
         payload: ConnectorPayload,
         *,
         account_id: str | None = None,
         pod_id: str | None = None,
     ) -> OperationExecutionResponse:
-        return self.operations.execute(
-            auth_config,
-            operation,
-            payload,
-            account_id=account_id,
-            pod_id=pod_id,
+        """Run ``operation`` through the pod connector ``connector`` (its slug).
+
+        A file argument takes a reference -- ``lemma_sdk.pod_file("/me/a.pdf")``
+        -- which resolves in this pod.
+
+        A connector that cannot run says why, as a typed error whose
+        ``code`` names the remedy and whose ``connect_url`` (when there is one)
+        is where to fix it: ``CONNECTION_REQUIRED`` / ``REAUTH_REQUIRED`` (connect
+        or reconnect your account), ``CONNECTOR_NEEDS_ACCOUNT`` (nobody has
+        shared an account for a shared connector), ``CONNECTOR_UNAVAILABLE``
+        (the installation is disabled), ``CONNECTION_REQUIRES_PERSON`` (a
+        per-member connector, called with no member behind the call).
+
+        Code written before pod connectors passed an installation's name and an
+        ``account_id``. That still runs, through the deprecated org-level route,
+        and warns: when ``account_id`` or ``pod_id`` is given, when there is no
+        pod, or when ``connector`` is not one of the pod's connectors.
+        """
+        if account_id is not None or pod_id is not None or self.pod_id is None:
+            warnings.warn(
+                "connectors.execute(..., account_id=, pod_id=) is deprecated: "
+                "pass the pod connector's slug and drop account_id; the "
+                "connector decides the account.",
+                LemmaDeprecationWarning,
+                stacklevel=2,
+            )
+            return self.operations.execute(
+                connector, operation, payload, account_id=account_id, pod_id=pod_id
+            )
+        try:
+            return self._call(
+                pod_connector_operation_execute,
+                self._pod_uuid(),
+                connector,
+                operation,
+                body={"payload": payload},
+                body_model=OperationExecutionRequest,
+            )
+        except LemmaNotFoundError as missing:
+            if missing.code != "POD_CONNECTOR_NOT_FOUND":
+                raise
+            # Not a slug: most likely an installation name, as written before
+            # pod connectors. The server answers that one with its own warning.
+            return self.operations.execute(connector, operation, payload)
+
+    def pod_connectors(self) -> PodConnectorListResponse:
+        """The connectors this pod declares, with their mode and status."""
+        return self._call(pod_connector_list, self._pod_uuid())
+
+    def pod_connector(self, connector: str) -> PodConnectorResponse:
+        """One pod connector, by slug."""
+        return self._call(pod_connector_get, self._pod_uuid(), connector)
+
+    def connector_coverage(self, connector: str) -> PodConnectorCoverage:
+        """Who of the members allowed to use a required PER_MEMBER
+        ``connector`` has connected an account. Needs ``pod.connector.manage``."""
+        return self._call(pod_connector_coverage, self._pod_uuid(), connector)
+
+    def ask_members_to_connect(
+        self, connector: str, *, user_ids: list[str] | None = None
+    ) -> AskMembersResponse:
+        """Ask the members a PER_MEMBER ``connector`` is waiting on to connect,
+        at most once a day each; ``user_ids`` asks only those of them."""
+        return self._call(
+            pod_connector_ask_members,
+            self._pod_uuid(),
+            connector,
+            body=compact({"user_ids": user_ids}),
+            body_model=AskMembersRequest,
+        )
+
+    def share_pod_account_as(
+        self, pod_account_id: str, slug: str, *, purpose: str | None = None
+    ) -> PodConnectorResponse:
+        """Share one of your pod accounts as the SHARED connector ``slug`` in
+        one step: both happen, or neither."""
+        return self._call(
+            pod_connector_account_share_as,
+            self._pod_uuid(),
+            UUID(str(pod_account_id)),
+            body=compact({"slug": slug, "purpose": purpose}),
+            body_model=PodAccountShareAsRequest,
+        )
+
+    def pod_operations(
+        self, connector: str, query: str | None = None, *, limit: int = 100
+    ) -> OperationDiscoverResponse:
+        """Search the operations a pod connector offers."""
+        return self._call(
+            pod_connector_operation_list,
+            self._pod_uuid(),
+            connector,
+            **compact({"query": query, "limit": limit}),
+        )
+
+    def pod_operation(self, connector: str, operation: str) -> OperationDetail:
+        """One operation's input and output schema, through a pod connector."""
+        return self._call(
+            pod_connector_operation_get, self._pod_uuid(), connector, operation
+        )
+
+    def declare_pod_connector(
+        self,
+        slug: str,
+        auth_config_id: str,
+        mode: str,
+        *,
+        shared_pod_account_id: str | None = None,
+        required: bool = False,
+        purpose: str | None = None,
+    ) -> PodConnectorResponse:
+        """Declare one of the org's installations in this pod, as ``slug``.
+
+        ``mode`` is ``PER_MEMBER`` (each caller's own account) or ``SHARED``
+        (the one pod account ``shared_pod_account_id`` names, which its owner
+        must already have shared). Needs ``pod.connector.manage``.
+        """
+        return self._call(
+            pod_connector_create,
+            self._pod_uuid(),
+            body=compact(
+                {
+                    "slug": slug,
+                    "auth_config_id": auth_config_id,
+                    "mode": mode,
+                    "shared_pod_account_id": shared_pod_account_id,
+                    "required": required,
+                    "purpose": purpose,
+                }
+            ),
+            body_model=PodConnectorCreateRequest,
+        )
+
+    def update_pod_connector(
+        self, connector: str, changes: JsonObject
+    ) -> PodConnectorResponse:
+        """Change a pod connector's mode, shared account, purpose or visibility."""
+        return self._call(
+            pod_connector_update,
+            self._pod_uuid(),
+            connector,
+            body=changes,
+            body_model=PodConnectorUpdateRequest,
+        )
+
+    def remove_pod_connector(self, connector: str) -> None:
+        """Stop the pod using ``connector``; the org installation stays."""
+        self._call(pod_connector_delete, self._pod_uuid(), connector)
+
+    def pod_accounts(self) -> PodAccountListResponse:
+        """The accounts in use in this pod that the caller can see."""
+        return self._call(pod_connector_account_list, self._pod_uuid())
+
+    def add_pod_account(
+        self, account_id: str, *, visibility: str = "PERSONAL"
+    ) -> PodAccountResponse:
+        """Bring one of your own accounts into this pod.
+
+        ``visibility="POD"`` shares it with the whole pod, so a SHARED
+        connector can run as it. Only an account's owner can do this.
+        """
+        return self._call(
+            pod_connector_account_add,
+            self._pod_uuid(),
+            body={"account_id": account_id, "visibility": visibility},
+            body_model=PodAccountCreateRequest,
+        )
+
+    def update_pod_account(
+        self, pod_account_id: str, changes: JsonObject
+    ) -> PodAccountResponse:
+        """Change an account's visibility in this pod; only its owner can."""
+        return self._call(
+            pod_connector_account_update,
+            self._pod_uuid(),
+            UUID(str(pod_account_id)),
+            body=changes,
+            body_model=PodAccountUpdateRequest,
+        )
+
+    def remove_pod_account(self, pod_account_id: str) -> None:
+        """Take an account out of this pod."""
+        self._call(
+            pod_connector_account_remove, self._pod_uuid(), UUID(str(pod_account_id))
         )
 
     def connect_request(

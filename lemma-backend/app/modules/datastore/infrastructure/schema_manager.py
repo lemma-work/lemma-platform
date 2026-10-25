@@ -23,6 +23,7 @@ from app.modules.datastore.infrastructure.pod_schema_migrations import (
 )
 from app.modules.datastore.infrastructure.pod_schema_catalog import (
     bootstrap_pod_schema,
+    drop_pod_schema,
     lock_schema_bootstrap,
 )
 from app.modules.datastore.infrastructure.query_role import QueryRoleGrants
@@ -58,9 +59,9 @@ class SchemaManager:
             4096, name="datastore.ensured_record_indexes"
         )
 
-    async def ensure_query_role(self) -> bool:
-        """Best-effort; see ``QueryRoleGrants.try_ensure_role``."""
-        return await self._query_role.try_ensure_role()
+    async def ensure_query_role(self, schema_name: str) -> bool:
+        """The pod's own query role; best-effort, see ``QueryRoleGrants``."""
+        return await self._query_role.try_ensure_role(schema_name)
 
     async def heal_query_role_access(self, schema_name: str) -> bool:
         """Grant a legacy pod schema's missing access if it is missing.
@@ -176,9 +177,8 @@ class SchemaManager:
 
     async def create_datastore_schema(self, pod_id: UUID) -> None:
         schema_name = self._get_schema_name(pod_id)
-        grant = await self._query_role.try_ensure_role()
         async with self._engine.begin() as conn:
-            await bootstrap_pod_schema(conn, schema_name, grant=grant)
+            await bootstrap_pod_schema(conn, schema_name, grant=True)
 
     async def migrate_search_tables(self, pod_id: UUID) -> int:
         """Bring the pod's search tables to the latest version; see ``pod_schema_migrations``."""
@@ -198,7 +198,7 @@ class SchemaManager:
     async def drop_datastore_schema(self, pod_id: UUID) -> None:
         schema_name = self._get_schema_name(pod_id)
         async with self._engine.begin() as conn:
-            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
+            await drop_pod_schema(conn, schema_name)
         logger.debug(
             "datastore.schema_manager.dropped_schema_pod.observed", pod_id=pod_id
         )
@@ -296,10 +296,9 @@ class SchemaManager:
             f'CREATE TABLE "{schema_name}"."{table_name}" ({", ".join(column_defs)})'
         )
 
-        grant = await self._query_role.try_ensure_role()
         try:
             async with self._engine.begin() as conn:
-                await bootstrap_pod_schema(conn, schema_name, grant=grant)
+                await bootstrap_pod_schema(conn, schema_name, grant=True)
                 await conn.execute(text(create_table_sql))
 
                 if enable_rls:

@@ -132,6 +132,35 @@ async def test_an_agent_writing_to_a_member_plans_their_push(scenario):
     assert _pushes(await _rows(sent.message_id)) == {UUID(colleague["id"])}
 
 
+async def test_asking_a_member_to_connect_plans_their_push(scenario):
+    """ "Ask members to connect" (`pod.connector.manage`): a line in the
+    member's own channel, said by the pod's agent for the editor, and its push
+    -- the reminder has to reach them, not wait in the app."""
+    from app.modules.connectors.infrastructure.adapters.member_coverage import (
+        tell_through_channels,
+    )
+
+    seeded = await seeded_conversation(scenario)
+    colleague, _ = await _colleague(scenario, "asked-to-connect")
+    editor = seeded.user_id
+    pod_id = seeded.pod_id
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await tell_through_channels(
+            uow,
+            pod_id=pod_id,
+            user_id=UUID(colleague["id"]),
+            asked_by=editor,
+            text="This pod uses Gmail — connect yours: https://app.test/c",
+            key=f"connect-ask:{uuid4()}",
+        )
+        theirs = await direct_channel(uow, pod_id=pod_id, user_id=UUID(colleague["id"]))
+        await uow.commit()
+
+    [line] = await _lines_in(theirs.id)
+    assert "connect yours" in line.body
+    assert _pushes(await _rows(line.id)) == {UUID(colleague["id"])}
+
+
 async def test_an_agent_writing_in_its_members_channel_plans_their_push(scenario):
     """``channel_post(channel_id=…)`` -- the one channel it may write in by id
     for the run's member, their own: the line, and its push to them. (A group

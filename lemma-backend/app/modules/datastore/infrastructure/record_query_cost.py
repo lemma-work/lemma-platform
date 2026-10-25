@@ -6,15 +6,16 @@ One ``EXPLAIN`` answers two questions, and both of them are refusals.
 a connection and a server-side cursor for as long as it takes to stream, and
 the caller usually meant to add a filter.
 
-*Does it stay inside this pod?* Ad-hoc SQL runs as one shared role that holds
-SELECT on every pod's schema (see ``query_role``), so what keeps pod A's query
-out of pod B's tables is the ``search_path`` plus ``analyze_query`` rejecting
-schema-qualified references. That makes a single parser gap — a relation form
-sqlglot does not model as ``exp.Table``, a dialect change, an inheritance or
-``regclass`` trick — the difference between a degraded error and cross-tenant
-exposure. The plan is the one place PostgreSQL states which relations it
-resolved, by its own rules rather than the parser's, so it is where that can be
-checked instead of assumed.
+*Does it stay inside this pod?* Ad-hoc SQL runs as the pod's own role, which
+holds no privilege on any other pod's schema (see ``query_role``), so the
+database refuses another pod's tables whatever the SQL says. It used to run as
+one shared role that could read every pod, and then a single parser gap — a
+relation form sqlglot does not model as ``exp.Table``, a dialect change, an
+inheritance or ``regclass`` trick — was the difference between a degraded error
+and cross-tenant exposure. This check predates the per-pod roles and is kept as
+a second line: the plan is the one place PostgreSQL states which relations it
+resolved, by its own rules rather than the parser's, so a query naming another
+pod is refused with a clear error before it reaches the privilege check.
 
 The namespace check is deliberately narrow: it refuses a plan naming some other
 pod's schema, and says nothing about ``pg_catalog``, ``public`` or the

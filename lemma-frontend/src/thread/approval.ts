@@ -1,3 +1,4 @@
+import { grantNote, sessionScopeSentence } from "./approval-scope";
 import { toolKey } from "./tool-name";
 
 export interface ApprovalDetails {
@@ -13,6 +14,14 @@ export interface ApprovalDetails {
     /** What "approve for this conversation" is called, when the asker named
      *  it — a coding agent's own "Always allow" option. */
     sessionLabel?: string;
+    /** What approving for the conversation allows, in words: it covers the
+     *  permission, not the one call ("Delete records in any table for the
+     *  rest of this conversation"). */
+    sessionScope?: string;
+    /** Set when approving gives a named agent a connector for good rather
+     *  than lending it once: what the card says instead of the session
+     *  option, which it does not offer. */
+    grantNote?: string;
     /** A coding agent on a computer asking before it uses one of its own
      *  tools. It waits inside a live run, and not for ever: see
      *  {@link HOST_PERMISSION_WINDOW_MS}. */
@@ -184,6 +193,16 @@ export function approvalDetails(toolArgs: unknown, fallbackText?: string): Appro
         };
     }
 
+    const permissionIds = Array.isArray(args.permission_ids)
+        ? args.permission_ids.map(asString).filter(Boolean)
+        : [];
+    /* A named agent refused a pod connector asks to be given it, and a yes
+       adds the grant — once or not — so there is no conversation-long option
+       to offer, only the plain statement of what approving does. */
+    const offersGrant =
+        (toolName === "run_connector_operation" || toolName === "describe_connector_operation") &&
+        permissionIds.includes("connector.use");
+
     return {
         /* Empty when the call gave nothing to name it with, and left that way
            on purpose: what a nameless pause should be called depends on who is
@@ -199,7 +218,9 @@ export function approvalDetails(toolArgs: unknown, fallbackText?: string): Appro
         /* Approving for the session keeps this kind of action from asking
            again until it expires. Lemma's own approvals always can; a coding
            agent's can only when it offered an "always" option, above. */
-        canApproveForSession: true,
+        canApproveForSession: !offersGrant,
+        sessionScope: sessionScopeSentence(permissionIds),
+        grantNote: offersGrant ? grantNote(asString(inner.connector)) : undefined,
     };
 }
 

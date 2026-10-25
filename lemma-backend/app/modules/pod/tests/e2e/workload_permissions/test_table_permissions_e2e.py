@@ -3,7 +3,9 @@
 Covers, for both AGENT and FUNCTION workloads:
 
 * a table grant (``datastore.table.read`` + ``datastore.record.read`` +
-  ``datastore.record.write``) authorizes full record CRUD on that table only;
+  ``datastore.record.write``) authorizes creating, reading and updating records
+  on that table only; deleting them takes ``datastore.record.delete`` too, a
+  destructive permission (audit H14);
 * table grants are EXACT-MATCH (no cascade): a grant on table A gives no access
   to table B;
 * data writes require ``datastore.record.write`` — ``datastore.table.update``
@@ -120,6 +122,25 @@ async def test_table_grant_authorizes_crud_and_is_exact_match(
         assert (await api.get_record(granted, record_id))["title"] == "from-workload"
         await api.update_record(granted, record_id, {"title": "edited"})
         assert (await api.get_record(granted, record_id))["title"] == "edited"
+        # Writing is not deleting: that is its own, destructive permission.
+        await api.delete_record(
+            granted, record_id, expected_status=status.HTTP_403_FORBIDDEN
+        )
+        await replace_workload_grants(
+            authenticated_client,
+            pod_id,
+            workload_type,
+            name,
+            [
+                _table_grant(
+                    granted,
+                    "datastore.table.read",
+                    "datastore.record.read",
+                    "datastore.record.write",
+                    "datastore.record.delete",
+                )
+            ],
+        )
         await api.delete_record(granted, record_id)
 
         # Exact-match: the grant on `granted` gives NO access to `ungranted`.

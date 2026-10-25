@@ -7,6 +7,7 @@ import typer
 
 from ...cli_app.enums import SURFACE_PLATFORM_HELP, SURFACE_PLATFORMS
 from ..confirm import confirm_destructive
+from ..deprecation import warn_deprecated
 from ..io import emit
 from ..payload import read_json
 from ..sdk import pod_client
@@ -28,7 +29,7 @@ def init_surface(
     ),
     force: bool = typer.Option(False, "--force", help="Overwrite existing files."),
 ) -> None:
-    """Scaffold a surface bundle file for a platform. Set the agent + account, then import."""
+    """Scaffold a surface bundle file for a platform. Set the agent + pod connector, then import."""
     from ...cli_app.scaffold import ScaffoldError, init_resource, report
 
     try:
@@ -39,7 +40,7 @@ def init_surface(
         raise typer.BadParameter(str(exc)) from exc
     report(
         result,
-        next_hint="set default_agent_name + account_id, then `lemma pods import .`",
+        next_hint="set default_agent_name + pod_connector, then `lemma pods import .`",
     )
 
 
@@ -60,7 +61,7 @@ def _surface_payload(
     *,
     credential_mode: str | None = None,
     default_agent_name: str | None = None,
-    account_id: str | None = None,
+    pod_connector: str | None = None,
     allowed_domains: list[str] | None = None,
     allowed_email_addresses: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -72,7 +73,7 @@ def _surface_payload(
         _clean_payload(
             {
                 "default_agent_name": default_agent_name,
-                "account_id": account_id,
+                "pod_connector": pod_connector,
             }
         )
     )
@@ -146,7 +147,15 @@ def upsert_surface(
     default_agent_name: str | None = typer.Option(
         None, "--agent", "--agent-name", help="Default agent that handles messages."
     ),
-    account_id: str | None = typer.Option(None, "--account", "--account-id"),
+    pod_connector: str | None = typer.Option(
+        None,
+        "--connector",
+        "--pod-connector",
+        help=(
+            "Slug of the SHARED pod connector the surface runs as (an account "
+            "its owner shared with the pod; see `lemma connectors pod-list`)."
+        ),
+    ),
     credential_mode: str | None = typer.Option(
         None, "--credential-mode", help="SYSTEM or CUSTOM."
     ),
@@ -162,13 +171,18 @@ def upsert_surface(
         dir_okay=False,
         readable=True,
     ),
+    # Deprecated: the account it runs as, from before pod connectors. Hidden,
+    # still served -- as the pod connector serving that account.
+    account_id: str | None = typer.Option(
+        None, "--account", "--account-id", hidden=True
+    ),
 ) -> None:
     """Create or update a surface: the agent's surface on a platform, or one by name.
 
     An agent reaches a platform in one place, so `upsert resend` changes the
     mailbox the agent already has (every agent is given one, named
     `resend-<agent>`) rather than refusing to make a second. One command covers
-    create, config/agent/account edits, and enable/disable. Only the fields you
+    create, config/agent/connector edits, and enable/disable. Only the fields you
     pass are applied to an existing surface.
     """
     state = state_from_ctx(ctx)
@@ -176,7 +190,7 @@ def upsert_surface(
         read_json(data, file, required=False),
         credential_mode=credential_mode,
         default_agent_name=default_agent_name,
-        account_id=account_id,
+        pod_connector=pod_connector,
         allowed_domains=allowed_domains,
         allowed_email_addresses=allowed_email_addresses,
     )
@@ -184,6 +198,13 @@ def upsert_surface(
         payload["is_enabled"] = enabled
     if name:
         payload["name"] = name
+    if account_id:
+        payload["account_id"] = account_id
+    if payload.get("account_id"):
+        warn_deprecated(
+            "surfaces upsert --account" if account_id else "account_id in --data",
+            "pass --connector <slug> (a SHARED pod connector); it decides the account",
+        )
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).surfaces.upsert(
@@ -306,7 +327,7 @@ def delete_surface(
     pod: str | None = typer.Option(None, "--pod"),
     yes: bool = typer.Option(False, "--yes", "-y"),
 ) -> None:
-    """Delete a surface entirely, freeing its account for use in another pod."""
+    """Delete a surface entirely, freeing its bot for use by another surface."""
     state = state_from_ctx(ctx)
     confirm_destructive(f"Delete {platform} surface?", yes)
     run_with_client(

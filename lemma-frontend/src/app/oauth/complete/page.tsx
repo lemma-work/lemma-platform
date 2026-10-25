@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import {
     announceOutcome,
     deliverOutcome,
+    phoneAppReturn,
     waitingForOutcome,
     type ConnectOutcome,
 } from '@/connect/round-trip';
@@ -50,6 +51,16 @@ export default function OAuthCompletePage() {
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
+
+        // Started in the phone app: the outcome goes back to the app, whose
+        // browser session closes on reaching it. Before the tabs below, which
+        // a phone's sign-in never has.
+        const phone = phoneAppReturn(params);
+        if (phone) {
+            window.location.replace(phone);
+            return;
+        }
+
         const outcome: ConnectOutcome = {
             connect: params.get('connect') ?? '',
             connector: params.get('connector'),

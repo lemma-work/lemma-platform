@@ -155,6 +155,10 @@ class AgentSurface(UUIDAuditBase):
         # it is this index's leading column, and there is no query that filters
         # the platform without also filtering the status.
         Index("ix_agent_surface_routing", "surface_type", "status"),
+        # The surfaces bound to one pod connector, which is how a slug reaches
+        # back to them: is this bot already bound, what does removing the
+        # connector stop.
+        Index("ix_agent_surfaces_pod_connector", "pod_id", "pod_connector_slug"),
     )
 
     # No index of its own: `uq_agent_surface_pod_name` leads with `pod_id`, and
@@ -203,13 +207,13 @@ class AgentSurface(UUIDAuditBase):
         String(50), default="SYSTEM", server_default="SYSTEM"
     )
     config: Mapped[dict] = mapped_column(JSONB)
-    # Indexed: `get_account_conflict_in_org` and the shared-webhook narrowing in
-    # `routing_surfaces` both filter it, including as IS NULL.
-    account_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("accounts.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
+    # The pod connector the surface runs as, by slug. No foreign key, on
+    # purpose: slugs never change, and a connector removed from the pod must
+    # make the surface fail with `POD_CONNECTOR_NOT_FOUND` on its next use --
+    # a SET NULL would quietly put it on the deployment's own credentials.
+    # Indexed with the pod, which is how every reader finds the surfaces on
+    # one connector.
+    pod_connector_slug: Mapped[str | None] = mapped_column(String(63), nullable=True)
     # Indexed: `routing_surfaces` narrows by it on every inbound event that
     # carries a workspace, which is the selective predicate once the platform's
     # live surfaces are the candidate set.
@@ -252,7 +256,7 @@ class AgentSurface(UUIDAuditBase):
         everyone's problem. `list_by_pod` maps a whole page, so one retired row
         took the pod's entire surface list with it -- as a 500, since a
         ``ValueError`` is not a ``DomainError`` and reaches the catch-all
-        handler. `get_account_conflict_in_org` is org-wide and platform-blind,
+        handler. `get_bound_to_connectors` can be platform-blind,
         so it did the same to the *creation* of an unrelated surface, and
         `list_by_pod` again to every agent-to-human notification for the pod.
 
@@ -295,7 +299,7 @@ class AgentSurface(UUIDAuditBase):
                 self.credential_mode or SurfaceCredentialMode.SYSTEM.value
             ),
             config=self.config,
-            account_id=self.account_id,
+            pod_connector_slug=self.pod_connector_slug,
             external_workspace_id=self.external_workspace_id,
             external_tenant_id=self.external_tenant_id,
             external_channel_id=self.external_channel_id,

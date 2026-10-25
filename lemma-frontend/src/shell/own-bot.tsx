@@ -268,7 +268,7 @@ function Authorise({
         mutationFn: async () => {
             const id = await source.findAccount(pod.orgId, entry.connectorId, authorization.before, authorization.authConfigId);
             if (!id) throw new Error("Authorization is not complete yet. Finish in Slack, then check again.");
-            await source.connectAccount(pod.id, entry.platform, id);
+            await source.connectOwnAccount(pod.id, entry.platform, id);
         },
         onSuccess: onDone,
         onError: (problem) => onError(problem.message),

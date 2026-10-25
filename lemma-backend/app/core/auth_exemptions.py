@@ -178,16 +178,23 @@ _POD_LIVE_WS_TAILS = (["live"], ["datastore", "changes"])
 
 
 def _is_pod_live_ws_path(path: str) -> bool:
-    """Match ``/pods/{pod_id}/live`` and ``/pods/{pod_id}/datastore/changes``.
+    """Match ``/pods/{pod_id}/live``, ``/pods/{pod_id}/datastore/changes`` and
+    a call's ``/pods/{pod_id}/calls/{call_id}/socket``.
 
     The handlers authenticate the session themselves (cookie or bearer), so
     the global HTTP auth dependency must let the handshake through.
     """
     parts = path.strip("/").split("/")
-    if len(parts) < 3 or parts[0] != "pods" or parts[2:] not in _POD_LIVE_WS_TAILS:
+    if len(parts) < 3 or parts[0] != "pods":
+        return False
+    tail = parts[2:]
+    is_call = len(tail) == 3 and tail[0] == "calls" and tail[2] == "socket"
+    if tail not in _POD_LIVE_WS_TAILS and not is_call:
         return False
     try:
         UUID(parts[1])
+        if is_call:
+            UUID(tail[1])
     except ValueError:
         return False
     return True

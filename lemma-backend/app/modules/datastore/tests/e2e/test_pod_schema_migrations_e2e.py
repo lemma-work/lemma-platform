@@ -30,6 +30,7 @@ from app.modules.datastore.events.pod_schema_work import (
     register_pod_schema_work,
 )
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
+    CHANGE_LOG_VERSION,
     CHUNKS_VERSION,
     POD_SCHEMA_LATEST,
     all_pod_schemas_at_least,
@@ -364,3 +365,69 @@ async def test_rerunning_the_change_log_step_takes_no_lock_a_writer_holds(
             await backfill.execute(text("SET LOCAL lock_timeout = '2s'"))
             await create_change_log(backfill, schema)
         await writer.rollback()
+
+
+async def _shared_role_reaches(engine: AsyncEngine, schema: str, table: str) -> bool:
+    async with engine.connect() as conn:
+        return bool(
+            await conn.scalar(
+                text(
+                    "SELECT has_schema_privilege(:role, :schema, 'USAGE') "
+                    "OR has_table_privilege(:role, :table, 'SELECT') "
+                    "OR EXISTS (SELECT 1 FROM pg_default_acl d, "
+                    "aclexplode(d.defaclacl) a "
+                    "WHERE d.defaclnamespace = CAST(:schema AS regnamespace) "
+                    "AND a.grantee = CAST(:role AS regrole))"
+                ),
+                {
+                    "role": datastore_settings.datastore_query_role,
+                    "schema": schema,
+                    "table": f'"{schema}".{table}',
+                },
+            )
+        )
+
+
+async def test_the_query_role_every_pod_shared_loses_every_pod_schema(
+    engine: AsyncEngine,
+) -> None:
+    """Version 4: a schema from before per-pod roles stops being readable by
+    the shared role -- its schema, its tables, and the tables made later.
+
+    The shared role is what made one parser gap (``table_to_xml``) a
+    cross-organization read; queries no longer set it, and this makes sure it
+    could reach nothing if anything ever did.
+    """
+    shared = datastore_settings.datastore_query_role
+    schema = schema_name_for_pod(uuid4())
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                f'DO $$ BEGIN CREATE ROLE "{shared}" NOLOGIN; '
+                "EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; "
+                "END $$"
+            )
+        )
+        for statement in (
+            f'CREATE SCHEMA "{schema}"',
+            f'CREATE TABLE "{schema}".widgets (id integer)',
+            # What every pod schema was born with before roles were per pod.
+            f'GRANT USAGE ON SCHEMA "{schema}" TO "{shared}"',
+            f'GRANT SELECT ON ALL TABLES IN SCHEMA "{schema}" TO "{shared}"',
+            (
+                "ALTER DEFAULT PRIVILEGES FOR ROLE CURRENT_USER "
+                f'IN SCHEMA "{schema}" GRANT SELECT ON TABLES TO "{shared}"'
+            ),
+        ):
+            await conn.execute(text(statement))
+    await migrate_pod_schema(engine, schema, target=CHANGE_LOG_VERSION)
+    assert await _shared_role_reaches(engine, schema, "widgets"), "the premise"
+
+    await migrate_pod_schema(engine, schema)
+
+    assert await pod_schema_version(engine, schema) == POD_SCHEMA_LATEST
+    assert not await _shared_role_reaches(engine, schema, "widgets")
+    assert not await _shared_role_reaches(engine, schema, "reserved_chunks")
+    async with engine.begin() as conn:
+        await conn.execute(text(f'CREATE TABLE "{schema}".later (id integer)'))
+    assert not await _shared_role_reaches(engine, schema, "later")

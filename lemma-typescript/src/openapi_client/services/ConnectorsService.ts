@@ -6,9 +6,12 @@ import type { AccountCreateSchema } from '../models/AccountCreateSchema.js';
 import type { AccountCredentialsUpdateSchema } from '../models/AccountCredentialsUpdateSchema.js';
 import type { AccountInstallationsSchema } from '../models/AccountInstallationsSchema.js';
 import type { AccountListResponseSchema } from '../models/AccountListResponseSchema.js';
+import type { AccountPodUsageResponse } from '../models/AccountPodUsageResponse.js';
 import type { AccountResponseSchema } from '../models/AccountResponseSchema.js';
 import type { AppTriggerListResponseSchema } from '../models/AppTriggerListResponseSchema.js';
 import type { AppTriggerResponseSchema } from '../models/AppTriggerResponseSchema.js';
+import type { AskMembersRequest } from '../models/AskMembersRequest.js';
+import type { AskMembersResponse } from '../models/AskMembersResponse.js';
 import type { AuthConfigCreateSchema } from '../models/AuthConfigCreateSchema.js';
 import type { AuthConfigListResponseSchema } from '../models/AuthConfigListResponseSchema.js';
 import type { AuthConfigOperationsRefreshResponseSchema } from '../models/AuthConfigOperationsRefreshResponseSchema.js';
@@ -22,6 +25,8 @@ import type { ConnectorStatusResponse } from '../models/ConnectorStatusResponse.
 import type { ConnectRequestInitiateSchema } from '../models/ConnectRequestInitiateSchema.js';
 import type { ConnectRequestResponseSchema } from '../models/ConnectRequestResponseSchema.js';
 import type { InstallationBindSchema } from '../models/InstallationBindSchema.js';
+import type { InstallationImpactResponse } from '../models/InstallationImpactResponse.js';
+import type { InstallationOperationExecutionRequest } from '../models/InstallationOperationExecutionRequest.js';
 import type { InstallRequestInitiateSchema } from '../models/InstallRequestInitiateSchema.js';
 import type { InstallRequestResponseSchema } from '../models/InstallRequestResponseSchema.js';
 import type { MessageResponseSchema } from '../models/MessageResponseSchema.js';
@@ -31,6 +36,16 @@ import type { OperationDetailsBatchResponse } from '../models/OperationDetailsBa
 import type { OperationDiscoverResponse } from '../models/OperationDiscoverResponse.js';
 import type { OperationExecutionRequest } from '../models/OperationExecutionRequest.js';
 import type { OperationExecutionResponse } from '../models/OperationExecutionResponse.js';
+import type { PodAccountCreateRequest } from '../models/PodAccountCreateRequest.js';
+import type { PodAccountListResponse } from '../models/PodAccountListResponse.js';
+import type { PodAccountResponse } from '../models/PodAccountResponse.js';
+import type { PodAccountShareAsRequest } from '../models/PodAccountShareAsRequest.js';
+import type { PodAccountUpdateRequest } from '../models/PodAccountUpdateRequest.js';
+import type { PodConnectorCoverage } from '../models/PodConnectorCoverage.js';
+import type { PodConnectorCreateRequest } from '../models/PodConnectorCreateRequest.js';
+import type { PodConnectorListResponse } from '../models/PodConnectorListResponse.js';
+import type { PodConnectorResponse } from '../models/PodConnectorResponse.js';
+import type { PodConnectorUpdateRequest } from '../models/PodConnectorUpdateRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -129,6 +144,26 @@ export class ConnectorsService {
             },
             query: {
                 'kind': kind,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Where One Of My Accounts Is Used
+     * @param accountId
+     * @returns AccountPodUsageResponse Successful Response
+     * @throws ApiError
+     */
+    public static connectorAccountPods(
+        accountId: string,
+    ): CancelablePromise<AccountPodUsageResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/me/connectors/accounts/{account_id}/pods',
+            path: {
+                'account_id': accountId,
             },
             errors: {
                 422: `Validation Error`,
@@ -659,7 +694,9 @@ export class ConnectorsService {
         });
     }
     /**
-     * Execute Connector Operation
+     * @deprecated
+     * Execute Connector Operation (deprecated)
+     * Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's pod declares for this installation; a person outside any pod uses their own account.
      * @param organizationId
      * @param authConfigName
      * @param operationName
@@ -671,7 +708,7 @@ export class ConnectorsService {
         organizationId: string,
         authConfigName: string,
         operationName: string,
-        requestBody: OperationExecutionRequest,
+        requestBody: InstallationOperationExecutionRequest,
     ): CancelablePromise<OperationExecutionResponse> {
         return __request(OpenAPI, {
             method: 'POST',
@@ -740,6 +777,409 @@ export class ConnectorsService {
                 'auth_config_name': authConfigName,
                 'trigger_name': triggerName,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * What Removing An Installation Would Stop
+     * Accounts, pod accounts and pod connectors on the installation, and the surfaces, schedules and MCP event subscriptions that run through them: organization-wide counts, and per pod for the pods the caller can open. If the second half cannot be read just now the first is still returned, with `complete: false`.
+     * @param organizationId
+     * @param authConfigId
+     * @returns InstallationImpactResponse Successful Response
+     * @throws ApiError
+     */
+    public static connectorInstallationImpact(
+        organizationId: string,
+        authConfigId: string,
+    ): CancelablePromise<InstallationImpactResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/installations/{auth_config_id}/impact',
+            path: {
+                'organization_id': organizationId,
+                'auth_config_id': authConfigId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Accounts In Use In The Pod
+     * @param podId
+     * @returns PodAccountListResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorAccountList(
+        podId: string,
+    ): CancelablePromise<PodAccountListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/connector-accounts',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Add One Of Your Accounts To The Pod
+     * @param podId
+     * @param requestBody
+     * @returns PodAccountResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorAccountAdd(
+        podId: string,
+        requestBody: PodAccountCreateRequest,
+    ): CancelablePromise<PodAccountResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/connector-accounts',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Remove An Account From The Pod
+     * @param podId
+     * @param podAccountId
+     * @returns void
+     * @throws ApiError
+     */
+    public static podConnectorAccountRemove(
+        podId: string,
+        podAccountId: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/connector-accounts/{pod_account_id}',
+            path: {
+                'pod_id': podId,
+                'pod_account_id': podAccountId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Share Or Withdraw Your Account In The Pod
+     * @param podId
+     * @param podAccountId
+     * @param requestBody
+     * @returns PodAccountResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorAccountUpdate(
+        podId: string,
+        podAccountId: string,
+        requestBody: PodAccountUpdateRequest,
+    ): CancelablePromise<PodAccountResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/pods/{pod_id}/connector-accounts/{pod_account_id}',
+            path: {
+                'pod_id': podId,
+                'pod_account_id': podAccountId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Share Your Account As A Pod Connector
+     * Owner only, and the caller must also manage the pod's connectors: share this pod account with the pod (if it is still yours alone) and run the SHARED connector `slug` as it -- pointing the existing one, or declaring it. Checked in full before anything changes, and done in one transaction: a refusal leaves the account as it was.
+     * @param podId
+     * @param podAccountId
+     * @param requestBody
+     * @returns PodConnectorResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorAccountShareAs(
+        podId: string,
+        podAccountId: string,
+        requestBody: PodAccountShareAsRequest,
+    ): CancelablePromise<PodConnectorResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/connector-accounts/{pod_account_id}/share-as',
+            path: {
+                'pod_id': podId,
+                'pod_account_id': podAccountId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Pod Connectors
+     * @param podId
+     * @returns PodConnectorListResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorList(
+        podId: string,
+    ): CancelablePromise<PodConnectorListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/connectors',
+            path: {
+                'pod_id': podId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Declare A Pod Connector
+     * @param podId
+     * @param requestBody
+     * @returns PodConnectorResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorCreate(
+        podId: string,
+        requestBody: PodConnectorCreateRequest,
+    ): CancelablePromise<PodConnectorResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/connectors',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Remove Pod Connector
+     * @param podId
+     * @param slug
+     * @returns void
+     * @throws ApiError
+     */
+    public static podConnectorDelete(
+        podId: string,
+        slug: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/connectors/{slug}',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Pod Connector
+     * @param podId
+     * @param slug
+     * @returns PodConnectorResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorGet(
+        podId: string,
+        slug: string,
+    ): CancelablePromise<PodConnectorResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/connectors/{slug}',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update Pod Connector
+     * @param podId
+     * @param slug
+     * @param requestBody
+     * @returns PodConnectorResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorUpdate(
+        podId: string,
+        slug: string,
+        requestBody: PodConnectorUpdateRequest,
+    ): CancelablePromise<PodConnectorResponse> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/pods/{pod_id}/connectors/{slug}',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Ask Members To Connect
+     * Post one line, "This pod uses <connector> — connect yours: <connect_url>", in the own channel of each member a PER_MEMBER connector is waiting on (as `coverage` counts them). A member is asked about one connector at most once a day; those asked already are returned as `asked_recently`, and those whose line could not be posted, or whose last ask could not be checked, as `not_asked`.
+     * @param podId
+     * @param slug
+     * @param requestBody
+     * @returns AskMembersResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorAskMembers(
+        podId: string,
+        slug: string,
+        requestBody?: (AskMembersRequest | null),
+    ): CancelablePromise<AskMembersResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/connectors/{slug}/ask-members',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Who A Per-Member Connector Is Waiting On
+     * For someone who may manage the pod's connectors: of the members who may use this PER_MEMBER connector, how many have connected a working account, and who has not. Viewers, and anyone a RESTRICTED connector leaves out, are not counted. Asked for one connector at a time, because it weighs each member's own access; listings leave it out.
+     * @param podId
+     * @param slug
+     * @returns PodConnectorCoverage Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorCoverage(
+        podId: string,
+        slug: string,
+    ): CancelablePromise<PodConnectorCoverage> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/connectors/{slug}/coverage',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Discover Pod Connector Operations
+     * @param podId
+     * @param slug
+     * @param query
+     * @param limit
+     * @returns OperationDiscoverResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorOperationList(
+        podId: string,
+        slug: string,
+        query?: (string | null),
+        limit: number = 100,
+    ): CancelablePromise<OperationDiscoverResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/connectors/{slug}/operations',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+            },
+            query: {
+                'query': query,
+                'limit': limit,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Pod Connector Operation
+     * @param podId
+     * @param slug
+     * @param operationName
+     * @returns OperationDetail Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorOperationGet(
+        podId: string,
+        slug: string,
+        operationName: string,
+    ): CancelablePromise<OperationDetail> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/connectors/{slug}/operations/{operation_name}',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+                'operation_name': operationName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Execute Pod Connector Operation
+     * Run an operation through a pod connector. The account it runs as is decided by the connector: the caller's own for a PER_MEMBER connector, the shared one for a SHARED connector. Typed refusals: `CONNECTION_REQUIRED` and `REAUTH_REQUIRED` (with `connect_url`), `CONNECTOR_NEEDS_ACCOUNT`, `CONNECTOR_UNAVAILABLE`.
+     * @param podId
+     * @param slug
+     * @param operationName
+     * @param requestBody
+     * @returns OperationExecutionResponse Successful Response
+     * @throws ApiError
+     */
+    public static podConnectorOperationExecute(
+        podId: string,
+        slug: string,
+        operationName: string,
+        requestBody: OperationExecutionRequest,
+    ): CancelablePromise<OperationExecutionResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute',
+            path: {
+                'pod_id': podId,
+                'slug': slug,
+                'operation_name': operationName,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

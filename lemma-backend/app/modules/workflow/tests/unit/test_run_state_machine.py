@@ -126,6 +126,30 @@ def test_reopen_at_failed_node_returns_to_running_there_and_keeps_earlier_output
     assert run.step_history[-1].status == StepStatus.FAILED
 
 
+def test_a_run_retried_by_another_person_continues_as_them():
+    run = _run()
+    starter = run.user_id
+    retrier = uuid4()
+    run.begin_step("record")
+    run.fail("function runtime returned 500", node_id="record")
+
+    run.reopen_at_failed_node(by_user_id=retrier)
+
+    # The steps still to come run with the retrier's access, not the starter's.
+    assert run.user_id == retrier != starter
+
+
+def test_a_run_retried_by_nobody_in_particular_keeps_its_person():
+    run = _run()
+    starter = run.user_id
+    run.begin_step("record")
+    run.fail("function runtime returned 500", node_id="record")
+
+    run.reopen_at_failed_node()
+
+    assert run.user_id == starter
+
+
 def test_reopen_refuses_a_run_that_did_not_fail_at_a_node():
     run = _run()
     with pytest.raises(ValueError, match="failed at a node"):

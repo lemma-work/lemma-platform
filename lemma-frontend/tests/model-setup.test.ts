@@ -144,14 +144,13 @@ test("a failed Test says whether the key was refused or the list could not be re
     );
 });
 
-test("voice is offered only when the install says it is set up", async () => {
+test("voice is offered only when the pod's server has a voice engine", async () => {
     const { voiceConfigured } = await import("../src/call/voice-config.ts");
-    const answering = (body: unknown, ok = true) =>
-        (async () => ({ ok, json: async () => body })) as unknown as typeof fetch;
-    assert.equal(await voiceConfigured(answering({ configured: true })), true);
-    assert.equal(await voiceConfigured(answering({ configured: false })), false);
-    assert.equal(await voiceConfigured(answering({ configured: true }, false)), false);
-    assert.equal(await voiceConfigured((async () => { throw new Error("offline"); }) as unknown as typeof fetch), false);
+    const answering = (body: unknown) => async () => body;
+    assert.equal(await voiceConfigured("pod", answering({ engines: ["gemini_live"] })), true);
+    assert.equal(await voiceConfigured("pod", answering({ engines: [] })), false);
+    assert.equal(await voiceConfigured("pod", answering({})), false);
+    assert.equal(await voiceConfigured("pod", async () => { throw new Error("offline"); }), false);
 });
 
 test("a refusal whose fix is in Settings → Models gets the way there", async () => {

@@ -165,6 +165,7 @@ async def test_export_pod_bundle_roundtrip(
 
     # pod.json manifest.
     pod = json.loads((root / "pod.json").read_text())
+    # No pod connectors, so the format a reader of 3 reads whole.
     assert pod["format_version"] == 3
     assert pod["name"] == test_pod["name"]
 

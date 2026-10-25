@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from lemma_pod_bundle import pack_bundle
+from lemma_pod_bundle import bundle_format_version, pack_bundle
 from lemma_pod_bundle.layout import (
     RESOURCE_DIRS,
     TABLE_DATA_FILE,
@@ -48,6 +48,9 @@ from lemma_pod_bundle.normalize import (
 from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
+from app.modules.pod_bundle.infrastructure.exporter_connectors import (
+    export_connectors,
+)
 from app.modules.pod_bundle.infrastructure.exporter_surfaces import (
     export_surfaces,
 )
@@ -64,6 +67,7 @@ logger = get_logger(__name__)
 # out of scope for the export slice (the CLI's file/asset export is separate and
 # best-effort); we still create the empty dir for layout parity.
 _EXPORT_RESOURCE_TYPES = (
+    "connectors",
     "tables",
     "functions",
     "agents",
@@ -212,9 +216,6 @@ class BundleExporter:
             list_app_names,
             require_app,
         )
-        from app.modules.connectors.contracts.provisioning import (
-            resolve_account_connector,
-        )
         from app.modules.datastore.contracts.provisioning import (
             get_table,
             list_table_names,
@@ -245,13 +246,26 @@ class BundleExporter:
                 raise BundleInvalidError(f"Pod {pod_id} no longer exists.")
             pod_dict = _pod_response_dict(pod)
             pod_name = str(pod_dict.get("name") or str(pod_id)).strip() or str(pod_id)
-            _write_json(root / "pod.json", _normalize_pod_payload(pod_dict))
 
             # Total = the pod.json step + every selected resource type; drives the
             # progress bar deterministically without a pre-count DB round-trip.
             total = 1 + sum(1 for rtype in _EXPORT_RESOURCE_TYPES if rtype in selected)
             done = 1
             await on_progress(done, total)
+
+            # --- connectors (named by slug by everything below) --------------
+            if "connectors" in selected:
+                await export_connectors(root, uow, ctx=ctx, pod_id=pod_id)
+                done += 1
+                await on_progress(done, total)
+            # Written once the connectors are: a bundle with none stays the
+            # format a reader of 3 reads whole.
+            _write_json(
+                root / "pod.json",
+                _normalize_pod_payload(
+                    pod_dict, format_version=bundle_format_version(root)
+                ),
+            )
 
             # --- tables (+ optional data) -------------------------------------
             if "tables" in selected:
@@ -381,24 +395,10 @@ class BundleExporter:
                     schedule_name = str(schedule.name or schedule.id or "")
                     dir_ = root / "schedules" / schedule_name
                     dir_.mkdir(parents=True, exist_ok=True)
+                    # A schedule names its pod connector by slug, which is
+                    # portable as it stands: the importing pod declares a
+                    # connector of that name, on its own installation.
                     raw_schedule = _schedule_response_dict(schedule)
-                    account_id = raw_schedule.get("account_id")
-                    if account_id:
-                        info = await resolve_account_connector(
-                            uow, UUID(str(account_id))
-                        )
-                        if info is None:
-                            from app.modules.pod_bundle.domain.errors import (
-                                BundleInvalidError,
-                            )
-
-                            raise BundleInvalidError(
-                                f"Schedule '{schedule_name}' references account "
-                                f"{account_id}, which no longer exists."
-                            )
-                        raw_schedule["connector_id"], raw_schedule["connector_kind"] = (
-                            info
-                        )
                     payload = _normalize_schedule_payload(raw_schedule)
                     payload.setdefault("name", schedule_name)
                     _write_json(dir_ / f"{schedule_name}.json", payload)

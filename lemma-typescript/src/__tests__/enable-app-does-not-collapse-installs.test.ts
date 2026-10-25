@@ -24,6 +24,8 @@ function namespaceWith(existing: Array<Record<string, unknown>>) {
     // `http` is unused by the paths under test, but the constructor takes it
     // and `tsconfig.test.json` type-checks this file.
     {} as never,
+    // The pod, for `connectors.pod`; the org install paths under test take none.
+    () => "pod-1",
   );
 
   vi.spyOn(connectors.authConfigs, "list").mockResolvedValue(listed as never);

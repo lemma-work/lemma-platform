@@ -45,6 +45,15 @@ def render_schedule_paused_email(
                 "account."
             ),
         ),
+        "MCP_CONNECTOR_UNRESOLVED": (
+            "was turned off because its connector no longer reaches its account",
+            (
+                "Lemma turned off this automation because the pod connector it "
+                "listened through no longer means the account it was listening "
+                "on: a shared account was withdrawn, or the connector changed. "
+                "Turn it back on to listen through what the connector means now."
+            ),
+        ),
         "MCP_SUBSCRIPTION_LAPSED": (
             "was turned off because its server stopped telling us about events",
             (

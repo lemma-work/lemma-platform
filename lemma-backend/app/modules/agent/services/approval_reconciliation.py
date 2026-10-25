@@ -156,55 +156,79 @@ async def record_session_approvals(
     pod_id: UUID,
     tool_args: JsonObject,
     user_id: UUID,
+    approval_id: str | None = None,
 ) -> None:
     """Persist APPROVE_FOR_SESSION as per-permission session approvals, plus an
     exact-match approval for the wrapped call itself.
 
-    Keyed to (conversation, workload actor, permission) — the same key the
-    authorizer checks (for `permission_ids`) or `request_approval` itself checks
-    before pausing again (for the exact-command key). Structured actions
-    (pod/table/folder/... delete) carry `permission_ids` copied from the denied
-    tool result, unlocking the whole action TYPE for the rest of the
-    conversation. Tools with no structured permission — exec_command,
-    execute_python, anything not gated by the authorizer — have no category to
-    unlock, so they get only the exact-command key: approving one call lets the
-    agent repeat that LITERAL call again without re-prompting, but a different
-    command still re-prompts (see session_approvals.exact_command_permission_id
-    for why anything looser, e.g. a prefix match, would be a shell-injection
-    vector).
+    Keyed to (conversation, approving person, workload actor, permission) — the
+    same key the authorizer checks, reading the person from the delegated
+    context, and ``request_approval`` itself checks before pausing again (for
+    the exact-command key). So it covers this person's runs only: in a group
+    conversation another member's run does not inherit it (M5).
+
+    The permissions recorded are the ones the card showed (``approval_id``'s,
+    ``approval_denials.card_lends``): what the server had refused when the card
+    went up, unlocking those action TYPES for the rest of the conversation.
+    Never the ``permission_ids`` in ``tool_args``: they are a
+    ``request_approval`` argument, whatever the model wrote, and a model
+    steered by a poisoned page wrote ``pod.delete`` there and had it recorded
+    behind a card asking about something harmless (H6). Nor a refusal recorded
+    after the card was shown: a sandbox's refusals are per session, and one
+    from a command run since would otherwise be approved by a card that never
+    named it. Every call also gets the exact-command key: approving one lets
+    the agent repeat that LITERAL call again without re-prompting, but a
+    different command still re-prompts (see
+    session_approvals.exact_command_permission_id for why anything looser,
+    e.g. a prefix match, would be a shell-injection vector).
     """
     from app.core.authorization.session_approvals import (
         exact_command_permission_id,
         record_session_approval,
+    )
+    from app.modules.agent.tools.approval_denials import (
+        SANDBOX_COMMAND_TOOLS,
+        answered,
+        card_lends,
     )
     from app.modules.agent.tools.authority import conversation_workload_actor_id
 
     workload_actor_id = conversation_workload_actor_id(agent_id=agent_id, pod_id=pod_id)
 
     inner_tool_name = tool_args.get("tool_name")
-    if isinstance(inner_tool_name, str) and inner_tool_name:
-        inner_args = tool_args.get("args")
-        await record_session_approval(
-            session_id=str(conversation_id),
-            workload_actor_id=workload_actor_id,
-            permission_id=exact_command_permission_id(
-                inner_tool_name,
-                inner_args if isinstance(inner_args, dict) else {},
-            ),
-            resolved_by_user_id=user_id,
-        )
-
-    permission_ids = tool_args.get("permission_ids")
-    if not isinstance(permission_ids, list):
+    if not isinstance(inner_tool_name, str) or not inner_tool_name:
         return
-    for permission_id in permission_ids:
-        if not isinstance(permission_id, str) or not permission_id:
-            continue
+    inner_args = tool_args.get("args")
+    await record_session_approval(
+        session_id=str(conversation_id),
+        person_user_id=user_id,
+        workload_actor_id=workload_actor_id,
+        permission_id=exact_command_permission_id(
+            inner_tool_name,
+            inner_args if isinstance(inner_args, dict) else {},
+        ),
+    )
+    card = await card_lends(
+        conversation_id=conversation_id,
+        approval_id=approval_id,
+        person_user_id=user_id,
+        workload_actor_id=workload_actor_id,
+        tool_name=inner_tool_name,
+    )
+    for permission_id in sorted(card.permission_ids):
         await record_session_approval(
             session_id=str(conversation_id),
+            person_user_id=user_id,
             workload_actor_id=workload_actor_id,
             permission_id=permission_id,
-            resolved_by_user_id=user_id,
+        )
+    # Approved now, so the next one-time approval does not lend them again.
+    if inner_tool_name in SANDBOX_COMMAND_TOOLS:
+        await answered(
+            conversation_id=conversation_id,
+            person_user_id=user_id,
+            workload_actor_id=workload_actor_id,
+            permission_ids=card.permission_ids,
         )
 
 

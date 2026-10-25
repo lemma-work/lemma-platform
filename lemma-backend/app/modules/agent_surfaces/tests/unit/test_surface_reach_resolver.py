@@ -33,7 +33,7 @@ def _surface(**overrides) -> AgentSurfaceEntity:
         "name": "slack",
         "agent_id": uuid4(),
         "surface_type": SurfacePlatform.SLACK,
-        "account_id": uuid4(),
+        "pod_connector_slug": "slack-bot",
         "config": SurfaceConfig(),
         "surface_identity_id": "U123BOT",
     }
@@ -54,7 +54,7 @@ class FakeCredentialResolver:
 def _account_named(display_name: str | None = "Support Bot Account"):
     """Connectors' account read, as the resolver is handed it."""
 
-    async def _find(account_id):
+    async def _find(surface):
         return SimpleNamespace(display_name=display_name)
 
     return _find
@@ -213,7 +213,7 @@ async def test_whatsapp_falls_back_to_account_display_name_when_number_unavailab
 async def test_resend_falls_back_to_surface_email(monkeypatch):
     surface = _surface(
         surface_type=SurfacePlatform.RESEND,
-        account_id=None,
+        pod_connector_slug=None,
         surface_identity_id=None,
         surface_identity_email="pod-abc@ops.lemma.work",
     )

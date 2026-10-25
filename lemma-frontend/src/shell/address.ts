@@ -1,7 +1,7 @@
 import type { Tab } from "@/data";
 import { docTitle } from "@/library/doc-title";
 import { readableName } from "@/library/reading";
-import { isAboutSection, type AboutSection } from "@/space/about-sections";
+import { aboutSectionOf, type AboutSection } from "@/space/about-sections";
 
 /** The one segment every workspace URL hangs off. */
 export const ROOT = "/t";
@@ -120,7 +120,10 @@ export function readAddress(pathname: string): Address {
            a section that moved to Settings, say — still opens About. */
         case "about":
             if (rest.length > 2) return here(null);
-            return isAboutSection(rest[1]) ? here("space:about", { section: rest[1] }) : here("space:about");
+            {
+                const section = aboutSectionOf(rest[1]);
+                return section ? here("space:about", { section }) : here("space:about");
+            }
         /* The space's settings are sections of the teammate's page now. A link
            that still names the page they had opens the one that carries them
            rather than nothing, and the shell rewrites the address. */

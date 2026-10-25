@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source, type Member } from "@/data";
+import { ProblemLine } from "@/connect/connection-problem";
 import { lemma } from "@/session/client";
 import { useMe } from "@/session/use-me";
 import { isForbidden } from "@/session/auth-state";
@@ -12,7 +13,7 @@ import {
     useCreateSchedule, useRetryRun, useScheduleActive, useScheduleRuns, useScheduleTargets, useSchedules, useServerEvents,
 } from "./queries";
 import {
-    CADENCES, SCHEDULE_EDIT, SCOPE_LABEL, SCOPE_NOTE, WHENS, accountsOffering, agoOf, copyNeedOf, copyRequest, blankDraft, canRetry, draftProblems, healthOf, may, serverGroups,
+    CADENCES, SCHEDULE_EDIT, SCOPE_LABEL, SCOPE_NOTE, WHENS, agoOf, copyNeedOf, copyRequest, blankDraft, canRetry, draftProblems, healthOf, may, serverGroups,
     type DraftWhen, type ScheduleDraft, type StandingJob,
 } from "./schedules";
 
@@ -40,13 +41,11 @@ export interface OpenTarget {
     onOpenConversation?: (id: string) => void;
 }
 
-export function StandingWork({ podId, teammate, members = [], orgId = null, onOpenRun, onOpenConversation }: {
+export function StandingWork({ podId, teammate, members = [], onOpenRun, onOpenConversation }: {
     podId: string;
     teammate: string;
     /** For naming who a schedule belongs to. */
     members?: Member[];
-    /** For finding your own accounts when copying a webhook schedule. */
-    orgId?: string | null;
 } & OpenTarget) {
     const schedules = useSchedules(podId);
     const me = useMe();
@@ -101,7 +100,6 @@ export function StandingWork({ podId, teammate, members = [], orgId = null, onOp
                                 job={job}
                                 mine={!job.ownerId || job.ownerId === me}
                                 owner={members.find((member) => member.userId && member.userId === job.ownerId)?.name ?? null}
-                                orgId={orgId}
                                 open={opened === job.id && Boolean(job.id)}
                                 onOpen={() => setOpened(opened === job.id ? null : job.id)}
                                 onOpenRun={onOpenRun}
@@ -132,12 +130,11 @@ export function StandingWork({ podId, teammate, members = [], orgId = null, onOp
 
 /* ── one standing job ───────────────────────────────────────────────── */
 
-function Row({ podId, job, mine, owner, orgId, open, onOpen, onOpenRun, onOpenConversation }: {
+function Row({ podId, job, mine, owner, open, onOpen, onOpenRun, onOpenConversation }: {
     podId: string;
     job: StandingJob;
     mine: boolean;
     owner: string | null;
-    orgId: string | null;
     open: boolean;
     onOpen: () => void;
 } & OpenTarget) {
@@ -178,6 +175,10 @@ function Row({ podId, job, mine, owner, orgId, open, onOpen, onOpenRun, onOpenCo
                     <span className="sched-row__when">
                         {job.trigger}
                         {job.triggerLiteral && <code>{job.triggerLiteral}</code>}
+                        {/* Which of the pod's connectors it hears through. Its
+                            account is the connector's to decide, so the slug is
+                            the whole of what this row can say. */}
+                        {job.podConnector && <> through <code>{job.podConnector}</code></>}
                     </span>
                     {/* Which of the two it is, said in the sentence rather than
                         as a badge after it. A schedule runs an agent or a
@@ -223,7 +224,7 @@ function Row({ podId, job, mine, owner, orgId, open, onOpen, onOpenRun, onOpenCo
                         </button>
                     </>
                 ) : (
-                    <CopyForMe podId={podId} job={job} orgId={orgId} />
+                    <CopyForMe podId={podId} job={job} />
                 )}
             </div>
 
@@ -262,67 +263,31 @@ function ShareToggle({ podId, job }: { podId: string; job: StandingJob }) {
     );
 }
 
-function CopyForMe({ podId, job, orgId }: { podId: string; job: StandingJob; orgId: string | null }) {
+function CopyForMe({ podId, job }: { podId: string; job: StandingJob }) {
     const cache = useQueryClient();
     const sample = source.label === "sample";
     const need = copyNeedOf(job);
-    const [picking, setPicking] = useState(false);
-    const [accountId, setAccountId] = useState("");
-    const accounts = useQuery({
-        queryKey: ["connector-accounts", orgId],
-        enabled: picking && Boolean(orgId) && !sample,
-        queryFn: () => source.listAccounts(orgId!),
-        staleTime: 60_000,
-    });
-    /* A copy of a schedule on a connected server's event listens through your
-       own account on that same server — not whichever account comes first,
-       which would ask a different server for an event it may not offer. */
-    const onServer = job.listening !== null;
-    const serverEvents = useServerEvents(podId, picking && onServer && !sample);
-    const sameServer = onServer ? accountsOffering(serverEvents.data ?? [], job) : null;
-    const usable = (accounts.data ?? []).filter(
-        (account) => account.usable && (sameServer === null || sameServer.has(account.id)),
-    );
-    const chosen = accountId || usable[0]?.id || "";
+    /* A webhook's copy names the same pod connector, and the connector decides
+       whose account it listens through. A per-member one with no account of
+       yours answers CONNECTION_REQUIRED with the link to connect one, which is
+       shown beside the button rather than asked for ahead of it. */
     const copy = useMutation({
-        mutationFn: () => lemma(podId).request("POST", "/pods/" + podId + "/schedules", { body: copyRequest(job, chosen || undefined) }),
-        onSuccess: () => { setPicking(false); void cache.invalidateQueries({ queryKey: ["schedules", podId] }); },
+        mutationFn: () => lemma(podId).request("POST", "/pods/" + podId + "/schedules", { body: copyRequest(job) }),
+        onSuccess: () => void cache.invalidateQueries({ queryKey: ["schedules", podId] }),
     });
     if (need === "not-needed") return <span className="sched-row__aside" title="A table change runs as whoever owns the row, so everyone already has it.">Runs for everyone’s rows</span>;
     if (need === "impossible") return null;
-    if (need === "account" && picking) {
-        return (
-            <span className="sched-copy">
-                {accounts.isPending || (onServer && serverEvents.isPending) ? <small>Finding your accounts…</small>
-                    : usable.length === 0 ? (
-                        <small>
-                            {onServer
-                                ? "Connect " + (job.listening?.server || "that server") + " with an account of your own first."
-                                : "Connect an account of your own first."}
-                        </small>
-                    )
-                    : (
-                        <select value={chosen} onChange={(event) => setAccountId(event.target.value)} aria-label="Your account">
-                            {usable.map((account) => <option key={account.id} value={account.id}>{account.label || account.ref || account.connectorId}</option>)}
-                        </select>
-                    )}
-                <button className="btn" disabled={!chosen || copy.isPending} onClick={() => copy.mutate()}>{copy.isPending ? "…" : "Set up"}</button>
-                <button className="btn btn--quiet" onClick={() => setPicking(false)}>Cancel</button>
-                {copy.isError && <small className="sched-copy__error">{copy.error instanceof Error ? copy.error.message : "Couldn’t set it up."}</small>}
-            </span>
-        );
-    }
     return (
         <span className="sched-copy">
             <button
                 className="btn"
                 disabled={sample || copy.isPending}
-                title={sample ? "Sign in to set up your own." : "A personal copy that runs as you" + (need === "account" ? ", with your own account." : ".")}
-                onClick={() => (need === "account" ? setPicking(true) : copy.mutate())}
+                title={sample ? "Sign in to set up your own." : "A personal copy that runs as you" + (job.podConnector ? ", through " + job.podConnector + "." : ".")}
+                onClick={() => copy.mutate()}
             >
                 {copy.isPending ? "…" : copy.isSuccess ? "Set up ✓" : "Set up my own"}
             </button>
-            {copy.isError && <small className="sched-copy__error">{copy.error instanceof Error ? copy.error.message : "Couldn’t set it up."}</small>}
+            {copy.isError && <ProblemLine as="small" className="sched-copy__error" error={copy.error} fallback="Couldn’t set it up." />}
         </span>
     );
 }
@@ -470,8 +435,9 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
                     }}
                 >
                     {WHENS.map((one) => <option key={one.value} value={one.value}>{one.label}</option>)}
-                    {/* Grouped by server: each is listened to through your own
-                        connection to it, so only servers you connected appear. */}
+                    {/* Grouped by server: each is listened to through one of
+                        the pod's connectors, so only connectors you may use
+                        appear. */}
                     {serverGroups(serverEvents.data ?? []).map((group) => (
                         <optgroup key={group.label} label={group.label}>
                             {group.events.map((one) => <option key={one.key} value={one.key}>{one.event}</option>)}
@@ -479,10 +445,10 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
                     ))}
                 </select>
             </label>
-            {serverEvents.isPending && <p className="sched-new__note" role="status">Asking your connected servers what they can tell you about…</p>}
+            {serverEvents.isPending && <p className="sched-new__note" role="status">Asking this space’s connected servers what they can tell you about…</p>}
             {serverEvents.isError && (
                 <p className="sched-new__note" role="alert">
-                    Events from your connected servers could not be loaded, so only these are offered.{" "}
+                    Events from this space’s connected servers could not be loaded, so only these are offered.{" "}
                     <button className="linkish" onClick={() => void serverEvents.refetch()}>Try again</button>
                 </p>
             )}
@@ -491,7 +457,7 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
                 {/* Closed, the select says only the event's name; two servers
                     can both have an `issue.created`. */}
                 <p className="sched-new__note">
-                    {"From " + draft.serverEvent.server + "." + (draft.serverEvent.description ? " " + draft.serverEvent.description : "")}
+                    {"From " + draft.serverEvent.server + ", through " + draft.serverEvent.podConnector + "." + (draft.serverEvent.description ? " " + draft.serverEvent.description : "")}
                 </p>
                 {draft.serverEvent.asks.map((ask) => {
                     const value = draft.eventArguments[ask.name] ?? "";
@@ -618,11 +584,7 @@ function NewSchedule({ podId, onDone }: { podId: string; onDone: () => void }) {
                 Add instructions for an agent that does not have its own. Workflows use their configured steps.
             </p>
 
-            {create.isError && (
-                <p className="sched-field__problem" role="alert">
-                    {create.error instanceof Error ? create.error.message : "Couldn’t create the schedule."}
-                </p>
-            )}
+            {create.isError && <ProblemLine className="sched-field__problem" error={create.error} fallback="Couldn’t create the schedule." />}
 
             <div className="sched-new__acts">
                 <button className="btn btn--primary" disabled={create.isPending} onClick={submit}>

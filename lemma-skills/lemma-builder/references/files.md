@@ -110,6 +110,9 @@ lemma files share /reports/summary.pdf --ttl 3h --max-hits 50   # public, no-log
 `--ttl` = `30m`/`3h`/`7d` (default 24h, max 7d); `--max-hits` caps downloads
 (default 200, max 1000). The public link streams through the backend and stops at
 the cap — a value outside either range is rejected. Folders have no URL.
+Making a public link takes `folder.share` on the file as well as reading it.
+Every pod member holds it; an agent or function holds it only where it is
+granted (`/reports:read,share`).
 
 ## Tables + Files pattern
 
@@ -143,7 +146,8 @@ link = pod.files.create_signed_url("/reports/summary.pdf", expires_seconds=3600,
 
 `/me` here is the **invoking user's** tree. Grant each pod folder the workload
 touches: `resource_type: "folder"`, `resource_name: "/knowledge"` (the stored path),
-`permission_ids: ["folder.read"]` (add `folder.write` for uploads). Tell agents in
+`permission_ids: ["folder.read"]` (add `folder.write` for uploads, `folder.share`
+for public links, e.g. a large file sent as a link in an email). Tell agents in
 their instructions that pod files are **searchable by path and fully readable via
 converted markdown** — otherwise they assume they only get search snippets.
 

@@ -10,10 +10,13 @@ the config back as sent dropped them: the schedule stopped routing, and delete
 no longer knew what to unsubscribe. Nor may an update *add* them: they are
 dropped from whatever is sent, on every schedule (`PROVISIONED_CONFIG_KEYS`).
 
-A new subscription is made on the author's account, so only the author may
-change what it listens to. A pod editor may still rename, pause or retarget
-the schedule; re-pointing someone else's credentials at a different filter is
-theirs to do.
+A subscription is made through the schedule's pod connector, as its owner:
+whatever the connector resolves to for them. Whoever changes what a schedule
+does becomes its owner (`schedule_ownership.py`), on their own use of the
+connector, so an owner change is a new subscription too -- made as the new
+owner, even on an unchanged filter. Otherwise a per-member connector would keep
+delivering the previous owner's events to a schedule that runs as somebody
+else.
 """
 
 from __future__ import annotations
@@ -66,36 +69,33 @@ async def resubscribe_for_new_config(
     existing: ScheduleEntity,
     update_data: dict[str, object],
     writer: ExternalScheduleWriter,
-    *,
-    caller_id: UUID | None = None,
 ) -> SubscriptionSwap | None:
     """Rewrite ``update_data["config"]`` so it still routes; make a new
-    subscription when the filter changed.
+    subscription when the filter or the owner changed.
 
     Returns the swap when a remote subscription was made, so the caller can
     drop whichever one loses. ``None`` means nothing remote changed.
     """
     sent = update_data.get("config")
+    owner = update_data.get("user_id", existing.user_id)
+    owner_changes = owner != existing.user_id
     if not isinstance(sent, dict):
-        return None
+        if not (owner_changes and existing.listens_through_connector):
+            return None
+        sent = existing.config
     authored: ScheduleConfig = authored_config(sent)
-    if not existing.listens_through_account:
+    if not existing.listens_through_connector:
         update_data["config"] = authored
         return None
-    if authored == authored_config(existing.config):
+    if authored == authored_config(existing.config) and not owner_changes:
         update_data["config"] = dict(existing.config)
         return None
-    if caller_id is not None and caller_id != existing.user_id:
-        raise ScheduleAccessDeniedError(
-            "This schedule listens through its author's account, so only its "
-            "author can change what it listens for."
-        )
-    candidate = existing.model_copy(update={"config": authored})
-    if not candidate.listens_through_account:
+    candidate = existing.model_copy(update={"config": authored, "user_id": owner})
+    if not candidate.listens_through_connector:
         # The old subscription would be left renewing on the author's
         # account with nothing routed to it, and delete could no longer find it.
         raise ScheduleValidationError(
-            "A schedule that listens through an account keeps listening "
+            "A schedule that listens through a connector keeps listening "
             "through it. Make a new schedule to listen for something else."
         )
     provisioned = await writer.create_provider_trigger(candidate)
@@ -227,9 +227,7 @@ async def update_schedule_resubscribing(
     """
     writer, uow = service.external_schedule_writer, service.uow
     async with connection_released(uow.session):
-        swap = await resubscribe_for_new_config(
-            existing, update_data, writer, caller_id=caller_id
-        )
+        swap = await resubscribe_for_new_config(existing, update_data, writer)
         # A reactivation has no old subscription to drop, only a new one.
         made = (
             await resubscribe_on_reactivation(

@@ -13,6 +13,7 @@ from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_ide
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.contracts.onboarding import UserEntity
 from app.modules.agent_surfaces.domain.ingress_context import (
+    SurfaceConnectorRef,
     AgentSurfaceContext,
     SurfaceChatContext,
 )
@@ -191,7 +192,7 @@ async def _expired_reply_context(
     return SurfaceReplyContext(
         platform=destination.platform,
         surface_id=surface.id if surface else None,
-        surface_account_id=surface.account_id if surface else None,
+        surface_connector=SurfaceConnectorRef.of(surface),
         surface_config=surface.config if surface else None,
         event=destination,
         reply_kind="identity_link",

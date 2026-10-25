@@ -13,6 +13,9 @@ def _routers():
     from app.modules.identity.api.controllers.organization_navigation_controller import (
         router as organization_navigation,
     )
+    from app.modules.identity.api.controllers.organization_permission_controller import (
+        router as organization_permissions,
+    )
     from app.modules.identity.api.controllers.first_workspace_controller import (
         router as first_workspace,
     )
@@ -41,6 +44,7 @@ def _routers():
         email_delivery,
         user,
         organization_navigation,
+        organization_permissions,
         organization,
         auth,
         email_login,

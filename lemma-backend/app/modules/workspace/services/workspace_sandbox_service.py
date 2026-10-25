@@ -25,6 +25,7 @@ from sandbox_runtime.protocol import (
     WorkloadKind,
 )
 from app.modules.workspace.contracts import SandboxInfo
+from app.modules.workspace.contracts.session_config import session_config_env
 from app.modules.workspace.sandbox_session import (
     SandboxWorkspaceSession,
     canonical_workspace_cwd,
@@ -449,6 +450,13 @@ class WorkspaceSandboxService(
                     ),
                     budget.remaining(),
                 )
+        # Named for the session here, not left to the session object, because
+        # the environment has to name it too: this session's git and gh read
+        # its own files, never the ones a concurrent session in the same
+        # sandbox is writing. Added after the cache, so an environment cached
+        # before these existed still gets them.
+        resolved_session_id = session_id or str(uuid4())
+        env_vars = {**env_vars, **session_config_env(resolved_session_id)}
 
         # Tell this session, once, if the disk it is about to use is not the one
         # it saw last. Without it an agent cannot distinguish a recreated
@@ -475,7 +483,7 @@ class WorkspaceSandboxService(
         return SandboxWorkspaceSession(
             client=self._get_manager_client(),
             sandbox_id=str(user_id),
-            session_id=session_id,
+            session_id=resolved_session_id,
             env_vars=env_vars,
             initial_cwd=resolved_cwd,
             auto_close=close_on_exit,

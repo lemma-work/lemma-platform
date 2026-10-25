@@ -28,10 +28,12 @@ from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
 from supertokens_python.recipe.session.interfaces import SessionContainer
 
 from app.core.live.connection import LiveConnection
+from app.core.live.handshake_origin import cookie_socket_refusal
 from app.core.live.limits import SLOT_REFRESH_SECONDS
 from app.core.live.pod_access import close_code_for
 from app.core.live.sessions import LiveSession, open_sockets
 from app.core.live.protocol import (
+    CLOSE_FORBIDDEN,
     CLOSE_UNAUTHENTICATED,
     MAX_CLIENT_FRAME_BYTES,
     PONG_FRAME,
@@ -59,24 +61,29 @@ calls_made = meter.create_counter("lemma.live.calls")
 _TRANSIENT = (SQLAlchemyError, OSError, LiveUnavailable)
 
 
-async def _resolve_session(websocket: WebSocket) -> SessionContainer:
-    """A SuperTokens session from the handshake.
+def _handshake_token(websocket: WebSocket) -> tuple[str | None, bool]:
+    """The handshake's session token, and whether it came from a cookie.
 
     Tries, in order: ``Authorization: Bearer`` (CLI/SDK), the access-token
     cookie (browser cookie sessions), then an ``access_token`` query parameter
     (browsers cannot set headers on an upgrade).
     """
-    token: str | None = None
     authorization = websocket.headers.get("authorization") or ""
     scheme, _, raw = authorization.partition(" ")
     if scheme.lower() == "bearer" and raw.strip():
-        token = raw.strip()
-    if token is None:
-        token = (
-            websocket.cookies.get("sAccessToken")
-            or websocket.cookies.get("st-access-token")
-            or websocket.query_params.get("access_token")
-        )
+        return raw.strip(), False
+    cookie = websocket.cookies.get("sAccessToken") or websocket.cookies.get(
+        "st-access-token"
+    )
+    if cookie:
+        return cookie, True
+    return websocket.query_params.get("access_token"), False
+
+
+async def _resolve_session(websocket: WebSocket) -> tuple[SessionContainer, bool]:
+    """A SuperTokens session from the handshake, and whether it was the
+    cookie's -- the one credential a page gets by being opened."""
+    token, from_cookie = _handshake_token(websocket)
     if not token:
         raise PermissionError("The live socket requires a session token.")
     session = await get_session_without_request_response(
@@ -84,7 +91,7 @@ async def _resolve_session(websocket: WebSocket) -> SessionContainer:
     )
     if session is None:
         raise PermissionError("The live socket requires a session token.")
-    return session
+    return session, from_cookie
 
 
 def _session_of(session: SessionContainer) -> LiveSession:
@@ -105,7 +112,7 @@ async def accept_and_authenticate(websocket: WebSocket) -> LiveSession | None:
         # The client went away before the accept.
         return None
     try:
-        session = await _resolve_session(websocket)
+        session, from_cookie = await _resolve_session(websocket)
     except TryRefreshTokenError:
         await websocket.close(
             code=CLOSE_UNAUTHENTICATED,
@@ -120,7 +127,45 @@ async def accept_and_authenticate(websocket: WebSocket) -> LiveSession | None:
             code=CLOSE_UNAUTHENTICATED, reason="Unauthorized live socket."
         )
         return None
+    refusal = await _workload_refusal(websocket, session)
+    if refusal is None and from_cookie:
+        # No anti-CSRF check above: where the page that opened it is decides
+        # (``handshake_origin``), and an app's page stays in its own pod.
+        refusal = await cookie_socket_refusal(websocket)
+    if refusal is not None:
+        await websocket.close(code=CLOSE_FORBIDDEN, reason=refusal)
+        return None
     return _session_of(session)
+
+
+async def _workload_refusal(
+    websocket: WebSocket, session: SessionContainer
+) -> str | None:
+    """Why a workload's token may not hold this socket, or None.
+
+    The socket authenticates itself, so the global gate never ran, and its
+    topics read as the user the token names. A workload's token got that
+    person's whole reach here -- in any pod. It is resolved now as on every
+    HTTP route: standing, revocation, and the pin to its own pod. The pod's
+    assistant reads exactly what its person reads, so it keeps the socket in
+    its own pod; a named agent or function would read past its grants, which
+    the topics do not apply, so it is refused.
+    """
+    from app.core.authorization.delegation import is_default_pod_agent_claims
+    from app.core.security import PrincipalRefused, resolve_delegated_principal
+
+    raw_pod_id = websocket.path_params.get("pod_id")
+    try:
+        claims = await resolve_delegated_principal(
+            session.get_access_token_payload() or {},
+            user_id=UUID(session.get_user_id()),
+            pod_id=UUID(str(raw_pod_id)) if raw_pod_id else None,
+        )
+    except PrincipalRefused as refused:
+        return refused.message
+    if claims is None or is_default_pod_agent_claims(claims):
+        return None
+    return "A named agent or function cannot hold a live socket."
 
 
 class LiveDispatcher:

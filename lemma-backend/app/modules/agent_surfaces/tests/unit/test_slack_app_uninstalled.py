@@ -99,7 +99,7 @@ async def test_an_unhashable_or_missing_event_type_is_not_an_uninstall(event):
 def _surface(identity: str | None, *, status: str = "ACTIVE"):
     return SimpleNamespace(
         id=uuid4(),
-        account_id=uuid4(),
+        pod_connector_slug="slack-bot",
         surface_identity_id=identity,
         surface_type=SurfacePlatform.SLACK,
         external_workspace_id="T1",
@@ -149,6 +149,7 @@ async def test_a_surface_in_any_status_verifies_its_apps_removal_and_nothing_els
 
 def _retired(*, is_you: bool, is_pod_member: bool = True) -> SurfaceConnection:
     return SurfaceConnection(
+        pod_connector="slack-bot",
         account_id=uuid4(),
         connector_id="slack",
         status=SurfaceConnectionStatus.REAUTH_REQUIRED,

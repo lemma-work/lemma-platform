@@ -365,15 +365,13 @@ class SurfaceWebhookSecurityService:
         Lemma's own managed number. Only account-less (Lemma-managed) surfaces
         use the env-configured system credentials.
         """
-        if surface is not None and surface.account_id is not None:
+        if surface is not None and surface.pod_connector_slug is not None:
             try:
                 async with self._resolver() as resolver:
                     if resolver is None:
                         return None, None
                     credentials = WhatsAppCredentials.of(
-                        await resolver.for_account(
-                            surface.account_id, platform=SurfacePlatform.WHATSAPP
-                        )
+                        await resolver.for_surface(surface)
                     )
             except Exception as exc:
                 # The request is refused as unverifiable either way; this is
@@ -381,7 +379,7 @@ class SurfaceWebhookSecurityService:
                 # nobody configured.
                 logger.warning(
                     "agent_surfaces.webhook_security_service.whatsapp_credentials_unavailable.degraded",
-                    account_id=str(surface.account_id),
+                    surface_id=str(surface.id),
                     error_type=type(exc).__name__,
                     exc_info=exc,
                 )

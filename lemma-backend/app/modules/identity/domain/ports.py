@@ -227,3 +227,10 @@ class PodMembershipPort(Protocol):
         user_name: Optional[str],
         pod_role: str,
     ) -> None: ...
+
+    async def leave_organization_pods(
+        self, *, organization_member_id: UUID, user_id: UUID
+    ) -> list[UUID]:
+        """Take a departing organization member out of each of its pods, each
+        announced as the pod's own removal."""
+        ...

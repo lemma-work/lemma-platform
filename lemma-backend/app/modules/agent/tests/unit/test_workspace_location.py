@@ -278,11 +278,15 @@ def test_parse_project_repo_drops_a_ref_git_would_read_as_a_flag():
     assert repo.ref is None
 
 
-def test_parse_project_repo_ignores_an_unparseable_account():
-    repo = parse_project_repo({"owner": "acme", "repo": "web", "account_id": "nope"})
+def test_a_project_never_names_the_account_it_clones_as():
+    """Which account clones is the pod's `github` connector's decision, so an
+    account a client writes into the metadata is not carried anywhere."""
+    repo = parse_project_repo(
+        {"owner": "acme", "repo": "web", "account_id": str(uuid4())}
+    )
 
-    assert repo is not None
-    assert repo.account_id is None
+    assert repo == ProjectRepo(owner="acme", repo="web")
+    assert repo.as_metadata() == {"owner": "acme", "repo": "web"}
 
 
 def test_repo_metadata_derives_the_working_directory():

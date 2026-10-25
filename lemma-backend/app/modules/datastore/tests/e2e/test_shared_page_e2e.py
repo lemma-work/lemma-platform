@@ -371,7 +371,8 @@ async def test_an_agents_page_carries_only_what_the_agent_may_read(
                 {
                     "resource_type": "folder",
                     "resource_name": "/library",
-                    "permission_ids": ["folder.read"],
+                    # Making a public link is its own grant (audit M22).
+                    "permission_ids": ["folder.read", "folder.share"],
                 },
             ]
         },

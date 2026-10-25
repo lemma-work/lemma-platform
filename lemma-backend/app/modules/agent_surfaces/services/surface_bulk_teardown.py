@@ -18,6 +18,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 
 logger = get_logger(__name__)
 
@@ -82,3 +83,43 @@ async def delete_matching_surfaces(
             "surface.cleanup.failed", pod_id=pod_id, failure_count=failure_count
         )
     return deleted
+
+
+async def release_scarce_identities(service, pod_id: UUID) -> int:
+    """Free the finite things this pod holds, inline as it is deleted.
+
+    Two kinds, for one reason: a Resend inbound address and a WhatsApp
+    number out of the pool. Both are allocated per surface off a shared
+    credential, both are exhaustible, and neither makes a provider call on
+    the way out -- Resend receives on a catch-all webhook, and a pooled
+    number's webhook belongs to the number rather than to the surface, so
+    there is nothing to deregister. That is what keeps this bounded and
+    safe to do inside the delete transaction; everything else still goes
+    through the pod-deleted event and ``delete_all_surfaces_for_pod``.
+
+    Inline rather than on the event, because pod deletion is **soft** and
+    the surface row survives on purpose so an undelete restores a working
+    surface. That is the right trade for a Slack app and the wrong one for
+    something scarce: a soft-deleted pod would hold a number out of a finite
+    pool indefinitely, and the deployment would run out on behalf of pods
+    nobody is using. For the address there is a second reason -- the pod's
+    org-unique *name* is freed in this same request, so a pod recreated
+    under it races the worker for the address.
+
+    The cost, stated rather than discovered: an undeleted pod does not get
+    its number back, exactly as it does not get its address back. Somebody
+    restoring a pod re-allocates, and may find the pool empty.
+
+    Only WhatsApp surfaces that actually hold a number are released. One on
+    the shared line has taken nothing scarce, so it keeps the ordinary
+    teardown path.
+    """
+    released = await delete_matching_surfaces(
+        service, pod_id, platform=SurfacePlatform.RESEND.value
+    )
+    return released + await delete_matching_surfaces(
+        service,
+        pod_id,
+        platform=SurfacePlatform.WHATSAPP.value,
+        only_holding_an_identity=True,
+    )

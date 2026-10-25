@@ -25,11 +25,14 @@ class SurfaceUpdateRequest:
     recreate to change either.
 
         Attributes:
-            account_id (None | Unset | UUID):
+            account_id (None | Unset | UUID): Deprecated: name `pod_connector` instead. Still accepted, as the pod connector
+                that serves this account to you.
             config (SurfaceBehaviorConfigInput | Unset):
             credential_mode (None | SurfaceCredentialMode | Unset):
             default_agent_name (None | str | Unset):
             is_enabled (bool | None | Unset):
+            pod_connector (None | str | Unset): Slug of the SHARED pod connector to run this surface as instead: the repair
+                when the account it runs as is withdrawn or expires. Omit to keep the one it has.
     """
 
     account_id: None | Unset | UUID = UNSET
@@ -37,6 +40,7 @@ class SurfaceUpdateRequest:
     credential_mode: None | SurfaceCredentialMode | Unset = UNSET
     default_agent_name: None | str | Unset = UNSET
     is_enabled: bool | None | Unset = UNSET
+    pod_connector: None | str | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
         account_id: None | str | Unset
@@ -71,6 +75,12 @@ class SurfaceUpdateRequest:
         else:
             is_enabled = self.is_enabled
 
+        pod_connector: None | str | Unset
+        if isinstance(self.pod_connector, Unset):
+            pod_connector = UNSET
+        else:
+            pod_connector = self.pod_connector
+
         field_dict: dict[str, Any] = {}
 
         field_dict.update({})
@@ -84,6 +94,8 @@ class SurfaceUpdateRequest:
             field_dict["default_agent_name"] = default_agent_name
         if is_enabled is not UNSET:
             field_dict["is_enabled"] = is_enabled
+        if pod_connector is not UNSET:
+            field_dict["pod_connector"] = pod_connector
 
         return field_dict
 
@@ -156,12 +168,22 @@ class SurfaceUpdateRequest:
 
         is_enabled = _parse_is_enabled(d.pop("is_enabled", UNSET))
 
+        def _parse_pod_connector(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        pod_connector = _parse_pod_connector(d.pop("pod_connector", UNSET))
+
         surface_update_request = cls(
             account_id=account_id,
             config=config,
             credential_mode=credential_mode,
             default_agent_name=default_agent_name,
             is_enabled=is_enabled,
+            pod_connector=pod_connector,
         )
 
         return surface_update_request

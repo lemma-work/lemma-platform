@@ -99,16 +99,14 @@ def test_parse_grant_spec(spec, expected):
     assert parse_grant_spec(spec) == expected
 
 
-def test_fixed_account_mode_is_expressible():
-    """Pinning a shared connector account needs `connector_account.use` on the
-    account id, alongside `connector.use`. There was no way to write the first
-    half at all, so fixed-account mode could not be authored from the CLI."""
+@pytest.mark.parametrize("token", ["account", "connector_account"])
+def test_an_account_is_never_granted_to_a_workload(token):
+    """Agents and functions are granted a pod connector, by slug. Which account
+    it runs as is the connector's and the account owner's decision, so there is
+    no account grant to write -- and saying so beats "unknown grant type"."""
     account_id = "6f1c9e2a-0000-4000-8000-000000000001"
-    assert parse_grant_spec(f"account:{account_id}:use") == {
-        "resource_type": "connector_account",
-        "resource_name": account_id,
-        "permission_ids": ["connector_account.use"],
-    }
+    with pytest.raises(ScaffoldError, match="connector:<slug>:use"):
+        parse_grant_spec(f"{token}:{account_id}:use")
 
 
 def test_app_use_still_resolves_to_a_connector_grant(capsys):
@@ -132,13 +130,13 @@ def test_grant_presets_only_use_permissions_the_backend_accepts():
             "datastore.table.read",
             "datastore.record.read",
             "datastore.record.write",
+            "datastore.record.delete",
             "datastore.table.update",
             "datastore.table.delete",
         },
-        "folder": {"folder.read", "folder.write", "folder.delete"},
-        "document": {"folder.read", "folder.write", "folder.delete"},
+        "folder": {"folder.read", "folder.write", "folder.delete", "folder.share"},
+        "document": {"folder.read", "folder.write", "folder.delete", "folder.share"},
         "connector": {"connector.use"},
-        "connector_account": {"connector_account.use", "connector_account.manage"},
         "function": {
             "function.read",
             "function.execute",

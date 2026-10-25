@@ -436,8 +436,28 @@ class TestConnectingAnAccountAndExecuting:
         # Execution goes over HTTP: the use case takes a Request, because the
         # authorization context is built from it. Calling it any other way
         # would be testing a path no caller uses.
+        # Through a pod connector on the install: the one way an operation runs.
+        pod = await authenticated_client.post(
+            "/pods",
+            json={
+                "organization_id": str(org_id),
+                "name": f"MCP Pod {uuid4().hex[:8]}",
+                "type": "HYBRID",
+            },
+        )
+        assert pod.status_code == 201, pod.text
+        pod_id = pod.json()["id"]
+        declared = await authenticated_client.post(
+            f"/pods/{pod_id}/connectors",
+            json={
+                "slug": "calc",
+                "auth_config_id": str(install.id),
+                "mode": "PER_MEMBER",
+            },
+        )
+        assert declared.status_code == 201, declared.text
         executed = await authenticated_client.post(
-            f"/organizations/{org_id}/connectors/{install.name}/operations/add/execute",
+            f"/pods/{pod_id}/connectors/calc/operations/add/execute",
             json={"payload": {"a": 2, "b": 3}},
         )
         assert executed.status_code == 200, executed.text

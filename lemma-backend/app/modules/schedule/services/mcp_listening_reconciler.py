@@ -12,10 +12,16 @@ went unnoticed:
   the server started refusing. The schedule still read "When issue.created
   happens" and never fired again, silently.
 
-This pass finds each. An orphan is unsubscribed. The other two turn the
-schedule off and say why, the way PS-SCHED-023 asks: the subscription is
-dropped and the routing key cleared, so turning it back on subscribes afresh
-on the author's account (`resubscribe_on_reactivation`).
+- **A connector that no longer means that account.** The schedule names a pod
+  connector, and the subscription was made on whatever it resolved to then.
+  The shared account was withdrawn, the owner's account left the pod, the
+  connector was removed -- the subscription kept renewing on an account the
+  schedule no longer has any claim to.
+
+This pass finds each. An orphan is unsubscribed. The others turn the schedule
+off and say why, the way PS-SCHED-023 asks: the subscription is dropped and
+the routing key cleared, so turning it back on subscribes afresh through what
+the connector means then (`resubscribe_on_reactivation`).
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from app.modules.schedule.repositories.listening_queries import (
     schedules_listening_through,
 )
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
+from app.modules.schedule.services.schedule_connector_policy import standing_account
 
 logger = get_logger(__name__)
 
@@ -50,6 +57,7 @@ PAGE = 200
 
 AUTHOR_LEFT = "MCP_AUTHOR_LEFT_POD"
 LAPSED = "MCP_SUBSCRIPTION_LAPSED"
+CONNECTOR_MOVED = "MCP_CONNECTOR_UNRESOLVED"
 
 #: What the schedule says about why it is off, where its author will look.
 WHY = {
@@ -61,12 +69,20 @@ WHY = {
         "Turned off: the server stopped accepting its subscription. Reconnect "
         "the account if it needs signing in again, then turn this back on."
     ),
+    CONNECTOR_MOVED: (
+        "Turned off: the connector it listens through no longer reaches the "
+        "account it was listening on -- a shared account was withdrawn, or "
+        "the connector changed. Turn it back on to listen through what the "
+        "connector means now."
+    ),
 }
 
 ListeningPage = Callable[..., Awaitable[list[McpListening]]]
 Unsubscribe = Callable[[str], Awaitable[None]]
 #: Whether this person is in this pod, now.
 IsMember = Callable[[object, UUID, UUID], Awaitable[bool]]
+#: The account a schedule's pod connector resolves to now, or None.
+BoundAccount = Callable[[object, ScheduleEntity], Awaitable[UUID | None]]
 
 
 async def _is_member(uow: object, pod_id: UUID, user_id: UUID) -> bool:
@@ -89,12 +105,14 @@ class McpListeningReconciler:
         page: ListeningPage,
         unsubscribe: Unsubscribe,
         is_member: IsMember = _is_member,
+        bound_account: BoundAccount = standing_account,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._uow_factory = uow_factory
         self._page = page
         self._unsubscribe = unsubscribe
         self._is_member = is_member
+        self._bound_account = bound_account
         self._clock = clock
 
     async def run(self) -> Reconciled:
@@ -151,6 +169,9 @@ class McpListeningReconciler:
         async with self._uow_factory() as uow:
             if not await self._is_member(uow, schedule.pod_id, schedule.user_id):
                 return AUTHOR_LEFT
+            account_id = await self._bound_account(uow, schedule)
+        if account_id is None or account_id != state.account_id:
+            return CONNECTOR_MOVED
         if state.lapsed and state.renew_failures >= LAPSED_AFTER_FAILURES:
             return LAPSED
         return None

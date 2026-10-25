@@ -129,6 +129,9 @@ async def display_resource(
             access = await workspace_service.create_browser_access(
                 ctx.deps.user_id,
                 ttl_seconds=1800,
+                # The browser in this agent's workspace, beside its shell.
+                pod_id=ctx.deps.pod_id,
+                actor_id=ctx.deps.workload_id,
             )
         except Exception as exc:
             # Redacted: this becomes the tool return the model reads and the
@@ -300,13 +303,14 @@ async def request_approval(
     permission_ids: list[str] | None = None,
 ) -> RequestApprovalResponse:
     """
-    Ask the user to approve an action you lack permission for, then run it.
+    Ask the user to approve an action you were refused, then run it.
 
-    Call this when a tool fails with a permission error (403) or the action needs
-    the user's authority — deleting data, sending email, a privileged command.
+    Call this when a tool fails needing approval (a 403 for a missing grant or a
+    destructive action) — deleting data, sending email, a privileged command.
     Describe the FULL action; do not rely on prior context. The run pauses for an
-    approval card, and on approval the backend executes the tool with the *user's*
-    authority and returns its result here. On denial nothing runs.
+    approval card. On approval the backend runs the tool as you, allowed exactly
+    what that call was refused (never more, and never beyond what the user may do
+    themselves), and returns its result here. On denial nothing runs.
 
     Args:
         tool_name: Tool to run on approval, e.g. "exec_command". Must be one you have.
@@ -314,11 +318,14 @@ async def request_approval(
         title: Short user-facing title for the approval card.
         reason: Why this needs approval.
         payload: Extra structured detail for rendering or audit.
-        permission_ids: Copy `approval.permission_ids` verbatim from the failed tool
-            result. Lets "approve for session" cover these actions for the rest of the
-            conversation instead of re-prompting.
+        permission_ids: Copy `approval.permission_ids` from the failed tool result, to
+            show on the card. What an approval allows comes from the refusal the
+            server recorded, not from this.
     """
     del payload  # rendered from the persisted tool call; not needed at runtime
+    # Rendered on the card too, and nothing else: an approval lends what the
+    # server recorded refusing the call for (``approval_denials``), never this.
+    del permission_ids
     deps = ctx.deps
     if deps.agent_run_id is None:
         return RequestApprovalResponse(
@@ -343,13 +350,11 @@ async def request_approval(
                 error="request_approval requires a durable tool call id.",
             )
         auto_approved = await _run_if_exact_match_already_approved(
-            deps=deps,
-            tool_name=tool_name,
-            args=args,
-            permission_ids=permission_ids,
+            deps=deps, tool_name=tool_name, args=args
         )
         if auto_approved is not None:
             return auto_approved
+        await _show_card(deps, ctx.tool_call_id, tool_name=tool_name, args=args)
         return RequestApprovalResponse(
             success=True,
             parked_tool_call_id=ctx.tool_call_id,
@@ -362,13 +367,11 @@ async def request_approval(
         )
 
     auto_approved = await _run_if_exact_match_already_approved(
-        deps=deps,
-        tool_name=tool_name,
-        args=args,
-        permission_ids=permission_ids,
+        deps=deps, tool_name=tool_name, args=args
     )
     if auto_approved is not None:
         return auto_approved
+    await _show_card(deps, ctx.tool_call_id, tool_name=tool_name, args=args)
 
     # Pause the run for the user's decision instead of blocking the worker. The
     # harness already persisted this tool call (tool_name/args/title in its args)
@@ -380,12 +383,33 @@ async def request_approval(
     raise AgentInputRequired(ctx.tool_call_id, "request_approval")
 
 
+async def _show_card(
+    deps: BaseAgentContext, approval_id: str, *, tool_name: str, args: JsonObject
+) -> None:
+    """Write on the approval what is pending as its card goes up: all an answer
+    to it may lend (``approval_denials.show_card``). A run with no person
+    behind it has nobody to show it to, and its answer lends nothing."""
+    from app.modules.agent.tools.approval_denials import show_card
+    from app.modules.agent.tools.authority import workload_actor_id
+
+    person = getattr(deps, "user_id", None)
+    if person is None:
+        return
+    await show_card(
+        conversation_id=deps.conversation_id,
+        approval_id=approval_id,
+        person_user_id=person,
+        workload_actor_id=workload_actor_id(deps),
+        tool_name=tool_name,
+        args=args,
+    )
+
+
 async def _run_if_exact_match_already_approved(
     *,
     deps: BaseAgentContext,
     tool_name: str,
     args: JsonObject,
-    permission_ids: list[str] | None = None,
 ) -> RequestApprovalResponse | None:
     """Skip the pause when this exact call was approved for session earlier.
 
@@ -396,8 +420,8 @@ async def _run_if_exact_match_already_approved(
     can be honored. See session_approvals.exact_command_permission_id for why
     the match is exact-args-only, never a prefix.
 
-    ``permission_ids`` are recorded here as well, and that is the whole of
-    DEV-ACCESS-002. The exact-command key is tool-name-plus-args, so a second
+    Every permission the call was refused for is required here as well, and
+    that is the whole of DEV-ACCESS-002. The exact-command key is tool-name-plus-args, so a second
     denial of the *same* call for a *different* permission still matches it and
     takes this path -- and the path used to return before anything recorded the
     new permission. Reading a table needs two permissions and the authorizer
@@ -410,6 +434,7 @@ async def _run_if_exact_match_already_approved(
         exact_command_permission_id,
         has_session_approval,
     )
+    from app.modules.agent.tools.approval_denials import pending_refusals
     from app.modules.agent.tools.authority import workload_actor_id as actor_of
 
     # The same key the agent's own delegated context carries, so an approval
@@ -430,13 +455,31 @@ async def _run_if_exact_match_already_approved(
     # when something is missing means the user is asked exactly once per new
     # permission, and `record_session_approvals` writes it with a human behind
     # it.
-    needed = [
-        exact_command_permission_id(tool_name, args),
-        *(p for p in (permission_ids or []) if isinstance(p, str) and p),
-    ]
+    #
+    # And "every permission this call needs" is the server's record of what it
+    # refused this call for, not the model's ``permission_ids``: requiring
+    # those could only ever narrow, but the record is the one list that is
+    # actually right (H6). For a sandbox command that includes what its
+    # session's sandbox was refused since: the person allowed `python job.py`
+    # for the conversation, the agent edited job.py to delete a table, and
+    # asking for `python job.py` again ran it -- and lent it the delete -- with
+    # no card. A refusal nobody approved yet sends the call to a card, and the
+    # run below lends nothing beyond the approvals already standing.
+    refused = await pending_refusals(
+        conversation_id=deps.conversation_id,
+        person_user_id=getattr(deps, "user_id", None),
+        workload_actor_id=workload_actor_id,
+        tool_name=tool_name,
+        args=args,
+    )
+    needed = [exact_command_permission_id(tool_name, args), *sorted(refused)]
     for permission_id in needed:
         if not await has_session_approval(
             session_id=str(deps.conversation_id),
+            # Only this person's approvals: in a group conversation another
+            # member's "allow for this conversation" is not theirs (M5). A run
+            # with nobody behind it has no approvals at all, and pauses.
+            person_user_id=getattr(deps, "user_id", None),
             workload_actor_id=workload_actor_id,
             permission_id=permission_id,
         ):

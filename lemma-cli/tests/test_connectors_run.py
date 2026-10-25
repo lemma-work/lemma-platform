@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from lemma_cli.cli_core.app import app
 from lemma_cli.cli_core.commands import connectors
+from lemma_sdk.errors import LemmaNotFoundError
 
 runner = CliRunner()
 
@@ -97,6 +98,19 @@ def _fake_client(captured: dict):
         def get(self, auth_config, operation):
             return _OPERATIONS[operation]
 
+        def execute(
+            self, auth_config, operation, payload, *, account_id=None, pod_id=None
+        ):
+            # The deprecated org-level route (`--account`, `--auth-config`).
+            captured["deprecated_execute"] = {
+                "auth_config": auth_config,
+                "operation": operation,
+                "payload": payload,
+                "account_id": account_id,
+                "pod_id": pod_id,
+            }
+            return {"result": {"ok": True}}
+
         def search_all(self, query=None, *, limit=100):
             # The org-wide endpoint: ONE request, hits labelled with the install
             # to execute them against.
@@ -132,26 +146,96 @@ def _fake_client(captured: dict):
             captured["connect_request"] = {"connector": connector, **extra}
             return {"authorization_url": "https://acme.myshopify.com/admin/oauth"}
 
-        def execute(self, auth_config, operation, *, payload, account_id=None, **extra):
+    class PodConnectors:
+        """A pod's connectors: what `connectors run`/`execute` now talk to."""
+
+        def __init__(self, pod_id):
+            self.pod_id = pod_id
+
+        def pod_connectors(self):
+            return {"items": [{"slug": slug} for slug in _POD_CONNECTORS]}
+
+        def pod_operation(self, connector, operation):
+            captured.setdefault("op_gets", []).append((connector, operation))
+            if connector not in _POD_CONNECTORS:
+                raise LemmaNotFoundError(
+                    404, "no such connector", code="POD_CONNECTOR_NOT_FOUND"
+                )
+            if operation not in _OPERATIONS:
+                raise LemmaNotFoundError(404, "no such operation")
+            return _OPERATIONS[operation]
+
+        def pod_operations(self, connector, query=None, *, limit=100):
+            captured.setdefault("pod_searches", []).append((connector, query, limit))
+            hits = [
+                {"name": name, "description": op["description"]}
+                for name, op in _OPERATIONS.items()
+                if not query or query.split()[0].lower() in op["description"].lower()
+            ] or [
+                {"name": name, "description": op["description"]}
+                for name, op in _OPERATIONS.items()
+            ]
+            return {"items": hits[:limit]}
+
+        def declare_pod_connector(self, slug, auth_config_id, mode, **extra):
+            captured["declare"] = {
+                "slug": slug,
+                "auth_config_id": auth_config_id,
+                "mode": mode,
+                **extra,
+            }
+            return {"slug": slug}
+
+        def add_pod_account(self, account_id, *, visibility="PERSONAL"):
+            captured["add_account"] = (account_id, visibility)
+            return {"id": "pa-1"}
+
+        def share_pod_account_as(self, pod_account_id, slug, *, purpose=None):
+            captured["share_as"] = (pod_account_id, slug, purpose)
+            return {"slug": slug}
+
+        def connector_coverage(self, slug):
+            captured["coverage"] = slug
+            return {"eligible": 2, "connected": 1, "waiting_on": [], "truncated": False}
+
+        def ask_members_to_connect(self, slug, *, user_ids=None):
+            captured["ask"] = (slug, user_ids)
+            return {
+                "asked": [],
+                "asked_recently": [],
+                "not_asked": [],
+                "connect_url": "x",
+            }
+
+        def execute(self, connector, operation, payload):
+            if connector not in _POD_CONNECTORS:
+                raise LemmaNotFoundError(
+                    404, "no such connector", code="POD_CONNECTOR_NOT_FOUND"
+                )
             captured["execute"] = {
-                "auth_config": auth_config,
+                "pod_id": self.pod_id,
+                "connector": connector,
                 "operation": operation,
                 "payload": payload,
-                "account_id": account_id,
-                **extra,
             }
             return {"result": {"ok": True}}
 
-    return SimpleNamespace(connectors=Connectors())
+    return SimpleNamespace(
+        connectors=Connectors(),
+        pod=lambda pod_id: SimpleNamespace(connectors=PodConnectors(pod_id)),
+    )
 
 
-def _patch(monkeypatch, client):
+_POD = "11111111-1111-1111-1111-111111111111"
+_POD_CONNECTORS = ("gmail", "support-inbox")
+
+
+def _patch(monkeypatch, client, *, pod=_POD):
+    runtime = {"org": "org-1", **({"pod": pod} if pod else {})}
     monkeypatch.setattr(
         connectors,
         "run_with_client",
-        lambda ctx, fn: fn(
-            client, SimpleNamespace(config={"_runtime": {"org": "org-1"}})
-        ),
+        lambda ctx, fn: fn(client, SimpleNamespace(config={"_runtime": runtime})),
     )
 
 
@@ -172,10 +256,16 @@ def test_run_resolves_connector_id_operation_and_executes(monkeypatch):
     )
 
     assert result.exit_code == 0, result.stdout
-    # `gmail` resolved to the DEFAULT install, not the first one listed.
-    assert captured["execute"]["auth_config"] == "workspace-gmail"
-    assert captured["execute"]["operation"] == "gmail_list_messages"
-    assert captured["execute"]["payload"] == {"max_results": 5}
+    # `gmail` is the pod connector's slug, run in the selected pod: the
+    # connector, not the caller, decides which account it runs as.
+    assert captured["execute"] == {
+        "pod_id": _POD,
+        "connector": "gmail",
+        "operation": "gmail_list_messages",
+        "payload": {"max_results": 5},
+    }
+    # Discovery went through the same pod connector.
+    assert captured["op_gets"] == [("gmail", "gmail_list_messages")]
 
 
 def test_run_resolves_a_plain_english_intent(monkeypatch):
@@ -205,38 +295,29 @@ def test_run_prints_the_schema_instead_of_failing_when_input_is_missing(monkeypa
     assert "to" in result.stdout  # the required field is named
 
 
-def test_run_accepts_an_account_email(monkeypatch):
-    captured: dict = {}
-    _patch(monkeypatch, _fake_client(captured))
-
-    result = runner.invoke(
-        app,
-        [
-            "connectors",
-            "run",
-            "gmail",
-            "gmail_list_messages",
-            "-d",
-            "{}",
-            "--account",
-            "anukul@lemma.work",
-        ],
-    )
-
-    assert result.exit_code == 0, result.stdout
-    assert captured["execute"]["account_id"] == "acct-9"
-
-
-def test_run_reports_an_unknown_connector_with_what_is_installed(monkeypatch):
+def test_run_reports_an_unknown_connector_with_what_the_pod_declares(monkeypatch):
     captured: dict = {}
     _patch(monkeypatch, _fake_client(captured))
 
     result = runner.invoke(app, ["connectors", "run", "notion", "anything"])
 
     assert result.exit_code != 0
-    # The error names the installs that DO exist, so the next command is obvious
-    # without a separate `overview` call.
-    assert "workspace-gmail" in result.output
+    # The error names the pod's connectors, so the next command is obvious.
+    assert "support-inbox" in result.output
+
+
+def test_run_needs_a_pod_for_a_name_that_is_no_installation(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured), pod=None)
+    monkeypatch.delenv("LEMMA_POD_ID", raising=False)
+
+    result = runner.invoke(
+        app, ["connectors", "run", "notion", "gmail_list_messages", "-d", "{}"]
+    )
+
+    assert result.exit_code != 0
+    assert "execute" not in captured
+    assert "deprecated_execute" not in captured
 
 
 def test_search_with_no_connector_searches_every_install(monkeypatch):
@@ -327,24 +408,20 @@ def test_operations_get_auto_discovers_like_its_siblings(monkeypatch):
     assert "gmail_send_email" in result.stdout
 
 
-def test_resolution_lists_installs_once_per_command(monkeypatch):
-    """Classifying a positional and resolving it must not cost two round trips."""
+def test_execute_runs_the_named_pod_connector_without_resolving_installs(monkeypatch):
+    """A pod connector slug is the whole address: nothing to look up first."""
     captured: dict = {}
     _patch(monkeypatch, _fake_client(captured))
 
     result = runner.invoke(
         app,
-        [
-            "connectors",
-            "operations",
-            "execute",
-            "workspace-gmail",
-            "gmail_list_messages",
-        ],
+        ["connectors", "operations", "execute", "support-inbox", "gmail_send_email"],
     )
 
     assert result.exit_code == 0, result.stdout
-    assert captured["auth_config_lists"] == 1
+    assert "auth_config_lists" not in captured
+    assert captured["execute"]["connector"] == "support-inbox"
+    assert captured["execute"]["pod_id"] == _POD
 
 
 def test_read_intent_skips_a_higher_ranked_write_operation(monkeypatch):
@@ -441,7 +518,7 @@ def test_attach_turns_pod_paths_into_file_references(monkeypatch):
             "connectors",
             "operations",
             "execute",
-            "workspace-gmail",
+            "gmail",
             "gmail_send_email",
             "-d",
             '{"to": "anukul@lemma.work"}',
@@ -461,28 +538,8 @@ def test_attach_turns_pod_paths_into_file_references(monkeypatch):
         "attachments": [{"pod_path": "/me/a.pdf"}, {"pod_path": "/me/b.pdf"}],
         "body": {"file": {"pod_path": "/shared/c.csv"}},
     }
-    # The pod the paths resolve in, sent only because a pod file is named.
-    assert sent["pod_id"] == "11111111-1111-1111-1111-111111111111"
-
-
-def test_a_call_without_files_sends_no_pod(monkeypatch):
-    captured: dict = {}
-    _patch(monkeypatch, _fake_client(captured))
-    monkeypatch.setenv("LEMMA_POD_ID", "11111111-1111-1111-1111-111111111111")
-
-    result = runner.invoke(
-        app,
-        [
-            "connectors",
-            "operations",
-            "execute",
-            "workspace-gmail",
-            "gmail_list_messages",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "pod_id" not in captured["execute"]
+    # The paths resolve in the pod the connector is run in.
+    assert sent["pod_id"] == _POD
 
 
 def test_connect_request_passes_connection_fields(monkeypatch):
@@ -512,3 +569,365 @@ def test_connect_request_passes_connection_fields(monkeypatch):
         app, ["connectors", "connect-requests", "create", "shopify", "--field", "acme"]
     )
     assert refused.exit_code != 0
+
+
+def test_pod_list_and_pod_operations_read_the_selected_pods_connectors(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    listed = runner.invoke(app, ["--json", "connectors", "pod-list"])
+    assert listed.exit_code == 0, listed.output
+    assert [i["slug"] for i in json.loads(listed.stdout)["items"]] == list(
+        _POD_CONNECTORS
+    )
+
+    found = runner.invoke(
+        app, ["--json", "connectors", "pod-operations", "gmail", "send", "--limit", "3"]
+    )
+    assert found.exit_code == 0, found.output
+    assert captured["pod_searches"] == [("gmail", "send", 3)]
+
+
+def test_pod_add_declares_an_installation_under_a_slug(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "pod-add",
+            "support-inbox",
+            "gmail",
+            "--mode",
+            "SHARED",
+            "--shared-account",
+            "pa-1",
+            "--purpose",
+            "The team inbox",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # `gmail` resolved to the org's default Gmail install, by id.
+    assert captured["declare"] == {
+        "slug": "support-inbox",
+        "auth_config_id": "ac-1",
+        "mode": "SHARED",
+        "shared_pod_account_id": "pa-1",
+        "required": False,
+        "purpose": "The team inbox",
+    }
+
+
+def test_pod_share_brings_ones_own_account_into_the_pod_shared(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(app, ["connectors", "pod-share", "acct-9"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["add_account"] == ("acct-9", "POD")
+
+
+def test_pod_share_as_shares_and_points_in_one_call(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        ["connectors", "pod-share-as", "pa-1", "support-inbox", "--purpose", "Inbox"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["share_as"] == ("pa-1", "support-inbox", "Inbox")
+
+
+def test_pod_coverage_and_pod_ask_reach_the_selected_pods_connector(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    covered = runner.invoke(app, ["--json", "connectors", "pod-coverage", "gmail"])
+    assert covered.exit_code == 0, covered.output
+    assert json.loads(covered.stdout)["connected"] == 1
+    assert captured["coverage"] == "gmail"
+
+    everyone = runner.invoke(app, ["connectors", "pod-ask", "gmail"])
+    assert everyone.exit_code == 0, everyone.output
+    assert captured["ask"] == ("gmail", None)
+
+    some = runner.invoke(
+        app, ["connectors", "pod-ask", "gmail", "--user", "u1", "--user", "u2"]
+    )
+    assert some.exit_code == 0, some.output
+    assert captured["ask"] == ("gmail", ["u1", "u2"])
+
+
+# --- Deprecated: addressing an installation and an account -----------------
+#
+# Live scripts, agents and pod functions still pass `--account`/`--auth-config`
+# or an `account_id` in the data. They keep working, through the deprecated
+# org-level route the server still serves, hidden from help and warned about.
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_run_with_an_account_takes_the_deprecated_route_and_warns(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "run",
+            "gmail",
+            "gmail_list_messages",
+            "-d",
+            "{}",
+            "--account",
+            "anukul@lemma.work",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # The email resolved to its account; `gmail` to the default installation.
+    assert captured["deprecated_execute"] == {
+        "auth_config": "workspace-gmail",
+        "operation": "gmail_list_messages",
+        "payload": {},
+        "account_id": "acct-9",
+        "pod_id": None,
+    }
+    assert "execute" not in captured  # never the pod connector route
+    assert "op_gets" not in captured  # resolved on the installation instead
+    assert "warning: --account is deprecated" in _flat(result.stderr)
+
+
+def test_execute_with_auth_config_and_account_takes_the_deprecated_route(
+    monkeypatch,
+):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "-c",
+            "workspace-gmail",
+            "gmail_send_email",
+            "--account-id",
+            "acct-1",
+            "-d",
+            '{"to": "a@example.com"}',
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["deprecated_execute"] == {
+        "auth_config": "workspace-gmail",
+        "operation": "gmail_send_email",
+        "payload": {"to": "a@example.com"},
+        "account_id": "acct-1",
+        "pod_id": None,
+    }
+    assert "execute" not in captured
+    assert "warning: --auth-config and --account is deprecated" in _flat(result.stderr)
+
+
+def test_execute_with_account_id_in_the_data_takes_the_deprecated_route(
+    monkeypatch,
+):
+    """`account_id` in --data was refused for a while; it is accepted again,
+    with a warning, and CONNECTOR read as an installation (or connector id)."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "gmail",
+            "gmail_send_email",
+            "-d",
+            json.dumps({"payload": {"to": "a@example.com"}, "account_id": "acct-1"}),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["deprecated_execute"]["auth_config"] == "workspace-gmail"
+    assert captured["deprecated_execute"]["account_id"] == "acct-1"
+    assert captured["deprecated_execute"]["payload"] == {"to": "a@example.com"}
+    assert "execute" not in captured
+    assert "account_id in --data is deprecated" in _flat(result.stderr)
+
+
+def test_a_deprecated_call_naming_a_pod_file_sends_the_pod(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "gmail",
+            "gmail_send_email",
+            "--account",
+            "acct-1",
+            "-d",
+            '{"to": "a@example.com"}',
+            "--attach",
+            "attachments=/me/a.pdf",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["deprecated_execute"]["pod_id"] == _POD
+
+
+def test_the_pod_connector_route_prints_no_deprecation(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app, ["connectors", "operations", "execute", "gmail", "gmail_list_messages"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "deprecated" not in result.stderr
+    assert "deprecated_execute" not in captured
+
+
+def test_deprecated_connector_flags_are_hidden_from_help():
+    for command in (
+        ["connectors", "run", "--help"],
+        ["connectors", "operations", "execute", "--help"],
+    ):
+        result = runner.invoke(app, command)
+        assert result.exit_code == 0, result.output
+        assert "--account" not in result.output
+        assert "--auth-config" not in result.output
+
+
+# --- Deprecated: an installation name where a pod connector slug goes ------
+#
+# Before pod connectors, `run INSTALL OPERATION` ran on the caller's own
+# account. It still does, through the deprecated org-level route, whenever no
+# pod connector can take the call: no pod selected, or no slug by that name.
+
+
+def test_run_with_no_pod_runs_an_installation_on_ones_own_account(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured), pod=None)
+    monkeypatch.delenv("LEMMA_POD_ID", raising=False)
+
+    result = runner.invoke(
+        app, ["connectors", "run", "gmail", "gmail_list_messages", "-d", "{}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["deprecated_execute"] == {
+        "auth_config": "workspace-gmail",
+        "operation": "gmail_list_messages",
+        "payload": {},
+        "account_id": None,  # the server uses the caller's own account
+        "pod_id": None,
+    }
+    assert "execute" not in captured
+    assert "op_gets" not in captured  # resolved on the installation
+    assert "rather than a pod connector is deprecated" in _flat(result.stderr)
+
+
+def test_run_falls_back_to_an_installation_the_pod_has_no_slug_for(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app, ["connectors", "run", "team-slack", "gmail_list_messages", "-d", "{}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    # The pod was asked first, and said it has no such connector.
+    assert captured["op_gets"] == [("team-slack", "gmail_list_messages")]
+    assert captured["deprecated_execute"]["auth_config"] == "team-slack"
+    assert captured["deprecated_execute"]["account_id"] is None
+    assert "execute" not in captured
+    assert "rather than a pod connector is deprecated" in _flat(result.stderr)
+
+
+def test_run_prefers_the_pod_slug_over_an_installation_of_that_name(monkeypatch):
+    """`gmail` is both a slug and an installed connector id: the slug wins, and
+    the happy path costs no installs lookup."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app, ["connectors", "run", "gmail", "gmail_list_messages", "-d", "{}"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["execute"]["connector"] == "gmail"
+    assert captured["execute"]["pod_id"] == _POD
+    assert "deprecated_execute" not in captured
+    assert "auth_config_lists" not in captured
+    assert "deprecated" not in result.stderr
+
+
+def test_execute_with_no_pod_runs_an_installation_on_ones_own_account(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured), pod=None)
+    monkeypatch.delenv("LEMMA_POD_ID", raising=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "workspace-gmail",
+            "gmail_list_messages",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["deprecated_execute"]["auth_config"] == "workspace-gmail"
+    assert captured["deprecated_execute"]["account_id"] is None
+    assert "execute" not in captured
+    assert "rather than a pod connector is deprecated" in _flat(result.stderr)
+
+
+def test_execute_falls_back_to_an_installation_the_pod_has_no_slug_for(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app,
+        ["connectors", "operations", "execute", "team-slack", "gmail_list_messages"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["deprecated_execute"]["auth_config"] == "team-slack"
+    assert captured["deprecated_execute"]["account_id"] is None
+    assert "execute" not in captured
+
+
+def test_execute_still_reports_a_name_that_is_neither_slug_nor_install(monkeypatch):
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(
+        app, ["connectors", "operations", "execute", "notion", "anything"]
+    )
+
+    assert result.exit_code != 0
+    assert "deprecated_execute" not in captured
+    assert "execute" not in captured

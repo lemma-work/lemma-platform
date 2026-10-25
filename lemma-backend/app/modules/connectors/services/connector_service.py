@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any, Optional
 from uuid import UUID
 
+from app.core.authorization.permissions import Permissions
 from app.core.domain.errors import DomainError
 from app.core.domain.uow import IUnitOfWork
 from app.core.log.log import get_logger
@@ -101,16 +102,13 @@ from app.modules.connectors.services.install_provisioning import (
 )
 from app.modules.connectors.services.install_update import update_install
 from app.modules.connectors.services.oauth_callback import handle_oauth_callback
+from app.modules.connectors.services import pod_reference_cleanup as pod_refs
 from app.modules.connectors.services.profile_operation_execution import (
     execute_profile_operation,
     normalize_profile_result,
 )
 
 logger = get_logger(__name__)
-
-# Who may install a connector, and -- since an install config is entirely
-# tenant-written for the mcp/http/sql kinds -- who may read one back.
-INSTALL_MANAGER_ROLES = ["ORG_OWNER", "ORG_EDITOR"]
 
 
 class ConnectorService:
@@ -247,15 +245,19 @@ class ConnectorService:
         *,
         user_id: UUID,
         organization_id: UUID,
-        allowed_roles: list[str] | None = None,
+        permission: str | None = None,
     ) -> None:
         exists = await self.organization_access.organization_exists(organization_id)
         if not exists:
             raise OrganizationConnectorsNotFoundError(str(organization_id))
-        has_access = await self.organization_access.user_has_organization_role(
-            user_id=user_id,
-            organization_id=organization_id,
-            allowed_roles=allowed_roles,
+        has_access = (
+            await self.organization_access.user_holds_organization_permission(
+                user_id, organization_id, permission
+            )
+            if permission is not None
+            else await self.organization_access.user_has_organization_role(
+                user_id, organization_id
+            )
         )
         if not has_access:
             raise OrganizationConnectorsNotFoundError(str(organization_id))
@@ -281,10 +283,8 @@ class ConnectorService:
         self, *, user_id: UUID, organization_id: UUID
     ) -> bool:
         """Whether this member may add or remove the org's installs."""
-        return await self.organization_access.user_has_organization_role(
-            user_id=user_id,
-            organization_id=organization_id,
-            allowed_roles=INSTALL_MANAGER_ROLES,
+        return await self.organization_access.user_holds_organization_permission(
+            user_id, organization_id, Permissions.ORG_INSTALLATION_MANAGE
         )
 
     def _provider_value(self, auth_config: AuthConfigEntity) -> str:
@@ -358,7 +358,7 @@ class ConnectorService:
         await self._require_org_member(
             user_id=user_id,
             organization_id=organization_id,
-            allowed_roles=INSTALL_MANAGER_ROLES,
+            permission=Permissions.ORG_INSTALLATION_MANAGE,
         )
         connector = await self.get_connector(connector_id)
         config_source_enum = AuthConfigSource(config_source)
@@ -1081,6 +1081,7 @@ class ConnectorService:
                 user_id=user_id,
             )
 
+        await pod_refs.forget_account_in_pods(self.uow, account_id)
         await self.account_repository.delete(account_id)
         # Keep the "exactly one default per (user, auth_config)" invariant: if the
         # deleted account was the default, promote the oldest remaining one so
@@ -1104,7 +1105,7 @@ class ConnectorService:
         await self._require_org_member(
             user_id=user_id,
             organization_id=organization_id,
-            allowed_roles=INSTALL_MANAGER_ROLES,
+            permission=Permissions.ORG_INSTALLATION_MANAGE,
         )
         auth_config = await self._resolve_auth_config(
             organization_id=organization_id,
@@ -1149,9 +1150,9 @@ class ConnectorService:
                 user_id=user_id,
             )
 
+        await pod_refs.forget_installation_in_pods(self.uow, auth_config.id)
         for account in accounts:
             await self.account_repository.delete(account.id)
-
         await self.auth_config_repository.delete(auth_config.id)
         await self.uow.commit()
 

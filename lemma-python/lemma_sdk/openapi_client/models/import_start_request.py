@@ -5,7 +5,6 @@ from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
-from attrs import field as _attrs_field
 
 from ..models.bundle_source_kind import BundleSourceKind
 from ..types import UNSET, Unset
@@ -23,7 +22,8 @@ class ImportStartRequest:
             ``URL`` covers any lemma-origin signed download URL (an export or an
             uploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public
             repo fetched via the connector path.
-        account_id (None | Unset | UUID): Connector account for a private GitHub repo.
+        account_id (None | Unset | UUID): Deprecated and ignored: a private repo is fetched through the pod's `github`
+            connector, as you.
         owner (None | str | Unset): GITHUB repo owner.
         ref (None | str | Unset): GITHUB branch/tag/sha (optional).
         repo (None | str | Unset): GITHUB repo name.
@@ -37,7 +37,6 @@ class ImportStartRequest:
     ref: None | str | Unset = UNSET
     repo: None | str | Unset = UNSET
     url: None | str | Unset = UNSET
-    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         kind = self.kind.value
@@ -75,7 +74,7 @@ class ImportStartRequest:
             url = self.url
 
         field_dict: dict[str, Any] = {}
-        field_dict.update(self.additional_properties)
+
         field_dict.update(
             {
                 "kind": kind,
@@ -161,21 +160,4 @@ class ImportStartRequest:
             url=url,
         )
 
-        import_start_request.additional_properties = d
         return import_start_request
-
-    @property
-    def additional_keys(self) -> list[str]:
-        return list(self.additional_properties.keys())
-
-    def __getitem__(self, key: str) -> Any:
-        return self.additional_properties[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.additional_properties[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        del self.additional_properties[key]
-
-    def __contains__(self, key: str) -> bool:
-        return key in self.additional_properties

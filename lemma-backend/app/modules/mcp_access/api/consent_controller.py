@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.api.schemas import ErrorResponse
-from app.core.authorization.dependencies import reject_delegated_workload_anywhere
 from app.modules.mcp_access.domain.entities import ConnectedApp, Scope
 from app.modules.mcp_access.domain.resources import pod_resource_url
 from app.modules.mcp_access.infrastructure.subscription_repository import (
@@ -144,9 +143,6 @@ def _connected(app: ConnectedApp) -> ConnectedClientResponse:
     include_in_schema=False,
     response_model=ConsentRequestResponse,
     operation_id="mcp_access.consent.get",
-    dependencies=[
-        reject_delegated_workload_anywhere("read an MCP client's consent request")
-    ],
     summary="What an MCP client is asking for",
 )
 async def get_consent_request(
@@ -171,9 +167,6 @@ async def get_consent_request(
     include_in_schema=False,
     response_model=ConsentAnswerResponse,
     operation_id="mcp_access.consent.answer",
-    dependencies=[
-        reject_delegated_workload_anywhere("answer an MCP client's consent request")
-    ],
     summary="Allow or deny an MCP client",
 )
 async def answer_consent_request(
@@ -193,7 +186,6 @@ async def answer_consent_request(
     "/grants",
     response_model=ConnectedClientsResponse,
     operation_id="mcp_access.grants.list",
-    dependencies=[reject_delegated_workload_anywhere("list connected MCP clients")],
     summary="MCP clients you have connected",
 )
 async def list_grants(
@@ -241,9 +233,6 @@ def _by_grant(
     "/grants/{grant_id}/subscriptions/{subscription_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="mcp_access.grants.subscription.delete",
-    dependencies=[
-        reject_delegated_workload_anywhere("stop an MCP client's subscription")
-    ],
     summary="Stop telling a connected app about an event",
     responses={404: {"model": ErrorResponse, "description": "No such subscription"}},
 )
@@ -264,9 +253,6 @@ async def stop_subscription(
     "/grants/{grant_id}/subscriptions/{subscription_id}/resume",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="mcp_access.grants.subscription.resume",
-    dependencies=[
-        reject_delegated_workload_anywhere("resume an MCP client's subscription")
-    ],
     summary="Let a connected app be told about an event again",
     responses={404: {"model": ErrorResponse, "description": "No such subscription"}},
 )
@@ -286,7 +272,6 @@ async def resume_subscription(
     "/grants/{grant_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="mcp_access.grants.revoke",
-    dependencies=[reject_delegated_workload_anywhere("disconnect an MCP client")],
     summary="Disconnect an MCP client",
     responses={
         404: {

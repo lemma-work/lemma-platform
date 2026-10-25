@@ -235,7 +235,7 @@ whether copying succeeded.
 **Status:** covered
 
 - If an agent attempts something destructive — dropping a table, deleting
-  records in bulk, sending a message outside the pod — then the system shall
+  records, sending a message outside the pod — then the system shall
   pause the run and ask a person before doing it.
 - While a run is paused for approval, the system shall keep it paused
   indefinitely rather than timing out and proceeding.

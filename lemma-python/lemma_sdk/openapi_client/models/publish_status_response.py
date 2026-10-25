@@ -23,7 +23,6 @@ class PublishStatusResponse:
     """Status of a pod publish job (pure Redis read).
 
     Attributes:
-        account_id (None | UUID):
         events_url (str):
         mode (PublishMode):
         pod_id (UUID):
@@ -31,6 +30,9 @@ class PublishStatusResponse:
         publish_id (UUID):
         repo_name (str):
         status (PublishStatus):
+        account_id (None | Unset | UUID):
+        connect_url (None | str | Unset): Where to connect the GitHub account the pod's `github` connector needs, when
+            the publish failed for want of one.
         error (None | str | Unset):
         error_code (None | str | Unset):
         progress (ExportProgressResponse | Unset):
@@ -39,7 +41,6 @@ class PublishStatusResponse:
         warnings (list[str] | Unset):
     """
 
-    account_id: None | UUID
     events_url: str
     mode: PublishMode
     pod_id: UUID
@@ -47,6 +48,8 @@ class PublishStatusResponse:
     publish_id: UUID
     repo_name: str
     status: PublishStatus
+    account_id: None | Unset | UUID = UNSET
+    connect_url: None | str | Unset = UNSET
     error: None | str | Unset = UNSET
     error_code: None | str | Unset = UNSET
     progress: ExportProgressResponse | Unset = UNSET
@@ -56,12 +59,6 @@ class PublishStatusResponse:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        account_id: None | str
-        if isinstance(self.account_id, UUID):
-            account_id = str(self.account_id)
-        else:
-            account_id = self.account_id
-
         events_url = self.events_url
 
         mode = self.mode.value
@@ -75,6 +72,20 @@ class PublishStatusResponse:
         repo_name = self.repo_name
 
         status = self.status.value
+
+        account_id: None | str | Unset
+        if isinstance(self.account_id, Unset):
+            account_id = UNSET
+        elif isinstance(self.account_id, UUID):
+            account_id = str(self.account_id)
+        else:
+            account_id = self.account_id
+
+        connect_url: None | str | Unset
+        if isinstance(self.connect_url, Unset):
+            connect_url = UNSET
+        else:
+            connect_url = self.connect_url
 
         error: None | str | Unset
         if isinstance(self.error, Unset):
@@ -108,7 +119,6 @@ class PublishStatusResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "account_id": account_id,
                 "events_url": events_url,
                 "mode": mode,
                 "pod_id": pod_id,
@@ -118,6 +128,10 @@ class PublishStatusResponse:
                 "status": status,
             }
         )
+        if account_id is not UNSET:
+            field_dict["account_id"] = account_id
+        if connect_url is not UNSET:
+            field_dict["connect_url"] = connect_url
         if error is not UNSET:
             field_dict["error"] = error
         if error_code is not UNSET:
@@ -138,22 +152,6 @@ class PublishStatusResponse:
         from ..models.export_progress_response import ExportProgressResponse
 
         d = dict(src_dict)
-
-        def _parse_account_id(data: object) -> None | UUID:
-            if data is None:
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                account_id_type_0 = UUID(data)
-
-                return account_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | UUID, data)
-
-        account_id = _parse_account_id(d.pop("account_id"))
-
         events_url = d.pop("events_url")
 
         mode = PublishMode(d.pop("mode"))
@@ -167,6 +165,32 @@ class PublishStatusResponse:
         repo_name = d.pop("repo_name")
 
         status = PublishStatus(d.pop("status"))
+
+        def _parse_account_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                account_id_type_0 = UUID(data)
+
+                return account_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        account_id = _parse_account_id(d.pop("account_id", UNSET))
+
+        def _parse_connect_url(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        connect_url = _parse_connect_url(d.pop("connect_url", UNSET))
 
         def _parse_error(data: object) -> None | str | Unset:
             if data is None:
@@ -207,7 +231,6 @@ class PublishStatusResponse:
         warnings = cast(list[str], d.pop("warnings", UNSET))
 
         publish_status_response = cls(
-            account_id=account_id,
             events_url=events_url,
             mode=mode,
             pod_id=pod_id,
@@ -215,6 +238,8 @@ class PublishStatusResponse:
             publish_id=publish_id,
             repo_name=repo_name,
             status=status,
+            account_id=account_id,
+            connect_url=connect_url,
             error=error,
             error_code=error_code,
             progress=progress,

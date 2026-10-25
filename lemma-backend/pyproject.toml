@@ -77,7 +77,9 @@ dependencies = [
     "pyjwt[crypto]>=2.10.1",
     "fastembed>=0.7.4",
     "pypdfium2>=5.10.1",
-    "pillow>=12.3.0",
+    # 13.0.0 fixes 27 CVEs in 12.x. fastembed caps pillow below 13; the
+    # override in [tool.uv] lifts that cap -- see the note there.
+    "pillow>=13.0.0",
     # Boilerplate-stripping article extraction for `web_fetch` (Apache-2.0).
     # Emits markdown directly, so a fetched page never becomes raw HTML in the
     # agent's context.
@@ -179,6 +181,15 @@ packages = ["app", "sandbox_runtime"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.uv]
+# Every fastembed release (0.9.0 included) requires `pillow<13`, and pillow
+# 13.0.0 is the only fix for 27 CVEs in 12.x that the dependency audit and the
+# image scan both fail on. fastembed needs pillow only for its image embedding
+# models; this backend loads `TextEmbedding` alone
+# (app/core/embeddings/local_embedder.py), so the cap protects nothing here.
+# Drop this once a fastembed release accepts pillow 13.
+override-dependencies = ["pillow>=13.0.0"]
 
 [tool.uv.sources]
 lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }

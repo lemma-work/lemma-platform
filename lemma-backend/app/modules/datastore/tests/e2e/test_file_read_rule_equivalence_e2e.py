@@ -31,10 +31,17 @@ from sqlalchemy.orm import aliased
 
 from app.core.authorization import sql_actions
 from app.core.authorization.context import (
-    ActorType,
+    Actor,
+    Assistant,
     Context,
+    OtherPod,
+    Outsider,
+    OutsiderKind,
+    Person,
     PrincipalRef,
     ResourceType,
+    Workload,
+    WorkloadKind,
 )
 from app.core.authorization.grants import grant_resource_type_values
 from app.core.authorization.models import ResourcePermissionGrantModel
@@ -253,43 +260,49 @@ def _contexts(world: _World) -> list[tuple[str, Context]]:
     p = world.principals
     everything = frozenset({_READ, _WRITE, _DELETE})
 
-    def ctx(name: str, actor_type: ActorType, **kwargs) -> tuple[str, Context]:
+    def ctx(name: str, actor: Actor, **kwargs) -> tuple[str, Context]:
         kwargs.setdefault("pod_id", world.pod_id)
-        return name, Context(
-            actor_type=actor_type, actor_id=name, authorizer=None, **kwargs
-        )
+        return name, Context(actor=actor, actor_id=name, authorizer=None, **kwargs)
+
+    def person(user_id: UUID | None) -> Person:
+        # A context with no user id still names a person; the rule reads the
+        # context's own ``user_id``.
+        return Person(user_id=user_id or uuid4())
+
+    agent1, function1, pod1 = p["agent1"], p["function1"], p["pod1"]
+    other_pod = OtherPod(pod_id=pod1.id)
 
     return [
-        ctx("superuser", ActorType.USER, user_id=u0, is_superuser=True),
+        ctx("superuser", person(u0), user_id=u0, is_superuser=True),
         ctx(
             "member-reader",
-            ActorType.USER,
+            person(u0),
             user_id=u0,
             permission_ids=frozenset({_READ}),
             principal_refs=frozenset({p["role1"], p["member1"]}),
         ),
         ctx(
             "member-without-role-read",
-            ActorType.USER,
+            person(u1),
             user_id=u1,
             principal_refs=frozenset({p["role2"]}),
         ),
         ctx(
             "member-editor",
-            ActorType.USER,
+            person(u2),
             user_id=u2,
             permission_ids=everything,
             principal_refs=frozenset({p["role1"], p["role2"]}),
         ),
         ctx(
             "member-without-principals",
-            ActorType.USER,
+            person(u1),
             user_id=u1,
             permission_ids=frozenset({_READ}),
         ),
         ctx(
             "member-two-principal-sets",
-            ActorType.USER,
+            person(u0),
             user_id=u0,
             permission_ids=frozenset({_READ}),
             principal_refs=frozenset({p["role1"], p["agent1"]}),
@@ -300,72 +313,73 @@ def _contexts(world: _World) -> list[tuple[str, Context]]:
         ),
         ctx(
             "user-without-user-id",
-            ActorType.USER,
+            person(None),
             permission_ids=frozenset({_READ}),
             principal_refs=frozenset({p["role1"]}),
         ),
         ctx(
             "default-agent",
-            ActorType.DELEGATED_USER_WORKLOAD,
+            Assistant(user_id=u0),
             user_id=u0,
             permission_ids=everything,
             principal_refs=frozenset({p["role1"], p["member1"]}),
-            is_user_equivalent=True,
         ),
         ctx(
             "delegated-agent",
-            ActorType.DELEGATED_USER_WORKLOAD,
+            Workload(
+                kind=WorkloadKind.AGENT,
+                workload_id=agent1.id,
+                for_user_id=u0,
+                principal_refs=frozenset({agent1}),
+            ),
             user_id=u0,
             permission_ids=frozenset({_READ}),
             principal_refs=frozenset({p["role1"], p["agent1"]}),
-            workload_principal_refs=frozenset({p["agent1"]}),
             invoker_principal_refs=frozenset({p["role1"]}),
         ),
         ctx(
             "delegated-function-no-user",
-            ActorType.DELEGATED_USER_WORKLOAD,
+            # Nobody behind it: a person-less run, decided on its own grants.
+            Workload(
+                kind=WorkloadKind.FUNCTION,
+                workload_id=function1.id,
+                principal_refs=frozenset({function1}),
+            ),
             principal_refs=frozenset({p["function1"]}),
-            workload_principal_refs=frozenset({p["function1"]}),
         ),
         ctx(
             "agent-actor",
-            ActorType.AGENT,
+            Workload(kind=WorkloadKind.AGENT, workload_id=agent1.id),
             principal_refs=frozenset({p["agent1"]}),
         ),
         ctx(
             "function-actor-with-role-read",
-            ActorType.FUNCTION,
+            Workload(kind=WorkloadKind.FUNCTION, workload_id=function1.id),
             permission_ids=frozenset({_READ}),
             principal_refs=frozenset({p["function1"]}),
         ),
-        ctx("pod-actor", ActorType.POD, principal_refs=frozenset({p["pod1"]})),
+        ctx("pod-actor", other_pod, principal_refs=frozenset({p["pod1"]})),
         ctx(
             "pod-actor-two-sets",
-            ActorType.POD,
+            other_pod,
             principal_refs=frozenset({p["pod1"], p["role1"]}),
             grant_principal_sets=(frozenset({p["pod1"]}), frozenset({p["role1"]})),
         ),
         ctx(
             "pod-actor-pinned-elsewhere",
-            ActorType.POD,
+            other_pod,
             pod_id=world.other_pod_id,
             principal_refs=frozenset({p["pod1"]}),
         ),
         ctx(
             "pod-actor-unpinned",
-            ActorType.POD,
+            other_pod,
             pod_id=None,
             principal_refs=frozenset({p["pod1"]}),
         ),
-        ctx("anonymous-pinned", ActorType.ANONYMOUS),
-        ctx("anonymous-unpinned", ActorType.ANONYMOUS, pod_id=None),
-        ctx("contact", ActorType.CONTACT),
-        ctx(
-            "system",
-            ActorType.SYSTEM,
-            permission_ids=frozenset({_READ}),
-            principal_refs=frozenset({p["role2"]}),
-        ),
+        ctx("anonymous-pinned", Outsider(kind=OutsiderKind.ANONYMOUS)),
+        ctx("anonymous-unpinned", Outsider(kind=OutsiderKind.ANONYMOUS), pod_id=None),
+        ctx("contact", Outsider(kind=OutsiderKind.CONTACT)),
     ]
 
 

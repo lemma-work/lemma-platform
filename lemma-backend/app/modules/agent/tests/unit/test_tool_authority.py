@@ -70,16 +70,20 @@ def test_no_agent_module_builds_its_own_delegated_context() -> None:
     )
 
 
-def test_an_approved_sandbox_command_runs_in_the_person_s_session() -> None:
-    """How an approved `lemma pods delete` in the sandbox gets the person's
-    authority: its workspace session is minted for the user, with no workload."""
+def test_an_approved_sandbox_command_still_runs_as_the_agent() -> None:
+    """H7: an approved `lemma` command keeps the workload's token. It used to
+    get a session minted for the person -- their whole authority, in a shell
+    the agent went on using. What it was refused is lent through the
+    session-approval store instead (`approval_denials.lent_to_the_sandbox`)."""
     agent_id = uuid4()
     ctx = _context().model_copy(
         update={"workload_type": "agent", "workload_id": agent_id}
     )
 
-    assert workspace_principal(_approved(ctx)).workload_id is None
-    assert workspace_principal(_approved(ctx)).workload_type is None
+    principal = workspace_principal(_approved(ctx))
+
+    assert (principal.workload_type, principal.workload_id) == ("agent", agent_id)
+    assert principal.workload_name == "chore-agent"
 
 
 def test_an_unapproved_sandbox_command_runs_as_the_agent() -> None:

@@ -21,8 +21,6 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     HarnessKind,
     AgentToolset,
-    ConnectorAccessConfig,
-    ConnectorMode,
     ConversationType,
     MessageKind,
     MessageRole,
@@ -391,8 +389,15 @@ async def test_display_resource_returns_browser_access_url(
             requested_user_id: UUID,
             *,
             ttl_seconds: int,
+            pod_id: UUID,
+            actor_id: UUID | None,
         ):
-            calls.append(("create_browser_access", (requested_user_id, ttl_seconds)))
+            calls.append(
+                (
+                    "create_browser_access",
+                    (requested_user_id, ttl_seconds, pod_id, actor_id),
+                )
+            )
             return SimpleNamespace(
                 url="https://browser.example/access-token",
                 expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
@@ -407,7 +412,11 @@ async def test_display_resource_returns_browser_access_url(
         FakeWorkspaceSandboxService,
     )
 
-    ctx = SimpleNamespace(deps=SimpleNamespace(user_id=user_id))
+    pod_id = uuid4()
+    agent_id = uuid4()
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(user_id=user_id, pod_id=pod_id, workload_id=agent_id)
+    )
 
     response = await display_resource(
         ctx,  # type: ignore[arg-type]
@@ -420,7 +429,9 @@ async def test_display_resource_returns_browser_access_url(
     assert response.url == "https://browser.example/access-token"
     assert response.expires_at == datetime(2030, 1, 1, tzinfo=timezone.utc)
     assert calls == [
-        ("create_browser_access", (user_id, 1800)),
+        # The browser in the run's own pod workspace, beside its shell.
+        # The browser of the agent that asked, not the pod assistant's.
+        ("create_browser_access", (user_id, 1800, pod_id, agent_id)),
         ("close", None),
     ]
 
@@ -661,6 +672,7 @@ def _approval_ctx(approval_id: str, *, supports_pause_signal: bool = True):
     return SimpleNamespace(
         deps=SimpleNamespace(
             conversation_id=uuid4(),
+            user_id=uuid4(),
             agent_run_id=uuid4(),
             supports_pause_signal=supports_pause_signal,
         ),
@@ -884,6 +896,7 @@ def _ask_ctx(*, supports_pause_signal: bool = True):
     return SimpleNamespace(
         deps=SimpleNamespace(
             conversation_id=uuid4(),
+            user_id=uuid4(),
             agent_run_id=uuid4(),
             supports_pause_signal=supports_pause_signal,
         ),
@@ -1232,24 +1245,6 @@ def test_non_workspace_agent_prompt_omits_working_directory():
         ctx=SimpleNamespace(workspace_cwd=f"{WORKSPACE_ROOT}/conversations/abc"),
     )
     assert "# Working Directory" not in prompt
-
-
-def test_connector_access_modes_use_account_ownership_names():
-    user_owned = ConnectorAccessConfig(app_name="gmail", mode="DYNAMIC")
-    agent_owned_account_id = uuid4()
-    agent_owned = ConnectorAccessConfig(
-        app_name="gmail",
-        mode="AGENT_OWNED",
-        account_id=agent_owned_account_id,
-    )
-
-    assert user_owned.mode == ConnectorMode.USER_OWNED
-    assert user_owned.to_dict() == {"app_name": "gmail", "mode": "USER_OWNED"}
-    assert agent_owned.to_dict() == {
-        "app_name": "gmail",
-        "mode": "AGENT_OWNED",
-        "account_id": str(agent_owned_account_id),
-    }
 
 
 @pytest.mark.parametrize("schema", [None, {}, "not-a-dict", [], 0])

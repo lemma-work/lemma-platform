@@ -11,8 +11,9 @@ import { LoadingIndicator } from "@/ui/loading";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
-import { accountName, bestAccount, blurbOf, isCredentialConflict, needsSharing, unavailableNote } from "@/data";
-import type { AccountConnect, Connectable, ConnectorAccount, GuidedSetup, Pod, Surface } from "@/data";
+import { blurbOf, connectionsPath, connectorsFor, isCredentialConflict, needsSharing, statusNote, unavailableNote } from "@/data";
+import type { AccountConnect, Connectable, GuidedSetup, Pod, PodConnector, Surface } from "@/data";
+import { ProblemLine } from "@/connect/connection-problem";
 import { BackIcon, CheckIcon, CopyIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
 import { KnownSender } from "@/session/mobile-verification";
 import { OwnBot } from "./own-bot";
@@ -325,12 +326,14 @@ function Account({
     pod: Pod;
     onDone: () => void;
     /** What to do with the account once it exists. A surface on it, unless
-     *  told otherwise: Slack makes Lemma's own app the workspace's manager. */
+     *  told otherwise — shared into the pod as a SHARED connector, since a
+     *  surface answers as the one account for everyone. Slack instead makes
+     *  Lemma's own app the workspace's manager. */
     bind?: (accountId: string) => Promise<unknown>;
     /** Which kind of install to authorise against, when it matters. */
     configSource?: ConfigSource;
 }) {
-    const attach = bind ?? ((accountId: string) => source.connectAccount(pod.id, entry.platform, accountId));
+    const attach = bind ?? ((accountId: string) => source.connectOwnAccount(pod.id, entry.platform, accountId));
     const [link, setLink] = useState<AccountConnect | null>(null);
     const [stage, setStage] = useState<"idle" | "starting" | "waiting" | "binding">("idle");
     const [error, setError] = useState<string | null>(null);
@@ -484,34 +487,31 @@ function ConnectRow({
     entry,
     busy,
     onConnect,
-    accounts,
-    onUseAccount,
+    connectors,
+    onUseConnector,
     onFocus,
     elsewhere,
 }: {
     entry: Connectable;
     busy: boolean;
     onConnect: (platform: string) => void;
-    accounts: ConnectorAccount[];
-    onUseAccount: (entry: Connectable, accountId: string) => void;
+    /** The pod's SHARED connectors for this platform's connector. */
+    connectors: PodConnector[];
+    onUseConnector: (entry: Connectable, podConnector: string) => void;
     onFocus: (entry: Connectable) => void;
     /** Another teammate in this organization already answers here. */
     elsewhere: boolean;
 }) {
     const name = entry.title || channelName(entry.platform);
-    /* An account the organization already authorised is not something to make
-       somebody authorise again. This is also the case that was quietly broken:
-       re-authorising a connector the org already has can refresh the existing
-       row instead of inserting a new one, so a flow that waits for a NEW
-       account waits forever. Finding the existing one first removes both the
-       wait and the reason for it. */
-    /* An account this organization already has — but only worth offering when
-       nothing else is already answering on this platform. A connected account
-       belongs to one surface org-wide, so if another teammate is on Slack the
-       odds are this account is the one they are on, and "Ready now" would be a
-       button whose only outcome is a 409. The backend is the authority and
-       still gets the last word; this just stops the UI promising ahead of it. */
-    const held = entry.effort === "account" ? bestAccount(accounts, entry.connectorId) : null;
+    /* A connector this space already shares is not something to make
+       somebody authorise again — a surface answers as the one account a
+       SHARED connector runs as. But only worth offering when nothing else is
+       already answering on this platform: an account answers under one name
+       org-wide, so if another teammate is on Slack the odds are this account
+       is the one they are on, and "Ready now" would be a button whose only
+       outcome is a 409. The backend is the authority and still gets the last
+       word; this just stops the UI promising ahead of it. */
+    const held = entry.effort === "account" ? connectorsFor(connectors, entry.connectorId, "SHARED").find((one) => one.status === "READY") ?? null : null;
     /* Not for Slack: an account there is Lemma's app or a teammate's own, and
        neither is one to hand this teammate. Lemma's app manages the
        workspace; this teammate gets an app of its own, from the focused view. */
@@ -530,11 +530,8 @@ function ConnectRow({
                 <b>{name}</b>
                 {note && <span className="reachrow__note">{note}</span>}
                 {ready && !guiding && (
-                    /* The organization's, not this teammate's — the account is
-                       org-scoped, and "already connected here" implied this
-                       pod had it. */
                     <span className="reachrow__note">
-                        Using {accountName(ready, name)}, already connected to this organization.
+                        Using {ready.slug}{ready.sharedAccount ? " (" + ready.sharedAccount + ")" : ""}, already shared in this space.
                     </span>
                 )}
                 {elsewhere && held && !guiding && (
@@ -568,7 +565,7 @@ function ConnectRow({
                         {busy ? "Connecting…" : "Connect"}
                     </button>
                 ) : ready ? (
-                    <button className="btn btn--primary" disabled={busy} onClick={() => onUseAccount(entry, ready.id)}>
+                    <button className="btn btn--primary" disabled={busy} onClick={() => onUseConnector(entry, ready.slug)}>
                         {busy ? "Connecting…" : "Connect"}
                     </button>
                 ) : entry.effort === "account" || entry.effort === "unavailable" ? (
@@ -624,8 +621,9 @@ function Focused({
             <span className="focused__logo"><ChannelIcon platform={entry.platform} size={38} /></span>
 
             {/* No setup guide here any more: the one the API serves is written
-                for whoever calls it — account_id, POST the surface — and was
-                shown to people deciding where a colleague should answer. */}
+                for whoever calls it — name a pod connector, POST the surface —
+                and was shown to people deciding where a colleague should
+                answer. */}
             {((custom || !entry.guided) && hasCredentials) ? (
                 <>
                     <h3>{entry.platform === "TELEGRAM" ? "Use a bot you already made" : "Connect your " + name + " account"}</h3>
@@ -677,6 +675,7 @@ function Focused({
                             lead={"Lemma has no " + name + " app on {machine} yet. Add one once and everyone here can connect."}
                         />
                     )}
+                    <SharedConnectors entry={entry} pod={pod} onDone={onDone} />
                     {entry.account ? <Account entry={entry} pod={pod} onDone={onDone} /> : (
                         machine ? (
                             /* On a local install the administrator is the
@@ -695,6 +694,73 @@ function Focused({
                 </>
             )}
         </div>
+    );
+}
+
+/** The space's own shared connectors for this platform, each a way to answer
+ *  without authorising anything — or, with none, where to set one up.
+ *
+ *  A surface answers as one account for everyone who writes to it, so only a
+ *  SHARED pod connector can carry one; a per-member connector is each
+ *  person's own and is not offered. Every one is listed, with why it cannot
+ *  be used yet when it cannot, rather than only the ready ones: a connector
+ *  that exists but has no account shared is a different fix from none at
+ *  all. */
+function SharedConnectors({ entry, pod, onDone }: { entry: Connectable; pod: Pod; onDone: () => void }) {
+    const name = entry.title || channelName(entry.platform);
+    const connectors = useQuery({
+        queryKey: ["pod-connectors", pod.id],
+        queryFn: () => source.listPodConnectors(pod.id),
+        staleTime: 60_000,
+    });
+    const use = useMutation({
+        mutationFn: (slug: string) => source.connectPodConnector(pod.id, entry.platform, slug),
+        onSuccess: onDone,
+    });
+    const shared = connectorsFor(connectors.data ?? [], entry.connectorId, "SHARED");
+    if (connectors.isPending) return <p className="guided__wait" role="status"><RefreshIcon size={13} /> Looking for this space’s {name} connectors…</p>;
+    if (connectors.isError) {
+        return (
+            <p role="alert">
+                This space’s connectors could not be read.{" "}
+                <button className="linkish" onClick={() => void connectors.refetch()}>Try again</button>
+            </p>
+        );
+    }
+    if (shared.length === 0) {
+        return (
+            <p className="reachrow__note">
+                This space has no shared {name} connector yet.{" "}
+                <a className="linkish" href={connectionsPath(pod.id)}>Set one up in connections</a>
+                {entry.account ? ", or connect an account of your own here." : "."}
+            </p>
+        );
+    }
+    return (
+        <>
+            <ul className="reachrows">
+                {shared.map((one) => (
+                    <li key={one.slug} className="reachrow">
+                        <div className="reachrow__body">
+                            <b>{one.slug}</b>
+                            <span className="reachrow__note">
+                                {statusNote(one) || (one.sharedAccount ? "Answers as " + one.sharedAccount : "Ready")}
+                            </span>
+                        </div>
+                        <div className="reachrow__acts">
+                            {one.status === "READY" ? (
+                                <button className="btn btn--primary" disabled={use.isPending} onClick={() => use.mutate(one.slug)}>
+                                    {use.isPending && use.variables === one.slug ? "Connecting…" : "Use"}
+                                </button>
+                            ) : (
+                                <a className="btn" href={connectionsPath(pod.id, one.slug)}>Fix in connections</a>
+                            )}
+                        </div>
+                    </li>
+                ))}
+            </ul>
+            {use.isError && <ProblemLine className="reachrow__error" error={use.error} fallback="That connector could not be used." />}
+        </>
     );
 }
 
@@ -769,9 +835,9 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
         queryFn: () => source.listConnectable(pod.id),
         staleTime: 5 * 60_000,
     });
-    const accounts = useQuery({
-        queryKey: ["accounts", pod.orgId],
-        queryFn: () => source.listAccounts(pod.orgId),
+    const connectors = useQuery({
+        queryKey: ["pod-connectors", pod.id],
+        queryFn: () => source.listPodConnectors(pod.id),
         staleTime: 60_000,
     });
     /* One call for every pod's surfaces, which is the only place this app can
@@ -786,6 +852,7 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
         void queryClient.invalidateQueries({ queryKey: ["surfaces", 2, pod.id] });
         void queryClient.invalidateQueries({ queryKey: ["connectable", pod.id] });
         void queryClient.invalidateQueries({ queryKey: ["accounts", pod.orgId] });
+        void queryClient.invalidateQueries({ queryKey: ["pod-connectors", pod.id] });
         void queryClient.invalidateQueries({ queryKey: ["my-surfaces"] });
         void queryClient.invalidateQueries({ queryKey: ["surface-detail", pod.id] });
         void queryClient.invalidateQueries({ queryKey: ["surface-setup", pod.id] });
@@ -809,9 +876,9 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
         onSuccess: (surface) => { refresh(); setManaging(surface); },
     });
     const [taken, setTaken] = useState<string | undefined>(undefined);
-    const useAccount = useMutation({
-        mutationFn: ({ entry, accountId }: { entry: Connectable; accountId: string }) =>
-            source.connectAccount(pod.id, entry.platform, accountId),
+    const useConnector = useMutation({
+        mutationFn: ({ entry, podConnector }: { entry: Connectable; podConnector: string }) =>
+            source.connectPodConnector(pod.id, entry.platform, podConnector),
         onSuccess: (surface) => { refresh(); setManaging(surface); },
         onError: (problem, variables) => {
             /* Not a failure to report and stop at: the account is spoken for,
@@ -849,7 +916,7 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
         [mine.data, pod.id],
     );
 
-    const failed = connect.error ?? drop.error ?? (isCredentialConflict(useAccount.error) ? null : useAccount.error);
+    const failed = connect.error ?? drop.error ?? (isCredentialConflict(useConnector.error) ? null : useConnector.error);
 
     return (
         <>
@@ -901,13 +968,13 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
                                     entry={entry}
                                     busy={
                                         (connect.isPending && connect.variables === entry.platform) ||
-                                        (useAccount.isPending && useAccount.variables?.entry.platform === entry.platform)
+                                        (useConnector.isPending && useConnector.variables?.entry.platform === entry.platform)
                                     }
                                     onConnect={(platform) => connect.mutate(platform)}
-                                    onUseAccount={(chosen, accountId) => useAccount.mutate({ entry: chosen, accountId })}
+                                    onUseConnector={(chosen, podConnector) => useConnector.mutate({ entry: chosen, podConnector })}
                                     onFocus={setFocus}
                                     elsewhere={heldElsewhere.has(channelKey(entry.platform))}
-                                    accounts={accounts.data ?? []}
+                                    connectors={connectors.data ?? []}
                                 />
                             ))}
                         </ul>
@@ -916,11 +983,7 @@ export function ReachPanel({ pod, onLeave, inline = false }: { pod: Pod; onLeave
 
                 {completionError && <p role="alert">{completionError} <button className="btn" onClick={() => { refresh(); setCompletionError(null); }}>Refresh channels</button></p>}
                 {surfaces.isError && <p role="alert">Could not read existing channels. <button className="btn" onClick={() => void surfaces.refetch()}>Retry</button></p>}
-                {failed && (
-                    <p className="approval__error">
-                        {failed instanceof Error ? failed.message : "Couldn’t update this channel."}
-                    </p>
-                )}
+                {failed && <ProblemLine className="approval__error" error={failed} fallback="Couldn’t update this channel." />}
             </div>
             )}
         </>

@@ -409,128 +409,7 @@ async def test_default_pod_agent_delegation_does_not_exceed_current_user_access(
 
 
 @pytest.mark.asyncio
-async def test_named_agent_connector_access_uses_core_roles_and_resource_grants(
-    authenticated_client,
-    async_client,
-    fixed_test_org,
-    fixed_test_user,
-    db_session,
-):
-    pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
-    suffix = uuid4().hex[:8]
-    connector_id = f"agent_app_{suffix}"
-    account_owner = await signup_user(async_client, "agent-owned-account")
-    account = await _seed_agent_owned_connector(
-        db_session,
-        organization_id=fixed_test_org["id"],
-        pod_id=pod_id,
-        connector_id=connector_id,
-        account_user_id=account_owner["id"],
-    )
-
-    create_agent = await authenticated_client.post(
-        f"/pods/{pod_id}/agents",
-        json={
-            "name": "Grant Limited Agent",
-            "instruction": "Only use explicitly granted resources.",
-        },
-    )
-    assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
-    agent = create_agent.json()
-
-    await _replace_role_resource_grants(
-        authenticated_client,
-        pod_id=pod_id,
-        role_name="POD_ADMIN",
-        grants=[
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-            {
-                "resource_type": "connector_account",
-                "resource_name": str(account.id),
-                "permission_ids": ["connector_account.use"],
-            },
-        ],
-    )
-    await _replace_agent_resource_grants(
-        authenticated_client,
-        pod_id=pod_id,
-        agent_name=agent["name"],
-        grants=[
-            {
-                "resource_type": "connector",
-                "resource_name": connector_id,
-                "permission_ids": ["connector.use"],
-            },
-            {
-                "resource_type": "connector_account",
-                "resource_name": str(account.id),
-                "permission_ids": ["connector_account.use"],
-            },
-        ],
-    )
-    delegated_headers = await _agent_headers(
-        user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        agent_id=agent["id"],
-        agent_name=agent["name"],
-    )
-
-    # `http` connectors reach their provider through the OpenAPI executor, so
-    # that is the seam standing in for the upstream here.
-    async def mock_execute(_self, **_kwargs):
-        return {"ok": True}
-
-    with patch(
-        "app.modules.connectors.infrastructure.adapters.openapi_http_executor."
-        "OpenApiHttpExecutor.execute",
-        new=mock_execute,
-    ):
-        app_execution = await async_client.post(
-            (
-                f"/organizations/{fixed_test_org['id']}/connectors/"
-                f"{connector_id}/operations/echo/execute"
-            ),
-            headers=delegated_headers,
-            json={"account_id": str(account.id), "payload": {"message": "hello"}},
-        )
-    assert app_execution.status_code == status.HTTP_200_OK, app_execution.text
-    assert app_execution.json()["result"] == {"ok": True}
-
-    create_ungranted_agent = await authenticated_client.post(
-        f"/pods/{pod_id}/agents",
-        json={
-            "name": "No App Agent",
-            "instruction": "No connector grants.",
-        },
-    )
-    assert create_ungranted_agent.status_code == status.HTTP_201_CREATED, (
-        create_ungranted_agent.text
-    )
-    ungranted = create_ungranted_agent.json()
-    ungranted_headers = await _agent_headers(
-        user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        agent_id=ungranted["id"],
-        agent_name=ungranted["name"],
-    )
-    denied_execution = await async_client.post(
-        (
-            f"/organizations/{fixed_test_org['id']}/connectors/"
-            f"{connector_id}/operations/echo/execute"
-        ),
-        headers=ungranted_headers,
-        json={"account_id": str(account.id), "payload": {"message": "hello"}},
-    )
-    assert denied_execution.status_code == status.HTTP_403_FORBIDDEN
-    assert denied_execution.json()["code"] == "CONNECTOR_ACCESS_DENIED"
-
-
-@pytest.mark.asyncio
-async def test_named_agent_connector_access_resolves_dynamic_account_with_app_id_grant(
+async def test_a_named_agent_granted_a_pod_connector_runs_as_its_invokers_account(
     authenticated_client,
     async_client,
     fixed_test_org,
@@ -558,6 +437,17 @@ async def test_named_agent_connector_access_resolves_dynamic_account_with_app_id
     )
     assert create_agent.status_code == status.HTTP_201_CREATED, create_agent.text
     agent = create_agent.json()
+
+    # The pod declares the connector; grants name it by its slug.
+    declared = await authenticated_client.post(
+        f"/pods/{pod_id}/connectors",
+        json={
+            "slug": connector_id,
+            "auth_config_id": str(account.auth_config_id),
+            "mode": "PER_MEMBER",
+        },
+    )
+    assert declared.status_code == status.HTTP_201_CREATED, declared.text
 
     role_grants = await authenticated_client.put(
         f"/pods/{pod_id}/roles/POD_ADMIN/permissions",
@@ -607,10 +497,7 @@ async def test_named_agent_connector_access_resolves_dynamic_account_with_app_id
         new=mock_execute,
     ):
         app_execution = await async_client.post(
-            (
-                f"/organizations/{fixed_test_org['id']}/connectors/"
-                f"{connector_id}/operations/echo/execute"
-            ),
+            f"/pods/{pod_id}/connectors/{connector_id}/operations/echo/execute",
             headers=delegated_headers,
             json={"payload": {"message": "hello-dynamic"}},
         )

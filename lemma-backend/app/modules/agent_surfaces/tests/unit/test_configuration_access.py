@@ -47,7 +47,9 @@ def _access(
         pod_membership_port=pod_membership_port or SimpleNamespace(),
         identity_service=identity_service or SimpleNamespace(),
         external_user_repository=external_user_repository or SimpleNamespace(),
-        credential_resolver=SimpleNamespace(),
+        credential_resolver=SimpleNamespace(
+            installation_identity=AsyncMock(side_effect=lambda surface: surface.id)
+        ),
     )
 
 
@@ -57,7 +59,7 @@ def _surface(*, pod_id, surface_id=None):
         pod_id=pod_id,
         surface_type=SurfacePlatform.SLACK,
         external_workspace_id="T1",
-        account_id=None,
+        pod_connector_slug=None,
         agent_id=uuid4(),
         name="slack",
     )
@@ -218,7 +220,8 @@ async def test_a_cached_actor_whose_account_is_gone_configures_nothing():
         external_user_repository=external_users, identity_service=identity
     )
     harness.credential_resolver = SimpleNamespace(
-        for_surface=AsyncMock(return_value={})
+        for_surface=AsyncMock(return_value={}),
+        installation_identity=AsyncMock(side_effect=lambda surface: surface.id),
     )
     harness.uow = SimpleNamespace(session=None)
 
@@ -265,7 +268,7 @@ def _whatsapp_surface(*, pod_id):
         name="whatsapp",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.WHATSAPP,
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         config=SurfaceConfig(),
         is_active=True,
     )
@@ -290,7 +293,7 @@ def _setup_harness(surface, monkeypatch):
     harness._surface_admin_consent = AsyncMock(return_value=None)
     harness._surface_uses_org_custom_app = AsyncMock(return_value=True)
     harness._credential_resolver = SimpleNamespace(
-        for_account=AsyncMock(return_value={"verify_token": _A_VERIFY_TOKEN})
+        for_surface=AsyncMock(return_value={"verify_token": _A_VERIFY_TOKEN})
     )
     return harness
 

@@ -9,12 +9,16 @@ import { readPodRoles } from "./pod-roles";
 import { everyPage, readCap, readContact, readContacts, readOrigins, readWidget, type OutreachSent } from "./contacts";
 import { readOpening } from "./public-rows";
 import type { OpenTableRequest, UpdateTableRequest, WebWidgetCreateRequest, WebWidgetUpdateRequest } from "lemma-sdk";
+import { PodAccountVisibility } from "lemma-sdk";
+import type { AgentPermissionsReplaceRequest, PodAccountCreateRequest, PodAccountUpdateRequest, PodConnectorCreateRequest, PodConnectorUpdateRequest } from "lemma-sdk";
 import {
     agentChanges,
     agentRows,
     answeringAs,
+    grantsBody,
     readAgentDetail,
     type AgentDetail,
+    type AgentGrant,
     type AgentDraft,
     type AgentRow,
 } from "./agents";
@@ -42,6 +46,15 @@ type JoinWire = NonNullable<
     NonNullable<Parameters<ReturnType<typeof lemma>["pods"]["update"]>[1]["config"]>["join_policy"]
 >;
 import { readAccount, readConnector, type Connector, type ConnectorAccount } from "./accounts";
+import {
+    connectorCreateBody, connectorPatchBody, freshSlug, readAskOutcome, readCoverage, readPodConnector, readPodConnectors,
+    type PodConnector, type PodConnectorDraft, type PodConnectorPatch,
+} from "./pod-connectors";
+import {
+    accountPatchBody, readAccountUsage, readImpact, readPodAccounts, readShareRoles, shareAsBody,
+    type Grantee, type PodAccountPatch, type PodAccountVisibility as PodAccountShare,
+} from "./pod-accounts";
+import { readOrgActions } from "./org-actions";
 import { canInstallWithDefaults, freshInstallName, heldInstall, primaryKind, type CatalogEntry, type ConfigSource, type Install } from "@/connect/install";
 import {
     readChoice,
@@ -329,6 +342,40 @@ function asSurface(raw: unknown, platform: string): Surface {
         email: made.reach?.email ?? made.surface_identity_email ?? undefined,
         active: true,
     };
+}
+
+/** Share an account its owner just connected for this pod as a SHARED pod
+ *  connector, and return the slug a surface binds by.
+ *
+ *  The person connecting is the account's owner, and connecting it here, for
+ *  this teammate, is the consent sharing needs — the same step the server
+ *  takes for a bot it makes itself (`share_own_account_as_pod_connector`). The
+ *  account is brought into the pod for everyone (visibility POD), and the
+ *  connector already running as it is reused rather than a second made. */
+async function shareOwnAccount(podId: string, accountId: string): Promise<string> {
+    const pod = lemma(podId).connectors.pod;
+    const held = readPodAccounts(await pod.accounts.list()).find((one) => one.accountId === accountId);
+    const account = held ?? readPodAccounts({ items: [await pod.accounts.add({ account_id: accountId, visibility: PodAccountVisibility.POD })] })[0];
+    const connectors = await liveSource.listPodConnectors(podId);
+    const running = connectors.find((one) => one.mode === "SHARED" && one.sharedPodAccountId === account.id);
+    /* Already shared and already run by a connector: nothing to change. */
+    if (running && account.visibility !== "PERSONAL") return running.slug;
+    if (running) return (await shareAs(podId, account.id, running.slug, running.purpose)).slug;
+    const named = account.connectorId || "account";
+    return (await shareAs(podId, account.id, freshSlug(named, connectors.map((one) => one.slug)),
+        "A teammate's own " + named + (account.label ? ", " + account.label : ""))).slug;
+}
+
+/** Use one of my pod accounts for everyone as <slug>: one request, which the
+ *  server checks in full before it changes anything (`shareAsBody`). Its
+ *  refusals arrive typed, as the SDK's errors, for `ProblemLine` to say. By
+ *  path: the SDK this app builds against has no method for it yet. */
+async function shareAs(podId: string, podAccountId: string, slug: string, purpose: string): Promise<PodConnector> {
+    const made = await lemma(podId).request(
+        "POST", `/pods/${encodeURIComponent(podId)}/connector-accounts/${encodeURIComponent(podAccountId)}/share-as`,
+        { body: shareAsBody(slug, purpose) },
+    );
+    return readPodConnector(made) ?? readPodConnectors({ items: [made] })[0];
 }
 
 /** The managed-bot setup, in the shape the sheet renders. */
@@ -873,11 +920,15 @@ export const liveSource: PodSource = {
             default_model_name: key.models[0] ?? null,
             model_names: key.models,
         };
+        /* `source` is the field the backend tells the three kinds of profile
+           apart by, and a union on a discriminator refuses a body without it
+           — each kind defaulting its own does not help. The SDK types it
+           optional for that default, so nothing here would say it is gone. */
         await lemma().agentRuntime.createProfile(
             orgId,
             key.protocol === "anthropic"
-                ? { ...shared, base_url: key.baseUrl || null }
-                : { ...shared, base_url: key.baseUrl, vision_model_names: key.visionModels ?? [] },
+                ? { ...shared, source: "ANTHROPIC_COMPATIBLE", base_url: key.baseUrl || null }
+                : { ...shared, source: "OPENAI_COMPATIBLE", base_url: key.baseUrl, vision_model_names: key.visionModels ?? [] },
         );
     },
 
@@ -1249,11 +1300,108 @@ export const liveSource: PodSource = {
         return eligible.find((account) => !seen.has(account.id) && account.usable)?.id ?? "";
     },
 
-    async connectAccount(podId: string, platform: string, accountId: string): Promise<Surface> {
-        const payload = { platform, credential_mode: "CUSTOM", account_id: accountId } as unknown as Parameters<
+    async listPodConnectors(podId: string) {
+        return readPodConnectors(await lemma(podId).connectors.pod.list());
+    },
+
+    async connectPodConnector(podId: string, platform: string, podConnector: string): Promise<Surface> {
+        /* Asserted once, as `connectSystem` says why. */
+        const payload = { platform, credential_mode: "CUSTOM", pod_connector: podConnector } as unknown as Parameters<
             ReturnType<typeof lemma>["podSurfaces"]["create"]
         >[1];
         return asSurface(await lemma(podId).podSurfaces.create(podId, payload), platform);
+    },
+
+    async connectOwnAccount(podId: string, platform: string, accountId: string): Promise<Surface> {
+        return liveSource.connectPodConnector(podId, platform, await shareOwnAccount(podId, accountId));
+    },
+
+    async addPodConnector(podId: string, draft: PodConnectorDraft) {
+        const made = await lemma(podId).connectors.pod.create(connectorCreateBody(draft) as unknown as PodConnectorCreateRequest);
+        return readPodConnector(made) ?? readPodConnectors({ items: [made] })[0];
+    },
+
+    async changePodConnector(podId: string, slug: string, patch: PodConnectorPatch) {
+        const saved = await lemma(podId).connectors.pod.update(slug, connectorPatchBody(patch) as PodConnectorUpdateRequest);
+        return readPodConnector(saved) ?? readPodConnectors({ items: [saved] })[0];
+    },
+
+    async removePodConnector(podId: string, slug: string) {
+        await lemma(podId).connectors.pod.delete(slug);
+    },
+
+    async podConnectorCoverage(podId: string, slug: string) {
+        /* By path, as asking members is. */
+        return readCoverage(await lemma(podId).request(
+            "GET", `/pods/${encodeURIComponent(podId)}/connectors/${encodeURIComponent(slug)}/coverage`,
+        ));
+    },
+
+    async askMembersToConnect(podId: string, slug: string, userIds?: string[]) {
+        /* By path: the SDK has no method for it yet. */
+        return readAskOutcome(await lemma(podId).request(
+            "POST", `/pods/${encodeURIComponent(podId)}/connectors/${encodeURIComponent(slug)}/ask-members`,
+            { body: userIds ? { user_ids: userIds } : {} },
+        ));
+    },
+
+    async listShareRoles(podId: string) {
+        return readShareRoles(await lemma(podId).podRoles.list(podId));
+    },
+
+    async listPodAccounts(podId: string) {
+        return readPodAccounts(await lemma(podId).connectors.pod.accounts.list());
+    },
+
+    async addPodAccount(podId: string, accountId: string, visibility: PodAccountShare = "PERSONAL", shareWith: Grantee[] = []) {
+        const added = await lemma(podId).connectors.pod.accounts.add({
+            account_id: accountId,
+            visibility: visibility as PodAccountVisibility,
+            share_with: shareWith.map((one) => ({ grantee_type: one.type, grantee_id: one.id })) as PodAccountCreateRequest["share_with"],
+        });
+        return readPodAccounts({ items: [added] })[0];
+    },
+
+    async changePodAccount(podId: string, podAccountId: string, patch: PodAccountPatch) {
+        const saved = await lemma(podId).connectors.pod.accounts.update(podAccountId, accountPatchBody(patch) as PodAccountUpdateRequest);
+        return readPodAccounts({ items: [saved] })[0];
+    },
+
+    async removePodAccount(podId: string, podAccountId: string) {
+        await lemma(podId).connectors.pod.accounts.remove(podAccountId);
+    },
+
+    async shareAccountAs(podId: string, podAccountId: string, slug: string, purpose = "") {
+        return shareAs(podId, podAccountId, slug, purpose);
+    },
+
+    async accountUsage(accountId: string) {
+        return readAccountUsage(await lemma().request("GET", `/me/connectors/accounts/${encodeURIComponent(accountId)}/pods`));
+    },
+
+    async installationImpact(orgId: string, authConfigId: string) {
+        return readImpact(await lemma().request(
+            "GET", `/organizations/${encodeURIComponent(orgId)}/installations/${encodeURIComponent(authConfigId)}/impact`,
+        ));
+    },
+
+    async listInstallations(orgId: string) {
+        const listed = await lemma().connectors.authConfigs.list(orgId, { limit: 200 });
+        return ((listed as { items?: Install[] }).items ?? []);
+    },
+
+    async orgActions(orgId: string) {
+        return readOrgActions(await lemma().request("GET", `/organizations/${encodeURIComponent(orgId)}/permissions/me`));
+    },
+
+    async podActions(podId: string) {
+        return (await lemma(podId).podPermissions.me(podId)).actions ?? [];
+    },
+
+    async setAgentGrants(podId: string, name: string, grants: AgentGrant[]) {
+        const saved = await lemma(podId).agents.permissions.replace(name, grantsBody(grants) as unknown as AgentPermissionsReplaceRequest);
+        agentPages.delete(podId);
+        return readAgentDetail({ permissions: saved }).grants;
     },
 
     async startGuided(podId: string, platform: string): Promise<GuidedSetup> {

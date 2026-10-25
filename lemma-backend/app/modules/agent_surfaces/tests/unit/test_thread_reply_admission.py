@@ -72,7 +72,7 @@ def _surface() -> AgentSurfaceEntity:
         name="slack",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.SLACK,
-        account_id=None,
+        pod_connector_slug=None,
         external_workspace_id="T1",
         config=SurfaceConfig(channels=[SurfaceChannelRoute(channel_id="C1")]),
         is_active=True,

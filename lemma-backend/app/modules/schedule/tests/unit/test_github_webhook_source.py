@@ -52,6 +52,15 @@ def _pull_request(action: str = "opened", head_sha: str = "abc123") -> dict:
     }
 
 
+BOUND_ORG = "0199a1f6-0000-7000-8000-000000000001"
+
+
+async def _bound(_payload):
+    """Every installation here is bound to one organization; the lookup itself
+    reads Postgres and is covered end to end."""
+    return BOUND_ORG
+
+
 @pytest.fixture(autouse=True)
 def _secret(monkeypatch):
     monkeypatch.setattr(
@@ -67,13 +76,13 @@ def _secret(monkeypatch):
 
 class TestVerification:
     async def test_a_signed_delivery_is_accepted(self):
-        verified = await GitHubWebhookSource().verify(
+        verified = await GitHubWebhookSource(bound_organization=_bound).verify(
             _delivery(_pull_request(), event="pull_request")
         )
         assert verified.payload["number"] == 42
 
     async def test_an_unsigned_or_wrongly_signed_delivery_is_refused(self):
-        source = GitHubWebhookSource()
+        source = GitHubWebhookSource(bound_organization=_bound)
         with pytest.raises(WebhookNotVerified):
             await source.verify(
                 _delivery(_pull_request(), event="pull_request", secret="wrong")
@@ -93,7 +102,7 @@ class TestVerification:
             headers=delivery.headers,
         )
         with pytest.raises(WebhookNotVerified):
-            await GitHubWebhookSource().verify(tampered)
+            await GitHubWebhookSource(bound_organization=_bound).verify(tampered)
 
     async def test_no_configured_secret_refuses_rather_than_accepts(self, monkeypatch):
         """Unconfigured is not the same as unauthenticated.
@@ -105,7 +114,7 @@ class TestVerification:
             connector_settings, "connector_github_app_webhook_secret", None
         )
         with pytest.raises(WebhookNotVerified):
-            await GitHubWebhookSource().verify(
+            await GitHubWebhookSource(bound_organization=_bound).verify(
                 _delivery(_pull_request(), event="pull_request")
             )
 
@@ -121,7 +130,7 @@ class TestVerification:
             SECRET,
             raising=False,
         )
-        verified = await GitHubWebhookSource().verify(
+        verified = await GitHubWebhookSource(bound_organization=_bound).verify(
             _delivery(_pull_request(), event="pull_request", secret=SECRET)
         )
         assert verified.payload["action"] == "opened"
@@ -129,7 +138,7 @@ class TestVerification:
 
 class TestRouting:
     async def _normalized(self, payload: dict, event: str):
-        source = GitHubWebhookSource()
+        source = GitHubWebhookSource(bound_organization=_bound)
         return source.normalize(await source.verify(_delivery(payload, event=event)))
 
     async def test_the_routing_key_is_tenant_scoped(self):
@@ -182,7 +191,7 @@ class TestSourceEventId:
     """
 
     async def test_a_redelivery_collapses_onto_the_first_attempt(self):
-        source = GitHubWebhookSource()
+        source = GitHubWebhookSource(bound_organization=_bound)
         payload = _pull_request()
         first = _delivery(payload, event="pull_request")
         second = WebhookDelivery(
@@ -374,7 +383,7 @@ NEW_EVENTS = {
 
 
 async def _normalize(payload: dict, event: str, *, delivery_id: str | None = None):
-    source = GitHubWebhookSource()
+    source = GitHubWebhookSource(bound_organization=_bound)
     delivery = _delivery(payload, event=event)
     if delivery_id is not None:
         delivery = WebhookDelivery(
@@ -572,3 +581,23 @@ async def test_a_check_runs_pull_request_from_a_fork_binds_no_branch():
     payload["check_run"]["pull_requests"][0]["head"]["repo"] = FORK
     normalized = await _normalize(payload, "check_run")
     assert normalized.context == {"repo": {"owner": "octo", "repo": "api"}}
+
+
+class TestInstallationBinding:
+    """Audit H4: an installation belongs to one Lemma organization."""
+
+    async def test_a_delivery_is_scoped_to_its_installations_organization(self):
+        source = GitHubWebhookSource(bound_organization=_bound)
+        normalized = source.normalize(
+            await source.verify(_delivery(_pull_request(), event="pull_request"))
+        )
+        assert normalized is not None
+        assert normalized.organization_id == BOUND_ORG
+
+    async def test_an_unbound_installations_delivery_routes_nowhere(self):
+        async def _unbound(_payload):
+            return None
+
+        source = GitHubWebhookSource(bound_organization=_unbound)
+        verified = await source.verify(_delivery(_pull_request(), event="pull_request"))
+        assert source.normalize(verified) is None

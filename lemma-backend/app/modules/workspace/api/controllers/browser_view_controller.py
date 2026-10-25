@@ -24,9 +24,10 @@ import contextlib
 import httpx
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, Query, WebSocket, status
 from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser
+from app.core.app_pin import app_host_slug
 from app.core.request_context import create_inherited_task
 
 from app.core.config import settings
@@ -39,6 +40,11 @@ from app.modules.workspace.services.browser_relay_client import (
 from app.modules.workspace.api.controllers.browser_view_session import (
     UserIdResolver,
     user_id_resolver,
+)
+from app.modules.workspace.api.controllers.browser_view_hangup import (
+    collect as _collect,
+    hang_up as _hang_up,
+    refuse as _refuse,
 )
 from app.modules.workspace.api.controllers.browser_view_watchers import (
     watch_begun,
@@ -320,118 +326,11 @@ async def _keep_awake(service: BrowserViewService, user_id: UUID) -> None:
         await service.keep_awake(user_id)
 
 
-#: What closing a socket that is already over can raise.
-#:
-#: `RuntimeError` is starlette's, for a socket in the wrong state, and it was
-#: the obvious guess and the only one handled. The one production actually
-#: threw is `AttributeError`, from inside uvicorn's own close path
-#: (`'WebSocketProtocol' object has no attribute 'transfer_data_task'`) when the
-#: handshake never completed -- so a refusal aimed at a client that had already
-#: gone became an unhandled ASGI error, and the pane, seeing an error rather
-#: than its close code, retried. `OSError` covers the transport being gone
-#: underneath, `ConnectionError` included.
-#:
-#: `WebSocketDisconnect` is starlette's for a client that has already gone, and
-#: is the *ordinary* case here rather than an edge: by the time anything is
-#: being refused, the person may well have navigated away.
-#:
-#: This tuple has now been corrected twice from production, which is the honest
-#: note to leave. It began as `RuntimeError` alone; `AttributeError` was found
-#: crashing refusals in dev; `WebSocketDisconnect` was found crashing them again
-#: in the local E2B run that was meant to confirm the first fix. So read the
-#: list as "the ways a socket is observed to end", not as a proof of
-#: completeness -- and if a fifth appears, the log line below names its type,
-#: which is the whole reason it logs rather than swallowing.
-_HANGUP_FAILURES = (RuntimeError, AttributeError, OSError, WebSocketDisconnect)
-
-
-async def _collect(task: "asyncio.Task[None]") -> None:
-    """Cancel a task and wait for it to finish, without that becoming an error.
-
-    Awaited rather than merely cancelled, because a cancelled task is not
-    finished until it has been collected and leaving it uncollected is how a
-    task outlives the request that started it.
-
-    `CancelledError` by name, and that is the whole point. Cancelling is what
-    makes awaiting it raise, and `CancelledError` is a `BaseException` -- so the
-    `suppress(Exception)` this replaces caught everything *except* the one
-    exception the line is guaranteed to produce. uvicorn logged "Exception in
-    ASGI application" on every close of the browser pane: a stack trace for the
-    ordinary act of stopping watching.
-    """
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
-
-
-async def _hang_up(websocket: WebSocket, code: int, *, doing: str) -> None:
-    """Accept if needed, then close, and never raise while doing it.
-
-    Broad on purpose, and logged rather than swallowed. `RuntimeError` alone was
-    the obvious guess and the wrong one: a socket whose handshake never
-    completed raises `AttributeError` from inside uvicorn's own close path
-    (`'WebSocketProtocol' object has no attribute 'transfer_data_task'`), so a
-    refusal aimed at a client that had already gone became an unhandled ASGI
-    error -- and the pane, which sees an error rather than its close code,
-    retries. "The browser is not running" is the ordinary resting state of an
-    idle workspace, and it was reaching people as a crash loop.
-
-    Whatever goes wrong here, the caller has already decided this socket is
-    over. There is nothing left to fail into, which is what makes catching
-    everything the right shape rather than a shrug.
-    """
-    try:
-        await websocket.accept()
-    except _HANGUP_FAILURES as exc:
-        # Already accepted is the ordinary case and not worth a line.
-        logger.debug(
-            "workspace.browser_view.accept_before_close_failed.observed",
-            doing=doing,
-            error_type=type(exc).__name__,
-        )
-    try:
-        await websocket.close(code=code)
-    except _HANGUP_FAILURES as exc:
-        logger.debug(
-            "workspace.browser_view.close_not_delivered.observed",
-            doing=doing,
-            close_code=code,
-            error_type=type(exc).__name__,
-        )
-
-
-async def _refuse(websocket: WebSocket, code: int) -> None:
-    """Close with a code the person's browser will actually receive.
-
-    A close sent *before* `accept()` is not a close. ASGI turns it into a
-    rejected handshake -- uvicorn answers HTTP 403 -- and a rejected handshake
-    reaches page script as `code: 1006`, the anonymous "abnormal closure" a
-    browser reports when it never had a connection at all. The close code is
-    part of the WebSocket close *frame*, and there is no frame until the socket
-    has been accepted.
-
-    So every one of the five codes below arrived at the pane as the same 1006,
-    and two things followed from it. The person was told "The connection
-    dropped. Reconnecting." no matter what had really happened -- including
-    "the browser is not running", which is the ordinary resting state of an
-    idle workspace and not a failure at all. And the view retried, for ever,
-    because 1006 is the code it is right to retry: the client has explicit
-    logic to stop on a refusal that will never become an acceptance, and that
-    logic could never fire.
-
-    Accepting a socket in order to close it is backwards, and the reason it is
-    correct anyway is that nothing is sent between the two. A caller refused
-    here gets an open event, a close frame carrying the reason, and no bytes.
-    """
-    await _hang_up(websocket, code, doing="refusing")
-
-
 @router.websocket("/view")
 async def browser_view(
     websocket: WebSocket,
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
     origins: Annotated[tuple[str, ...], Depends(allowed_origins)],
-    origin_pattern: Annotated[str | None, Depends(allowed_origin_pattern)],
     resolve_user_id: Annotated[UserIdResolver, Depends(user_id_resolver)],
     mode: str = Query(default=MODE_VIEW),
     origin: str | None = Query(default=None),
@@ -455,6 +354,9 @@ async def browser_view(
     here to name.
     """
     sent = websocket.headers.get("origin")
+    # Read here, not taken as a handler parameter: it is deployment config, and
+    # a parameter reads to static analysis as something the caller supplied.
+    origin_pattern = allowed_origin_pattern()
     if not origin_is_allowed(sent, allowed=origins, pattern=origin_pattern):
         # Browsers do not apply same-origin to WebSockets but do send cookies,
         # so without this any page could open this socket as the signed-in
@@ -467,6 +369,14 @@ async def browser_view(
             "workspace.browser_view.origin_refused.denied",
             origin_hint=origin_refusal_hint(sent, allowed=origins),
         )
+        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
+        return
+    if app_host_slug(websocket) is not None:
+        # An app host is an allowed CORS origin, but this is the person's own
+        # sandbox -- their saved sign-ins -- outside any pod, and an app's page
+        # acts for its viewer only in its own pod (``core/app_pin``). Refused
+        # without looking the app up: no app host has any business here.
+        logger.warning("workspace.browser_view.app_origin_refused.denied")
         await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
         return
 

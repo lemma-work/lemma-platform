@@ -21,7 +21,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.authorizer import Authorizer
-from app.core.authorization.context import ActorType, Context, PrincipalRef
+from app.core.authorization.context import Context, OtherPod, PrincipalRef
 
 #: ``grantee_type`` on a grant to another pod, and the principal type it matches.
 POD_PRINCIPAL_TYPE = "POD"
@@ -42,7 +42,7 @@ def build_pod_context(
     """A context acting in ``pod_id`` as ``asking_pod_id``, with only its grants."""
     principals = frozenset({pod_principal(asking_pod_id)})
     return Context(
-        actor_type=ActorType.POD,
+        actor=OtherPod(pod_id=asking_pod_id),
         actor_id=f"pod:{asking_pod_id}",
         authorizer=Authorizer(session),
         request_id=request_id,

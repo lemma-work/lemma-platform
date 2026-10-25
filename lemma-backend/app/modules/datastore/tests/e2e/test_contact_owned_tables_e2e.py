@@ -192,16 +192,16 @@ async def test_each_principal_reads_its_own_share_of_a_contact_owned_table(
 
 async def test_a_session_that_names_nobody_sees_no_contact_row(pod_api: DatastoreApi):
     """The policy alone fails closed: no settings, no rows -- not every row."""
-    from app.modules.datastore.config import datastore_settings
+    from app.modules.datastore.infrastructure.query_role import pod_query_role_name
 
     table = await _tickets(pod_api)
     await pod_api.create_record(table, {"subject": "Mine", "contact_id": str(MINE)})
     schema = get_schema_manager()
-    await schema.ensure_query_role()
     schema_name = schema.get_schema_name(UUID(pod_api.pod_id))
+    await schema.ensure_query_role(schema_name)
     async with schema.session_factory() as session:
         await session.execute(
-            text(f'SET LOCAL ROLE "{datastore_settings.datastore_query_role}"')
+            text(f'SET LOCAL ROLE "{pod_query_role_name(schema_name)}"')
         )
         rows = (
             await session.execute(text(f'SELECT * FROM "{schema_name}"."{table}"'))

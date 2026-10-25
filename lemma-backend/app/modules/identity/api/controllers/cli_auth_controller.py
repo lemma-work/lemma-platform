@@ -22,7 +22,6 @@ from pydantic import BaseModel, EmailStr
 
 from app.core.api.dependencies import get_uow_factory
 from app.core.authorization.scope import uow_scope
-from app.core.authorization.dependencies import reject_delegated_workload_anywhere
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.identity.api.dependencies import get_user_service
 from app.modules.identity.domain.user_entities import UserEntity
@@ -53,7 +52,6 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
     "/cli/session-tokens",
     include_in_schema=False,
     operation_id="auth.cli.session_tokens",
-    dependencies=[reject_delegated_workload_anywhere("mint a CLI session")],
     summary="Mint a CLI session from the current browser session",
     description="Create a dedicated Lemma CLI session for the current authenticated user and return access and refresh tokens.",
     response_model=CliSessionResponse,

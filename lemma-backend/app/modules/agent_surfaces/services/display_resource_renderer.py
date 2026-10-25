@@ -94,15 +94,32 @@ def build_approval_render_plan(
     reason: str | None,
     tool_name: str | None,
     allow_session: bool = False,
+    session_scope: str | None = None,
 ) -> SurfaceApprovalRenderPlan:
     """Build a platform-neutral plan for rendering a ``request_approval`` prompt.
 
     Always includes Approve + Deny; the approve-for-session button is added only
     when ``allow_session`` is set (i.e. the paused call carries a real permission
     gate). ``callback_id`` routes the tapped decision back to the waiting run.
+
+    ``session_scope`` is what that button allows, in words ("Delete records in
+    any table for the rest of this conversation", ``approval_wording``). A
+    session approval covers the permission, not the one call, and a card that
+    only said "Approve for session" let a person agree to more than they read.
+    The sentence rides with the reason, since a platform's button label is
+    too short to carry it.
     """
     clean_title = sanitize_user_visible_text(title) or "Action requires your approval"
     clean_reason = sanitize_user_visible_text(reason).strip() if reason else None
+    if allow_session and session_scope:
+        clean_reason = "\n".join(
+            part
+            for part in (
+                clean_reason,
+                f"Allow for this conversation: {session_scope}.",
+            )
+            if part
+        )
     clean_tool = sanitize_user_visible_text(tool_name).strip() if tool_name else None
     buttons = [
         SurfaceApprovalButton(
@@ -115,7 +132,8 @@ def build_approval_render_plan(
     if allow_session:
         buttons.append(
             SurfaceApprovalButton(
-                label="Approve for session", decision=APPROVAL_DECISION_SESSION
+                label="Allow for this conversation",
+                decision=APPROVAL_DECISION_SESSION,
             )
         )
     return SurfaceApprovalRenderPlan(

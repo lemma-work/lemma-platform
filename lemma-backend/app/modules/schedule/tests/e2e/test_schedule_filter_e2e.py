@@ -274,11 +274,12 @@ async def test_a_deployment_without_a_provider_is_not_counted_against_a_schedule
     assert stored.consecutive_failures == 1
 
 
-async def test_a_table_change_is_judged_as_the_owner_of_the_row(
+async def test_a_table_change_is_judged_as_the_schedules_owner_not_the_rows(
     authenticated_client, fixed_test_org, db_session
 ):
     """Table changes are judged by this same job, not inline on the
-    stream, and run as the changed row's owner (PS-SCHED-011)."""
+    stream, and run as the schedule's owner -- not the changed row's, even
+    when an item queued with one names it (H16)."""
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     agent = await _create_agent(authenticated_client, pod_id)
     table = f"signups_{uuid4().hex[:8]}"
@@ -307,7 +308,7 @@ async def test_a_table_change_is_judged_as_the_owner_of_the_row(
     )
     assert run is not None
     assert run.status == ScheduleRunStatus.FILTERED.value
-    assert run.user_id == row_owner.id
+    assert run.user_id == UUID(schedule["user_id"]) != row_owner.id
     assert run.llm_output["should_proceed"] is False
 
 

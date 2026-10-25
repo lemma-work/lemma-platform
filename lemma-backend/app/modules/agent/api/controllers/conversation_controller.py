@@ -30,6 +30,7 @@ from app.modules.agent.api.controllers.conversation_streaming import (
 )
 from app.modules.agent.api.controllers.shared import (
     ChannelServiceDep,
+    PERSON_ANSWERS,
     _build_conversation_service,
     _parse_message_page_token,
     _parse_metadata_filters,
@@ -42,9 +43,7 @@ from app.modules.agent.api.controllers.conversation_page_token import (
     encode_conversation_page_token,
     parse_conversation_page_token,
 )
-from app.modules.agent.api.dependencies import (
-    ConversationServiceDep,
-)
+from app.modules.agent.api.dependencies import ConversationServiceDep
 from app.modules.agent.api.schemas import (
     AgentRunStartResponse,
     ApprovalDecisionResponse,
@@ -321,7 +320,7 @@ async def list_approvals(
     "/{conversation_id}/approvals/{approval_id}/decision",
     response_model=ApprovalDecisionResponse,
     operation_id="agent.conversation.approval.resolve",
-    dependencies=[CONVERSATION_MEMBERSHIP],
+    dependencies=[CONVERSATION_MEMBERSHIP, PERSON_ANSWERS],
     summary="Resolve User Approval",
     description=(
         "Record the user's decision/answers for a paused request_approval or "

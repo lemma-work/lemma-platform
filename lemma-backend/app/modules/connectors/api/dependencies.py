@@ -7,7 +7,6 @@ from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.context import Context
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.authorization.factory import create_authorization_data_service
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
 )
@@ -46,8 +45,12 @@ from app.modules.connectors.infrastructure.repositories.connector_trigger_reposi
 from app.modules.connectors.infrastructure.repositories.connect_request_repository import (
     ConnectRequestRepository,
 )
-from app.modules.connectors.services.account_resolution_service import (
-    AccountResolutionService,
+from app.modules.connectors.services import pod_connector_composition
+from app.modules.connectors.services.pod_connector_resolution import (
+    PodConnectorResolver,
+)
+from app.modules.connectors.services.pod_connector_service import (
+    PodConnectorService,
 )
 from app.modules.connectors.services.connector_operation_service import (
     ConnectorOperationService,
@@ -60,8 +63,14 @@ from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.connectors.services.trigger_service import ConnectorTriggerService
 
 if TYPE_CHECKING:
+    from app.modules.connectors.services.pod_connector_coverage import (
+        PodConnectorCoverageService,
+    )
     from app.modules.connectors.api.schemas.connector_operation_schemas import (
         OperationExecutionResponse,
+    )
+    from app.modules.connectors.services.installation_reach import (
+        InstallationReach,
     )
     from app.modules.connectors.services.files.operation_files import (
         FoundFile,
@@ -162,17 +171,24 @@ def build_connector_operation_service(
         operation_gateway=BoundedComposioGateway(
             connector_repository=connector_repository
         ),
-        account_resolution_service=get_account_resolution_service(uow),
+        pod_connector_resolver=build_pod_connector_resolver(uow),
         connector_service=get_connector_service(uow),
     )
 
 
-def get_account_resolution_service(uow: UoWDep) -> AccountResolutionService:
-    return AccountResolutionService(
-        account_repository=_account_repository(uow),
-        authorization_service=create_authorization_data_service(uow),
-        organization_access=SqlAlchemyOrganizationAccessAdapter(uow),
-    )
+def build_pod_connector_resolver(uow: UoWDep) -> PodConnectorResolver:
+    return pod_connector_composition.build_pod_connector_resolver(uow)
+
+
+def get_pod_connector_service(uow: UoWDep) -> PodConnectorService:
+    return pod_connector_composition.build_pod_connector_service(uow)
+
+
+def build_installation_reach(
+    uow: UoWDep,
+) -> "InstallationReach":
+    """What the agent's connector tools reach beyond the pod's connectors."""
+    return pod_connector_composition.build_installation_reach(uow)
 
 
 ConnectorServiceDep = Annotated[ConnectorService, Depends(get_connector_service)]
@@ -241,6 +257,43 @@ def get_connector_operation_use_cases(
 ConnectorOperationUseCasesDep = Annotated[
     ConnectorOperationUseCases, Depends(get_connector_operation_use_cases)
 ]
-AccountResolutionServiceDep = Annotated[
-    AccountResolutionService, Depends(get_account_resolution_service)
+PodConnectorServiceDep = Annotated[
+    PodConnectorService, Depends(get_pod_connector_service)
+]
+
+
+def get_pod_connector_coverage_service(
+    uow: UoWDep,
+) -> "PodConnectorCoverageService":
+    # Imported here: the adapters reach `channels` and `pod` contracts, which
+    # every process importing a connector route would otherwise pay for.
+    from app.modules.connectors.infrastructure.adapters.member_coverage import (
+        RedisAskLedger,
+        connector_title_through_catalog,
+        member_context_through_authorizer,
+        people_through_contracts,
+        tell_through_channels,
+    )
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodConnectorRepository,
+    )
+    from app.modules.connectors.services.pod_connector_coverage import (
+        PodConnectorCoverageService,
+    )
+
+    return PodConnectorCoverageService(
+        uow=uow,
+        pod_connectors=PodConnectorRepository(uow),
+        people=people_through_contracts,
+        member_context=member_context_through_authorizer,
+        ledger=RedisAskLedger(uow.session),
+        tell=tell_through_channels,
+        connector_title=connector_title_through_catalog(
+            uow, _auth_config_repository(uow)
+        ),
+    )
+
+
+PodConnectorCoverageServiceDep = Annotated[
+    "PodConnectorCoverageService", Depends(get_pod_connector_coverage_service)
 ]

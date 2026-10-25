@@ -29,7 +29,7 @@ def _surface(platform: SurfacePlatform) -> AgentSurfaceEntity:
         pod_id=uuid4(),
         agent_id=uuid4(),
         config=SurfaceConfig(),
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         surface_identity_id=BOT_ID,
     )
     return surface.model_copy(

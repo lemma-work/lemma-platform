@@ -24,11 +24,15 @@ from uuid import UUID
 from lemma_pod_bundle import (
     diff_table_columns,
     load_resource_payload,
-    require_account_variable_metadata,
 )
 from lemma_pod_bundle.diff import _order_table_dirs_by_dependency
 from lemma_pod_bundle.jsonc import loads_jsonc
-from lemma_pod_bundle.layout import FILES_MANIFEST, POD_MANIFEST_FILE, TABLE_DATA_FILE
+from lemma_pod_bundle.layout import (
+    FILES_MANIFEST,
+    POD_MANIFEST_FILE,
+    TABLE_DATA_FILE,
+    check_format_version,
+)
 from lemma_pod_bundle.limits import (
     MAX_IMPORT_PLAN_STEPS,
     MAX_RECORDS_PER_TABLE,
@@ -38,14 +42,31 @@ from lemma_pod_bundle.limits import (
 from app.modules.pod_bundle.domain.exportable import is_exportable_agent
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import BundleInvalidError
+from app.modules.pod_bundle.infrastructure.connector_grants import (
+    ConnectorDirectory,
+    plan_connector_grants,
+)
+from app.modules.pod_bundle.infrastructure.connector_planning import (
+    ConnectorLookup,
+    NoConnectorLookup,
+    plan_connectors,
+)
+from app.modules.pod_bundle.infrastructure import account_checks
 from app.modules.pod_bundle.infrastructure.grants import has_grants
+from app.modules.pod_bundle.infrastructure.plan_variables import (
+    variables_from_manifest,
+)
+from app.modules.pod_bundle.infrastructure.grant_planning import (
+    GrantConferral,
+    NoGrantConferral,
+    plan_grant_conferral,
+)
 from app.modules.pod_bundle.domain.state import (
     ImportPlan,
     PlanStep,
     StepAction,
     StepKind,
     StepStatus,
-    VariableSpec,
 )
 
 logger = get_logger(__name__)
@@ -208,16 +229,36 @@ def _names_with_grants(bundle_root: Path, resource_type: str) -> list[str]:
 
 
 class PlanBuilder:
-    def __init__(self, existing: ExistingResources):
+    def __init__(
+        self,
+        existing: ExistingResources,
+        directory: ConnectorDirectory | None = None,
+        *,
+        connectors: ConnectorLookup | None = None,
+        grants: GrantConferral | None = None,
+        accounts: account_checks.AccountUsability | None = None,
+    ):
         self._existing = existing
+        #: Whether the importer could use an account a schedule names.
+        self._accounts = accounts or account_checks.AnyAccountUsable()
+        #: Grants on connectors the pod does not declare (``connector_grants``).
+        self._directory = directory
+        #: The bundle's own ``connectors/`` (``connector_planning``).
+        self._connectors = connectors or NoConnectorLookup()
+        self._grants = grants or NoGrantConferral()
 
     async def build_plan(self, *, bundle_root: Path) -> ImportPlan:
         pod_manifest = self._read_pod_manifest(bundle_root)
-        format_version = int(pod_manifest.get("format_version") or 0)
+        try:
+            format_version = check_format_version(pod_manifest)
+        except ValueError as exc:
+            raise BundleInvalidError(str(exc)) from exc
         bundle_name = pod_manifest.get("name")
 
-        steps: list[PlanStep] = []
-        warnings: list[str] = []
+        # --- connectors first: everything else may name one by slug --------
+        connectors, steps, warnings = await plan_connectors(
+            bundle_root, self._connectors
+        )
 
         # --- tables (FK-ordered) + table_data --------------------------------
         table_dirs = _order_table_dirs_by_dependency(
@@ -295,17 +336,17 @@ class PlanBuilder:
         # --- schedules -------------------------------------------------------
         existing_schedules = await self._existing.schedule_names()
         for d in _resource_subdirs(bundle_root, "schedules"):
-            steps.append(
-                self._create_once_step(
-                    StepKind.SCHEDULE,
-                    d.name,
-                    existing_schedules,
-                    reason=(
-                        "a schedule of this name already exists; importing a "
-                        "bundle does not replace it"
-                    ),
-                )
+            step = self._create_once_step(
+                StepKind.SCHEDULE,
+                d.name,
+                existing_schedules,
+                reason=(
+                    "a schedule of this name already exists; importing a "
+                    "bundle does not replace it"
+                ),
             )
+            payload = load_resource_payload(d, d.name, resource_type="schedules")
+            steps.append(account_checks.noting_deprecated_account(step, payload))
 
         # --- surfaces --------------------------------------------------------
         existing_surfaces = await self._existing.surface_names()
@@ -356,6 +397,14 @@ class PlanBuilder:
                     action=StepAction.UPDATE,
                 )
             )
+        warnings += await plan_grant_conferral(bundle_root, steps, self._grants)
+
+        if self._directory is not None:
+            warnings += await plan_connector_grants(
+                bundle_root,
+                self._directory,
+                bundled={plan.slug for plan in connectors},
+            )
 
         # --- table data (after tables exist) ---------------------------------
         for name, _ in data_steps:
@@ -373,7 +422,15 @@ class PlanBuilder:
         for i, step in enumerate(steps):
             step.index = i
 
-        variables = _variables_from_manifest(pod_manifest)
+        variables = variables_from_manifest(pod_manifest)
+        # An account written into the bundle is known now; one given as an
+        # import variable is checked again when the apply is requested.
+        await account_checks.skip_unusable_accounts(
+            steps,
+            warnings,
+            replacements={v.name: v.default for v in variables if v.default},
+            check=self._accounts,
+        )
 
         return ImportPlan(
             format_version=format_version,
@@ -381,6 +438,7 @@ class PlanBuilder:
             steps=steps,
             variables=variables,
             warnings=warnings,
+            connectors=connectors,
         )
 
     def _simple_step(self, kind: StepKind, name: str, existing: set[str]) -> PlanStep:
@@ -534,52 +592,3 @@ class ServiceExistingResources:
                 exc_info=True,
             )
             return set()
-
-
-def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]:
-    """Turn ``pod.json -> variables`` into typed specs.
-
-    A connector ``account`` variable is **required**: its source id belongs to the
-    exporting org and cannot be reused, so the importer must supply one of their own
-    accounts (validated at apply). A ``pod_member`` variable auto-resolves to the
-    importing user, and a ``free`` variable (e.g. an app slug) is required only when
-    it has no default.
-
-    Every ``account`` variable must carry ``connector``/``provider`` metadata —
-    a bundle missing it predates that guarantee (or was hand-edited) and must
-    be re-exported rather than imported half-resolvable."""
-    raw = pod_manifest.get("variables")
-    if not isinstance(raw, dict):
-        return []
-    try:
-        require_account_variable_metadata(raw)
-    except ValueError as exc:
-        raise BundleInvalidError(str(exc)) from exc
-    specs: list[VariableSpec] = []
-    for name, meta in raw.items():
-        vtype = str((meta or {}).get("type") or "").lower()
-        if vtype == "account":
-            kind = "account"
-        elif vtype in ("member", "pod_member"):
-            kind = "pod_member"
-        else:
-            kind = "free"
-        default = (meta or {}).get("default")
-        connector = (meta or {}).get("connector")
-        # `provider` is the pre-rename spelling, still read so bundles exported
-        # before it keep planning.
-        connector_kind = (meta or {}).get("connector_kind") or (meta or {}).get(
-            "provider"
-        )
-        specs.append(
-            VariableSpec(
-                name=str(name),
-                kind=kind,  # type: ignore[arg-type]
-                description=(meta or {}).get("description"),
-                required=(kind == "account") or (kind == "free" and default is None),
-                default=str(default) if default is not None else None,
-                connector=str(connector) if connector else None,
-                connector_kind=str(connector_kind) if connector_kind else None,
-            )
-        )
-    return specs

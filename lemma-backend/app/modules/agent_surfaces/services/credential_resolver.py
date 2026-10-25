@@ -57,6 +57,13 @@ from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repo
     WhatsAppNumberRepository,
 )
 from app.modules.connectors.contracts import AuthConfigSource
+from app.modules.agent_surfaces.services.surface_connector import (
+    bound_account_id,
+    bound_account_ids,
+)
+from app.modules.connectors.contracts.pod_connectors import (
+    resolve_standing_pod_connector,
+)
 from app.modules.connectors.contracts.surfaces import (
     SurfaceAccount,
     account,
@@ -292,7 +299,7 @@ class SurfaceCredentialResolver:
     ) -> SurfaceCredentials:
         # Every branch returns through ``with_surface_identity``; see there for
         # why that is a property of the function rather than of the caller.
-        if surface.account_id is None or (
+        if surface.pod_connector_slug is None or (
             prefer_native and has_native_credentials(surface.surface_type)
         ):
             return await self._with_pooled_number(
@@ -301,22 +308,69 @@ class SurfaceCredentialResolver:
                 arrived_on,
             )
         credentials = await self.for_account(
-            surface.account_id,
+            await self.account_id_for(surface),
             platform=surface.surface_type,
             force_refresh=force_refresh,
         )
         return with_surface_identity(credentials, surface)
 
+    async def account_id_for(self, surface: AgentSurfaceEntity) -> UUID | None:
+        """The account this surface runs as right now, or ``None`` on system
+        credentials.
+
+        Resolved through its pod connector on every call, never stored: an
+        owner withdrawing the account, the connector being removed, the
+        installation disabled or the account needing reauth each raise the
+        connector's typed error here, so the surface stops at once and says
+        why instead of running on a credential nobody offers any more.
+        """
+        return await bound_account_id(self._uow, surface)
+
+    async def for_connector(
+        self,
+        platform: str | SurfacePlatform,
+        *,
+        pod_id: UUID,
+        slug: str,
+        force_refresh: bool = False,
+    ) -> SurfaceCredentials:
+        """The credentials of the account a pod connector runs as now.
+
+        For a step that carries the surface's connector rather than the
+        surface row (``SurfaceConnectorRef``).
+        """
+        resolved = await resolve_standing_pod_connector(
+            self._uow, pod_id=pod_id, slug=slug
+        )
+        return await self.for_account(
+            resolved.account_id, platform=platform, force_refresh=force_refresh
+        )
+
+    async def _verifying_account(self, surface: AgentSurfaceEntity) -> UUID | None:
+        """The account a delivery to this surface is verified against, read
+        with no side effect: this runs for every candidate of every webhook, in
+        the request. A connector that runs as nothing right now verifies
+        nothing -- the surface is skipped as a candidate, exactly as one whose
+        account row is gone."""
+        return (await bound_account_ids(self._uow, [surface])).get(surface.id)
+
+    async def installation_identity(self, surface: AgentSurfaceEntity) -> UUID:
+        """What a verified binding through this surface is keyed on: the bot's
+        own account where it runs as one, the surface itself on the
+        deployment's shared credentials."""
+        return await self.account_id_for(surface) or surface.id
+
     async def for_platform(
         self,
         platform: str | SurfacePlatform,
-        account_id: UUID | str | None,
         *,
         surface: AgentSurfaceEntity | None,
-        force_refresh: bool = False,
         arrived_on: str | None = None,
     ) -> SurfaceCredentials:
-        """Credentials when the caller may not have a surface row.
+        """The deployment's own credentials, for a step with no surface row.
+
+        A surface that runs as a pod connector is never resolved here: its
+        account comes from the connector, through ``for_surface``.
 
         ``surface`` is required and may be ``None`` — deliberately not
         defaulted. Some credential values live on the surface rather than the
@@ -333,18 +387,13 @@ class SurfaceCredentialResolver:
         settings token -- which belongs to another number and, under another
         WABA, is refused outright.
         """
-        if not account_id:
-            return await self._with_pooled_number(
-                native_credentials(platform, surface=surface), surface, arrived_on
-            )
-        credentials = await self.for_account(
-            account_id, platform=platform, force_refresh=force_refresh
+        return await self._with_pooled_number(
+            native_credentials(platform, surface=surface), surface, arrived_on
         )
-        return with_surface_identity(credentials, surface)
 
     async def for_account(
         self,
-        account_id: UUID | str,
+        account_id: UUID | str | None,
         *,
         platform: str | SurfacePlatform,
         force_refresh: bool = False,
@@ -357,10 +406,12 @@ class SurfaceCredentialResolver:
 
     async def _account_payload(
         self,
-        account_id: UUID | str,
+        account_id: UUID | str | None,
         *,
         force_refresh: bool = False,
     ) -> CredentialPayload:
+        if account_id is None:
+            return {}
         found = await account_with_secrets(self._uow, UUID(str(account_id)))
         if found is None:
             return {}
@@ -406,7 +457,7 @@ class SurfaceCredentialResolver:
 
         None means this workspace uses the deployment's Slack app.
         """
-        account_id = surface.account_id
+        account_id = await self._verifying_account(surface)
         if account_id is None:
             return None
         connected = await account(self._uow, account_id)
@@ -417,14 +468,18 @@ class SurfaceCredentialResolver:
     async def slack_webhook_credentials(
         self, surface: AgentSurfaceEntity
     ) -> SlackWebhookCredentials:
-        account_id = surface.account_id
-        if account_id is None:
+        if surface.pod_connector_slug is None:
             return SlackWebhookCredentials(
                 app_id=None,
                 signing_secret=reveal_secret(surface_settings.slack_signing_secret),
                 uses_custom_app=False,
             )
-        found = await account_with_secrets(self._uow, account_id)
+        account_id = await self._verifying_account(surface)
+        found = (
+            await account_with_secrets(self._uow, account_id)
+            if account_id is not None
+            else None
+        )
         if found is None:
             return SlackWebhookCredentials(
                 app_id=None,

@@ -466,23 +466,28 @@ itself*.
 
 ### As direct tools
 
-Once `search_tools` has surfaced them: leave `auth_config` unset and search by
-what you want to do — the search spans every installed connector and each hit
-names the `auth_config` to run it against, so you never have to guess which
-install does email:
+Once `search_tools` has surfaced them: leave `connector` unset and search by
+what you want to do — the search spans every pod connector you may use and each
+hit names the `connector` (its slug) to run it through, so you never have to
+guess which connector does email:
 
 ```text
 search_connector_operations {"query": "send an email"}
-  -> [{auth_config: "workspace-gmail", operation: "gmail_send_email", relevance_score: …}, …]
+  -> [{connector: "gmail", operation: "gmail_send_email", relevance_score: …}, …]
 
-run_connector_operation {"auth_config": "workspace-gmail",
+run_connector_operation {"connector": "gmail",
                          "operation": "gmail_send_email",
-                         "arguments": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "…"}}
+                         "payload": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "…"}}
 ```
+
+There is no account argument: the pod connector decides whose account the call
+runs as. A refusal comes back as data naming its remedy — `CONNECTION_REQUIRED`
+or `REAUTH_REQUIRED` with a `connect_url` to hand to the person,
+`CONNECTOR_NEEDS_ACCOUNT` when a shared connector has no shared account.
 
 Wrong arguments come back as `invalid_arguments` **with the operation's
 input_schema attached** — correct and retry, don't go fetch the schema
-separately. Pass `auth_config` on search only to narrow to one install;
+separately. Pass `connector` on search only to narrow to one connector;
 `describe_connector_operation` only when you want the full schema up front;
 `output_path` on run to land a file result in the pod.
 
@@ -492,8 +497,8 @@ Wherever an operation's schema takes a file — a Gmail attachment, a Drive or
 Slack upload, a multipart field — pass a **pod file**, never file bytes:
 
 ```text
-run_connector_operation {"auth_config": "workspace-gmail", "operation": "GMAIL_SEND_EMAIL",
-  "arguments": {"recipient_email": "anukul@lemma.work", "subject": "Q3", "body": "Attached.",
+run_connector_operation {"connector": "gmail", "operation": "GMAIL_SEND_EMAIL",
+  "payload": {"recipient_email": "anukul@lemma.work", "subject": "Q3", "body": "Attached.",
                 "attachment": {"pod_path": "/me/reports/q3.pdf"}}}
 ```
 
@@ -510,7 +515,7 @@ building MIME for `messages_send`.
 ### From the CLI
 
 Third-party connector operations — **`run` does the whole thing in one call**:
-it resolves the connector, picks the operation, and executes. Still never guess a
+it picks the operation on one of the pod's connectors and executes. Still never guess a
 payload; let `--dry-run` hand you the schema.
 
 ```bash
@@ -525,12 +530,15 @@ lemma connectors run gmail GMAIL_SEND_EMAIL \
 `--attach FIELD=PATH` puts a pod file in a file argument (repeat it for a
 list). `@./local.pdf` uploads a local file to `/me/connector-uploads/` first.
 
-The first argument is the **connector id** you already know from the task
-(`gmail`, `slack`); it resolves to that connector's install. The second is an
-operation id, or plain English — the resolved id is printed so you can name it
-exactly next time. `--dry-run`, or simply omitting `--data` on an operation that
-needs input, prints the input schema instead of failing. `--account` accepts an
-account id or the connected email. `--metadata-only` strips large HTML body
+The first argument is the **pod connector's slug** (`lemma connectors pod-list`
+shows them); the connector decides whose account it runs as — yours for a
+per-member connector, the shared one for a shared connector — so there is no
+account to pass. A refusal names its remedy: `CONNECTION_REQUIRED` /
+`REAUTH_REQUIRED` come with a `connect_url` to hand to the person. The second
+argument is an operation id, or plain English — the resolved id is printed so
+you can name it exactly next time. `--dry-run`, or simply omitting `--data` on
+an operation that needs input, prints the input schema instead of failing.
+`--metadata-only` strips large HTML body
 fields from the response — reach for it when listing mail or documents, where
 the bodies are most of the payload and none of the answer. An operation that
 CHANGES data and was inferred from text rather than named is refused without
@@ -547,10 +555,10 @@ lemma connectors operations search "send email"                    # searches EV
 lemma connectors operations search gmail "send email" --limit 5    # scoped; hits include their input schema
 ```
 
-Workloads execute operations via the invoking user's connected account
-(delegated) — they never touch raw credentials. If no account is connected, create
-a connect request and hand the link to the user:
-`lemma connectors connect-requests create gmail --auth-config-id <id>`.
+Workloads execute operations through the pod's connectors — they never touch raw
+credentials. `lemma connectors pod-list` shows each one's slug, mode and status.
+If a member has no account for a per-member connector, the refusal carries a
+`connect_url`: hand it to them.
 
 ## Contacts and form responses
 

@@ -109,7 +109,7 @@ async def _insert_on_first_free_address(
     name: str | None,
     config: SurfaceConfig,
     credential_mode: SurfaceCredentialMode | None,
-    account_id: UUID | None = None,
+    pod_connector_slug: str | None = None,
     ctx: Any = None,
     name_is_chosen: bool = False,
 ) -> AgentSurfaceEntity | None:
@@ -159,7 +159,7 @@ async def _insert_on_first_free_address(
                     ),
                     config=config,
                     credential_mode=credential_mode,
-                    account_id=account_id,
+                    pod_connector_slug=pod_connector_slug,
                     surface_identity_email=address,
                     ctx=ctx,
                 )
@@ -304,7 +304,7 @@ async def create_surface_on_minted_address(
     name: str | None,
     config: SurfaceConfig,
     credential_mode: SurfaceCredentialMode | None,
-    account_id: UUID | None = None,
+    pod_connector_slug: str | None = None,
     ctx: Any = None,
     contacts_chosen: bool | None = None,
 ) -> AgentSurfaceEntity:
@@ -345,7 +345,7 @@ async def create_surface_on_minted_address(
             name=name,
             config=config,
             credential_mode=credential_mode,
-            account_id=account_id,
+            pod_connector_slug=pod_connector_slug,
             ctx=ctx,
             contacts_chosen=contacts_chosen,
         )
@@ -378,7 +378,7 @@ async def create_surface_on_minted_address(
                 surface_id=existing.id,
                 config=config,
                 credential_mode=credential_mode,
-                account_id=account_id,
+                pod_connector_slug=pod_connector_slug,
                 ctx=ctx,
             )
 
@@ -397,7 +397,7 @@ async def create_surface_on_minted_address(
         name_is_chosen=bool(name),
         config=config,
         credential_mode=credential_mode,
-        account_id=account_id,
+        pod_connector_slug=pod_connector_slug,
         ctx=ctx,
     )
     if surface is None:

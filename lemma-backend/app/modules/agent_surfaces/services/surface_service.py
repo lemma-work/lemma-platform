@@ -44,6 +44,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 )
 from app.modules.agent_surfaces.services.surface_bulk_teardown import (
     delete_matching_surfaces,
+    release_scarce_identities,
 )
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_one_surface_per_agent,
@@ -135,7 +136,7 @@ class AgentSurfaceService(
         name: str | None = None,
         config: SurfaceConfig | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
-        account_id: UUID | None = None,
+        pod_connector_slug: str | None = None,
         external_workspace_id: str | None = None,
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
@@ -165,7 +166,13 @@ class AgentSurfaceService(
             bound_identity_id,
         ) = await self.account_binding_resolver.resolve_binding(
             platform,
-            account_id=account_id,
+            account_id=(
+                await self._accounts().account_for_binding(
+                    pod_id=pod_id, slug=pod_connector_slug, platform=platform, ctx=ctx
+                )
+                if pod_connector_slug is not None
+                else None
+            ),
         )
         # The binding resolver answers for the platforms whose identity is
         # *derivable* from a connected account -- Slack's bot user id, and so
@@ -183,7 +190,7 @@ class AgentSurfaceService(
             agent_id=agent_id,
             config=config,
             credential_mode=credential_mode,
-            account_id=account_id,
+            pod_connector_slug=pod_connector_slug,
             external_workspace_id=external_workspace_id or resolved_workspace_id,
             external_tenant_id=external_tenant_id or resolved_tenant_id,
             external_channel_id=external_channel_id,
@@ -222,7 +229,6 @@ class AgentSurfaceService(
         await self._ensure_identity_is_claimable(entity)
         telegram_credentials: SurfaceCredentials | None = None
         if telegram_requires_webhook_setup(entity):
-            await self._ensure_unique_telegram_account(entity)
             telegram_credentials = await self._prepare_telegram_webhook(entity)
         created = await self.surface_repository.create(entity)
         if telegram_credentials is not None:
@@ -341,7 +347,7 @@ class AgentSurfaceService(
         update_agent_id: bool = False,
         config: SurfaceConfig | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
-        account_id: UUID | None = None,
+        pod_connector_slug: str | None = None,
         external_workspace_id: str | None = None,
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
@@ -365,7 +371,7 @@ class AgentSurfaceService(
         # re-resolved as a whole rather than field by field.
         binding_changes = (
             config,
-            account_id,
+            pod_connector_slug,
             credential_mode,
             external_workspace_id,
             external_tenant_id,
@@ -375,11 +381,12 @@ class AgentSurfaceService(
             await self._apply_binding_update(
                 surface,
                 config=config,
-                account_id=account_id,
+                pod_connector_slug=pod_connector_slug,
                 credential_mode=credential_mode,
                 external_workspace_id=external_workspace_id,
                 external_tenant_id=external_tenant_id,
                 external_channel_id=external_channel_id,
+                ctx=ctx,
             )
         if is_active is not None:
             surface.toggle_active(is_active)
@@ -387,7 +394,6 @@ class AgentSurfaceService(
         telegram = _telegram_transition(previous_surface, surface)
         telegram_credentials: SurfaceCredentials | None = None
         if telegram.register:
-            await self._ensure_unique_telegram_account(surface)
             telegram_credentials = await self._prepare_telegram_webhook(surface)
         if telegram.disable:
             await self._delete_telegram_webhook(previous_surface)
@@ -408,24 +414,36 @@ class AgentSurfaceService(
         surface: AgentSurfaceEntity,
         *,
         config: SurfaceConfig | None,
-        account_id: UUID | None,
+        pod_connector_slug: str | None,
         credential_mode: SurfaceCredentialMode | None,
         external_workspace_id: str | None,
         external_tenant_id: str | None,
         external_channel_id: str | None,
+        ctx: Context | None,
     ) -> None:
-        """Re-resolve the account binding, then write the changed fields onto it."""
+        """Re-resolve the binding, then write the changed fields onto it. A
+        new connector is checked as the person binding it; the one already
+        bound only has to still run as an account."""
+        account_id = (
+            await self._accounts().account_for_binding(
+                pod_id=surface.pod_id,
+                slug=pod_connector_slug,
+                platform=surface.surface_type,
+                ctx=ctx,
+            )
+            if pod_connector_slug is not None
+            else await self._accounts().bound_account_id(surface)
+        )
         (
             resolved_tenant_id,
             resolved_workspace_id,
             surface_identity_id,
         ) = await self.account_binding_resolver.resolve_binding(
-            surface.surface_type,
-            account_id=account_id if account_id is not None else surface.account_id,
+            surface.surface_type, account_id=account_id
         )
         surface.update_config(
             config if config is not None else surface.config,
-            account_id=account_id,
+            pod_connector_slug=pod_connector_slug,
             credential_mode=credential_mode,
             external_workspace_id=external_workspace_id or resolved_workspace_id,
             external_tenant_id=external_tenant_id or resolved_tenant_id,
@@ -501,48 +519,25 @@ class AgentSurfaceService(
     async def release_scarce_identities_for_pod(self, pod_id: UUID) -> int:
         """Free the finite things this pod holds, inline as it is deleted.
 
-        Two kinds, for one reason: a Resend inbound address and a WhatsApp
-        number out of the pool. Both are allocated per surface off a shared
-        credential, both are exhaustible, and neither makes a provider call on
-        the way out -- Resend receives on a catch-all webhook, and a pooled
-        number's webhook belongs to the number rather than to the surface, so
-        there is nothing to deregister. That is what keeps this bounded and
-        safe to do inside the delete transaction; everything else still goes
-        through the pod-deleted event and :meth:`delete_all_surfaces_for_pod`.
-
-        Inline rather than on the event, because pod deletion is **soft** and
-        the surface row survives on purpose so an undelete restores a working
-        surface. That is the right trade for a Slack app and the wrong one for
-        something scarce: a soft-deleted pod would hold a number out of a finite
-        pool indefinitely, and the deployment would run out on behalf of pods
-        nobody is using. For the address there is a second reason -- the pod's
-        org-unique *name* is freed in this same request, so a pod recreated
-        under it races the worker for the address.
-
-        The cost, stated rather than discovered: an undeleted pod does not get
-        its number back, exactly as it does not get its address back. Somebody
-        restoring a pod re-allocates, and may find the pool empty.
-
-        Only WhatsApp surfaces that actually hold a number are released. One on
-        the shared line has taken nothing scarce, so it keeps the ordinary
-        teardown path.
+        See ``surface_bulk_teardown.release_scarce_identities``.
         """
-        released = await delete_matching_surfaces(
-            self, pod_id, platform=SurfacePlatform.RESEND.value
-        )
-        return released + await delete_matching_surfaces(
-            self,
-            pod_id,
-            platform=SurfacePlatform.WHATSAPP.value,
-            only_holding_an_identity=True,
-        )
+        return await release_scarce_identities(self, pod_id)
 
-    async def _get_connected_account(self, account_id: UUID) -> SurfaceAccountInfo:
+    @property
+    def account_port(self) -> SurfaceAccountPort:
+        """Which account a pod connector means, for callers composing a
+        create around this service."""
+        return self._accounts()
+
+    def _accounts(self) -> SurfaceAccountPort:
         if self._account_port is None:
             raise AgentSurfaceValidationError(
                 "Surface service account port is not configured"
             )
-        account = await self._account_port.get_account(account_id)
+        return self._account_port
+
+    async def _get_connected_account(self, account_id: UUID) -> SurfaceAccountInfo:
+        account = await self._accounts().get_account(account_id)
         if account is None:
             raise AgentSurfaceValidationError(
                 f"Surface account '{account_id}' not found"

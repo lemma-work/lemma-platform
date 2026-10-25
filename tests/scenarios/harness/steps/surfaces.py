@@ -41,11 +41,17 @@ class SurfaceSteps:
     ) -> JSON:
         """Install the connector, connect a bot, and put a surface on the pod.
 
-        Three calls that are always made together and interesting on their own
+        Calls that are always made together and interesting on their own
         exactly once: that a surface connects at all is its own scenario, in
         `test_surfaces.py`. Everywhere else this is the setup a scenario needs
         before it can ask its actual question, and four copies of it drifted
         apart in the ways copies do.
+
+        The surface runs as a SHARED pod connector, never as an account named
+        on the request: a bot answers with nobody at the keyboard, so it uses
+        the one account its owner shared with the pod. Connecting the bot and
+        sharing it are this person's own acts, which is what makes the second
+        allowed.
 
         The bot token is unique per call because whatever stands in for Telegram
         remembers a webhook per token, and it outlives any one scenario.
@@ -64,12 +70,13 @@ class SurfaceSteps:
             auth_config=auth_config,
             credentials={"bot_token": bot_token or f"{uuid4().int % 10**10}:scenarios"},
         )
+        connector = await self.shares_as_pod_connector(account, in_pod=in_pod)
         return await self.connects_a_surface(
             in_pod=in_pod,
             platform="TELEGRAM",
             named=named,
             agent=agent,
-            account=account,
+            pod_connector=connector,
         )
 
     async def connects_a_surface(
@@ -80,7 +87,7 @@ class SurfaceSteps:
         named: str | None = None,
         unnamed: bool = False,
         agent: str | None = None,
-        account: JSON | None = None,
+        pod_connector: JSON | None = None,
         config: JSON | None = None,
     ) -> JSON:
         """Connect a surface, naming it unless the caller wants the plain call.
@@ -98,10 +105,11 @@ class SurfaceSteps:
             body["name"] = named or a_name_for("surface")
         if agent:
             body["default_agent_name"] = agent
-        if account is not None:
-            # Where the bot's credentials come from. Without it the platform has
-            # nothing to authenticate as, and creation is refused.
-            body["account_id"] = str(account["id"])
+        if pod_connector is not None:
+            # Where the bot's credentials come from: the SHARED pod connector
+            # it runs as, by slug. Without one the platform has only Lemma's
+            # own credentials, and Slack and Teams refuse to be created.
+            body["pod_connector"] = str(pod_connector["slug"])
         if config is not None:
             body["config"] = config
         return await self.api.post(

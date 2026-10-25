@@ -40,7 +40,7 @@ def _surface(*, template: str | None, account: bool) -> AgentSurfaceEntity:
         agent_id=uuid4(),
         name="whatsapp",
         surface_type=SurfacePlatform.WHATSAPP,
-        account_id=uuid4() if account else None,
+        pod_connector_slug="own-bot" if account else None,
         config=SurfaceConfig(
             whatsapp=SurfaceWhatsAppConfig(reengage_template=template, language="de")
         ),

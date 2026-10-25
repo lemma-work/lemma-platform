@@ -10,9 +10,10 @@ bulk writes is woken for them, to record the skip, but never reads their rows.
 The ``reserved_`` prefix is the namespace the platform already owns inside a pod
 schema (a table name starting with it is refused at creation), so neither table
 can collide with a table a person makes, and neither is reachable through the
-read-only query endpoint, which only resolves registered tables. The query role
-is also denied both outright, because default privileges would otherwise grant
-it SELECT on every table created in the schema.
+read-only query endpoint, which only resolves registered tables. The pod's query
+role is also denied both outright, because the schema's default privilege would
+otherwise grant it SELECT on every table created there -- and the log carries
+rows a per-user policy hides, with no policy of its own.
 
 ``lemma_change_pending`` lives once in the database's ``public`` schema. A write
 that a durable subscriber watches inserts a row naming its pod; the handoff
@@ -25,7 +26,7 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from app.modules.datastore.infrastructure.query_role import query_role_name
+from app.modules.datastore.infrastructure.query_role import withhold_statement
 
 CHANGES_TABLE = "reserved_changes"
 SUBSCRIBERS_TABLE = "reserved_change_subscribers"
@@ -158,18 +159,10 @@ async def create_change_log(conn: AsyncConnection, schema: str) -> None:
         await conn.execute(text(statement))
     if {"changes", "subscribers"} <= present:
         return
-    role = query_role_name()
-    # The role may not exist (an install whose role could not be created); then
-    # there is nothing to revoke from.
-    await conn.execute(
-        text(
-            "DO $$ BEGIN "
-            f"IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN "
-            f'REVOKE ALL ON {changes} FROM "{role}"; '
-            f'REVOKE ALL ON {subscribers} FROM "{role}"; '
-            "END IF; END $$"
-        )
-    )
+    # The role may not exist (an install whose role could not be created, or a
+    # legacy schema not yet healed); then there is nothing to revoke from, and
+    # the heal that creates it withholds these tables itself.
+    await conn.execute(text(withhold_statement(schema)))
 
 
 __all__ = [

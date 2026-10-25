@@ -8,7 +8,13 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.authorization.anonymous import build_outsider_context
-from app.core.authorization.context import ActorType, Context
+from app.core.authorization.context import (
+    Actor,
+    Context,
+    Person,
+    Workload,
+    WorkloadKind,
+)
 from app.modules.datastore.domain.datastore_entities import ColumnSchema
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
@@ -33,8 +39,12 @@ CONTACT = UUID(int=5)
 
 
 def _member(user_id: UUID | None = None, **extra) -> Context:
+    return _acting(Person(user_id=user_id), user_id, **extra)
+
+
+def _acting(actor: Actor, user_id: UUID | None = None, **extra) -> Context:
     return Context(
-        actor_type=ActorType.USER,
+        actor=actor,
         actor_id=str(user_id),
         authorizer=SimpleNamespace(),
         user_id=user_id,
@@ -81,7 +91,9 @@ def test_an_anonymous_visitor_reads_as_nobody_at_all():
 
 def test_a_workload_carrying_a_contact_reads_as_that_contact():
     """A contact's function run has grants, and still only that contact's rows."""
-    workload = _member(None, contact_id=CONTACT)
+    workload = _acting(
+        Workload(kind=WorkloadKind.FUNCTION, workload_id=uuid4()), contact_id=CONTACT
+    )
     assert RowPrincipal.of(workload) == RowPrincipal.contact(CONTACT)
 
 

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -289,9 +290,17 @@ class _FakeUow:
         self.session = object()
 
 
+#: The importer's context, which the grant write is bounded by.
+_IMPORTER_CTX = object()
+
+
 def _grant_applier(root: Path) -> BundleApplier:
     return BundleApplier(
-        uow=_FakeUow(), ctx=object(), pod_id=_UUID, user_id=_UUID, bundle_root=root
+        uow=_FakeUow(),
+        ctx=_IMPORTER_CTX,
+        pod_id=_UUID,
+        user_id=_UUID,
+        bundle_root=root,
     )
 
 
@@ -309,9 +318,18 @@ def _patch_grant_layer(monkeypatch) -> dict:
         return ["NORMALIZED"]
 
     async def _replace(
-        session, *, pod_id, grantee_type, grantee_id, grants, created_by_user_id
+        session,
+        *,
+        ctx,
+        pod_id,
+        grantee_type,
+        grantee_id,
+        grants,
+        created_by_user_id,
+        action,
     ):
         calls["replace"] = {
+            "ctx": ctx,
             "grantee_type": grantee_type,
             "grantee_id": grantee_id,
             "grants": grants,
@@ -439,6 +457,8 @@ async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
     assert calls["replace"]["grantee_type"] == "AGENT"
     assert calls["replace"]["grantee_id"] == _AGENT_ID
     assert calls["replace"]["grants"] == ["NORMALIZED"]
+    # Bounded by the importer: the writer checks what they could confer.
+    assert calls["replace"]["ctx"] is _IMPORTER_CTX
 
 
 _FUNCTION_ID = uuid4()
@@ -760,12 +780,37 @@ async def test_a_one_time_schedule_that_already_ran_is_left_out(tmp_path, monkey
     assert [entity.name for entity in fake.created] == ["later"]
 
 
-async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monkeypatch):
-    """Regression test: account_id, connector_trigger_id, filter_instruction and
-    filter_output_schema were previously dropped on apply even when the bundle
-    had them resolved."""
-    account = uuid4()
+async def test_schedule_apply_carries_its_connector_and_trigger_fields(
+    tmp_path, monkeypatch
+):
+    """The pod connector rides by slug -- portable as it stands, no account
+    variable to fill -- with the trigger and filter fields that were once
+    dropped on apply."""
     root = tmp_path / "bundle"
+    _write(
+        root / "schedules" / "on_ticket" / "on_ticket.json",
+        {
+            "name": "on_ticket",
+            "schedule_type": "WEBHOOK",
+            "config": {},
+            "pod_connector": "jira",
+            "connector_trigger_id": "jira_new_issue",
+            "filter_instruction": "only urgent tickets",
+            "filter_output_schema": {"type": "object"},
+        },
+    )
+    fake = FakeScheduleOperations().patch(monkeypatch)
+    await _grant_applier(root).apply_step(_step(StepKind.SCHEDULE, "on_ticket"))
+
+    assert len(fake.created) == 1
+    entity = fake.created[0]
+    assert entity.pod_connector_slug == "jira"
+    assert entity.connector_trigger_id == "jira_new_issue"
+    assert entity.filter_instruction == "only urgent tickets"
+    assert entity.filter_output_schema == {"type": "object"}
+
+
+def _account_schedule(root: Path) -> None:
     _write(
         root / "schedules" / "on_ticket" / "on_ticket.json",
         {
@@ -774,20 +819,58 @@ async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monke
             "config": {},
             "account_id": "${on_ticket_account}",
             "connector_trigger_id": "jira_new_issue",
-            "filter_instruction": "only urgent tickets",
-            "filter_output_schema": {"type": "object"},
         },
     )
+
+
+async def test_a_bundled_schedule_naming_an_account_listens_through_its_connector(
+    tmp_path, monkeypatch
+):
+    """A bundle from before pod connectors pins a raw account. Deprecated, and
+    still imported: the account becomes the pod connector serving it to the
+    importer, and the import says so."""
+    root = tmp_path / "bundle"
+    _account_schedule(root)
     fake = FakeScheduleOperations().patch(monkeypatch)
-    applier = _applier(root, replacements={"on_ticket_account": str(account)})
+    account_id = uuid4()
+    asked = []
+
+    async def serving(_uow, _ctx, *, pod_id, account_id):
+        asked.append((pod_id, account_id))
+        return SimpleNamespace(slug="jira", pod_account_id=uuid4())
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.pod_connectors.pod_connector_for_account",
+        serving,
+    )
+    warnings: list[str] = []
+    applier = _applier(
+        root, replacements={"on_ticket_account": str(account_id)}, warnings=warnings
+    )
+
     await applier.apply_step(_step(StepKind.SCHEDULE, "on_ticket"))
 
-    assert len(fake.created) == 1
-    entity = fake.created[0]
-    assert entity.account_id == account
-    assert entity.connector_trigger_id == "jira_new_issue"
-    assert entity.filter_instruction == "only urgent tickets"
-    assert entity.filter_output_schema == {"type": "object"}
+    assert asked == [(_UUID, account_id)]
+    [created] = fake.created
+    assert created.pod_connector_slug == "jira"
+    assert any("deprecated" in warning for warning in warnings)
+
+
+async def test_a_bundled_schedule_with_no_account_given_is_left_out(
+    tmp_path, monkeypatch
+):
+    """Without an account there is nothing for it to listen through: it is left
+    out and said so, rather than failing the whole import."""
+    root = tmp_path / "bundle"
+    _account_schedule(root)
+    fake = FakeScheduleOperations().patch(monkeypatch)
+    warnings: list[str] = []
+    applier = _applier(root, replacements={"on_ticket_account": ""}, warnings=warnings)
+
+    await applier.apply_step(_step(StepKind.SCHEDULE, "on_ticket"))
+
+    assert fake.created == []
+    assert any("on_ticket" in warning for warning in warnings)
 
 
 async def test_schedule_apply_round_trips_a_pod_default_target(tmp_path, monkeypatch):
@@ -845,7 +928,7 @@ class FakeSurfaceService:
         name,
         config,
         credential_mode,
-        account_id,
+        pod_connector_slug,
         surface_identity_email=None,
         contacts_chosen=None,
         ctx=None,
@@ -857,7 +940,7 @@ class FakeSurfaceService:
             "platform": platform.value,
             "name": name,
             "agent_id": agent_id,
-            "account_id": account_id,
+            "pod_connector_slug": pod_connector_slug,
             "credential_mode": credential_mode,
             "surface_identity_email": surface_identity_email,
             "config": config,
@@ -941,29 +1024,90 @@ def _null_savepoint():
     return _cm()
 
 
-async def test_surface_apply_creates_with_resolved_account(tmp_path, monkeypatch):
-    account = uuid4()
+async def test_surface_apply_binds_the_pod_connector_the_bundle_names(
+    tmp_path, monkeypatch
+):
+    """A bundle's surface names the importing pod's connector by slug; the
+    account behind it is that pod's, and none travels in the bundle."""
     root = tmp_path / "bundle"
     _write(
         root / "surfaces" / "slack" / "slack.json",
         {
             "name": "slack",
             "platform": "SLACK",
-            "account_id": "${slack_account}",
+            "pod_connector": "support-slack",
             "is_enabled": True,
         },
     )
     surface_fake = FakeSurfaceService()
     _patch_surface_operations(monkeypatch, surface_fake)
     _patch_agent_lookup(monkeypatch)
-    # The account variable resolves the surface's ${slack_account} placeholder.
-    applier = _applier(root, replacements={"slack_account": str(account)})
+    applier = _applier(root)
     await applier.apply_step(_step(StepKind.SURFACE, "slack"))
 
     assert surface_fake.created is not None
     assert surface_fake.created["platform"] == "SLACK"
-    assert surface_fake.created["account_id"] == account
+    assert surface_fake.created["pod_connector_slug"] == "support-slack"
     assert surface_fake.updated is None  # created, not updated
+
+
+def _account_surface(root: Path) -> None:
+    """A surface exported before pod connectors, naming its account."""
+    _write(
+        root / "surfaces" / "slack" / "slack.json",
+        {"name": "slack", "platform": "SLACK", "account_id": "${slack_account}"},
+    )
+
+
+async def test_a_bundled_surface_naming_an_account_runs_as_its_connector(
+    tmp_path, monkeypatch
+):
+    """Translated as a schedule's is: the account the importer gave becomes
+    the pod connector serving it to them, and the import says so. It used to
+    be dropped without a word, while lemma-cli's import warned."""
+    root = tmp_path / "bundle"
+    _account_surface(root)
+    account_id = uuid4()
+    asked = []
+
+    async def serving(_uow, _ctx, *, pod_id, account_id):
+        asked.append((pod_id, account_id))
+        return SimpleNamespace(slug="support-slack", pod_account_id=uuid4())
+
+    monkeypatch.setattr(
+        "app.modules.connectors.contracts.pod_connectors.pod_connector_for_account",
+        serving,
+    )
+    surface_fake = FakeSurfaceService()
+    _patch_surface_operations(monkeypatch, surface_fake)
+    warnings: list[str] = []
+    applier = _applier(
+        root, replacements={"slack_account": str(account_id)}, warnings=warnings
+    )
+
+    await applier.apply_step(_step(StepKind.SURFACE, "slack"))
+
+    assert asked == [(_UUID, account_id)]
+    assert surface_fake.created is not None
+    assert surface_fake.created["pod_connector_slug"] == "support-slack"
+    assert any("deprecated" in w and "support-slack" in w for w in warnings)
+
+
+async def test_a_bundled_surface_with_no_account_given_says_so(tmp_path, monkeypatch):
+    """Without an account the surface still imports, on the platform's own
+    bot -- and the import says that, rather than nothing."""
+    root = tmp_path / "bundle"
+    _account_surface(root)
+    surface_fake = FakeSurfaceService()
+    _patch_surface_operations(monkeypatch, surface_fake)
+    warnings: list[str] = []
+    applier = _applier(root, replacements={"slack_account": ""}, warnings=warnings)
+
+    await applier.apply_step(_step(StepKind.SURFACE, "slack"))
+
+    assert surface_fake.created is not None
+    assert surface_fake.created["pod_connector_slug"] is None
+    assert any("'slack'" in w and "own bot" in w for w in warnings)
 
 
 async def test_a_whatsapp_reengage_template_survives_export_and_import(
@@ -1111,7 +1255,7 @@ async def test_surface_apply_rejects_missing_platform(tmp_path, monkeypatch):
     root = tmp_path / "bundle"
     _write(
         root / "surfaces" / "slack" / "slack.json",
-        {"name": "slack", "account_id": str(uuid4()), "is_enabled": True},
+        {"name": "slack", "pod_connector": "support-slack", "is_enabled": True},
     )
     _patch_surface_operations(monkeypatch, FakeSurfaceService())
     _patch_agent_lookup(monkeypatch)
@@ -1120,238 +1264,6 @@ async def test_surface_apply_rejects_missing_platform(tmp_path, monkeypatch):
 
 
 # --- account-binding validation on import ------------------------------------
-
-
-class _FakeConnectorService:
-    """Stand-in for the connectors service the applier consults to confirm a
-    supplied account matches the connector the bundle declared."""
-
-    def __init__(self, account, kind: str = "http"):
-        from types import SimpleNamespace
-
-        self.account_repository = SimpleNamespace(get=self._get_account)
-        self.auth_config_repository = SimpleNamespace(get=self._get_auth_config)
-        self._account = account
-        self._kind = kind
-
-    async def _get_account(self, account_id):
-        return self._account
-
-    async def get_account_kind(self, account):
-        return self._kind
-
-    async def _get_auth_config(self, auth_config_id):
-        from types import SimpleNamespace
-
-        return SimpleNamespace(kind=SimpleNamespace(value=self._kind))
-
-
-def _patch_surface_deps(monkeypatch, surface_service, connector_service) -> None:
-    _patch_surface_operations(monkeypatch, surface_service)
-    _patch_agent_lookup(monkeypatch)
-
-    async def _account(uow, account_id):
-        return await connector_service.account_repository.get(account_id)
-
-    async def _kind(uow, account):
-        return await connector_service.get_account_kind(account)
-
-    monkeypatch.setattr(f"{_CONNECTORS}.get_account", _account)
-    monkeypatch.setattr(f"{_CONNECTORS}.get_account_kind", _kind)
-
-
-async def test_surface_apply_accepts_matching_connector_account(tmp_path, monkeypatch):
-    """A supplied account whose connector matches the bundle's declared
-    connector_id passes validation and the surface is created."""
-    from types import SimpleNamespace
-
-    account = uuid4()
-    root = tmp_path / "bundle"
-    _write(
-        root / "surfaces" / "teams" / "teams.json",
-        {
-            "name": "teams",
-            "platform": "TEAMS",
-            "account_id": "${teams_account}",
-            "connector_id": "microsoft_teams",
-            "connector_kind": "http",
-            "is_enabled": True,
-        },
-    )
-    surface_fake = FakeSurfaceService()
-    connector_account = SimpleNamespace(
-        connector_id="microsoft_teams", auth_config_id=uuid4()
-    )
-    _patch_surface_deps(
-        monkeypatch, surface_fake, _FakeConnectorService(connector_account)
-    )
-
-    applier = _applier(root, replacements={"teams_account": str(account)})
-    await applier.apply_step(_step(StepKind.SURFACE, "teams"))
-    assert surface_fake.created is not None
-    assert surface_fake.created["account_id"] == account
-
-
-async def test_surface_apply_rejects_wrong_connector_account(tmp_path, monkeypatch):
-    """A supplied account for the wrong connector is rejected with a clear error
-    instead of silently binding a mismatched account."""
-    from types import SimpleNamespace
-
-    from app.modules.pod_bundle.domain.errors import PodBundleDomainError
-
-    root = tmp_path / "bundle"
-    _write(
-        root / "surfaces" / "teams" / "teams.json",
-        {
-            "name": "teams",
-            "platform": "TEAMS",
-            "account_id": "${teams_account}",
-            "connector_id": "microsoft_teams",
-            "connector_kind": "http",
-            "is_enabled": True,
-        },
-    )
-    # User supplied a slack account for a teams surface.
-    connector_account = SimpleNamespace(connector_id="slack", auth_config_id=uuid4())
-    _patch_surface_deps(
-        monkeypatch, FakeSurfaceService(), _FakeConnectorService(connector_account)
-    )
-
-    applier = _applier(root, replacements={"teams_account": str(uuid4())})
-    with pytest.raises(PodBundleDomainError, match="teams"):
-        await applier.apply_step(_step(StepKind.SURFACE, "teams"))
-
-
-async def test_surface_apply_rejects_missing_account(tmp_path, monkeypatch):
-    """A supplied account id that doesn't exist in the target org is rejected."""
-    from app.modules.pod_bundle.domain.errors import PodBundleDomainError
-
-    root = tmp_path / "bundle"
-    _write(
-        root / "surfaces" / "teams" / "teams.json",
-        {
-            "name": "teams",
-            "platform": "TEAMS",
-            "account_id": "${teams_account}",
-            "connector_id": "microsoft_teams",
-            "connector_kind": "http",
-            "is_enabled": True,
-        },
-    )
-    _patch_surface_deps(monkeypatch, FakeSurfaceService(), _FakeConnectorService(None))
-
-    applier = _applier(root, replacements={"teams_account": str(uuid4())})
-    with pytest.raises(PodBundleDomainError, match="does not exist"):
-        await applier.apply_step(_step(StepKind.SURFACE, "teams"))
-
-
-async def test_surface_apply_rejects_an_account_of_the_wrong_kind(
-    tmp_path, monkeypatch
-):
-    """One connector id can be installed more than one way.
-
-    A bundle exported against a vendored Slack package does not work against a
-    Composio Slack account -- the operation names differ -- so matching the
-    connector id alone is not enough. The bundle already carried this
-    information; until now the applier accepted it and ignored it.
-    """
-    from types import SimpleNamespace
-
-    from app.modules.pod_bundle.domain.errors import PodBundleDomainError
-
-    account = uuid4()
-    root = tmp_path / "bundle"
-    _write(
-        root / "surfaces" / "slack" / "slack.json",
-        {
-            "name": "slack",
-            "platform": "SLACK",
-            "account_id": "${slack_account}",
-            "connector_id": "slack",
-            "connector_kind": "http",
-            "is_enabled": True,
-        },
-    )
-    connector_account = SimpleNamespace(connector_id="slack", auth_config_id=uuid4())
-    _patch_surface_deps(
-        monkeypatch,
-        FakeSurfaceService(),
-        _FakeConnectorService(connector_account, kind="composio"),
-    )
-
-    applier = _applier(root, replacements={"slack_account": str(account)})
-    with pytest.raises(PodBundleDomainError) as caught:
-        await applier.apply_step(_step(StepKind.SURFACE, "slack"))
-    assert caught.value.code == "POD_BUNDLE_ACCOUNT_KIND_MISMATCH"
-
-
-async def test_surface_apply_accepts_a_legacy_lemma_bundle(tmp_path, monkeypatch):
-    """`LEMMA` covered every non-Composio kind, so it matches any of them.
-
-    Holding an old bundle to `package` specifically would make an MCP install
-    exported before the rename unimportable.
-    """
-    from types import SimpleNamespace
-
-    account = uuid4()
-    root = tmp_path / "bundle"
-    _write(
-        root / "surfaces" / "teams" / "teams.json",
-        {
-            "name": "teams",
-            "platform": "TEAMS",
-            "account_id": "${teams_account}",
-            "connector_id": "microsoft_teams",
-            "provider": "LEMMA",
-            "is_enabled": True,
-        },
-    )
-    surface_fake = FakeSurfaceService()
-    connector_account = SimpleNamespace(
-        connector_id="microsoft_teams", auth_config_id=uuid4()
-    )
-    _patch_surface_deps(
-        monkeypatch, surface_fake, _FakeConnectorService(connector_account, kind="mcp")
-    )
-
-    applier = _applier(root, replacements={"teams_account": str(account)})
-    await applier.apply_step(_step(StepKind.SURFACE, "teams"))
-    assert surface_fake.created is not None
-
-
-async def test_surface_apply_accepts_a_bundle_exported_under_the_package_kind(
-    tmp_path, monkeypatch
-):
-    """Every bundle exported before the `package` kind was removed says
-    `package`, and every connector that was installable as `package` is
-    installable as `http` now. Holding an old bundle to a kind that no longer
-    exists would make it unimportable for a rename."""
-    from types import SimpleNamespace
-
-    account = uuid4()
-    root = tmp_path / "bundle"
-    _write(
-        root / "surfaces" / "teams" / "teams.json",
-        {
-            "name": "teams",
-            "platform": "TEAMS",
-            "account_id": "${teams_account}",
-            "connector_id": "microsoft_teams",
-            "connector_kind": "package",
-            "is_enabled": True,
-        },
-    )
-    surface_fake = FakeSurfaceService()
-    connector_account = SimpleNamespace(
-        connector_id="microsoft_teams", auth_config_id=uuid4()
-    )
-    _patch_surface_deps(
-        monkeypatch, surface_fake, _FakeConnectorService(connector_account, kind="http")
-    )
-
-    applier = _applier(root, replacements={"teams_account": str(account)})
-    await applier.apply_step(_step(StepKind.SURFACE, "teams"))
-    assert surface_fake.created is not None
 
 
 async def test_an_explicitly_empty_grant_list_clears_the_target_s_grants(

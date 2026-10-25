@@ -90,14 +90,20 @@ async def reachable_channels(
 
 
 async def tell_member(
-    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, user_id: UUID, text: str
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    user_id: UUID,
+    text: str,
+    key: str | None = None,
 ) -> None:
-    """A notice to one member, in their own channel: never pushed."""
+    """A notice to one member, in their own channel: never pushed. ``key``
+    makes it said once, however often the caller is retried."""
     from app.modules.agent_surfaces.services.direct_messages import (
         tell_member as notice,
     )
 
-    await notice(uow, pod_id=pod_id, user_id=user_id, text=text)
+    await notice(uow, pod_id=pod_id, user_id=user_id, text=text, key=key)
 
 
 __all__ = [

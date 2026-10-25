@@ -243,6 +243,34 @@ async def _seed_real_google_calendar_account(db_session, *, user_id) -> str:
     return str(account.id)
 
 
+async def _pod_operations(client: AsyncClient, org: dict, auth_config) -> str:
+    """Operations are run through a pod connector: declare one on the install.
+
+    The org-level execute route these tests used is gone; an operation always
+    runs through a connector some pod declared.
+    """
+    pod = await client.post(
+        "/pods",
+        json={
+            "organization_id": org["id"],
+            "name": f"Operations Pod {uuid4().hex[:8]}",
+            "type": "HYBRID",
+        },
+    )
+    assert pod.status_code == 201, pod.text
+    pod_id = pod.json()["id"]
+    declared = await client.post(
+        f"/pods/{pod_id}/connectors",
+        json={
+            "slug": "conn",
+            "auth_config_id": str(auth_config.id),
+            "mode": "PER_MEMBER",
+        },
+    )
+    assert declared.status_code == 201, declared.text
+    return f"/pods/{pod_id}/connectors/conn/operations"
+
+
 _HTTP_EXECUTOR_SEAM = (
     "app.modules.connectors.infrastructure.adapters.openapi_http_executor."
     "OpenApiHttpExecutor.execute"
@@ -354,9 +382,9 @@ async def test_connector_operations_use_connected_user_account(
         assert "foo" in details["input_schema"]["properties"]
         assert details["input_schema"]["properties"]["foo"]["type"] == "string"
 
-        payload = {"payload": {"foo": "bar"}, "account_id": str(account_id)}
+        payload = {"payload": {"foo": "bar"}}
         response = await authenticated_client.post(
-            f"{operations_url}/TEST_OP/execute",
+            f"{await _pod_operations(authenticated_client, fixed_test_org, auth_config)}/TEST_OP/execute",
             json=payload,
         )
         assert response.status_code == 200, response.text
@@ -543,10 +571,6 @@ async def test_connector_operation_requires_connected_user_account(
         organization_id=fixed_test_org["id"],
         kind="http",
     )
-    operations_url = (
-        f"/organizations/{fixed_test_org['id']}/connectors/"
-        f"{auth_config.name}/operations"
-    )
     db_session.add(
         ConnectorOperation(
             id=f"{app_id}:test_op",
@@ -564,12 +588,12 @@ async def test_connector_operation_requires_connected_user_account(
     # Deliberately unpatched: the point is that account resolution refuses
     # before anything reaches an upstream at all.
     response = await authenticated_client.post(
-        f"{operations_url}/test_op/execute",
+        f"{await _pod_operations(authenticated_client, fixed_test_org, auth_config)}/test_op/execute",
         json={"payload": {"foo": "bar"}},
     )
 
-    assert response.status_code == 400, response.text
-    assert response.json()["code"] == "ACCOUNT_RESOLUTION_ERROR"
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "CONNECTION_REQUIRED"
 
 
 @pytest.mark.asyncio
@@ -608,10 +632,6 @@ async def test_connector_operation_returns_upstream_execution_error_details(
         app_id=app_id,
         organization_id=fixed_test_org["id"],
         kind="http",
-    )
-    operations_url = (
-        f"/organizations/{fixed_test_org['id']}/connectors/"
-        f"{auth_config.name}/operations"
     )
 
     account_id = uuid4()
@@ -652,10 +672,9 @@ async def test_connector_operation_returns_upstream_execution_error_details(
 
     with patch(_HTTP_EXECUTOR_SEAM, new=mock_execute):
         response = await authenticated_client.post(
-            f"{operations_url}/send_message/execute",
+            f"{await _pod_operations(authenticated_client, fixed_test_org, auth_config)}/send_message/execute",
             json={
                 "payload": {"channel": "#general", "text": "hi"},
-                "account_id": str(account_id),
             },
         )
 
@@ -703,10 +722,6 @@ async def test_google_calendar_operation_uses_composio_account(
         app_id=app_id,
         organization_id=fixed_test_org["id"],
         kind="composio",
-    )
-    operations_url = (
-        f"/organizations/{fixed_test_org['id']}/connectors/"
-        f"{auth_config.name}/operations"
     )
 
     db_session.add(
@@ -760,10 +775,9 @@ async def test_google_calendar_operation_uses_composio_account(
         ) as mock_get_credentials,
     ):
         response = await authenticated_client.post(
-            f"{operations_url}/LIST_EVENTS/execute",
+            f"{await _pod_operations(authenticated_client, fixed_test_org, auth_config)}/LIST_EVENTS/execute",
             json={
                 "payload": {"calendar_id": "primary"},
-                "account_id": str(account_id),
             },
         )
 

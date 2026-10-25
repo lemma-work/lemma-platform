@@ -21,7 +21,7 @@ def _surface(platform: SurfacePlatform, *, tenant: str | None) -> AgentSurfaceEn
         pod_id=uuid4(),
         agent_id=uuid4(),
         config=SurfaceConfig(),
-        account_id=uuid4(),
+        pod_connector_slug="own-bot",
         external_tenant_id=tenant if platform is SurfacePlatform.TEAMS else None,
         external_workspace_id=tenant if platform is SurfacePlatform.SLACK else None,
     )

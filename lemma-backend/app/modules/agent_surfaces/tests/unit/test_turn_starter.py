@@ -245,9 +245,7 @@ async def test_execute_chat_holds_no_session_during_io(monkeypatch):
         def __init__(self, *, uow, pooled_numbers=None) -> None:
             pass
 
-        async def for_platform(
-            self, platform, account_id, *, surface=None, arrived_on=None
-        ):
+        async def for_platform(self, platform, *, surface=None, arrived_on=None):
             return {}
 
     monkeypatch.setattr(

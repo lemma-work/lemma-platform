@@ -8,7 +8,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.log.log import get_logger
 from app.core.authorization.context import (
-    ActorType,
     Context,
     ResourceVisibility,
     normalize_resource_visibility,
@@ -389,30 +388,17 @@ class TableService:
         if not table:
             raise DatastoreTableNotFoundError("Table not found")
 
-        # A human deleting a table they created is fine via the owner shortcut.
-        # A delegated workload must ALWAYS route through authz, even for a table
-        # its delegating user created — table.delete is destructive and gated
-        # (needs an explicit workload grant or a session approval), so the owner
-        # shortcut must not let a workload bypass that.
-        is_delegated = ctx is not None and (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
+        # Always through the authorizer: its owner rule lets a creator delete
+        # what they made -- while they are still in the pod. A shortcut here
+        # that skipped it for the creator let someone removed from the pod
+        # delete their old tables, and let nothing gate a workload but itself.
+        await self.authz.require_table_delete(
+            user_id=requester_user_id,
+            pod_id=pod_id,
+            table_id=table.id,
+            table_name=table.table_name,
+            **({"ctx": ctx} if ctx is not None else {}),
         )
-        if ctx is not None:
-            if is_delegated or table.user_id != requester_user_id:
-                await self.authz.require_table_delete(
-                    user_id=requester_user_id,
-                    pod_id=pod_id,
-                    table_id=table.id,
-                    table_name=table.table_name,
-                    ctx=ctx,
-                )
-        elif table.user_id != requester_user_id:
-            await self.authz.require_table_delete(
-                user_id=requester_user_id,
-                pod_id=pod_id,
-                table_id=table.id,
-                table_name=table.table_name,
-            )
 
         # Physical table first, then the row — the ordering rule on this class
         # read in the destroying direction. Removing the row first would leave

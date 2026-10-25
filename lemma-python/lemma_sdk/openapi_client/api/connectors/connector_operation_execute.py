@@ -8,7 +8,9 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...models.operation_execution_request import OperationExecutionRequest
+from ...models.installation_operation_execution_request import (
+    InstallationOperationExecutionRequest,
+)
 from ...models.operation_execution_response import OperationExecutionResponse
 from ...types import Response
 
@@ -18,7 +20,7 @@ def _get_kwargs(
     auth_config_name: str,
     operation_name: str,
     *,
-    body: OperationExecutionRequest,
+    body: InstallationOperationExecutionRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -75,15 +77,19 @@ def sync_detailed(
     operation_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: OperationExecutionRequest,
+    body: InstallationOperationExecutionRequest,
 ) -> Response[ErrorResponse | OperationExecutionResponse]:
-    """Execute Connector Operation
+    """Execute Connector Operation (deprecated)
+
+     Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's
+    pod declares for this installation; a person outside any pod uses their own account.
 
     Args:
         organization_id (UUID):
         auth_config_name (str):
         operation_name (str):
-        body (OperationExecutionRequest):
+        body (InstallationOperationExecutionRequest): The deprecated org-level execute's body: an
+            installation, maybe an account.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -113,15 +119,19 @@ def sync(
     operation_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: OperationExecutionRequest,
+    body: InstallationOperationExecutionRequest,
 ) -> ErrorResponse | OperationExecutionResponse | None:
-    """Execute Connector Operation
+    """Execute Connector Operation (deprecated)
+
+     Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's
+    pod declares for this installation; a person outside any pod uses their own account.
 
     Args:
         organization_id (UUID):
         auth_config_name (str):
         operation_name (str):
-        body (OperationExecutionRequest):
+        body (InstallationOperationExecutionRequest): The deprecated org-level execute's body: an
+            installation, maybe an account.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -146,15 +156,19 @@ async def asyncio_detailed(
     operation_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: OperationExecutionRequest,
+    body: InstallationOperationExecutionRequest,
 ) -> Response[ErrorResponse | OperationExecutionResponse]:
-    """Execute Connector Operation
+    """Execute Connector Operation (deprecated)
+
+     Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's
+    pod declares for this installation; a person outside any pod uses their own account.
 
     Args:
         organization_id (UUID):
         auth_config_name (str):
         operation_name (str):
-        body (OperationExecutionRequest):
+        body (InstallationOperationExecutionRequest): The deprecated org-level execute's body: an
+            installation, maybe an account.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -182,15 +196,19 @@ async def asyncio(
     operation_name: str,
     *,
     client: AuthenticatedClient | Client,
-    body: OperationExecutionRequest,
+    body: InstallationOperationExecutionRequest,
 ) -> ErrorResponse | OperationExecutionResponse | None:
-    """Execute Connector Operation
+    """Execute Connector Operation (deprecated)
+
+     Deprecated: use `pod.connector.operation.execute`. Still served, through the connectors the caller's
+    pod declares for this installation; a person outside any pod uses their own account.
 
     Args:
         organization_id (UUID):
         auth_config_name (str):
         operation_name (str):
-        body (OperationExecutionRequest):
+        body (InstallationOperationExecutionRequest): The deprecated org-level execute's body: an
+            installation, maybe an account.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

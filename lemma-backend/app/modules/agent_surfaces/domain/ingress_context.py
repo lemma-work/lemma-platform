@@ -27,11 +27,29 @@ SurfaceReplyKind = Literal[
 ]
 
 
+class SurfaceConnectorRef(BaseModel):
+    """The pod connector a surface runs as: what a reply sends with.
+
+    A reference, never the account: the worker resolves it when it sends, so
+    an account withdrawn between the message arriving and the answer going
+    out is not used.
+    """
+
+    pod_id: UUID
+    slug: str
+
+    @classmethod
+    def of(cls, surface) -> "SurfaceConnectorRef | None":
+        if surface is None or surface.pod_connector_slug is None:
+            return None
+        return cls(pod_id=surface.pod_id, slug=surface.pod_connector_slug)
+
+
 class SurfaceContextBase(BaseModel):
     platform: SurfacePlatform
     surface_id: UUID | None = None
     surface_name: str | None = None
-    surface_account_id: UUID | None = None
+    surface_connector: SurfaceConnectorRef | None = None
     surface_config: SurfaceConfig | None = None
     agent_display_name: str | None = None
     event: ParsedInboundSurfaceEvent

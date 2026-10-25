@@ -2071,12 +2071,17 @@ async def test_scripted_pod_data_and_file_tools_cross_worker_authorization_bound
                         "datastore.table.read",
                         "datastore.record.read",
                         "datastore.record.write",
+                        # Standing authority for the scripted delete: deleting
+                        # rows is its own, destructive permission.
+                        "datastore.record.delete",
                     ],
                 },
                 {
                     "resource_type": "folder",
                     "resource_name": root,
-                    "permission_ids": ["folder.read", "folder.write"],
+                    # `folder.share` for the public link: a named agent makes
+                    # one only where it was granted to (audit M22).
+                    "permission_ids": ["folder.read", "folder.write", "folder.share"],
                 },
             ]
         },
@@ -3056,17 +3061,37 @@ async def test_scripted_connector_tools_reach_a_real_agent_run(
         },
     )
     assert agent.status_code == status.HTTP_201_CREATED, agent.text
+    # The pod declares the install as `mail`, and the agent is granted it: a
+    # named agent reaches only the pod connectors it holds `connector.use` on.
+    declared = await authenticated_client.post(
+        f"/pods/{pod_id}/connectors",
+        json={"slug": "mail", "auth_config_id": str(install.id), "mode": "PER_MEMBER"},
+    )
+    assert declared.status_code == status.HTTP_201_CREATED, declared.text
+    granted = await authenticated_client.put(
+        f"/pods/{pod_id}/agents/{agent_name}/permissions",
+        json={
+            "grants": [
+                {
+                    "resource_type": "connector",
+                    "resource_name": "mail",
+                    "permission_ids": ["connector.use"],
+                }
+            ]
+        },
+    )
+    assert granted.status_code == status.HTTP_200_OK, granted.text
 
     script = [
         script_tool_call("list_connectors", {}, tool_call_id="list-1"),
         script_tool_call(
             "search_connector_operations",
-            {"auth_config": install.name, "query": "email"},
+            {"connector": "mail", "query": "email"},
             tool_call_id="search-1",
         ),
         script_tool_call(
             "describe_connector_operation",
-            {"auth_config": install.name, "operation": "send_email"},
+            {"connector": "mail", "operation": "send_email"},
             tool_call_id="describe-1",
         ),
         script_text("Found what I needed."),
@@ -3106,9 +3131,9 @@ async def test_scripted_connector_tools_reach_a_real_agent_run(
     # than a success flag, so the absence of `error` is the success assertion.
     listed = returns["list-1"]
     assert "error" not in listed, listed
-    assert any(
-        item.get("auth_config") == install.name for item in listed.get("items", [])
-    ), f"the run's own organization's install is missing: {listed}"
+    assert any(item.get("connector") == "mail" for item in listed.get("items", [])), (
+        f"the pod connector the agent was granted is missing: {listed}"
+    )
 
     found = returns["search-1"]
     assert "error" not in found, found

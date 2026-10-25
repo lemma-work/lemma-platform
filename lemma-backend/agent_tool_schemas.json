@@ -1053,11 +1053,11 @@
   {
     "tool_name": "describe_connector_operation",
     "toolset": "CONNECTORS",
-    "description": "Get one operation's description and input/output schemas.\n\nCall this before running an operation you have not run before -- the input\nschema is what `run_connector_operation` validates `arguments` against.",
+    "description": "Get one operation's description and input/output schemas.\n\nCall this before running an operation you have not run before -- the input\nschema is what `run_connector_operation` validates `payload` against.",
     "input_schema": {
       "properties": {
-        "auth_config": {
-          "description": "Installed connector, by auth-config name.",
+        "connector": {
+          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`).",
           "type": "string"
         },
         "operation": {
@@ -1066,7 +1066,7 @@
         }
       },
       "required": [
-        "auth_config",
+        "connector",
         "operation"
       ],
       "title": "DescribeConnectorOperationRequest",
@@ -1703,7 +1703,7 @@
   {
     "tool_name": "list_connectors",
     "toolset": "CONNECTORS",
-    "description": "List the connectors installed in this organization that you may use.\n\nReturns each install's `auth_config` name, which is how every other\nconnector tool addresses it.",
+    "description": "List the pod's connectors you may run operations through.\n\nEach is named by its `connector` slug, which is how every other connector\ntool addresses it. `mode` says whose account a call uses: PER_MEMBER is\nthe person you act for, SHARED is one account shared with the pod.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {},
@@ -3560,7 +3560,7 @@
   {
     "tool_name": "pod_write_record",
     "toolset": "POD",
-    "description": "Create, update, or delete a record in a pod table (requires record.write grant).\n\n- ``action=\"create\"`` \u2014 needs ``data`` (column -> value).\n- ``action=\"update\"`` \u2014 needs ``record_id`` and ``data``.\n- ``action=\"delete\"`` \u2014 needs ``record_id``.",
+    "description": "Create, update, or delete a record in a pod table.\n\n- ``action=\"create\"`` \u2014 needs ``data`` (column -> value).\n- ``action=\"update\"`` \u2014 needs ``record_id`` and ``data``.\n- ``action=\"delete\"`` \u2014 needs ``record_id``. Deleting is destructive: it\n  needs ``datastore.record.delete``, not ``record.write``, and asks the\n  person for approval unless that was granted.",
     "input_schema": {
       "properties": {
         "action": {
@@ -3688,7 +3688,7 @@
   {
     "tool_name": "request_approval",
     "toolset": "USER_INTERACTION",
-    "description": "Ask the user to approve an action you lack permission for, then run it.\n\nCall this when a tool fails with a permission error (403) or the action needs\nthe user's authority \u2014 deleting data, sending email, a privileged command.\nDescribe the FULL action; do not rely on prior context. The run pauses for an\napproval card, and on approval the backend executes the tool with the *user's*\nauthority and returns its result here. On denial nothing runs.",
+    "description": "Ask the user to approve an action you were refused, then run it.\n\nCall this when a tool fails needing approval (a 403 for a missing grant or a\ndestructive action) \u2014 deleting data, sending email, a privileged command.\nDescribe the FULL action; do not rely on prior context. The run pauses for an\napproval card. On approval the backend runs the tool as you, allowed exactly\nwhat that call was refused (never more, and never beyond what the user may do\nthemselves), and returns its result here. On denial nothing runs.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -3743,7 +3743,7 @@
             }
           ],
           "default": null,
-          "description": "Copy `approval.permission_ids` verbatim from the failed tool\nresult. Lets \"approve for session\" cover these actions for the rest of the\nconversation instead of re-prompting."
+          "description": "Copy `approval.permission_ids` from the failed tool result, to\nshow on the card. What an approval allows comes from the refusal the\nserver recorded, not from this."
         }
       },
       "required": [
@@ -3848,33 +3848,22 @@
   {
     "tool_name": "run_connector_operation",
     "toolset": "CONNECTORS",
-    "description": "Run an operation on an installed connector.\n\n`arguments` must match the operation's input schema -- fetch it with\n`describe_connector_operation` first. To send a file (an email attachment,\na Drive upload), pass it as `{\"pod_path\": \"/me/report.pdf\"}` in the file\nargument; a file in your sandbox has to be uploaded to the pod first. A\nfile result larger than the inline limit is written to the pod datastore\nand returned as a reference; pass `output_path` to choose where it lands.",
+    "description": "Run an operation through one of the pod's connectors.\n\n`payload` must match the operation's input schema -- fetch it with\n`describe_connector_operation` first. Whose account the call runs as is the\nconnector's decision, not yours. To send a file (an email attachment, a\nDrive upload), pass it as `{\"pod_path\": \"/me/report.pdf\"}` in the file\nargument; a file in your sandbox has to be uploaded to the pod first. A\nfile result larger than the inline limit is written to the pod datastore\nand returned as a reference; pass `output_path` to choose where it lands.\nA `CONNECTION_REQUIRED` or `REAUTH_REQUIRED` answer carries a `connect_url`\nto hand your person.",
     "input_schema": {
+      "description": "No account argument: the connector decides whose account a call runs as.\n\nA per-member connector uses the account of the person you act for; a\nshared one uses the account its owner shared with the pod. An\n``account_id`` here was a free argument a model could fill in to act as a\ncolleague.",
       "properties": {
-        "auth_config": {
-          "description": "Installed connector, by auth-config name.",
+        "connector": {
+          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`).",
           "type": "string"
         },
         "operation": {
           "description": "Operation name from search results.",
           "type": "string"
         },
-        "arguments": {
+        "payload": {
           "additionalProperties": true,
           "description": "Operation arguments, matching its input_schema. A file argument takes a pod file: {\"pod_path\": \"/me/report.pdf\"}, or {\"file_id\": \"...\"}.",
           "type": "object"
-        },
-        "account_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Connected account to use; omit for the caller's own."
         },
         "output_path": {
           "anyOf": [
@@ -3890,7 +3879,7 @@
         }
       },
       "required": [
-        "auth_config",
+        "connector",
         "operation"
       ],
       "title": "RunConnectorOperationRequest",
@@ -4003,10 +3992,10 @@
   {
     "tool_name": "search_connector_operations",
     "toolset": "CONNECTORS",
-    "description": "Find operations by what they do, ranked by relevance.\n\nStart here rather than guessing an operation name: an install can expose\nhundreds of operations, and the names are provider-specific. Leave\n`auth_config` unset to search every installed connector at once -- each hit\nnames the `auth_config` to run it against, so you do not need to know which\ninstall provides a capability before searching for it.",
+    "description": "Find operations by what they do, ranked by relevance.\n\nStart here rather than guessing an operation name: a connector can expose\nhundreds of operations, and the names are provider-specific. Leave\n`connector` unset to search every connector you may use -- each hit names\nthe `connector` to run it through.",
     "input_schema": {
       "properties": {
-        "auth_config": {
+        "connector": {
           "anyOf": [
             {
               "type": "string"
@@ -4016,7 +4005,7 @@
             }
           ],
           "default": null,
-          "description": "Installed connector to search, by its auth-config name. Omit to search every connector installed in the organization -- prefer that when you know the task but not which install provides it."
+          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`). Omit to search every connector you may use in this pod -- prefer that when you know the task but not which connector provides it."
         },
         "query": {
           "anyOf": [

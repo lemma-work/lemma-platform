@@ -25,8 +25,11 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.work import Defer
 from app.core.log.log import get_logger
-from app.modules.pod_bundle.config import pod_bundle_settings
 from app.modules.pod_bundle.events import analytics as bundle_analytics
+from app.modules.pod_bundle.events.github_import import (
+    github_import_fetcher as _github_import_fetcher,
+    note_anonymous_access as _note_anonymous_access,
+)
 from app.modules.pod_bundle.events.work import BundleWorkerContext, yield_point
 from app.modules.pod_bundle.events.work import worker_context as _worker_ctx
 from app.modules.pod_bundle.domain.errors import (
@@ -39,6 +42,7 @@ from app.modules.pod_bundle.domain.state import (
     ExportStatus,
     ImportState,
     ImportStatus,
+    connect_url_of,
 )
 from app.modules.pod_bundle.infrastructure.archive_offload import (
     extract_bundle_offloaded,
@@ -63,21 +67,6 @@ logger = get_logger(__name__)
 
 class _ImportCancellation(Exception):
     pass
-
-
-def _github_import_fetcher(worker_ctx: BundleWorkerContext, state: ImportState):
-    runner = None
-    if state.account_id is not None:
-        runner = _github_import_operation_runner(worker_ctx=worker_ctx, state=state)
-    elif (
-        pod_bundle_settings.pod_bundle_github_token is None
-        and "GitHub import used anonymous API access and may be rate-limited."
-        not in state.warnings
-    ):
-        state.warnings.append(
-            "GitHub import used anonymous API access and may be rate-limited."
-        )
-    return github_fetcher.GithubBundleFetcher(operation_runner=runner)
 
 
 async def _cancellation_requested(store, import_id: UUID) -> ImportState | None:
@@ -388,15 +377,35 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                 user_id=state.user_id, pod_id=state.pod_id
             )
             async with context_scope(ctx):
+                from app.modules.pod_bundle.infrastructure.account_checks import (
+                    ServiceAccountUsability,
+                )
+                from app.modules.pod_bundle.infrastructure.connector_grants import (
+                    ServiceConnectorDirectory,
+                )
+                from app.modules.pod_bundle.infrastructure.connector_planning import (
+                    ServiceConnectorLookup,
+                )
+                from app.modules.pod_bundle.infrastructure.grant_planning import (
+                    ServiceGrantConferral,
+                )
                 from app.modules.pod_bundle.infrastructure.plan_builder import (
                     PlanBuilder,
                     ServiceExistingResources,
                 )
 
-                existing = ServiceExistingResources(
-                    uow=uow, ctx=ctx, pod_id=state.pod_id, user_id=state.user_id
+                scope = {"uow": uow, "ctx": ctx, "pod_id": state.pod_id}
+                existing = ServiceExistingResources(**scope, user_id=state.user_id)
+                directory = ServiceConnectorDirectory(
+                    uow=uow, pod_id=state.pod_id, organization_id=ctx.organization_id
                 )
-                plan = await PlanBuilder(existing).build_plan(bundle_root=bundle_root)
+                plan = await PlanBuilder(
+                    existing,
+                    directory,
+                    connectors=ServiceConnectorLookup(**scope, user_id=state.user_id),
+                    grants=ServiceGrantConferral(**scope),
+                    accounts=ServiceAccountUsability(**scope),
+                ).build_plan(bundle_root=bundle_root)
 
     await _raise_if_cancelled(store, import_id)
     state.plan = plan
@@ -411,7 +420,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
 
 
 async def import_pod_github(context: dict[str, str | None]) -> None:
-    """Fetch a GitHub zipball, using the selected connector account when set."""
+    """Fetch a GitHub zipball through the pod's `github` connector, or anonymously."""
     worker_ctx = _worker_ctx()
     import_id = UUID(str(context["import_id"]))
 
@@ -430,6 +439,7 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
         state.error = None
         state.error_type = None
         state.error_code = None
+        state.connect_url = None
         state.retryable = False
         await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.FETCHING
@@ -443,9 +453,11 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
             owner=(context.get("owner")),
             repo=(context.get("repo")),
         )
-        zip_bytes = await _github_import_fetcher(worker_ctx, state).fetch_zipball(
+        fetcher = _github_import_fetcher(worker_ctx, state)
+        zip_bytes = await fetcher.fetch_zipball(
             owner=owner, repo=repo, ref=state.source.ref
         )
+        _note_anonymous_access(fetcher, state)
         await _raise_if_cancelled(store, import_id)
         state.staging_key = await staging.put_archive(
             "pod-imports", import_id, zip_bytes
@@ -670,6 +682,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                                     # applier takes is checkpointed with the step
                                     # and read back by the status endpoint.
                                     warnings=state.warnings,
+                                    connector_choices=state.connector_choices,
                                 )
                                 await applier.apply_step(step)
                                 await _raise_if_cancelled(store, import_id)
@@ -873,37 +886,6 @@ async def _record_import_retry(
     await store.save_import(state)
 
 
-def _github_import_operation_runner(
-    *,
-    worker_ctx: BundleWorkerContext,
-    state: ImportState,
-):
-    async def run(operation_name: str, payload: dict) -> dict:
-        async with uow_scope(worker_ctx.uow_factory) as uow:
-            actor = await AuthorizationDataService(uow.session).build_user_context(
-                user_id=state.user_id,
-                pod_id=state.pod_id,
-            )
-            from app.modules.connectors.contracts.provisioning import (
-                execute_operation,
-            )
-
-            response = await execute_operation(
-                uow,
-                connector_id="github",
-                operation_name=operation_name,
-                payload=payload,
-                user_id=state.user_id,
-                actor=actor,
-                account_id=state.account_id,
-            )
-        if hasattr(response, "model_dump"):
-            return response.model_dump(mode="json")
-        return response if isinstance(response, dict) else {}
-
-    return run
-
-
 async def _fail_import(
     store,
     state: ImportState,
@@ -915,6 +897,7 @@ async def _fail_import(
     state.error = public_message or str(error)
     state.error_type = type(error).__name__ if isinstance(error, Exception) else None
     state.error_code = str(getattr(error, "code", None) or "POD_BUNDLE_IMPORT_FAILED")
+    state.connect_url = connect_url_of(error)
     state.retryable = False
     state.completed_at = _now()
     try:

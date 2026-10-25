@@ -32,6 +32,7 @@ from app.core.crypto import get_secret_cipher
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.background_reads import background_read
 from app.modules.agent_surfaces.tests.e2e.helpers import (
+    _bound_through_installation,
     _conversation_by_external_thread,
     _create_surface,
     _ensure_connector_account,
@@ -430,6 +431,16 @@ async def test_slack_signed_webhook_is_deduplicated_and_replies_via_worker(
         tenant_id=payload["team_id"],
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
+    # Proven to this installation: a profile email names nobody on Slack, so
+    # onboarding would otherwise ask for a code before the agent answered.
+    await _bound_through_installation(
+        db_session,
+        platform="SLACK",
+        tenant_id=payload["team_id"],
+        installation_id=account.id,
+        sender=payload["event"]["user"],
+        user_id=fixed_test_user["id"],
+    )
     raw_body = json.dumps(payload).encode("utf-8")
     headers = build_slack_signature_headers(
         raw_body=raw_body,
@@ -534,6 +545,16 @@ async def test_slack_channel_attachment_and_history_are_persisted_via_worker(
         external_user_id=event["user"],
         tenant_id=payload["team_id"],
         resolved_user_id=UUID(fixed_test_user["id"]),
+    )
+    # Proven to this installation: a profile email names nobody on Slack, so
+    # onboarding would otherwise ask for a code before the agent answered.
+    await _bound_through_installation(
+        db_session,
+        platform="SLACK",
+        tenant_id=payload["team_id"],
+        installation_id=account.id,
+        sender=event["user"],
+        user_id=fixed_test_user["id"],
     )
     raw_body = json.dumps(payload).encode("utf-8")
     response = await authenticated_client.post(
@@ -650,6 +671,16 @@ async def test_slack_native_socket_receiver_acknowledges_and_replies_via_worker(
         tenant_id=payload["team_id"],
         resolved_user_id=UUID(fixed_test_user["id"]),
     )
+    # Proven to this installation: a profile email names nobody on Slack, so
+    # onboarding would otherwise ask for a code before the agent answered.
+    await _bound_through_installation(
+        db_session,
+        platform="SLACK",
+        tenant_id=payload["team_id"],
+        installation_id=account.id,
+        sender=payload["event"]["user"],
+        user_id=fixed_test_user["id"],
+    )
     acknowledgements: list[str] = []
 
     class FakeSocketModeClient:
@@ -758,6 +789,17 @@ async def test_whatsapp_account_webhook_replies_via_worker(
         user_id=fixed_test_user["id"],
         mobile_number="15550550123",
     )
+    # The org's own Meta app: its secret signs any number, so only a binding
+    # made through this installation names the sender.
+    await _bound_through_installation(
+        db_session,
+        platform="WHATSAPP",
+        tenant_id="waba-worker-e2e",
+        installation_id=account.id,
+        sender="15550550123",
+        user_id=fixed_test_user["id"],
+        verified_phone="15550550123",
+    )
 
     payload = _whatsapp_payload(
         text="Reply through the real WhatsApp worker path",
@@ -839,6 +881,17 @@ async def test_whatsapp_document_is_downloaded_and_persisted_via_worker(
         db_session,
         user_id=fixed_test_user["id"],
         mobile_number="15550550456",
+    )
+    # The org's own Meta app: its secret signs any number, so only a binding
+    # made through this installation names the sender.
+    await _bound_through_installation(
+        db_session,
+        platform="WHATSAPP",
+        tenant_id="waba-document-e2e",
+        installation_id=account.id,
+        sender="15550550456",
+        user_id=fixed_test_user["id"],
+        verified_phone="15550550456",
     )
 
     payload = _whatsapp_payload(

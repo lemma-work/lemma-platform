@@ -36,6 +36,7 @@ are a different authorization layer.
 | `GET/POST /users/me...` | Read current user/profile and upsert profile preferences |
 | `/organizations` | Create and list organizations, suggestions, slug availability, and auto-join |
 | `/organizations/{org_id}` | Read/update organization and manage members/invitations |
+| `/organizations/{org_id}/permissions/me` | The organization-level permission ids the caller holds, asked of the authorizer: what pages gate on (`org.installation.manage`), never a role |
 | `/organizations/invitations...` | Inspect, accept, and revoke invitations |
 | `/auth/verify-token` | Resolve bearer/delegation claims into user, pod, organization, function, and scope context |
 | `/auth/cli/*` | Publish CLI login metadata, mint a CLI session from a browser session, and refresh CLI tokens |

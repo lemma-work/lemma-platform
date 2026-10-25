@@ -7,9 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .apply_fields import without_time_schedule_filter
+from .apply_fields import (
+    GRANT_HOLDER_DIRS,
+    BundleConnector,
+    read_bundle_connector,
+    without_time_schedule_filter,
+)
 from .diff import _is_system_table_column
-from .layout import FORMAT_VERSION, _parse_function_headers
+from .layout import FORMAT_VERSION, _parse_function_headers, load_resource_payload
 
 
 @dataclass
@@ -63,9 +68,13 @@ def _attach_permissions_payload(
 _AGENT_CLEARABLE_SCHEMA_FIELDS = ("output_schema", "input_schema")
 
 
-def _normalize_pod_payload(pod: dict[str, Any]) -> dict[str, Any]:
+def _normalize_pod_payload(
+    pod: dict[str, Any], *, format_version: int = FORMAT_VERSION
+) -> dict[str, Any]:
+    """``pod.json``. An exporter passes ``bundle_format_version`` of what it
+    wrote, so a bundle with no connectors stays readable by a reader of 3."""
     return {
-        "format_version": FORMAT_VERSION,
+        "format_version": format_version,
         "name": pod.get("name"),
         "description": pod.get("description"),
         "icon_url": pod.get("icon_url"),
@@ -270,6 +279,92 @@ def _normalize_schedule_payload(schedule: dict[str, Any]) -> dict[str, Any]:
     return stripped
 
 
+def _normalize_pod_connector_payload(connector: dict[str, Any]) -> dict[str, Any]:
+    """A pod connector as a bundle carries it: what it is, never what it runs as.
+
+    Fed the API's pod connector response (``GET /pods/{pod}/connectors``). Its
+    slug is the directory name. Everything that names the source organization
+    is left behind -- the installation (``auth_config_id``,
+    ``installation_name``), the shared account (``shared_pod_account_id``,
+    ``shared_account``), who declared it -- because the importer maps the
+    catalog connector to an installation of their own org and chooses the
+    shared account, if any, themselves.
+    """
+    mode = str(connector.get("mode") or "").upper()
+    payload: dict[str, Any] = {
+        "connector": connector.get("connector_id") or connector.get("connector"),
+        "mode": mode,
+        "required": bool(connector.get("required")),
+    }
+    purpose = str(connector.get("purpose") or "").strip()
+    if purpose:
+        payload["purpose"] = purpose
+    visibility = str(connector.get("visibility") or "POD").upper()
+    if visibility != "POD":
+        payload["visibility"] = visibility
+    return payload
+
+
+def load_bundle_connectors(bundle_root: Path) -> list[BundleConnector]:
+    """Every pod connector a bundle declares, by slug, checked.
+
+    Raises ``ValueError`` naming the first connector that is malformed: a
+    bundle whose connectors cannot be read cannot be imported safely, because
+    whatever refers to them would be bound to nothing.
+    """
+    connectors_root = bundle_root / "connectors"
+    if not connectors_root.is_dir():
+        return []
+    found: list[BundleConnector] = []
+    for resource_dir in sorted(
+        (path for path in connectors_root.iterdir() if path.is_dir()),
+        key=lambda path: path.name,
+    ):
+        manifest = resource_dir / f"{resource_dir.name}.json"
+        if not manifest.is_file():
+            raise ValueError(
+                f"connector '{resource_dir.name}': missing {manifest.name}"
+            )
+        payload = load_resource_payload(resource_dir, resource_dir.name)
+        found.append(read_bundle_connector(resource_dir.name, payload))
+    return found
+
+
+def referenced_connector_slugs(bundle_root: Path) -> dict[str, list[str]]:
+    """Which bundled resources name which pod connector slug.
+
+    A schedule or surface names the one it runs through (``pod_connector``); an
+    agent's or a function's grant is on one (``resource_type: connector``).
+    Keyed by slug, each with the ``<type>/<name>`` of what refers to it, so an importer
+    can say what a connector it cannot declare would leave unbound.
+    """
+    refs: dict[str, list[str]] = {}
+
+    def note(slug: object, where: str) -> None:
+        if isinstance(slug, str) and slug.strip():
+            refs.setdefault(slug.strip(), []).append(where)
+
+    for resource_type in ("schedules", "surfaces", *GRANT_HOLDER_DIRS):
+        type_root = bundle_root / resource_type
+        if not type_root.is_dir():
+            continue
+        for resource_dir in sorted(p for p in type_root.iterdir() if p.is_dir()):
+            if not (resource_dir / f"{resource_dir.name}.json").is_file():
+                continue
+            payload = load_resource_payload(resource_dir, resource_dir.name)
+            where = f"{resource_type}/{resource_dir.name}"
+            note(payload.get("pod_connector"), where)
+            permissions = payload.get("permissions")
+            holder = permissions if isinstance(permissions, dict) else payload
+            for grant in holder.get("grants") or []:
+                if isinstance(grant, dict) and grant.get("resource_type") in (
+                    "connector",
+                    "CONNECTOR",
+                ):
+                    note(grant.get("resource_name"), where)
+    return refs
+
+
 def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
     platform = str(surface.get("platform") or surface.get("surface_type") or "").upper()
     config = surface.get("config") or {}
@@ -326,15 +421,9 @@ def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
         "platform": platform,
         "default_agent_name": surface.get("agent_name"),
         "credential_mode": surface.get("credential_mode"),
-        "account_id": surface.get("account_id"),
-        # Ground-truth connector identity for the bound account, resolved by
-        # the exporter from the account itself (never inferred from the
-        # surface's own platform) — carried through so the portable-variable
-        # tokenizer can stamp every account variable with connector/kind.
-        # `provider` is the pre-rename spelling, still read so a bundle
-        # exported before it keeps its metadata.
-        "connector_id": surface.get("connector_id"),
-        "connector_kind": surface.get("connector_kind") or surface.get("provider"),
+        # The pod connector the surface runs through, by slug: portable as it
+        # is, since the importing pod's connector decides the account.
+        "pod_connector": surface.get("pod_connector"),
         "is_enabled": status != "INACTIVE",
     }
     if behavior_config:

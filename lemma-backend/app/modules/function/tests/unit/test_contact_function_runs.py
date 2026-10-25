@@ -21,9 +21,9 @@ import httpx
 import pytest
 
 from app.core.authorization.context import (
-    ActorType,
     AuthorizationDecision,
     Context,
+    Person,
 )
 from app.core.authorization.function_run import parse_function_run_token
 from app.core.authorization.permissions import (
@@ -253,7 +253,7 @@ class _RolePermissions:
 
 def _member(permissions, user_id: UUID) -> Context:
     return Context(
-        actor_type=ActorType.USER,
+        actor=Person(user_id=user_id),
         actor_id=str(user_id),
         user_id=user_id,
         authorizer=_RolePermissions(),

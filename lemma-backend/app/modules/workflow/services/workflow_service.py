@@ -4,7 +4,6 @@ from app.modules.workflow.execution.wait_work import write_admission
 from typing import List
 
 from app.core.authorization.context import (
-    ActorType,
     Context,
     ResourceRef,
     ResourceType,
@@ -299,16 +298,9 @@ class WorkflowService:
     ) -> None:
         flow = await self.flow_repo.get(flow_id, ctx=ctx)
         old_icon_url = flow.icon_url if flow else None
-        # A delegated workload always routes through authz — workflow.delete is
-        # destructive and gated — so the owner shortcut can't let it bypass.
-        is_delegated = ctx is not None and (
-            ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD
-        )
-        if (
-            flow
-            and requester_user_id is not None
-            and (is_delegated or flow.user_id != requester_user_id)
-        ):
+        # Always through the authorizer: its owner rule lets a creator delete
+        # their workflow while they are still in the pod, and gates a workload.
+        if flow and requester_user_id is not None:
             await self._require_action(
                 requester_user_id=requester_user_id,
                 action=Permissions.WORKFLOW_DELETE,

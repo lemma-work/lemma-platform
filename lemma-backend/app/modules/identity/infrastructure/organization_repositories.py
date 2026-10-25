@@ -11,6 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.work import facts
+from app.modules.identity.contracts.organization_facts import OrganizationMemberRemoved
 from app.modules.identity.events.identity_work import stage_identity_work
 from app.modules.identity.domain.errors import (
     OrganizationConflictError,
@@ -375,6 +377,15 @@ class OrganizationRepository(OrganizationRepositoryPort):
         if not member:
             return False
         await self.session.delete(member)
+        # Announced in the same transaction: the membership's cascade takes the
+        # pod memberships silently, and what the person held in this
+        # organization -- their connector accounts -- has to go with it.
+        await facts.emit(
+            self.uow,
+            OrganizationMemberRemoved(
+                organization_id=member.organization_id, user_id=member.user_id
+            ),
+        )
         return True
 
     async def add_invitation(

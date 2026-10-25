@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 
+from app.core.api.actor_policy import require_person
 from app.modules.usage.contracts.execution import build_usage_service
 from app.core.domain.errors import BadRequestError
 from app.core.domain.realtime import RealtimeChannel
@@ -31,6 +32,14 @@ from app.modules.agent.services.realtime import (
 )
 
 ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
+
+#: On every route that answers what an agent is waiting on -- an approval, an
+#: ``ask_user`` question -- on the person's behalf. It must be the person's own
+#: answer, never their software's: the sandbox holds a delegated token for the
+#: very person whose approval the agent is waiting on, so without this an agent
+#: approved its own request with ``lemma`` and the card read as though the
+#: person had (H5). Whatever a workload was granted or approved for.
+PERSON_ANSWERS = require_person("answer an approval")
 _TERMINAL_STREAM_EVENTS = {"completed", "stopped", "error"}
 
 #: An SSE comment: ignored by every client, visible as traffic to everything in

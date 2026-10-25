@@ -142,7 +142,7 @@ class _Pod:
             pod_id=self.pod_id,
             name="support",
             surface_type=platform,
-            account_id=uuid4(),
+            pod_connector_slug="support-bot",
             credential_mode=SurfaceCredentialMode.SYSTEM,
             surface_identity_email="help@acme.example",
             config=config,

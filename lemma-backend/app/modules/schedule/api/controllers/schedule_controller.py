@@ -4,13 +4,19 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 
 from app.core.api.dependencies import UoWDep
+from app.core.api.deprecation import note_deprecated_use
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.context import ResourceRef
 from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.core.authorization.permissions import Permissions
+from app.modules.connectors.contracts.deprecations import (
+    ACCOUNT_ADDRESSING_SUNSET,
+    ACCOUNT_ID_REPLACEMENT,
+)
+from app.modules.connectors.contracts.pod_connectors import pod_connector_for_account
 from app.modules.schedule.api.dependencies import (
     ScheduleServiceDep,
     get_current_user_id,
@@ -111,10 +117,28 @@ async def create_schedule(
     request: CreateScheduleRequest,
     service: ScheduleServiceDep,
     ctx: PodContextDep,
+    uow: UoWDep,
+    http_request: Request,
+    response: Response,
     current_user_id: UUID = Depends(get_current_user_id),
 ):
     """Create a new pod schedule."""
     await ctx.require(Permissions.SCHEDULE_CREATE, ResourceRef.pod(pod_id))
+    pinned = None
+    if request.account_id is not None and request.pod_connector is None:
+        # The account it named stays the one it listens through (pinned),
+        # not whichever of the owner's accounts is their default.
+        binding = await pod_connector_for_account(
+            uow, ctx, pod_id=pod_id, account_id=request.account_id
+        )
+        request.pod_connector, pinned = binding.slug, binding.pod_account_id
+        note_deprecated_use(
+            http_request,
+            response,
+            use="schedule.create.account_id",
+            replacement=ACCOUNT_ID_REPLACEMENT,
+            sunset=ACCOUNT_ADDRESSING_SUNSET,
+        )
     schedule_create_data = {
         "user_id": current_user_id,
         "pod_id": pod_id,
@@ -124,7 +148,8 @@ async def create_schedule(
         "workflow_name": request.workflow_name,
         "config": request.config,
         "instruction": request.instruction,
-        "account_id": request.account_id,
+        "pod_connector_slug": request.pod_connector,
+        "pod_account_id": pinned,
         "connector_trigger_id": request.connector_trigger_id,
         "filter_instruction": request.filter_instruction,
         "filter_output_schema": request.filter_output_schema,

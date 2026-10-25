@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, create_autospec, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, create_autospec, patch
 from uuid import uuid4
 
 import httpx
@@ -117,9 +117,16 @@ def _auth_config_repo(auth_config: AuthConfigEntity | None = None) -> AsyncMock:
     )
 
 
+def _uow_reading_nothing() -> AsyncMock:
+    """A unit of work whose reads find nothing -- an account in no pod."""
+    uow = AsyncMock()
+    uow.session.execute.return_value = MagicMock()
+    return uow
+
+
 def _service(**overrides) -> ConnectorService:
     deps = {
-        "uow": AsyncMock(),
+        "uow": _uow_reading_nothing(),
         "connector_repository": AsyncMock(get=AsyncMock(return_value=_connector())),
         "auth_config_repository": _auth_config_repo(),
         "account_repository": AsyncMock(),
@@ -820,6 +827,7 @@ async def test_handle_oauth_callback_resets_status_to_connected():
     account_repo.update.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -831,6 +839,7 @@ async def test_handle_oauth_callback_resets_status_to_connected():
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-reauth&code=abc",
         state="state-reauth",
     )
@@ -1041,6 +1050,7 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1052,6 +1062,7 @@ async def test_handle_oauth_callback_sets_provider_account_id_on_create():
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-1&code=abc",
         state="state-1",
     )
@@ -1127,6 +1138,7 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1141,6 +1153,7 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
 
     with patch.object(service, "_profile_dispatcher", return_value=dispatcher):
         account = await service.handle_oauth_callback(
+            browser_user_id=connect_request.user_id,
             redirect_uri="https://cb?state=state-profile&code=abc",
             state="state-profile",
         )
@@ -1193,6 +1206,7 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
     account_repo.update.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1204,6 +1218,7 @@ async def test_handle_oauth_callback_updates_provider_account_id_on_existing_acc
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-2&code=abc",
         state="state-2",
     )
@@ -1282,6 +1297,7 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     outlook_app = ConnectorEntity(
@@ -1304,6 +1320,7 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-outlook&code=abc",
         state="state-outlook",
     )
@@ -1458,6 +1475,7 @@ async def test_handle_oauth_callback_surfaces_upstream_error_details():
     registry.get.return_value = auth_provider
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
 
     service = _service(
         connector_repository=AsyncMock(get=AsyncMock(return_value=_connector("slack"))),
@@ -1469,6 +1487,7 @@ async def test_handle_oauth_callback_surfaces_upstream_error_details():
 
     with pytest.raises(OAuthWorkflowError) as exc_info:
         await service.handle_oauth_callback(
+            browser_user_id=connect_request.user_id,
             redirect_uri="https://cb?state=state-3&code=abc",
             state="state-3",
         )
@@ -1521,6 +1540,7 @@ async def test_reauth_new_identity_does_not_clobber_null_provider_default():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1532,6 +1552,7 @@ async def test_reauth_new_identity_does_not_clobber_null_provider_default():
     )
 
     account = await service.handle_oauth_callback(
+        browser_user_id=connect_request.user_id,
         redirect_uri="https://cb?state=state-clobber&code=abc",
         state="state-clobber",
     )
@@ -1696,6 +1717,7 @@ async def test_the_catalog_profile_supplies_the_provider_identity():
     account_repo.create.side_effect = lambda entity: entity
     connect_repo = AsyncMock()
     connect_repo.claim_pending_by_state.return_value = connect_request
+    connect_repo.get_by_state.return_value = connect_request
     connect_repo.update.side_effect = lambda req: req
 
     service = _service(
@@ -1716,6 +1738,7 @@ async def test_the_catalog_profile_supplies_the_provider_identity():
         ),
     ):
         account = await service.handle_oauth_callback(
+            browser_user_id=connect_request.user_id,
             redirect_uri="https://cb?state=state-gh&code=abc",
             state="state-gh",
         )

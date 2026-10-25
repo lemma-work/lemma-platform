@@ -122,7 +122,6 @@ async def test_github_publish_schedules_bounded_retry(monkeypatch):
         pod_id=uuid4(),
         user_id=uuid4(),
         repo_name="example",
-        account_id=uuid4(),
     )
     store = _StateStore(state)
 

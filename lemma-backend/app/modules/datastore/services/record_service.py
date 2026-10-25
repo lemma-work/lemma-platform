@@ -81,6 +81,12 @@ class RecordService:
             self.authz.refuse_contact_scoped_records(ctx)
         await self.authz.require_record_write(user_id=user_id, ctx=ctx)
 
+    async def _require_record_delete(self, *, user_id: UUID, ctx: TableContext) -> None:
+        if self.authz is None:
+            return
+        self.authz.refuse_contact_scoped_records(ctx)
+        await self.authz.require_record_delete(user_id=user_id, ctx=ctx)
+
     def _for_contact(self, ctx: TableContext) -> TableContext:
         """``ctx`` for a create made for a contact, whose rows alone it may write."""
         contact_id = self.authz.contact_scope(ctx) if self.authz is not None else None
@@ -346,7 +352,7 @@ class RecordService:
         admin_mode: bool = False,
         intent: WriteIntent = WriteIntent.NORMAL,
     ) -> bool:
-        await self._require_record_write(user_id=user_id, ctx=ctx)
+        await self._require_record_delete(user_id=user_id, ctx=ctx)
         enforce_user_scope = await self._should_enforce_user_scope(
             user_id=user_id,
             ctx=ctx,
@@ -493,7 +499,7 @@ class RecordService:
         transaction and why an id that matched nothing is a refusal rather
         than a smaller count.
         """
-        await self._require_record_write(user_id=user_id, ctx=ctx)
+        await self._require_record_delete(user_id=user_id, ctx=ctx)
         if not record_ids:
             return 0
         # Decided once; see `bulk_update_records` for why.
