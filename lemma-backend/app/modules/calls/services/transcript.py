@@ -31,7 +31,10 @@ class Transcript:
         self._record = record
         self.lines: list[str] = []
         self._flushed = 0
-        #: Chunks whose write failed, for the final flush.
+        #: Chunks taken but not yet written: in flight, failed, or cancelled.
+        #: A chunk leaves only once its write succeeds, so a write the
+        #: session's drain cancels -- even one that never started -- is still
+        #: here for the final flush.
         self._unwritten: list[list[str]] = []
 
     def text(self) -> str:
@@ -44,23 +47,25 @@ class Transcript:
         if not pending or (not final and len(pending) < FLUSH_LINES):
             return []
         self._flushed = len(self.lines)
+        self._unwritten.append(pending)
         return pending
 
     async def write(self, chunk: list[str]) -> None:
         try:
             await self._record(TRANSCRIPT_HEADING + "\n\n" + "\n".join(chunk))
         except DomainError, SQLAlchemyError, OSError:
-            # Kept, not dropped: the cursor already moved past these lines, so
-            # the final flush tries them again rather than losing them.
+            # Kept, not dropped: the final flush tries it again.
             logger.warning("calls.session.transcript.failed", exc_info=True)
-            self._unwritten.append(chunk)
+            return
+        self._unwritten = [one for one in self._unwritten if one is not chunk]
 
     async def flush(self, *, final: bool = False) -> None:
-        if final and self._unwritten:
-            # Chunks that failed to write are tried again, in order, first.
-            earlier, self._unwritten = self._unwritten, []
-            for chunk in earlier:
-                await self.write(chunk)
         chunk = self.take(final=final)
-        if chunk:
-            await self.write(chunk)
+        if not final:
+            if chunk:
+                await self.write(chunk)
+            return
+        # Everything not yet written, in the order it was said: chunks that
+        # failed or were cancelled, then the last lines.
+        for one in list(self._unwritten):
+            await self.write(one)

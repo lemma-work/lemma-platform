@@ -227,11 +227,14 @@ async def _wind_down(
     call: CallSession, engine: VoiceEngine, agents: CallAgents
 ) -> None:
     """Every step runs whatever the one before it did: an engine that fails to
-    close must not leak the call's watchers or lose its transcript."""
+    close must not leak the call's watchers or lose its transcript. Each is
+    bounded, so the whole of it fits inside a takeover's wait
+    (``lease.HANDOVER_SECONDS``): a provider socket that will not close does
+    not hold the call."""
     steps: tuple[tuple[Callable[[], Awaitable[None]], str], ...] = (
-        (lambda: _bounded(call.flush(final=True)), "transcript"),
-        (engine.close, "engine"),
-        (agents.close, "agents"),
+        (lambda: _bounded(call.flush(final=True), FINAL_FLUSH_SECONDS), "transcript"),
+        (lambda: _bounded(engine.close(), CLOSE_SECONDS), "engine"),
+        (lambda: _bounded(agents.close(), CLOSE_SECONDS), "agents"),
     )
     for step, name in steps:
         try:
@@ -250,14 +253,16 @@ async def _wind_down(
             logger.warning("calls.socket.wind_down.failed", step=name, exc_info=True)
 
 
-#: The final transcript write gets this long; a connection taking this call
-#: over waits for it (``lease.HANDOVER_SECONDS``).
+#: The final transcript write gets this long, and closing the voice engine and
+#: the agents' watchers this long each; a connection taking this call over
+#: waits for all of it (``lease.HANDOVER_SECONDS``).
 FINAL_FLUSH_SECONDS = 8.0
+CLOSE_SECONDS = 3.0
 
 
-async def _bounded(write: Awaitable[None]) -> None:
-    async with asyncio.timeout(FINAL_FLUSH_SECONDS):
-        await write
+async def _bounded(step: Awaitable[None], seconds: float) -> None:
+    async with asyncio.timeout(seconds):
+        await step
 
 
 def _budget(

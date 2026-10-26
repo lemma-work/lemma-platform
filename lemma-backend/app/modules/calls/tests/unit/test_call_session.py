@@ -35,6 +35,7 @@ from app.modules.calls.services.agents import (
 )
 from app.modules.calls.services.gate import Route
 from app.modules.calls.services.session import CallLimits, CallSession, CallStats
+from app.modules.calls.services.transcript import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -620,3 +621,23 @@ async def test_a_transcript_chunk_that_failed_to_write_is_written_at_the_end() -
     first, rest = agents.recorded
     assert "Voice: line 0" in first and "Voice: line 7" in first
     assert "Voice: line 8" in rest
+
+
+async def test_a_transcript_write_cancelled_before_it_ran_is_written_at_the_end() -> (
+    None
+):
+    recorded: list[str] = []
+
+    async def record(text: str) -> None:
+        recorded.append(text)
+
+    transcript = Transcript(record)
+    transcript.lines.extend(f"Voice: line {index}" for index in range(9))
+    # The session's drain cancels a write it spawned; here, before it ran.
+    write = asyncio.create_task(transcript.write(transcript.take(final=False)))
+    write.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await write
+    await transcript.flush(final=True)
+    assert len(recorded) == 1
+    assert "Voice: line 0" in recorded[0] and "Voice: line 8" in recorded[0]

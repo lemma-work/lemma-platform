@@ -31,12 +31,13 @@ LEASE_TTL_SECONDS = 90
 #: How long a new connection waits for the one it took over to finish.
 #: Covers everything a replaced session does before it lets go: its guard
 #: noticing (``session._GUARD_SECONDS``), a turn still being routed
-#: (``session._ROUTE_DRAIN_SECONDS``) and its final transcript write
-#: (``hold.FINAL_FLUSH_SECONDS``), with room to spare. A live session therefore
+#: (``session._ROUTE_DRAIN_SECONDS``), its final transcript write
+#: (``hold.FINAL_FLUSH_SECONDS``) and closing its voice and watchers
+#: (``hold.CLOSE_SECONDS`` each) -- 28 seconds at most -- with room to spare. A live session therefore
 #: always lets go first. Past it, the holder is taken to be gone -- a process
 #: that died keeps its running key until the lease lapses -- and the call goes
 #: on with the transcript that was written.
-HANDOVER_SECONDS = 25.0
+HANDOVER_SECONDS = 32.0
 _POLL_SECONDS = 0.1
 
 
