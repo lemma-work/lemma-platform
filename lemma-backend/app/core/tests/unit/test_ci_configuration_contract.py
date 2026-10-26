@@ -163,6 +163,28 @@ def test_backend_e2e_triggers_directly_without_a_label() -> None:
     )
 
 
+# The suites the merge queue deliberately does not run. Each runs on the pull
+# request and again on the push to main, where a failure posts to Slack; the
+# queue keeps the light suites, which is what took a merge's wait from two
+# full runs to one. Adding a job here is a decision about the merge gate, so it
+# has to be made in this list rather than by an `if:` that quietly stops
+# matching.
+_KEPT_OUT_OF_THE_QUEUE = {
+    ".github/workflows/ci.yml": {
+        "desktop",
+        "desktop-contract",
+        "desktop-launch-smoke",
+        "desktop-windows",
+    },
+    ".github/workflows/e2e.yml": {
+        "backend-e2e",
+        "backend-e2e-sandbox",
+        "sandbox-images",
+        "service-images",
+    },
+}
+
+
 def test_every_gated_job_runs_in_the_merge_queue() -> None:
     """A required check has to run its suites on `merge_group`, not just report.
 
@@ -172,6 +194,10 @@ def test_every_gated_job_runs_in_the_merge_queue() -> None:
     skips in the queue, and its check goes green there having run nothing.
     `backend-e2e-sandbox` was added with exactly that allowlist after the
     trigger was first written.
+
+    The exception is `_KEPT_OUT_OF_THE_QUEUE`, and a job there has to say so
+    in its own `if:` and still run on main -- the backstop that makes leaving
+    the queue safe.
     """
     for path, aggregator in (
         (".github/workflows/ci.yml", "ci"),
@@ -186,8 +212,20 @@ def test_every_gated_job_runs_in_the_merge_queue() -> None:
         # an aggregator that stopped running in the queue would wave every
         # entry through without looking at the jobs below.
         assert "!= 'merge_group'" not in str(jobs[aggregator].get("if", "")), path
-        for name in [aggregator, *jobs[aggregator]["needs"]]:
+        kept_out = _KEPT_OUT_OF_THE_QUEUE.get(path, set())
+        for name in [aggregator, *jobs[aggregator]["needs"], *kept_out]:
             condition = str(jobs[name].get("if", ""))
+            if name in kept_out:
+                # Out of the queue either by saying so, or by an event
+                # allowlist that leaves it out -- and that allowlist has to
+                # name the push to main, or the suite stops running anywhere
+                # after the pull request.
+                assert "== 'merge_group'" not in condition, f"{path}: {name}"
+                if "!= 'merge_group'" not in condition:
+                    assert "== 'push'" in condition, (
+                        f"{path}: {name} must still run on the push to main"
+                    )
+                continue
             # `!= 'pull_request'` already lets a merge group through; only an
             # allowlist that names the pull request event has to name it too.
             if "== 'pull_request'" in condition:
