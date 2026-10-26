@@ -30,7 +30,15 @@ def test_native_desktop_dependency_caches_are_shared_across_build_workflows() ->
                 assert step["uses"] == "Swatinem/rust-cache@v2"
                 assert settings["workspaces"] == "desktop"
                 assert settings["shared-key"] == "${{ runner.os }}-${{ runner.arch }}"
-                assert "save-if" not in settings, "PRs need merge-ref cache reuse"
+                # Saved from main only in ci.yml: a pull request's 1-2 GB copy
+                # held the same dependencies as main's and, over the 10 GB
+                # repository limit, evicted the main caches every pull request
+                # restores. The release workflows run on main and tags only.
+                if path == ".github/workflows/ci.yml":
+                    assert (
+                        settings.get("save-if")
+                        == "${{ github.ref == 'refs/heads/main' }}"
+                    ), f"{name}: a pull request must not save its own copy"
                 assert not settings.get("cache-all-crates", False)
                 assert not settings.get("cache-workspace-crates", False)
                 assert any(
@@ -271,10 +279,25 @@ def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
             cache = [
                 earlier
                 for earlier in job["steps"][:index]
-                if earlier.get("uses", "").startswith("actions/cache@")
+                if earlier.get("uses", "").startswith(
+                    ("actions/cache@", "actions/cache/restore@")
+                )
                 and "ms-playwright" in str(earlier.get("with", {}).get("path", ""))
             ]
             assert cache, f"{name} downloads a browser it never restores"
+            # A restore-only cache is saved after the install, from main only,
+            # under the key it was restored with.
+            if cache[-1]["uses"].startswith("actions/cache/restore@"):
+                saves = [
+                    later
+                    for later in job["steps"][index + 1 :]
+                    if later.get("uses", "").startswith("actions/cache/save@")
+                    and later["with"]["key"] == cache[-1]["with"]["key"]
+                ]
+                assert saves, f"{name} restores a browser cache nothing saves"
+                assert "refs/heads/main" in str(saves[0].get("if", "")), (
+                    f"{name} saves its browser cache from a pull request"
+                )
             key = cache[-1]["with"]["key"]
             lockfile = (
                 "lemma-frontend/package-lock.json"
