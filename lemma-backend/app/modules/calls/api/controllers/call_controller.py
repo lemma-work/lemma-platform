@@ -58,13 +58,16 @@ async def call_config(pod_id: UUID) -> CallConfigResponse:
     summary="Open a call",
     dependencies=[require_pod_membership("call agents in this pod")],
     description=(
-        "Open a live voice call with a pod agent. The call is a conversation: "
-        "its agent coordinates the call, hands work to sub-agents and shows "
-        "things on the call's canvas. Connect to "
+        "Open a live voice call with a pod agent, in the chat named by "
+        "`conversation_id` or in a new conversation. The call is held in that "
+        "conversation: its agent coordinates the call, hands work to sub-agents "
+        "and shows things on the call's canvas. Connect to "
         "`/pods/{pod_id}/calls/{call_id}/socket` to talk."
     ),
     responses={
-        404: {"description": "The agent was not found."},
+        404: {"description": "The agent, or the conversation, was not found."},
+        409: {"description": "That conversation cannot hold a call."},
+        422: {"description": "The caller cannot run the model the agent runs on."},
         403: {"description": "The caller may not run this agent."},
         503: {"description": "No voice engine is configured."},
     },
@@ -88,8 +91,13 @@ async def open_call_route(
     from app.modules.agent.contracts.calls import open_call
     from app.modules.calls.services.coordinator_runtime import coordinator_runtime
 
-    runtime = await coordinator_runtime(
-        calls_settings.call_coordinator_model, user_id=user.id, pod_id=pod_id
+    # A pin for a new conversation only: an existing chat keeps its model.
+    runtime = (
+        await coordinator_runtime(
+            calls_settings.call_coordinator_model, user_id=user.id, pod_id=pod_id
+        )
+        if body.conversation_id is None
+        else None
     )
     async with pod_context_scope(
         uow_factory, request=request, user_id=user.id, pod_id=pod_id
@@ -97,10 +105,10 @@ async def open_call_route(
         opened = await open_call(
             scope.uow,
             pod_id=pod_id,
-            agent_name=body.agent_name,
-            agent_display_name=body.display_name,
             user_id=user.id,
             title=body.title or f"Call with {body.display_name}",
+            agent_name=body.agent_name,
+            conversation_id=body.conversation_id,
             runtime=runtime,
         )
     return CallResponse(call_id=opened.conversation_id, engines=engines)

@@ -48,6 +48,7 @@ from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilde
 from app.modules.agent.services.granted_resources_brief import GrantedResourcesBrief
 from app.modules.agent.services.brief_lines import (
     MAX_RESOURCES as _MAX_RESOURCES,
+    call_brief,
     more_note,
     table_line,
     top_level_file_entries,
@@ -272,6 +273,7 @@ class AgentContextBriefBuilder:
                 )
             per_run = (
                 run_framing(conversation, run_source=run_source, platform=platform),
+                call_brief(conversation),
                 "\n".join(asks),
                 cached.files,
                 memory,
