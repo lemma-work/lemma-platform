@@ -16,7 +16,7 @@ auto-allow list and raised approval cards. And the question asked was whether
 the person had *any* usable host, not whether the run's own host was one.
 
 So it is decided when the run's context is first built, for the host the run's
-harness is on, and written on the run (``control/run_records``); every later
+harness is on, and written on the run's record (``run_records``); every later
 context build for the run -- a reclaimed worker, every relayed tool call --
 reads it back.
 """
@@ -37,9 +37,8 @@ from app.modules.agent.agent_host.control.repository import (
     AgentHostRepository,
 )
 from app.modules.agent.agent_host.control.run_records import (
-    NATIVE_COMMANDS_METADATA_KEY,
-    read_run_metadata_value,
-    record_run_metadata_value,
+    read_run_record,
+    record_run_field,
 )
 from app.modules.agent.agent_host.control.host_execution_selection import (
     host_runs_native_commands,
@@ -61,16 +60,12 @@ async def _usable_for(user_id: UUID, host_id: UUID) -> bool:
 
 async def _recorded(run_id: UUID) -> dict[str, object] | None:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        return await read_run_metadata_value(
-            uow, run_id, key=NATIVE_COMMANDS_METADATA_KEY
-        )
+        return await read_run_record(uow, run_id, "host_native_commands")
 
 
 async def _record(run_id: UUID, value: dict[str, object]) -> None:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        await record_run_metadata_value(
-            uow, run_id, key=NATIVE_COMMANDS_METADATA_KEY, value=value
-        )
+        await record_run_field(uow, run_id, "host_native_commands", value)
         await uow.commit()
 
 

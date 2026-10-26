@@ -35,12 +35,6 @@ from app.modules.agent.domain.value_objects import (
 AGENT_HOST_PROTOCOL_VERSION = 3
 AGENT_HOST_OFFLINE_AFTER_SECONDS = 90
 
-# Conversation metadata key holding the provider session (a Codex rollout, a
-# Claude Code session) this conversation has been talking to. One conversation
-# is one provider session: the host reports the id it opened, and every later
-# turn is dispatched with it so the agent keeps the history.
-AGENT_HOST_SESSION_METADATA_KEY = "agent_host_provider_session_id"
-
 
 class AgentHostStatus(str, Enum):
     ONLINE = "ONLINE"

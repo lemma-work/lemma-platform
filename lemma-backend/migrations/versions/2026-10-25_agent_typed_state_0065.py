@@ -41,6 +41,18 @@ an unknown status, a call that is gone, a run that is gone, an open `wait_for`
 with no wait -- are counted and logged. The two old tables stay, unwritten, for
 one release; the downgrade copies what the new table holds back into them.
 
+The Agent Host gets two tables of its own. `agent_host_sessions`, one row per
+conversation, holds what the conversation's `agent_host_provider_session_id`
+key held: the provider session, its harness and host, the run that bound it
+and when that run began, the host's working directory, the instructions digest
+delivered, the instructions and prompt still pending (each with its run), and
+the newest prompted run with how far into the conversation its prompt ran.
+`agent_host_run_records`, one row per run, holds the run's `execution`,
+`host_native_commands` and `final_answer` keys. A binding that is not a JSON
+object, and an unreadable value inside one, are counted and logged; the
+downgrade writes both tables back into the keys, so the code before this reads
+what the code after it wrote.
+
 A value that does not read as its column's type -- an unknown `source`, an id
 that is not a UUID, a timestamp that is not one -- is left out (a default
 `origin` of `CHAT`, a `trigger` of `MESSAGE`) and counted; the counts are
@@ -815,6 +827,158 @@ ON CONFLICT (conversation_id, approval_id) DO NOTHING
 """
 
 
+# -- agent_host_sessions and agent_host_run_records -------------------------------
+
+_B = "(conversation_metadata->'agent_host_provider_session_id')"
+_PI = f"({_B}->'pending_instructions')"
+_PP = f"({_B}->'pending_prompt')"
+
+
+def _number(column: str, key: str) -> str:
+    return (
+        f"CASE WHEN jsonb_typeof({column}->'{key}') = 'number' "
+        f"THEN ({column}->>'{key}')::numeric::bigint END"
+    )
+
+
+_RUN_CREATED_AT = (
+    f"CASE WHEN {_B}->>'run_created_at' ~ {_TIMESTAMP} "
+    f"THEN ({_B}->>'run_created_at')::timestamptz END"
+)
+
+_SESSIONS_BACKFILL = f"""
+INSERT INTO agent_host_sessions (conversation_id, session_id, harness_id, host_id,
+  run_id, run_created_at, host_cwd, instructions_digest,
+  pending_instructions_run_id, pending_instructions_digest, pending_prompt_run_id,
+  pending_prompt_seen_through, prompted_run_id, prompted_through, created_at,
+  updated_at)
+SELECT id, {_text(_B, "session_id")}, {_uuid(_B, "harness_id")},
+  {_uuid(_B, "host_id")}, {_uuid(_B, "run_id")}, {_RUN_CREATED_AT},
+  {_text(_B, "host_cwd")}, {_text(_B, "instructions_digest")},
+  {_uuid(_PI, "run_id")}, {_text(_PI, "digest")}, {_uuid(_PP, "run_id")},
+  {_number(_PP, "seen_through")}, {_uuid(_B, "prompted_run_id")},
+  {_number(_B, "prompted_through")}, now(), now()
+FROM agent_conversations
+WHERE jsonb_typeof({_B}) = 'object'
+"""
+
+_SESSIONS_UNMAPPED = {
+    "agent_host_provider_session_id": (
+        f"{_M} ? 'agent_host_provider_session_id' "
+        f"AND jsonb_typeof({_B}) NOT IN ('object', 'null')"
+    ),
+    **{
+        f"agent_host_provider_session_id.{key}": _unreadable(_B, key, _uuid(_B, key))
+        for key in ("harness_id", "host_id", "run_id", "prompted_run_id")
+    },
+    "agent_host_provider_session_id.run_created_at": _unreadable(
+        _B, "run_created_at", _RUN_CREATED_AT
+    ),
+}
+
+_RECORD_KEYS = ("execution", "host_native_commands", "final_answer")
+
+_RUN_RECORDS_BACKFILL = f"""
+INSERT INTO agent_host_run_records (run_id, execution, host_native_commands,
+  final_answer, created_at, updated_at)
+SELECT id, {_object(_R, "execution")}, {_object(_R, "host_native_commands")},
+  {_object(_R, "final_answer")}, now(), now()
+FROM agent_runs
+WHERE jsonb_typeof({_R}->'execution') = 'object'
+  OR jsonb_typeof({_R}->'host_native_commands') = 'object'
+  OR jsonb_typeof({_R}->'final_answer') = 'object'
+"""
+
+_RUN_RECORDS_UNMAPPED = {
+    key: _unreadable(_R, key, _object(_R, key)) for key in _RECORD_KEYS
+}
+
+
+def _create_agent_host_tables() -> None:
+    jsonb = postgresql.JSONB(astext_type=sa.Text())
+    timestamp = sa.DateTime(timezone=True)
+    op.create_table(
+        "agent_host_sessions",
+        sa.Column(
+            "conversation_id",
+            sa.Uuid(),
+            sa.ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+        sa.Column("session_id", sa.Text(), nullable=True),
+        sa.Column("harness_id", sa.Uuid(), nullable=True),
+        sa.Column("host_id", sa.Uuid(), nullable=True),
+        sa.Column("run_id", sa.Uuid(), nullable=True),
+        sa.Column("run_created_at", timestamp, nullable=True),
+        sa.Column("host_cwd", sa.Text(), nullable=True),
+        sa.Column("instructions_digest", sa.String(64), nullable=True),
+        sa.Column("pending_instructions_run_id", sa.Uuid(), nullable=True),
+        sa.Column("pending_instructions_digest", sa.String(64), nullable=True),
+        sa.Column("pending_prompt_run_id", sa.Uuid(), nullable=True),
+        sa.Column("pending_prompt_seen_through", sa.BigInteger(), nullable=True),
+        sa.Column("prompted_run_id", sa.Uuid(), nullable=True),
+        sa.Column("prompted_through", sa.BigInteger(), nullable=True),
+        sa.Column("created_at", timestamp, nullable=False),
+        sa.Column("updated_at", timestamp, nullable=False),
+    )
+    op.create_table(
+        "agent_host_run_records",
+        sa.Column(
+            "run_id",
+            sa.Uuid(),
+            sa.ForeignKey("agent_runs.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+        sa.Column("execution", jsonb, nullable=True),
+        sa.Column("host_native_commands", jsonb, nullable=True),
+        sa.Column("final_answer", jsonb, nullable=True),
+        sa.Column("created_at", timestamp, nullable=False),
+        sa.Column("updated_at", timestamp, nullable=False),
+    )
+
+
+def _backfill_agent_host_tables(conn) -> None:
+    _report(conn, "agent_conversations", _SESSIONS_UNMAPPED)
+    _report(conn, "agent_runs", _RUN_RECORDS_UNMAPPED)
+    sessions = conn.execute(sa.text(_SESSIONS_BACKFILL)).rowcount
+    records = conn.execute(sa.text(_RUN_RECORDS_BACKFILL)).rowcount
+    _log().info(
+        "0065: backfilled %d agent_host_sessions and %d agent_host_run_records.",
+        sessions,
+        records,
+    )
+
+
+#: The downgrade's way back into the keys the old code reads.
+_RESTORE_SESSIONS = """
+UPDATE agent_conversations c SET conversation_metadata = jsonb_set(
+  coalesce(c.conversation_metadata, '{}'::jsonb),
+  '{agent_host_provider_session_id}',
+  jsonb_strip_nulls(jsonb_build_object(
+    'session_id', s.session_id, 'harness_id', s.harness_id::text,
+    'host_id', s.host_id::text, 'run_id', s.run_id::text,
+    'run_created_at', s.run_created_at, 'host_cwd', s.host_cwd,
+    'instructions_digest', s.instructions_digest,
+    'pending_instructions', CASE WHEN s.pending_instructions_run_id IS NOT NULL
+      THEN jsonb_build_object('run_id', s.pending_instructions_run_id::text,
+        'digest', s.pending_instructions_digest) END,
+    'pending_prompt', CASE WHEN s.pending_prompt_run_id IS NOT NULL
+      THEN jsonb_build_object('run_id', s.pending_prompt_run_id::text,
+        'seen_through', s.pending_prompt_seen_through) END,
+    'prompted_run_id', s.prompted_run_id::text,
+    'prompted_through', s.prompted_through)))
+FROM agent_host_sessions s WHERE s.conversation_id = c.id
+"""
+
+_RESTORE_RUN_RECORDS = """
+UPDATE agent_runs r SET run_metadata = coalesce(r.run_metadata, '{}'::jsonb)
+  || jsonb_strip_nulls(jsonb_build_object('execution', x.execution,
+    'host_native_commands', x.host_native_commands,
+    'final_answer', x.final_answer))
+FROM agent_host_run_records x WHERE x.run_id = r.id
+"""
+
+
 def upgrade() -> None:
     conn = op.get_bind()
     _add_columns()
@@ -869,12 +1033,18 @@ def upgrade() -> None:
 
     _create_pauses()
     _backfill_pauses(conn)
+    _create_agent_host_tables()
+    _backfill_agent_host_tables(conn)
 
 
 def downgrade() -> None:
     conn = op.get_bind()
     conn.execute(sa.text(_RESTORE_WAITS))
     conn.execute(sa.text(_RESTORE_DECISIONS))
+    conn.execute(sa.text(_RESTORE_SESSIONS))
+    conn.execute(sa.text(_RESTORE_RUN_RECORDS))
+    op.drop_table("agent_host_run_records")
+    op.drop_table("agent_host_sessions")
     op.drop_table("agent_pauses")
     op.drop_index("ix_agent_message_queued", table_name="agent_messages")
     op.drop_index("uq_agent_message_client_id", table_name="agent_messages")

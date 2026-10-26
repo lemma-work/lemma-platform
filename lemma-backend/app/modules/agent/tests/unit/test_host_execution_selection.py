@@ -23,7 +23,6 @@ from app.modules.agent.domain.value_objects import (
     RunTrigger,
 )
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
-from app.modules.agent.agent_host.domain.host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.prompt.directories import _directory_sections
 from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
@@ -81,6 +80,8 @@ class Facts:
         self.host_lookups: list[tuple[UUID, UUID | None]] = []
         # What started the runs before the one being chosen for, newest first.
         self.earlier: list[RunTrigger] = [RunTrigger.MESSAGE]
+        # The directory the conversation's last Agent Host run reported.
+        self.host_cwd: str | None = None
 
     def build(self) -> HostExecutionFacts:
         async def usable_host(
@@ -108,7 +109,11 @@ class Facts:
         ) -> list[RunTrigger]:
             return self.earlier
 
+        async def host_cwd(conversation_id: UUID) -> str | None:
+            return self.host_cwd
+
         return HostExecutionFacts(
+            host_cwd=host_cwd,
             earlier_triggers=earlier_triggers,
             is_desktop=lambda: self.desktop,
             usable_host=usable_host,
@@ -343,10 +348,8 @@ def test_metadata_a_client_wrote_does_not_make_a_chat_unattended():
 
 async def test_a_bound_folder_is_the_root_hint():
     facts = Facts()
-    conversation = _conversation(
-        **{AGENT_HOST_SESSION_METADATA_KEY: {"host_cwd": "/Users/owner/code/app"}}
-    )
-    await _choose(facts, conversation=conversation)
+    facts.host_cwd = "/Users/owner/code/app"
+    await _choose(facts, conversation=_conversation())
     assert facts.opened[0]["root_hint"] == "/Users/owner/code/app"
 
 

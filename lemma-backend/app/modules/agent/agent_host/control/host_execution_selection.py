@@ -71,7 +71,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.agent_host.control.host_execution import (
     host_execution_host_id,
 )
-from app.modules.agent.agent_host.domain.host import AGENT_HOST_SESSION_METADATA_KEY
+from app.modules.agent.agent_host.control import session_memory
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.agent.domain.value_objects import ConversationOrigin, RunTrigger
@@ -159,6 +159,11 @@ async def _earlier_triggers(conversation_id: UUID, run_id: UUID) -> list[RunTrig
         return await earlier_run_triggers(uow, conversation_id, run_id)
 
 
+async def _host_cwd(conversation_id: UUID) -> str | None:
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        return await session_memory.host_cwd(uow, conversation_id)
+
+
 async def _record_choice(run_id: UUID, value: dict[str, object]) -> None:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         await record_run_execution(uow, run_id, value)
@@ -220,6 +225,8 @@ class HostExecutionFacts:
     earlier_triggers: Callable[[UUID, UUID], Awaitable[list[RunTrigger]]] = (
         _earlier_triggers
     )
+    #: ``conversation_id -> the directory its last Agent Host run reported``.
+    host_cwd: Callable[[UUID], Awaitable[str | None]] = _host_cwd
 
 
 FACTS = HostExecutionFacts()
@@ -241,16 +248,16 @@ async def paired_host_for(
     return await facts.usable_host(user_id, conversation_id)
 
 
-def host_folder_hint(conversation: Conversation) -> str | None:
+async def host_folder_hint(
+    conversation_id: UUID, *, facts: HostExecutionFacts = FACTS
+) -> str | None:
     """The Mac folder this conversation is bound to, if Lemma has seen one.
 
     An Agent Host run in the conversation reports the directory it ran in;
     that is the same folder the folder chip binds. A conversation with no such
     run leaves the choice to the host, which also knows the chip's binding.
     """
-    metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
-    binding = metadata.get(AGENT_HOST_SESSION_METADATA_KEY)
-    cwd = binding.get("host_cwd") if isinstance(binding, dict) else None
+    cwd = await facts.host_cwd(conversation_id)
     return cwd if isinstance(cwd, str) and cwd.startswith("/") else None
 
 
@@ -279,7 +286,9 @@ async def host_folder_for(conversation_id: UUID) -> HostFolder | None:
             return None
         conversation = row.to_entity()
     day, slug = default_folder(conversation)
-    return HostFolder(day=day, slug=slug, root_hint=host_folder_hint(conversation))
+    return HostFolder(
+        day=day, slug=slug, root_hint=await host_folder_hint(conversation_id)
+    )
 
 
 async def choose_host_workspace(
@@ -338,7 +347,7 @@ async def _select(
             host_id=host_id,
             day=day,
             slug=slug,
-            root_hint=host_folder_hint(conversation),
+            root_hint=await host_folder_hint(conversation.id, facts=facts),
         )
     except SandboxError:
         # Nothing has run anywhere yet, so the VM is still a clean choice.

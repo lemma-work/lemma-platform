@@ -8,6 +8,11 @@ The host opens a session and reports its id on the checkpoint it writes just
 before dispatching the prompt; that id is stored against the conversation, and
 every later turn is dispatched with it so the agent loads its own history back.
 Both halves live here so the read and the write cannot drift apart.
+
+Stored in ``agent_host_sessions``, one row per conversation. The rules below
+work on a *binding* -- the row as a JSON-shaped dict, the shape it had when it
+was the conversation's ``agent_host_provider_session_id`` metadata key -- and
+``load_binding`` and ``_save`` convert between the two.
 """
 
 from __future__ import annotations
@@ -17,18 +22,18 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.agent_host.control.models import AgentHostSessionModel
 from app.modules.agent.agent_host.domain.host import (
-    AGENT_HOST_SESSION_METADATA_KEY,
     AgentHostHarnessCapabilities,
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 
 
@@ -88,31 +93,19 @@ async def remember_provider_session(
     if binding is None:
         return False
     conversation_id, harness_id, created_at, host_id = binding
-    conversations = Conversations(uow)
     opened = _OpenedSession(
         session_id=session_id,
         harness_id=str(harness_id),
         host_id=str(host_id),
         created_at=created_at,
     )
-    unlocked = await conversations.get_conversation_metadata_key(
-        conversation_id, AGENT_HOST_SESSION_METADATA_KEY
-    )
-    if _rebound(unlocked, checkpoint, opened) is None:
+    if _rebound(await load_binding(uow, conversation_id), checkpoint, opened) is None:
         return False
-    stored = await conversations.get_conversation_metadata_key(
-        conversation_id,
-        AGENT_HOST_SESSION_METADATA_KEY,
-        for_update=True,
-    )
+    stored = await load_binding(uow, conversation_id, for_update=True)
     binding_value = _rebound(stored, checkpoint, opened)
     if binding_value is None:
         return False
-    await conversations.set_conversation_metadata_key(
-        conversation_id,
-        AGENT_HOST_SESSION_METADATA_KEY,
-        binding_value,
-    )
+    await _save(uow, conversation_id, binding_value)
     return True
 
 
@@ -271,24 +264,14 @@ async def record_pending_instructions(
     A promise, not a record: :func:`remember_provider_session` turns it into one
     when the host reports that it actually prompted.
     """
-    conversations = Conversations(uow)
-    stored = await conversations.get_conversation_metadata_key(
-        conversation_id,
-        AGENT_HOST_SESSION_METADATA_KEY,
-        for_update=True,
-    )
-    binding = dict(stored) if isinstance(stored, dict) else {}
+    binding = await load_binding(uow, conversation_id, for_update=True)
     binding["pending_instructions"] = {"run_id": str(run_id), "digest": digest}
     if seen_through is not None:
         binding["pending_prompt"] = {
             "run_id": str(run_id),
             "seen_through": seen_through,
         }
-    await conversations.set_conversation_metadata_key(
-        conversation_id,
-        AGENT_HOST_SESSION_METADATA_KEY,
-        binding,
-    )
+    await _save(uow, conversation_id, binding)
 
 
 async def instructions_already_delivered(
@@ -305,11 +288,8 @@ async def instructions_already_delivered(
     an agent quietly running without its instructions, so every ambiguous case
     resolves toward sending them again.
     """
-    stored = await Conversations(uow).get_conversation_metadata_key(
-        conversation_id,
-        AGENT_HOST_SESSION_METADATA_KEY,
-    )
-    if not isinstance(stored, dict) or stored.get("harness_id") != str(harness_id):
+    stored = await load_binding(uow, conversation_id)
+    if stored.get("harness_id") != str(harness_id):
         return False
     return stored.get("instructions_digest") == digest
 
@@ -345,11 +325,8 @@ async def resumed_session(
     """
     if not AgentHostHarnessCapabilities.model_validate(capabilities).load_session:
         return None
-    stored = await Conversations(uow).get_conversation_metadata_key(
-        conversation_id,
-        AGENT_HOST_SESSION_METADATA_KEY,
-    )
-    if not isinstance(stored, dict) or stored.get("harness_id") != str(harness_id):
+    stored = await load_binding(uow, conversation_id)
+    if stored.get("harness_id") != str(harness_id):
         return None
     session_id = stored.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -384,3 +361,106 @@ def _uuid(value: object) -> UUID | None:
         return UUID(value) if isinstance(value, str) else None
     except ValueError:
         return None
+
+
+async def host_cwd(uow: SqlAlchemyUnitOfWork, conversation_id: UUID) -> str | None:
+    """The directory the conversation's last Agent Host run reported working in."""
+    return await uow.session.scalar(
+        select(AgentHostSessionModel.host_cwd).where(
+            AgentHostSessionModel.conversation_id == conversation_id
+        )
+    )
+
+
+# -- the row ------------------------------------------------------------------
+
+#: Binding keys held as text, and those held as a UUID, by the column's name.
+_TEXT = ("session_id", "host_cwd", "instructions_digest")
+_UUIDS = ("harness_id", "host_id", "run_id", "prompted_run_id")
+
+
+async def load_binding(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, *, for_update: bool = False
+) -> JsonObject:
+    """The conversation's binding; empty when it has none.
+
+    ``for_update`` makes the row first, so there is always one to lock: two
+    writers serialize on it even when neither has bound a session yet.
+    """
+    if for_update:
+        await uow.session.execute(
+            insert(AgentHostSessionModel)
+            .from_select(
+                ["conversation_id"],
+                select(ConversationModel.id).where(
+                    ConversationModel.id == conversation_id
+                ),
+            )
+            .on_conflict_do_nothing(index_elements=["conversation_id"])
+        )
+    statement = select(AgentHostSessionModel).where(
+        AgentHostSessionModel.conversation_id == conversation_id
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    row = (await uow.session.execute(statement)).scalar_one_or_none()
+    return _binding(row) if row is not None else {}
+
+
+def _binding(row: AgentHostSessionModel) -> JsonObject:
+    binding: JsonObject = {key: getattr(row, key) for key in _TEXT}
+    binding.update({key: _text(getattr(row, key)) for key in _UUIDS})
+    if row.run_created_at is not None:
+        binding["run_created_at"] = row.run_created_at.isoformat()
+    binding["prompted_through"] = row.prompted_through
+    if row.pending_instructions_run_id is not None:
+        binding["pending_instructions"] = {
+            "run_id": str(row.pending_instructions_run_id),
+            "digest": row.pending_instructions_digest,
+        }
+    if row.pending_prompt_run_id is not None:
+        binding["pending_prompt"] = {
+            "run_id": str(row.pending_prompt_run_id),
+            "seen_through": row.pending_prompt_seen_through,
+        }
+    return {key: value for key, value in binding.items() if value is not None}
+
+
+async def _save(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, binding: JsonObject
+) -> None:
+    """Write the whole binding over the row ``load_binding(for_update=True)`` locked."""
+    pending = binding.get("pending_instructions")
+    pending = pending if isinstance(pending, dict) else {}
+    prompt = binding.get("pending_prompt")
+    prompt = prompt if isinstance(prompt, dict) else {}
+    created = binding.get("run_created_at")
+    values: dict[str, object] = {key: _str(binding.get(key)) for key in _TEXT}
+    values.update({key: _uuid(binding.get(key)) for key in _UUIDS})
+    values.update(
+        run_created_at=(
+            datetime.fromisoformat(created) if isinstance(created, str) else None
+        ),
+        prompted_through=_int(binding.get("prompted_through")),
+        pending_instructions_run_id=_uuid(pending.get("run_id")),
+        pending_instructions_digest=_str(pending.get("digest")),
+        pending_prompt_run_id=_uuid(prompt.get("run_id")),
+        pending_prompt_seen_through=_int(prompt.get("seen_through")),
+    )
+    await uow.session.execute(
+        update(AgentHostSessionModel)
+        .where(AgentHostSessionModel.conversation_id == conversation_id)
+        .values(**values)
+    )
+
+
+def _text(value: UUID | None) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None

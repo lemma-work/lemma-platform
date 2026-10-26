@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from app.modules.agent.agent_host.control.models import AgentHostRunRecordModel
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.agent_host.mcp import ConversationMCPService
 
@@ -31,10 +32,16 @@ async def test_the_bridge_reads_the_runs_decision_back(db_session, scenario, dec
         conversation_id=created.json()["id"],
         status="RUNNING",
         agent_runtime={"profile_id": "system:lemma"},
-        run_metadata={"host_native_commands": {"enabled": decided, "host_id": None}},
         started_at=datetime.now(timezone.utc),
     )
     db_session.add(run)
+    await db_session.flush()
+    db_session.add(
+        AgentHostRunRecordModel(
+            run_id=run.id,
+            host_native_commands={"enabled": decided, "host_id": None},
+        )
+    )
     await db_session.commit()
 
     (

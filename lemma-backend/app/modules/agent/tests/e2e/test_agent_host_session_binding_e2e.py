@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.agent_host.domain.host import (
-    AGENT_HOST_SESSION_METADATA_KEY,
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
@@ -18,6 +17,7 @@ from app.modules.agent.agent_host.control.control_updates import (
 )
 from app.modules.agent.agent_host.control.event_stream import StreamedEvent
 from app.modules.agent.agent_host.control.session_memory import (
+    load_binding,
     remember_provider_session,
     record_pending_instructions,
     resume_session_id,
@@ -150,9 +150,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
         == "renewed-session"
     )
     assert not await remember_provider_session(uow, old)
-    stored = await Conversations(uow).get_conversation_metadata_key(
-        conversation_id, AGENT_HOST_SESSION_METADATA_KEY
-    )
+    stored = await load_binding(uow, conversation_id)
     assert isinstance(stored, dict)
     assert stored["session_id"] == "renewed-session"
     assert stored["run_id"] == str(new_run.id)
@@ -174,9 +172,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
         )
         is True
     )
-    stored = await Conversations(uow).get_conversation_metadata_key(
-        conversation_id, AGENT_HOST_SESSION_METADATA_KEY
-    )
+    stored = await load_binding(uow, conversation_id)
     assert stored["host_cwd"] == host_cwd
     assert stored["instructions_digest"] == "new-instructions"
     assert "pending_instructions" not in stored
@@ -212,9 +208,4 @@ async def test_another_host_or_stale_epoch_cannot_write_a_session_binding(
             now=datetime.now(timezone.utc),
             lease_seconds=60,
         )
-        assert (
-            await Conversations(uow).get_conversation_metadata_key(
-                conversation_id, AGENT_HOST_SESSION_METADATA_KEY
-            )
-            is None
-        )
+        assert await load_binding(uow, conversation_id) == {}

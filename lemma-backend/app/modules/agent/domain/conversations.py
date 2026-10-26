@@ -8,13 +8,14 @@ server decides on is a typed column of the row, which no request reaches
 
 ``SERVER_READ_KEYS`` are the keys the server still reads out of metadata,
 until they move to tables of their own -- a chat surface's binding
-(agent_surfaces' contracts phase) and the Agent Host's session (its own phase).
+(agent_surfaces' contracts phase).
 A client can neither set nor drop them: they are taken out of what it sends,
 and an update keeps whatever the server wrote.
 
-``MOVED_*_KEYS`` were metadata once and are columns now. A client may still
-send one -- it is a tag like any other, and the list filter finds it -- but it
-changes nothing, because the column is what is read. These lists are also what
+``MOVED_*_KEYS`` were metadata once and are columns, or the Agent Host's own
+tables, now. A client may still send one -- it is a tag like any other, and the
+list filter finds it -- but it changes nothing, because the column is what is
+read. These lists are also what
 ``tests/unit/test_moved_metadata_keys`` holds every ``*_metadata`` read and
 write in the module against.
 """
@@ -48,8 +49,6 @@ SERVER_READ_KEYS = frozenset(
         "web_session_id",
         # What fired a schedule, which the run's platform origin is read from.
         "schedule_type",
-        # The Agent Host's provider session, resumed on the next turn.
-        "agent_host_provider_session_id",
     }
 )
 
@@ -76,6 +75,8 @@ MOVED_CONVERSATION_KEYS = frozenset(
         "repo",
         "repo_full_name",
         "todos",
+        # The Agent Host's session: `agent_host_sessions`.
+        "agent_host_provider_session_id",
     }
 )
 
@@ -101,6 +102,10 @@ MOVED_RUN_KEYS = frozenset(
         "scheduled_for",
         "timezone",
         "failure",
+        # An Agent Host run's record: `agent_host_run_records`.
+        "execution",
+        "host_native_commands",
+        "final_answer",
     }
 )
 

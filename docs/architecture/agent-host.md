@@ -331,7 +331,7 @@ bugs live between them, which is why they present to a user as "it's slow" or
 Immediately after ACP opens or loads a session, Agent Host journals a
 `run_state` event containing its provider session id before dispatching the
 prompt. The backend consumes that event in stream order and commits the
-conversation metadata binding before processing answer events. Follow-up turns
+conversation's session binding (`agent_host_sessions`) before processing answer events. Follow-up turns
 load that same session in the conversation's persistent working directory.
 Control checkpoints retain the binding for older hosts and recovery, but a late
 checkpoint from an older run cannot replace a newer run's session. Changing to
@@ -843,7 +843,7 @@ guarantee:
   become a message. A worker that reclaims the run after a deploy resumes
   there, with the tool calls already on the record restored, instead of
   dispatching again and re-reading the stream from its start
-  (`harnesses/agent_host/stream_resume.py`). The stream is trimmed only below
+  (`agent_host/harness/stream_resume.py`). The stream is trimmed only below
   that cursor, never by length, and each event's payload is capped at 8 MiB
   at intake.
 - **Locks on the host row.** One host runs many runs at once, so a run start,
@@ -912,7 +912,7 @@ guarantee:
   never expire, so past `AGENT_HOST_PARKED_WINDOW_SECONDS` (10 minutes) the
   worker marks the run (`suspended_while_parked`) and sends the ordinary
   `CANCEL_RUN`; the host ends the ACP turn as it does for Stop, and the
-  terminal it reports is read as WAITING (`harnesses/agent_host/parked_window.py`).
+  terminal it reports is read as WAITING (`agent_host/harness/parked_window.py`).
   Nothing on the wire changed: the bridge's wait ends with its run and hands
   the agent the unchanged "waiting" result, never a denial, and the host
   resolves a held permission request as the cancelled turn's. The pause stays
@@ -930,7 +930,7 @@ guarantee:
   correctness: a lost command or result leaves the message queued in Lemma, and
   the follow-up turn delivers it when the current one ends.
 - **What a resumed turn carries.** A turn that loads its provider session is
-  sent only what that session has not seen (`harnesses/turn_messages.py`): its
+  sent only what that session has not seen (`agent_host/harness/turn_messages.py`): its
   own messages -- the one that started it, any steered into it, the tool
   return a resume answers -- and what was written into the conversation in no
   run since the start of the session's last landed prompt: a reminder or a

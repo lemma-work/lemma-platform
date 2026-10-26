@@ -566,8 +566,8 @@ contract left to it.
   `prompts/agent_host_host_execution.md`. Whether they do is decided once,
   when the run's context is first built, for the host the run's harness is on
   -- not for whichever of the person's Macs has host execution -- and written
-  on the run (`host_native_commands`, under `host_native_commands` in the
-  run's metadata). Every relayed tool call reads it back, so a toggle mid-run
+  on the run (`host_native_commands` in the run's `agent_host_run_records`
+  row). Every relayed tool call reads it back, so a toggle mid-run
   cannot change the toolset under the prompt the run was given.
 - **The browser.** Such a run used to drive the VM browser with
   `agent-browser` through `lemma_exec_command`, and an in-process host run's
@@ -580,8 +580,8 @@ contract left to it.
   `/home/user/` from the VM (where screenshots land) and any other path from
   the Mac.
 - **Recorded on the run.** The choice -- `{"target": "vm"}` or `{"target":
-  "host", "host_id", "sandbox_id", "root"}` -- is written under `execution` in the run's
-  metadata the first time its context is built. A reclaimed run reads it back
+  "host", "host_id", "sandbox_id", "root"}` -- is written as `execution` in the run's
+  `agent_host_run_records` row the first time its context is built. A reclaimed run reads it back
   instead of selecting again, and an approved tool executed after a pause uses
   the paused run's record, so neither can land in the VM when the run was on
   the host. A recorded host whose Mac is offline fails the op with
