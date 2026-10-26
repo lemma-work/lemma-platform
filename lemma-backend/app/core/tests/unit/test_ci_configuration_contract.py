@@ -31,15 +31,13 @@ def test_native_desktop_dependency_caches_are_shared_across_build_workflows() ->
                 assert step["uses"] == "Swatinem/rust-cache@v2"
                 assert settings["workspaces"] == "desktop"
                 assert settings["shared-key"] == "${{ runner.os }}-${{ runner.arch }}"
-                # Saved from main only in ci.yml: a pull request's copy held
-                # the same dependencies as main's and, over the repository's
-                # cache limit, evicted the main caches every pull request
-                # restores. The release workflows run on main and tags only.
-                if path == ".github/workflows/ci.yml":
-                    assert (
-                        settings.get("save-if")
-                        == "${{ github.ref == 'refs/heads/main' }}"
-                    ), f"{name}: a pull request must not save its own copy"
+                # Saved from main only, in every workflow: a pull request's or a
+                # tag's copy can be restored by nothing but that ref, and over
+                # the repository's cache limit it evicted the main caches every
+                # pull request restores.
+                assert (
+                    settings.get("save-if") == "${{ github.ref == 'refs/heads/main' }}"
+                ), f"{path}: {name}: only main may save its copy"
                 assert not settings.get("cache-all-crates", False)
                 assert not settings.get("cache-workspace-crates", False)
                 assert any(
@@ -282,6 +280,31 @@ def test_expensive_security_jobs_are_change_scoped() -> None:
     assert "needs.changes.outputs.backend_image == 'true'" in condition("container")
 
 
+_ON_MAIN = re.compile(r"github\.ref\s*==\s*'refs/heads/main'")
+_CACHE_MISS = re.compile(r"steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit\s*!=\s*'true'")
+
+
+def _saves_only_on_main(condition: str) -> bool:
+    """Whether a save step's `if:` can run on main and on nothing else.
+
+    Evaluated with the cache missed, once on main and once off it, rather
+    than searched for the word: `github.ref != 'refs/heads/main'` mentions
+    main too. Anything else in the condition fails the test unread.
+    """
+
+    def runs(on_main: bool) -> bool:
+        skeleton = _CACHE_MISS.sub("True", _ON_MAIN.sub(str(on_main), condition))
+        skeleton = " ".join(
+            skeleton.replace("&&", " and ").replace("||", " or ").split()
+        )
+        assert re.fullmatch(r"[\s()]*(?:(?:True|False|and|or)[\s()]*)*", skeleton), (
+            f"a save condition this test cannot read: {condition}"
+        )
+        return bool(eval(skeleton, {"__builtins__": {}}, {}))  # noqa: S307
+
+    return runs(True) and not runs(False)
+
+
 def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
     """Chromium is downloaded once per Playwright version, not once per run.
 
@@ -319,7 +342,7 @@ def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
                     and later["with"]["key"] == cache[-1]["with"]["key"]
                 ]
                 assert saves, f"{name} restores a browser cache nothing saves"
-                assert "refs/heads/main" in str(saves[0].get("if", "")), (
+                assert _saves_only_on_main(str(saves[0].get("if", ""))), (
                     f"{name} saves its browser cache from a pull request"
                 )
             key = cache[-1]["with"]["key"]
