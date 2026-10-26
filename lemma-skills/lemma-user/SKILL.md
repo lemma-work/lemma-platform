@@ -191,7 +191,7 @@ searchable, `NOT_REQUIRED` = stored but not an indexed document,
 `PENDING`/`PROCESSING` = still working, including a failed attempt waiting to
 be retried, `FAILED_PERMANENT` = out of retries or unprocessable, with the
 reason in `last_processing_error`; nothing re-drives it on its own. New bytes,
-or `pod.files.retry_processing(path)` once the cause is fixed, re-opens it;
+or `lemma files retry <path>` once the cause is fixed, re-opens it;
 uploading the same bytes again does not).
 
 ### Link to a file — pick by who opens it
@@ -660,7 +660,8 @@ conversations — confirm with the person first.
 - **Fresh upload not in search.** Indexing lag — `files stat` for status, retry
   shortly. `NOT_REQUIRED` means it isn't an indexed document (spreadsheets,
   presentations, images and email are stored but never searchable);
-  `FAILED_PERMANENT` will not retry by itself — read `last_processing_error`.
+  `FAILED_PERMANENT` will not retry by itself — read `last_processing_error`,
+  fix the cause, then `lemma files retry <path>`.
 - **A query's numbers look too round.** Check `truncated` on the `query run`
   payload before believing `total` — 1,000 rows exactly is usually the row cap,
   not the answer.

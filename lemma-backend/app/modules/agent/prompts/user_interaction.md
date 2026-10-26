@@ -57,7 +57,7 @@ A widget's buttons can do anything in Lemma, as the person viewing it, through
 
 - `c.records.create(table, data)` / `c.records.update(table, id, data)` / `c.records.delete(table, id)`
 - `c.functions.run(name, { input })` / `c.workflows.runs.create(name)`
-- `lemma.act(connector, operation, payload)` — a connector operation; it finds the install itself
+- `lemma.act(connector, operation, payload)` — a connector operation through the pod's connector for it; a missing connection shows a Connect button
 
 Wire each button with `lemma.button(el, { run, confirm?, done? })`: it disables
 the button while `run` works and shows the result or error where the button was,
