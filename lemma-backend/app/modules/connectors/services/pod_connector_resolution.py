@@ -540,6 +540,22 @@ async def may_use_shared_account(ctx: Context, pod_account: PodAccountEntity) ->
     return True
 
 
+def reauth_required_for(
+    ctx: Context, pod_connector: PodConnectorEntity, resolved: ResolvedPodConnector
+) -> ReauthRequiredError:
+    """A marked account resolution let through, whose refresh then confirmed
+    the grant is gone: the answer resolution gives an account it refuses
+    outright, with the pod's reconnect link rather than the bare account one."""
+    return ReauthRequiredError(
+        slug=pod_connector.slug,
+        connector_id=resolved.auth_config.connector_id,
+        connect_url=connect_url(pod_connector.pod_id, pod_connector.slug),
+        acting_person_is_owner=(
+            acting_person(ctx) == resolved.pod_account.owner_user_id
+        ),
+    )
+
+
 def _restricted_without_person() -> ConnectorAccessDeniedError:
     return ConnectorAccessDeniedError(
         "This shared account is restricted to some members, and this run "
@@ -557,4 +573,5 @@ __all__ = [
     "free_slug",
     "may_use_shared_account",
     "needs_account",
+    "reauth_required_for",
 ]

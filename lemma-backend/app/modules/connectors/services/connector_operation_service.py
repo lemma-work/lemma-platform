@@ -20,7 +20,6 @@ from app.modules.connectors.domain.errors import (
     ConnectorReauthRequiredError,
     OperationNotFoundError,
 )
-from app.modules.connectors.domain.pod_connector_errors import ReauthRequiredError
 from app.modules.connectors.domain.ports import (
     ConnectorOperationRepositoryPort,
     ConnectorRepositoryPort,
@@ -35,10 +34,9 @@ from app.modules.connectors.services.operation_visibility import (
     find_install_or_catalog_operation,
     list_operations_for_install,
 )
-from app.modules.connectors.services.pod_account_rule import connect_url
 from app.modules.connectors.services.pod_connector_resolution import (
     PodConnectorResolver,
-    acting_person,
+    reauth_required_for,
 )
 from app.modules.connectors.domain.account import AccountEntity, AccountStatus
 from app.modules.connectors.domain.auth_config import AuthConfigEntity
@@ -516,18 +514,7 @@ class ConnectorOperationService:
                 act_as=act_as,
             )
         except ConnectorReauthRequiredError as exc:
-            # A marked account resolution let through, and the refresh that was
-            # to vouch for it confirmed the grant is gone: the same answer
-            # resolution gives an account it refuses outright, with the pod's
-            # reconnect link rather than the bare account one.
-            raise ReauthRequiredError(
-                slug=pod_connector.slug,
-                connector_id=resolved.auth_config.connector_id,
-                connect_url=connect_url(pod_connector.pod_id, pod_connector.slug),
-                acting_person_is_owner=(
-                    acting_person(ctx) == resolved.pod_account.owner_user_id
-                ),
-            ) from exc
+            raise reauth_required_for(ctx, pod_connector, resolved) from exc
 
     async def execution_for(
         self,

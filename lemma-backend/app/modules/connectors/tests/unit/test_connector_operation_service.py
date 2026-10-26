@@ -886,15 +886,18 @@ async def test_a_marked_account_whose_grant_is_confirmed_gone_asks_for_a_reconne
     link, exactly as if resolution had refused it outright."""
     account = _account()
     account.status = AccountStatus.REAUTH_REQUIRED
-    account.credentials = {"access_token": "old", "connection_id": "ca_1"}
+    account.credentials = {"access_token": "old", "refresh_token": "r"}
     pod_id = uuid4()
     resolver = _resolver(account)
-    resolver.connector = AsyncMock(
+    resolver.pod_connectors.get_by_slug = AsyncMock(
         return_value=SimpleNamespace(slug="bigquery", pod_id=pod_id)
     )
     resolver.resolve.return_value.pod_account = SimpleNamespace(
         owner_user_id=account.user_id
     )
+    # An install whose token Lemma refreshes itself. A Composio call skips the
+    # refresh -- Composio holds the token -- and is verified by the call.
+    resolver.resolve.return_value.auth_config.kind = ConnectorKind.HTTP
     operation_repository = AsyncMock()
     operation_repository.get_by_connector_kind_and_name.return_value = (
         ConnectorOperationEntity(
@@ -909,7 +912,7 @@ async def test_a_marked_account_whose_grant_is_confirmed_gone_asks_for_a_reconne
     )
     connector_service = _composio_install_service()
     connector_service.get_account_credentials = AsyncMock(
-        side_effect=ConnectorReauthRequiredError(reason="composio_expired")
+        side_effect=ConnectorReauthRequiredError(reason="refresh_revoked")
     )
     service = ConnectorOperationService(
         connector_repository=AsyncMock(),
