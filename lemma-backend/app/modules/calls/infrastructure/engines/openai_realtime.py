@@ -84,6 +84,11 @@ class OpenAIRealtimeEngine:
         #: time from then, which is what a truncate has to measure.
         self._audio_started_at: float | None = None
         self._configured = False
+        #: A response is being generated; the provider refuses another until
+        #: it is done.
+        self._responding = False
+        #: An update asked to be spoken while one was: start it after.
+        self._speak_owed = False
 
     async def open(self) -> None:
         import websockets
@@ -147,8 +152,14 @@ class OpenAIRealtimeEngine:
                 },
             }
         )
-        if mode is Inject.SPEAK:
-            await self._send({"type": "response.create"})
+        if mode is not Inject.SPEAK:
+            return
+        if self._responding:
+            # Asked again mid-response the provider answers with an error and
+            # the update is never said: it is started once this one is done.
+            self._speak_owed = True
+            return
+        await self._send({"type": "response.create"})
 
     async def events(self) -> AsyncIterator[VoiceEvent]:
         while True:
@@ -201,6 +212,7 @@ class OpenAIRealtimeEngine:
             case "conversation.item.input_audio_transcription.completed":
                 offer(self._events, Heard(_str(frame.get("transcript")), final=True))
             case "response.created":
+                self._responding = True
                 self._delivered_ms = 0.0
                 self._audio_started_at = None
             case "response.output_audio.delta":
@@ -215,7 +227,11 @@ class OpenAIRealtimeEngine:
             case "response.output_audio_transcript.done":
                 offer(self._events, Said(_str(frame.get("transcript")), final=True))
             case "response.done":
+                self._responding = False
                 offer(self._events, TurnDone())
+                if self._speak_owed:
+                    self._speak_owed = False
+                    await self._send({"type": "response.create"})
             case "error":
                 return self._error(frame)
         return None

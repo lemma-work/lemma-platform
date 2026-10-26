@@ -72,6 +72,8 @@ _SETUP_TIMEOUT_SECONDS = 15.0
 #: Each reconnect replays nothing; more than a few in a row means the provider
 #: is refusing us, not rotating the connection.
 _MAX_RECONNECTS = 3
+#: Text frames kept across one reconnect, the newest.
+_MAX_HELD_TEXT = 20
 
 type Frame = dict[str, JsonValue]
 
@@ -104,6 +106,10 @@ class GeminiLiveEngine:
         self._said: list[str] = []
         self._voice_turn_open = False
         self._closing_turn: asyncio.TimerHandle | None = None
+        #: Notes and updates for the voice sent while the connection was being
+        #: rotated, to send once it is back. Audio is never kept: late
+        #: microphone audio is worse than none.
+        self._held_text: list[Frame] = []
 
     async def open(self) -> None:
         await self._connect()
@@ -175,9 +181,9 @@ class GeminiLiveEngine:
 
     async def inject(self, text: str, mode: Inject) -> None:
         if mode is Inject.SPEAK:
-            await self._send({"realtimeInput": {"text": text}})
+            await self._send_text({"realtimeInput": {"text": text}})
             return
-        await self._send(
+        await self._send_text(
             {
                 "clientContent": {
                     "turns": [{"role": "user", "parts": [{"text": text}]}],
@@ -185,6 +191,26 @@ class GeminiLiveEngine:
                 }
             }
         )
+
+    async def _send_text(self, frame: Frame) -> None:
+        """Text for the voice is kept, not dropped, across a reconnect: a
+        relay sent while Gemini rotated the connection was never said."""
+        socket = self._socket
+        import websockets
+
+        if socket is not None and socket.state.name == "OPEN":
+            try:
+                await socket.send(encode(frame))
+                return
+            except websockets.ConnectionClosed:
+                pass
+        self._held_text.append(frame)
+        del self._held_text[:-_MAX_HELD_TEXT]
+
+    async def _send_held(self) -> None:
+        held, self._held_text = self._held_text, []
+        for frame in held:
+            await self._send_text(frame)
 
     async def events(self) -> AsyncIterator[VoiceEvent]:
         while True:
@@ -236,6 +262,7 @@ class GeminiLiveEngine:
                 offer(self._events, EngineClosed(str(exc)), essential=True)
                 return
             logger.info("calls.gemini.resumed.observed", attempt=reconnects)
+            await self._send_held()
         offer(self._events, EngineClosed(), essential=True)
 
     def _handle_frame(self, frame: dict[str, JsonValue]) -> None:

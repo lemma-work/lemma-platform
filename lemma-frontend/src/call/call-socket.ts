@@ -30,6 +30,8 @@ export interface CallStart {
     /** What came before the call, for the voice's brief. */
     context: string;
     engine?: string;
+    /** Whether the microphone is muted, so a rejoin keeps it muted. */
+    muted?: boolean;
 }
 
 export interface CallSocketHandlers {
@@ -79,7 +81,11 @@ export function openCallSocket(url: string, start: CallStart, handlers: CallSock
         ended = true;
         handlers.onClose(reason, dropped);
     };
-    socket.onopen = () => socket.send(JSON.stringify({ type: "start", ...start }));
+    let opened = false;
+    socket.onopen = () => {
+        opened = true;
+        socket.send(JSON.stringify({ type: "start", ...start }));
+    };
     socket.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) {
             handlers.onAudio(event.data);
@@ -93,10 +99,15 @@ export function openCallSocket(url: string, start: CallStart, handlers: CallSock
         else handlers.onFrame(typed);
     };
     socket.onclose = (event) => {
+        if (!opened) { end("The call could not connect."); return; }
         const outcome = closeOutcome(event.code, event.reason);
         end(outcome.reason, outcome.dropped);
     };
-    socket.onerror = () => end("The call could not connect.");
+    /* No verdict here. An unclean drop fires `error` and then `close`; ending
+       on `error` latched "could not connect" and the close that says it was a
+       drop -- one the call can rejoin -- was never heard. A socket that never
+       opened closes too, as 1006, and is told apart there. */
+    socket.onerror = () => undefined;
     return new CallConnection(socket);
 }
 

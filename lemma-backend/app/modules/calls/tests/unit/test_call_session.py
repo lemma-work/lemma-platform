@@ -1,8 +1,8 @@
 """A call between a scripted caller, a scripted voice and scripted agents.
 
 What is under test is the session's own work: which turns reach the agents and
-with what context, how relays reach the voice, what the caller's screen is
-sent, and how the call ends.
+with what context, what the voice is told (and only what is true), how relays
+reach it, what the caller's screen is sent, and how the call ends.
 """
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ from app.modules.calls.domain.voice import (
 from app.modules.calls.services.agents import (
     AgentSignal,
     CallAgents,
+    Failed,
+    Finished,
     Relay,
     Shown,
     Working,
@@ -88,11 +90,23 @@ class Agents:
     def __init__(self, canvas: list[CanvasItem] | None = None) -> None:
         self.turns: list[str] = []
         self.notes: list[str] = []
+        self.recorded: list[str] = []
+        self.started = False
+        self.working = False
         self.signals_in: asyncio.Queue[AgentSignal] = asyncio.Queue()
         self._canvas = canvas or []
 
+    async def start(self) -> None:
+        self.started = True
+
+    async def still_working(self) -> bool:
+        return self.working
+
     async def send_turn(self, content: str) -> None:
         self.turns.append(content)
+
+    async def record(self, transcript: str) -> None:
+        self.recorded.append(transcript)
 
     async def canvas(self) -> list[CanvasItem]:
         return self._canvas
@@ -162,10 +176,37 @@ async def test_chit_chat_waits_and_rides_along_with_the_next_real_request() -> N
     assert len(agents.turns) == 1
     turn = agents.turns[0]
     assert turn.startswith("[caller] plan a Goa offsite for twelve")
+    # Labelled for what they are: said on the call, never sent to the agents
+    # -- not "already handled", which marked a misrouted request done.
+    assert "Said on the call since your last turn (not sent to you)" in turn
     assert "Caller: hey there" in turn and "Voice: Hi! What can I do?" in turn
     caller.inbox.put_nowait(None)
     await running
     assert session.transcript().splitlines()[0] == "Caller: hey there"
+
+
+async def test_the_voice_may_say_a_request_is_in_hand_only_once_it_reached_the_team() -> (
+    None
+):
+    # The dev symptom: "I'm looking that up" while nothing ran. The voice is
+    # told a request was passed on only when it was, and never for a turn
+    # kept for the voice alone.
+    caller, voice, agents = Caller(), Voice(), Agents()
+    gate = _gate({"how are you": Route.VOICE})
+    running = asyncio.create_task(_session(caller, voice, agents, gate).run())
+    await voice.out.put(Heard("how are you", final=True))
+    await _until(lambda: "how are you" in gate.asked)
+    await voice.out.put(Heard("find the q3 report", final=True))
+    await _until(lambda: agents.turns and voice.injected)
+    caller.inbox.put_nowait(None)
+    await running
+    passed = [text for text, _ in voice.injected if "Passed on" in text]
+    assert passed == [
+        (
+            '[team] Passed on to your team: "find the q3 report". You may now '
+            "tell the person it is being looked into."
+        )
+    ]
 
 
 async def test_microphone_audio_reaches_the_voice_unless_muted_and_its_audio_reaches_the_caller() -> (
@@ -243,6 +284,10 @@ async def test_what_is_shown_goes_to_the_screen_and_the_voice_is_told_what_is_on
         Inject.CONTEXT,
     ) in voice.injected
     assert caller.of("work") == [{"type": "work", "running": True}]
+    # The voice is told the team is working, once for the one change.
+    assert [t for t, _ in voice.injected if "working on it" in t] == [
+        "[team] Your team is working on it right now."
+    ]
     # The person paging back to the earlier file is told to the voice.
     caller.inbox.put_nowait(json.dumps({"type": "canvas.focus", "tool_call_id": "t-0"}))
     failed = json.dumps(
@@ -295,7 +340,15 @@ async def test_a_request_the_agents_never_got_is_not_promised() -> None:
 
 def test_the_session_takes_call_agents() -> None:
     # The stand-in above mirrors these; a renamed method should fail here first.
-    for name in ("send_turn", "canvas", "signals"):
+    for name in (
+        "start",
+        "still_working",
+        "send_turn",
+        "record",
+        "note",
+        "canvas",
+        "signals",
+    ):
         assert hasattr(CallAgents, name)
 
 
@@ -326,16 +379,10 @@ async def test_a_turn_heard_while_another_is_routed_is_not_called_handled() -> N
 
 
 def test_a_canvas_item_whose_data_is_json_text_is_described_by_its_title() -> None:
-    from app.modules.calls.services.session import _describe
+    from app.modules.calls.services.narration import describe
 
-    shown = Shown(
-        conversation_id=uuid4(),
-        tool_call_id="t1",
-        tool_name="display_resource",
-        args={"type": "WIDGET", "data": json.dumps({"title": "Venues"})},
-        result={"success": True},
-    )
-    assert _describe(shown)[0] == "Venues"
+    args = {"type": "WIDGET", "data": json.dumps({"title": "Venues"})}
+    assert describe(args)[0] == "Venues"
 
 
 async def test_a_call_counts_the_audio_and_turns_it_carried() -> None:
@@ -353,62 +400,6 @@ async def test_a_call_counts_the_audio_and_turns_it_carried() -> None:
     await running
     # A typed turn is a turn too.
     assert session.stats == CallStats(audio_in_bytes=640, caller_turns=2, voice_lines=1)
-
-
-async def test_the_agents_are_told_what_the_voice_was_told_once_with_their_first_turn() -> (
-    None
-):
-    # The voice was briefed with the chat the call grew out of; the
-    # coordinator, never told, answered as if nothing had been said.
-    caller, voice, agents = Caller(), Voice(), Agents()
-    session = CallSession(
-        socket=caller,
-        engine=voice,  # type: ignore[arg-type]
-        agents=agents,  # type: ignore[arg-type]
-        gate=_gate({}),
-        limits=CallLimits(max_seconds=30, quiet_window_ms=0),
-        background="Recent chat: they asked for Goa venues for 12.",
-    )
-    running = asyncio.create_task(session.run())
-    await voice.out.put(Heard("make it fifteen people", final=True))
-    await _until(lambda: agents.turns)
-    await voice.out.put(Heard("and near the beach", final=True))
-    await _until(lambda: len(agents.turns) == 2)
-    caller.inbox.put_nowait(None)
-    await running
-    first, second = agents.turns
-    assert "Before the call, the voice was told:" in first
-    assert "Goa venues for 12" in first
-    assert "Goa venues" not in second
-
-
-async def test_a_turn_the_agents_never_got_leaves_the_brief_for_the_next() -> None:
-    caller, voice = Caller(), Voice()
-
-    class FailsOnce(Agents):
-        async def send_turn(self, content: str) -> None:
-            if not self.turns:
-                self.turns.append("")  # the failed attempt
-                raise ConnectionError("database unavailable")
-            await super().send_turn(content)
-
-    agents = FailsOnce()
-    session = CallSession(
-        socket=caller,
-        engine=voice,  # type: ignore[arg-type]
-        agents=agents,  # type: ignore[arg-type]
-        gate=_gate({}),
-        limits=CallLimits(max_seconds=30, quiet_window_ms=0),
-        background="Recent chat: Goa venues for 12.",
-    )
-    running = asyncio.create_task(session.run())
-    await voice.out.put(Heard("make it fifteen", final=True))
-    await _until(lambda: voice.injected)
-    await voice.out.put(Heard("make it fifteen", final=True))
-    await _until(lambda: len(agents.turns) == 2)
-    caller.inbox.put_nowait(None)
-    await running
-    assert "Goa venues for 12" in agents.turns[1]
 
 
 async def test_a_resumed_call_tells_the_voice_what_the_screen_shows() -> None:
@@ -486,3 +477,122 @@ async def test_a_request_the_team_cannot_take_says_why_instead_of_asking_again()
     assert reason in note
     assert "say it again" not in note and "Do not ask them to repeat" in note
     assert {"type": "notice", "text": reason} in caller.frames
+
+
+async def test_a_failed_run_is_said_at_once_shown_and_kept_in_the_chat() -> None:
+    caller, voice, agents = Caller(), Voice(), Agents()
+    running = asyncio.create_task(_session(caller, voice, agents, _gate({})).run())
+    await agents.signals_in.put(Failed(reason="The usage limit is reached."))
+    await _until(
+        lambda: any(mode is Inject.SPEAK for _, mode in voice.injected) and agents.notes
+    )
+    caller.inbox.put_nowait(None)
+    await running
+    [spoken] = [text for text, mode in voice.injected if mode is Inject.SPEAK]
+    assert "failed: The usage limit is reached." in spoken
+    assert {"type": "notice", "text": "The usage limit is reached."} in caller.frames
+    assert "The usage limit is reached." in agents.notes[0]
+
+
+async def test_a_run_that_ends_without_a_word_still_reaches_the_person() -> None:
+    caller, voice, agents = Caller(), Voice(), Agents()
+    running = asyncio.create_task(_session(caller, voice, agents, _gate({})).run())
+    await agents.signals_in.put(Finished(answer="Three venues; Goa Palms is cheapest."))
+    await _until(lambda: any(mode is Inject.SPEAK for _, mode in voice.injected))
+    caller.inbox.put_nowait(None)
+    await running
+    [spoken] = [text for text, mode in voice.injected if mode is Inject.SPEAK]
+    assert spoken == "[team] Your team finished: Three venues; Goa Palms is cheapest."
+
+
+async def test_a_replayed_item_is_not_drawn_twice_or_reported_broken_again() -> None:
+    from datetime import datetime
+
+    caller, voice = Caller(), Voice()
+    replayed = CanvasItem(
+        conversation_id=uuid4(),
+        tool_call_id="old",
+        tool_name="display_resource",
+        args=CHART,
+        result={"success": True},
+        shown_at=datetime.now(),
+    )
+    agents = Agents(canvas=[replayed])
+    running = asyncio.create_task(_session(caller, voice, agents, _gate({})).run())
+    # The same item arriving on the stream after the replay read it.
+    await agents.signals_in.put(
+        Shown(
+            conversation_id=replayed.conversation_id,
+            tool_call_id="old",
+            tool_name="display_resource",
+            args=CHART,
+            result={"success": True},
+        )
+    )
+    await agents.signals_in.put(Relay("marker", "context"))
+    await _until(lambda: ("[team] marker", Inject.CONTEXT) in voice.injected)
+    caller.inbox.put_nowait(
+        json.dumps(
+            {"type": "canvas.render_failed", "tool_call_id": "old", "error": "x"}
+        )
+    )
+    caller.inbox.put_nowait(json.dumps({"type": "end"}))
+    await running
+    assert agents.started
+    assert len(caller.of("canvas.item")) == 1
+    assert agents.turns == []
+
+
+async def test_a_loop_that_fails_ends_the_call_with_a_reason() -> None:
+    caller, voice = Caller(), Voice()
+
+    class Broken(Agents):
+        async def signals(self) -> AsyncIterator[AgentSignal]:
+            raise RuntimeError("stream gone")
+            yield  # pragma: no cover
+
+    session = _session(caller, voice, Broken(), _gate({}))
+    await session.run()
+    assert caller.of("ended") == [
+        {"type": "ended", "reason": "Something went wrong on the call."}
+    ]
+
+
+async def test_a_call_held_elsewhere_ends_here(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modules.calls.services import session as session_module
+
+    monkeypatch.setattr(session_module, "_GUARD_SECONDS", 0.01)
+
+    class Lost:
+        async def still_held(self) -> bool:
+            return False
+
+    caller, voice, agents = Caller(), Voice(), Agents()
+    session = CallSession(
+        socket=caller,
+        engine=voice,  # type: ignore[arg-type]
+        agents=agents,  # type: ignore[arg-type]
+        gate=_gate({}),
+        limits=CallLimits(max_seconds=30, quiet_window_ms=0),
+        holding=Lost(),
+    )
+    await session.run()
+    assert session.end_reason == "This call continued somewhere else."
+
+
+async def test_the_transcript_is_written_as_the_call_goes_and_the_rest_at_its_end() -> (
+    None
+):
+    caller, voice, agents = Caller(), Voice(), Agents()
+    session = _session(caller, voice, agents, _gate({}))
+    running = asyncio.create_task(session.run())
+    for index in range(9):
+        await voice.out.put(Said(f"line {index}", final=True))
+    await _until(lambda: agents.recorded and session.stats.voice_lines == 9)
+    caller.inbox.put_nowait(None)
+    await running
+    await session.flush(final=True)
+    first, rest = agents.recorded
+    assert first.startswith("Said on the call -- by the person and the voice")
+    assert "Voice: line 0" in first and "Voice: line 7" in first
+    assert "Voice: line 8" in rest and "line 0" not in rest
