@@ -1095,6 +1095,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             if (!pod) return;
             setExpandedTab(null);
             setPeekedTab(null);
+            /* Choosing a tab replaces whatever a link was still waiting for.
+               A conversation link waits out the pod's tab list, and a tab
+               picked meanwhile would otherwise never be the pending one, so
+               the mirror would hold the address on the link for good. */
+            if (pendingTab.current !== tabId) pendingTab.current = null;
             setTabs((previous) => ({ ...previous, [pod.id]: tabId }));
         },
         [pod],
