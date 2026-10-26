@@ -70,7 +70,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --backend-root /app
 
 # Stage 2: Runtime stage
-FROM python:3.15-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 # Take the base image's security updates. `python:3.14-slim-bookworm` is
 # rebuilt on its own schedule, so a Debian advisory published between rebuilds
