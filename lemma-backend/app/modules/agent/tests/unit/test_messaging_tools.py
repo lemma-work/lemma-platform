@@ -22,14 +22,14 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.usage import RunUsage
 
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.messaging.models import (
+from app.modules.agent.infrastructure.tools.messaging.models import (
     ChannelListRequest,
     ChannelPostRequest,
     ChannelReadRequest,
     ChannelSearchRequest,
     ListPodMembersRequest,
 )
-from app.modules.agent.tools.messaging.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.messaging.pydantic_adapter import (
     channel_list,
     channel_post,
     channel_read,
@@ -268,7 +268,9 @@ def _no_database(monkeypatch):
     def _uow():  # pragma: no cover - must not be reached
         raise AssertionError("the tool reached the database")
 
-    monkeypatch.setattr("app.modules.agent.tools.messaging.pydantic_adapter._uow", _uow)
+    monkeypatch.setattr(
+        "app.modules.agent.infrastructure.tools.messaging.pydantic_adapter._uow", _uow
+    )
 
 
 async def test_a_name_that_resolves_to_nobody_points_at_the_lookup(monkeypatch):

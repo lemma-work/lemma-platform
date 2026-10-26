@@ -72,8 +72,8 @@ from app.modules.agent.services.mcp_pausing_calls import (
     record_pausing_tool_call,
 )
 from app.modules.agent.services.wait_wake_service import AgentWaitService
-from app.modules.agent.tools.waiting.models import WaitForRequest
-from app.modules.agent.tools.waiting.pydantic_adapter import wait_for
+from app.modules.agent.infrastructure.tools.waiting.models import WaitForRequest
+from app.modules.agent.infrastructure.tools.waiting.pydantic_adapter import wait_for
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     publish_harnesses,
     conversation_with_a_leased_run,

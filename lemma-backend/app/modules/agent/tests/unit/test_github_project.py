@@ -7,12 +7,15 @@ import pytest
 
 from app.modules.agent.domain.workspace_location import ProjectRepo
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli import github_project, workspace_cli
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    github_project,
+    workspace_cli,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecutePythonRequest,
 )
-from app.modules.agent.tools.workspace_entities import PythonExecutionResult
+from app.modules.workspace.contracts import PythonExecutionResult
 
 
 class _FakeRedis:

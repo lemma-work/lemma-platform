@@ -23,8 +23,10 @@ from app.modules.agent.capabilities.todo import build_todo_toolset
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import ConversationType
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.tools.final_answer import get_final_answer_tool
-from app.modules.agent.tools.registry import (
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_tool import (
+    get_final_answer_tool,
+)
+from app.modules.agent.infrastructure.tools.registry import (
     POD_DEFAULT_AGENT_TOOLSETS,
     _TOOLSET_BY_NAME,
 )
@@ -165,7 +167,7 @@ def test_pod_write_record_data_advertises_object_or_json_string():
     from app.modules.agent.infrastructure.providers.openai_schema_compat import (
         InlineDefsOpenAIJsonSchemaTransformer,
     )
-    from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
+    from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import pod_toolset
 
     raw = _tool_schema(pod_toolset.tools["pod_write_record"])
     assert raw is not None
@@ -176,7 +178,7 @@ def test_pod_write_record_data_advertises_object_or_json_string():
 
 
 def test_record_filter_value_is_typed_not_bare_any():
-    from app.modules.agent.tools.pod.models import RecordFilter
+    from app.modules.agent.infrastructure.tools.pod.models import RecordFilter
 
     value_schema = RecordFilter.model_json_schema()["properties"]["value"]
     # The value must carry a type-defining key (anyOf of scalars/list), not be a
@@ -243,7 +245,7 @@ def test_final_answer_tool_schema_clean_with_output_schema():
 
 
 def test_inline_tool_schema_refs_removes_defs_and_refs():
-    from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
+    from app.modules.agent.infrastructure.tools.callables import inline_tool_schema_refs
 
     # MCP tool schemas are served to remote harnesses (OpenCode/Cursor/...) whose
     # providers (e.g. Fireworks GLM) can't resolve $ref server-side, so they must

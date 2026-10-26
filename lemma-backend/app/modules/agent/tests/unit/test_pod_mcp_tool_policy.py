@@ -8,7 +8,7 @@ from app.modules.agent.services.pod_mcp_tool_policy import (
     scope_for_call,
     without_approval_envelope,
 )
-from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
+from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.mcp_access.contracts import Scope
 
 pytestmark = pytest.mark.unit

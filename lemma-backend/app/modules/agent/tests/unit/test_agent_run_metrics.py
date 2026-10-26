@@ -33,8 +33,13 @@ from app.modules.agent.services.run_metrics import (
     model_label,
 )
 from app.modules.agent.services.run_phase_spans import observe_first_output
-from app.modules.agent.tools.graceful_toolset import GracefulToolset, tool_kind_of
-from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
+from app.modules.agent.infrastructure.tools.graceful_toolset import (
+    GracefulToolset,
+    tool_kind_of,
+)
+from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
+    connectors_toolset,
+)
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import ConversationOrigin
 

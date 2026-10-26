@@ -22,7 +22,9 @@ from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.value_objects import ConversationType, HarnessKind
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.final_answer import get_final_answer_tool
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_tool import (
+    get_final_answer_tool,
+)
 
 type Toolsets = list[AbstractToolset[ToolContext]]
 type Capabilities = list[AgentCapability[ToolContext]]

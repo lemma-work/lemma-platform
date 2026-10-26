@@ -17,7 +17,7 @@
     "app/modules/agent/infrastructure/db/pauses.py::Pauses._decided_call_ids::unbounded-statement": 1,
     "app/modules/agent/infrastructure/db/pauses.py::Pauses._returned_call_ids::unbounded-statement": 1,
     "app/modules/agent/infrastructure/widget_asset_repository.py::WidgetAssetRepository.get_tool_args_for_call::unbounded-read": 1,
-    "app/modules/agent/tools/callable_tool_factory.py::AgentCallableToolFactory._load_grant_summary::unbounded-read": 1,
+    "app/modules/agent/infrastructure/tools/callables.py::AgentCallableToolFactory._load_grant_summary::unbounded-read": 1,
     "app/modules/agent_surfaces/infrastructure/adapters/routing_resolution_adapter.py::SqlAlchemySurfaceRoutingResolutionAdapter.get_user_pod_ids::unbounded-read": 1,
     "app/modules/agent_surfaces/infrastructure/repositories/surface_routing_sql.py::active_surfaces_of_type::unbounded-statement": 1,
     "app/modules/apps/infrastructure/repositories.py::AppRepository.list_releases::unbounded-read": 1,

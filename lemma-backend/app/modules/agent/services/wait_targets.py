@@ -25,7 +25,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
 )
 from app.modules.agent.domain.wait import AgentWaitType, AgentWaitWakeReason
-from app.modules.agent.tools.waiting.models import wake_message
+from app.modules.agent.infrastructure.tools.waiting.models import wake_message
 
 logger = get_logger(__name__)
 

@@ -18,7 +18,7 @@ import pytest
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
-from app.modules.agent.tools.speech.provider import SpeechProviderError
+from app.modules.agent.infrastructure.tools.speech.provider import SpeechProviderError
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
@@ -382,7 +382,7 @@ async def test_a_speaker_the_pod_cannot_place_is_not_reported_as_a_member():
 
 
 async def test_transcribe_voice_attachments_joins_caption_and_voice(monkeypatch):
-    import app.modules.agent.tools.speech.provider as speech_provider
+    import app.modules.agent.infrastructure.tools.speech.provider as speech_provider
 
     class _Result:
         text = "schedule a meeting tomorrow"
@@ -447,7 +447,7 @@ async def test_transcribe_voice_attachments_joins_caption_and_voice(monkeypatch)
     ids=["declared_failure", "undeclared_failure"],
 )
 async def test_transcribe_voice_falls_back_when_provider_fails(monkeypatch, failure):
-    import app.modules.agent.tools.speech.provider as speech_provider
+    import app.modules.agent.infrastructure.tools.speech.provider as speech_provider
 
     class _Provider:
         async def transcribe(self, audio_bytes, *, mime, language=None):

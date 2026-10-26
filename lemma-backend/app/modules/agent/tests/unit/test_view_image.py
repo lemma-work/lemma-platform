@@ -8,12 +8,14 @@ from pydantic_ai import BinaryContent, ToolReturn
 
 from app.core.domain.errors import DomainError
 from app.core.file_types import sniff_image_mime
-from app.modules.agent.tools.file_access import (
+from app.modules.agent.infrastructure.tools.file_access import (
     _best_mime,
     read_workspace_file_bytes,
 )
-from app.modules.agent.tools.workspace_cli import view_image as workspace_cli
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    view_image as workspace_cli,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ViewImageRequest,
     ViewImageResponse,
 )

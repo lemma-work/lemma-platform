@@ -27,8 +27,10 @@ from app.modules.agent.capabilities.open_questions import (
 )
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.messaging.answer import answer_question
-from app.modules.agent.tools.messaging.models import AnswerQuestionRequest
+from app.modules.agent.infrastructure.tools.messaging.answer import answer_question
+from app.modules.agent.infrastructure.tools.messaging.models import (
+    AnswerQuestionRequest,
+)
 from app.modules.channels.contracts import (
     ChannelMessage,
     Principal,

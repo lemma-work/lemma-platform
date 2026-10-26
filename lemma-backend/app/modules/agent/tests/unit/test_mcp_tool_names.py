@@ -25,12 +25,12 @@ from app.modules.agent.infrastructure.mcp import (
     normalize_local_mcp_tool_name,
     resource_tool_name,
 )
-from app.modules.agent.tools.callable_tool_factory import (
+from app.modules.agent.infrastructure.tools.callables import (
     AgentCallableToolFactory,
     distinct_tool_names,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.infrastructure.tools.dispatcher import AgentToolDispatcher
 
 # What Claude and OpenAI accept as a tool name.
 _PROVIDER_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")

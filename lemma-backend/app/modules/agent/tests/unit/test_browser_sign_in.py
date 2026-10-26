@@ -15,15 +15,15 @@ from app.modules.agent.domain.pausing_tools import (
     PAUSING_TOOL_NAMES,
     USER_PAUSING_TOOL_NAMES,
 )
-from app.modules.agent.tools.browser.models import (
+from app.modules.agent.infrastructure.tools.browser.models import (
     BrowserSignInRequest,
     BrowserSignInResponse,
 )
-from app.modules.agent.tools.browser.sign_in import (
+from app.modules.agent.infrastructure.tools.browser.sign_in import (
     SIGN_IN_TOOL_NAME,
     sign_in_internal,
 )
-from app.modules.agent.tools.tool_errors import (
+from app.modules.agent.infrastructure.tools.tool_errors import (
     AgentInputRequired,
     is_control_flow_exception,
 )
@@ -115,7 +115,7 @@ def patched(monkeypatch):
             return _AUTHORITY
 
         monkeypatch.setattr(
-            "app.modules.agent.tools.authority.tool_authorization_context",
+            "app.modules.agent.infrastructure.tools.authority.tool_authorization_context",
             _authority,
         )
 

@@ -85,9 +85,13 @@ from app.modules.agent.infrastructure.providers.model_factory import (
 from app.modules.agent.infrastructure.providers.summarization import (
     lazy_compaction_target,
 )
-from app.modules.agent.tools.final_answer.final_answer_text import final_answer_text
-from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
-from app.modules.agent.tools.tool_errors import AgentInputRequired
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_text import (
+    final_answer_text,
+)
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_tool import (
+    FinalAgentResult,
+)
+from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 

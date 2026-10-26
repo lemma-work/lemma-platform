@@ -23,7 +23,7 @@ from app.modules.agent.domain.run_origin import run_origin
 from app.modules.agent.domain.value_objects import ConversationOrigin
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
-from app.modules.agent.tools.toolset_selection import is_sub_agent_run
+from app.modules.agent.infrastructure.tools.toolset_selection import is_sub_agent_run
 
 pytestmark = [pytest.mark.e2e]
 

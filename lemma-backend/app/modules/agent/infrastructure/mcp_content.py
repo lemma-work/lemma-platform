@@ -19,7 +19,7 @@ from typing import Any
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic_ai import ToolReturn
 
-from app.modules.agent.tools.tool_errors import (
+from app.modules.agent.infrastructure.tools.tool_errors import (
     format_tool_error,
     result_is_failure,
 )

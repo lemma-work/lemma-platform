@@ -47,12 +47,12 @@ from app.modules.agent.infrastructure.mcp import (
     LEMMA_MCP_SERVER_NAME,
     exported_tool_name,
 )
-from app.modules.agent.tools.final_answer.final_answer_toolset import (
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_TOOL_NAME,
 )
 
 
-from app.modules.agent.tools.skills.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.skills.pydantic_adapter import (
     LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
     SKILL_RUNTIME_OVERRIDES,
 )

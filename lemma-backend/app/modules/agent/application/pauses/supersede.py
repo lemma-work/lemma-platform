@@ -111,7 +111,7 @@ class SupersedeStalePauses:
             AgentConversationWaitRepository,
         )
         from app.modules.agent.services.wait_timers import disarm_wait
-        from app.modules.agent.tools.waiting.models import (
+        from app.modules.agent.infrastructure.tools.waiting.models import (
             build_wait_result,
             elapsed_seconds,
         )

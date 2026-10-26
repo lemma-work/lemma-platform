@@ -9,7 +9,10 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher, UnknownToolError
+from app.modules.agent.infrastructure.tools.dispatcher import (
+    AgentToolDispatcher,
+    UnknownToolError,
+)
 
 
 async def echo_tool(ctx: RunContext[ToolContext], value: int) -> dict:

@@ -33,12 +33,12 @@ from app.modules.agent.tests.e2e.pod_link_helpers import (
 )
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.pod.models import (
+from app.modules.agent.infrastructure.tools.pod.models import (
     PodGetRecordsRequest,
     PodTablesRequest,
     QueryRequest,
 )
-from app.modules.agent.tools.pod.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import (
     pod_get_records,
     pod_query,
     pod_tables,

@@ -103,7 +103,9 @@ async def resolve_agent(
     if agent.kind is AgentKind.POD_DEFAULT:
         # Lazy import: the registry imports the subagents toolset, which imports
         # the conversation service — importing it at module load would cycle.
-        from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
+        from app.modules.agent.infrastructure.tools.registry import (
+            POD_DEFAULT_AGENT_TOOLSETS,
+        )
 
         return agent.model_copy(
             update={

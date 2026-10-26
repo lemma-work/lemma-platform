@@ -27,8 +27,8 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.file_access import is_datastore_path
-from app.modules.agent.tools.pod.pod_data_access import pod_services
+from app.modules.agent.infrastructure.tools.file_access import is_datastore_path
+from app.modules.agent.infrastructure.tools.pod.pod_data_access import pod_services
 
 
 @dataclass(frozen=True, slots=True)

@@ -457,7 +457,9 @@ def _fragment_toolsets(
     if run_toolsets is None:
         # A context the run-context builder did not make; resolve the same way
         # it does, minus grants it cannot see.
-        from app.modules.agent.tools.toolset_selection import resolve_toolset_names
+        from app.modules.agent.infrastructure.tools.toolset_selection import (
+            resolve_toolset_names,
+        )
 
         run_toolsets, _ = resolve_toolset_names(
             None if conversation.is_pod_assistant else agent, conversation

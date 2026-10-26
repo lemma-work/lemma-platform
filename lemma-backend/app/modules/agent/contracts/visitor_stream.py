@@ -29,7 +29,7 @@ from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.live import live_events
-from app.modules.agent.tools.form_tools import FILL_FORM_TOOL
+from app.modules.agent.infrastructure.tools.form import FILL_FORM_TOOL
 
 __all__ = [
     "COULD_NOT_ANSWER_VISITOR",

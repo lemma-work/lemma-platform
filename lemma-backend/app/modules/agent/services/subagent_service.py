@@ -23,7 +23,7 @@ from uuid import UUID
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.tools.authority import tool_authorization_context
+from app.modules.agent.infrastructure.tools.authority import tool_authorization_context
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,

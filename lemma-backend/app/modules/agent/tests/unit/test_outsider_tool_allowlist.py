@@ -34,20 +34,27 @@ from app.modules.agent.domain.outsiders import (
     refuse_owner_workspace,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.tools import registry
-from app.modules.agent.tools.contact_tools import build_contact_toolset
-from app.modules.agent.tools.form_tools import build_form_toolset
+from app.modules.agent.infrastructure.tools import registry
+from app.modules.agent.infrastructure.tools.contact import build_contact_toolset
+from app.modules.agent.infrastructure.tools.form import build_form_toolset
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher, UnknownToolError
-from app.modules.agent.tools.outsider_tools import (
+from app.modules.agent.infrastructure.tools.dispatcher import (
+    AgentToolDispatcher,
+    UnknownToolError,
+)
+from app.modules.agent.infrastructure.tools.outsider_tools import (
     OUTSIDER_TOOL_NAMES,
     OUTSIDER_TOOLS_WITHHELD,
 )
-from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
-from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.web.pydantic_adapter import (
+    web_search_toolset,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
     workspace_cli_toolset,
 )
-from app.modules.agent.tools.workspace_cli.workspace_cli import get_workspace_session
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+    get_workspace_session,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -125,7 +132,7 @@ def _stranger_deps(**overrides) -> ToolContext:
 async def test_an_assembled_strangers_run_is_offered_only_the_allow_list(monkeypatch):
     """Through the real assemblers and the gate, as the harness builds a run."""
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+    from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
 
     deps = _stranger_deps()
     conversation = SimpleNamespace(
@@ -175,7 +182,7 @@ async def test_a_contact_is_offered_their_own_rows_only_where_they_alone_read_it
     conversation_kind, offered
 ):
     """In a group, everybody in it would read what the agent quoted back."""
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+    from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
 
     deps = _stranger_deps()
     conversation = SimpleNamespace(

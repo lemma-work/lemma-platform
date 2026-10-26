@@ -10,13 +10,13 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.tools.browser.vm_browser import (
+from app.modules.agent.infrastructure.tools.browser.vm_browser import (
     BrowserCommandRequest,
     browser_argv,
     browser_command_internal,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.file_access import _on_the_host
+from app.modules.agent.infrastructure.tools.file_access import _on_the_host
 from app.modules.workspace.contracts.host_execution import HostWorkspace
 
 

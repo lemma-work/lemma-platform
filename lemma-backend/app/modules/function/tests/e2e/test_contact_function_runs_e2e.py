@@ -36,7 +36,7 @@ from app.core.authorization.function_run import (
     mint_function_run_token,
 )
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.tools.contact_tools import (
+from app.modules.agent.infrastructure.tools.contact import (
     ContactFunctionRequest,
     build_contact_toolset,
 )

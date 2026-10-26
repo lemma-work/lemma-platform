@@ -7,7 +7,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.tools.form_tools import FillFormRequest, build_form_toolset
+from app.modules.agent.infrastructure.tools.form import (
+    FillFormRequest,
+    build_form_toolset,
+)
 from app.modules.datastore.contracts.public_rows import (
     OpenTable,
     PublicAudience,

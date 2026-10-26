@@ -80,8 +80,10 @@ from app.modules.agent.infrastructure.harnesses.agent_host.final_answer_stream i
     final_answer_metadata,
     infer_final_answer,
 )
-from app.modules.agent.tools.final_answer.final_answer_text import final_answer_text
-from app.modules.agent.tools.final_answer.final_answer_toolset import (
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_text import (
+    final_answer_text,
+)
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_MARKER,
 )
 

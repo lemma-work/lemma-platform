@@ -51,7 +51,9 @@ from app.modules.agent.domain.workspace_location import (
     pod_cwd_from_workspace_cwd,
     resolve_workspace_location,
 )
-from app.modules.agent.tools.toolset_selection import NEW_AGENT_DEFAULT_TOOLSETS
+from app.modules.agent.infrastructure.tools.toolset_selection import (
+    NEW_AGENT_DEFAULT_TOOLSETS,
+)
 
 
 class AgentResourcePermissionRequest(BaseModel):

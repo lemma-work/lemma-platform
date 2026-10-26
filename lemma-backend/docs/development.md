@@ -183,7 +183,7 @@ the person** — their own permissions, nothing more, and nothing standing
 afterwards. Only the conversation's owner can approve (`ApprovalNotOwnedError`
 otherwise), because it is their authority being lent. The approval travels as
 an explicit `ApprovedExecution` on the tool context, and every tool gets its
-authorization from `app/modules/agent/tools/authority.py`
+authorization from `app/modules/agent/infrastructure/tools/authority.py`
 (`tool_authorization_context` for in-process tools, `workspace_principal` for
 sandbox sessions). Never build a delegated context in a tool directly —
 `test_tool_authority` fails if you do, because a second builder would not know

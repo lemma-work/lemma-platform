@@ -52,7 +52,7 @@ from app.modules.agent.services.wait_targets import (
     read_subagent_in,
     read_target,
 )
-from app.modules.agent.tools.waiting.models import (
+from app.modules.agent.infrastructure.tools.waiting.models import (
     build_wait_result,
     elapsed_seconds,
     next_poll_delay,

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-_TOOLS = Path(__file__).resolve().parents[2] / "tools"
+_TOOLS = Path(__file__).resolve().parents[2] / "infrastructure" / "tools"
 _PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 
 _MODEL_FACING = [

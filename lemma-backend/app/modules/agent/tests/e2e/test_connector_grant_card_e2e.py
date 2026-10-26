@@ -30,11 +30,13 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     seeded_conversation,
     uow_factory,
 )
-from app.modules.agent.tools.approval.executor import ApprovalExecutor
-from app.modules.agent.tools.approval_denials import show_card
-from app.modules.agent.tools.authority import workload_actor_id
-from app.modules.agent.tools.connectors.models import RunConnectorOperationRequest
-from app.modules.agent.tools.connectors.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.approval.executor import ApprovalExecutor
+from app.modules.agent.infrastructure.tools.approval.denials import show_card
+from app.modules.agent.infrastructure.tools.authority import workload_actor_id
+from app.modules.agent.infrastructure.tools.connectors.models import (
+    RunConnectorOperationRequest,
+)
+from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
     run_connector_operation,
 )
 from app.modules.agent.domain.context import ToolContext

@@ -18,7 +18,7 @@ from app.modules.agent.domain.workspace_location import (
     resolve_workspace_location,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli.workspace_cli import (
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     workspace_runtime_context,
 )
 from sandbox_runtime.paths import WORKSPACE_ROOT

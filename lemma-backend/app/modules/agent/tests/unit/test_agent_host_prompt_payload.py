@@ -759,7 +759,7 @@ class TestReplayedHistory:
         from app.modules.agent.infrastructure.harnesses.remote_payload import (
             _history_tool_result,
         )
-        from app.modules.agent.tools.skills.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.skills.pydantic_adapter import (
             LOCAL_WORKSPACE_SKILL_OVERRIDE,
             LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
         )
@@ -792,7 +792,7 @@ class TestReplayedHistory:
         from app.modules.agent.infrastructure.harnesses.remote_payload import (
             _history_tool_result,
         )
-        from app.modules.agent.tools.skills.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.skills.pydantic_adapter import (
             LOCAL_WORKSPACE_SKILL_OVERRIDE,
             LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
         )

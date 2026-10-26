@@ -46,17 +46,17 @@ from app.modules.agent.services.mcp_pausing_calls import (
     is_pausing_tool,
     record_pausing_tool_call,
 )
-from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
+from app.modules.agent.infrastructure.tools.callables import inline_tool_schema_refs
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher
-from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.infrastructure.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.infrastructure.tools.toolset_selection import AgentGrantSummary
 from app.modules.agent.services.run_session_relay import (
     RunInputsCache,
     load_relayed_session,
     recorded_native_commands_for,
     run_inputs_cache,
 )
-from app.modules.agent.tools.tool_errors import (
+from app.modules.agent.infrastructure.tools.tool_errors import (
     is_control_flow_exception,
 )
 

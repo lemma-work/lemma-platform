@@ -11,10 +11,14 @@ import pytest
 from app.core.authorization.current import get_current_context
 from app.modules.agent.domain.workspace_location import ProjectRepo
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
-from app.modules.agent.tools.workspace_cli import github_project
-from app.modules.agent.tools.workspace_cli import workspace_cli
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    github_credential_bridge as bridge,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli import github_project
+from app.modules.agent.infrastructure.tools.workspace_cli import workspace_cli
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandRequest,
+)
 from app.core.domain.errors import DomainError
 from app.modules.connectors.contracts.pod_connectors import (
     ConnectionRequiredError,

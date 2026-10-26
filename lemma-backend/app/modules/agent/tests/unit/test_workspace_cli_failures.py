@@ -6,9 +6,14 @@ import pytest
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli import helper as workspace_helper
-from app.modules.agent.tools.workspace_cli import process_visibility, workspace_cli
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    helper as workspace_helper,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    process_visibility,
+    workspace_cli,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ListProcessesRequest,
     TerminateProcessRequest,
@@ -452,7 +457,7 @@ class TestCommandOutputIsAlwaysBounded:
         )
 
     def test_the_default_non_tty_path_is_capped(self) -> None:
-        from app.modules.agent.tools.workspace_cli.helper import (
+        from app.modules.agent.infrastructure.tools.workspace_cli.helper import (
             CHARACTER_LIMIT_STDOUT,
         )
 
@@ -464,7 +469,7 @@ class TestCommandOutputIsAlwaysBounded:
     def test_truncation_says_so(self) -> None:
         """Silently keeping the tail reads as a complete log, so an agent
         reports 'no errors' for a build whose errors scrolled off."""
-        from app.modules.agent.tools.workspace_cli.helper import (
+        from app.modules.agent.infrastructure.tools.workspace_cli.helper import (
             CHARACTER_LIMIT_STDOUT,
         )
 
@@ -474,7 +479,7 @@ class TestCommandOutputIsAlwaysBounded:
 
     def test_the_end_is_what_survives(self) -> None:
         """A build's errors are at the bottom."""
-        from app.modules.agent.tools.workspace_cli.helper import (
+        from app.modules.agent.infrastructure.tools.workspace_cli.helper import (
             CHARACTER_LIMIT_STDOUT,
         )
 
@@ -485,7 +490,7 @@ class TestCommandOutputIsAlwaysBounded:
 
     def test_stderr_gets_its_own_smaller_limit(self) -> None:
         """`CHARACTER_LIMIT_STDERR` existed and this path passed the stdout one."""
-        from app.modules.agent.tools.workspace_cli.helper import (
+        from app.modules.agent.infrastructure.tools.workspace_cli.helper import (
             CHARACTER_LIMIT_STDERR,
             CHARACTER_LIMIT_STDOUT,
         )

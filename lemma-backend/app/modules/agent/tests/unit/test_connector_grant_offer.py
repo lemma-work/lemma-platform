@@ -13,8 +13,10 @@ from uuid import uuid4
 import pytest
 
 from app.core.domain.errors import DomainError
-from app.modules.agent.tools.approval.grant_outcome import confer_offered_grant
-from app.modules.agent.tools.connectors.grant_offer import (
+from app.modules.agent.infrastructure.tools.approval.grant_outcome import (
+    confer_offered_grant,
+)
+from app.modules.agent.infrastructure.tools.connectors.grant_offer import (
     connector_grant_offer,
     grant_card_title,
 )

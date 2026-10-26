@@ -121,7 +121,7 @@ class ResumeToolReturnBuilder:
         tool_call_id: str | None = None,
     ) -> tuple[str, object]:
         """Return ``(tool_name, tool_result)`` for the synthesized resume message."""
-        from app.modules.agent.tools.user_interaction.models import (
+        from app.modules.agent.infrastructure.tools.user_interaction.models import (
             AskUserResponse,
             RequestApprovalResponse,
         )
@@ -282,7 +282,9 @@ class ResumeToolReturnBuilder:
         keeps its own profile, so finishing a sign-in is the person finishing
         it, and there is nothing left here to fail.
         """
-        from app.modules.agent.tools.browser.models import BrowserSignInResponse
+        from app.modules.agent.infrastructure.tools.browser.models import (
+            BrowserSignInResponse,
+        )
 
         origin = str(tool_args.get("origin") or "")
 
@@ -371,7 +373,7 @@ class ResumeToolReturnBuilder:
         from app.core.infrastructure.db.session import async_session_maker
         from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
         from app.modules.agent.services.run_session import RunSession
-        from app.modules.agent.tools.callable_tool_factory import (
+        from app.modules.agent.infrastructure.tools.callables import (
             AgentCallableToolFactory,
         )
 

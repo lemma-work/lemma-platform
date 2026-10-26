@@ -13,9 +13,13 @@ import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
-from app.modules.agent.tools.workspace_cli import github_loan
-from app.modules.agent.tools.workspace_cli.github_loan import BorrowedLoan
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    github_credential_bridge as bridge,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli import github_loan
+from app.modules.agent.infrastructure.tools.workspace_cli.github_loan import (
+    BorrowedLoan,
+)
 from app.modules.connectors.contracts import sandbox_borrowers
 
 _SESSION = "session-1"

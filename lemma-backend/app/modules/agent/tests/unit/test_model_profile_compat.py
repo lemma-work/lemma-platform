@@ -50,7 +50,9 @@ from app.modules.agent.infrastructure.providers.anthropic_thinking import (
     adaptive_in_place_of_budget,
     nearest_thinking_effort,
 )
-from app.modules.agent.tools.final_answer import get_final_answer_tool
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_tool import (
+    get_final_answer_tool,
+)
 
 pytestmark = pytest.mark.unit
 

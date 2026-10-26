@@ -156,7 +156,7 @@ async def test_the_pause_survives_whatever_end_strategy_is_configured():
     changes behaviour -- it guards against the default moving back, which is
     what it was originally fixing. Under `exhaustive` the pause must hold too.
     """
-    from app.modules.agent.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
 
     async def pausing_tool(ctx: RunContext) -> str:
         raise AgentInputRequired(PAUSE_ID, "request_approval")

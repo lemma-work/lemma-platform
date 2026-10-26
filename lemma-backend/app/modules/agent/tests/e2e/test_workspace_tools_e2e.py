@@ -34,14 +34,14 @@ from app.modules.agent.tests.e2e.test_agent_e2e import (
     _post_sse,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecutePythonRequest,
     ListProcessesRequest,
     TerminateProcessRequest,
     WriteStdinRequest,
 )
-from app.modules.agent.tools.workspace_cli.workspace_cli import (
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     exec_command_internal,
     execute_python_internal,
     list_processes_internal,

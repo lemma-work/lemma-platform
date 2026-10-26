@@ -20,9 +20,12 @@ from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
 from app.modules.agent.services import pod_mcp_service as pod_mcp_module
 from app.modules.agent.services.pod_mcp_service import PodMCPService
-from app.modules.agent.tools.approval.executor import ApprovalExecutor
+from app.modules.agent.infrastructure.tools.approval.executor import ApprovalExecutor
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher, UnknownToolError
+from app.modules.agent.infrastructure.tools.dispatcher import (
+    AgentToolDispatcher,
+    UnknownToolError,
+)
 
 
 def _ctx(conversation_id, pod_id, user_id) -> ToolContext:
@@ -131,7 +134,7 @@ async def test_approval_executor_returns_error_on_tool_failure(monkeypatch):
             return SimpleNamespace(agent_id=None, metadata={})
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.approval.executor.Conversations",
+        "app.modules.agent.infrastructure.tools.approval.executor.Conversations",
         _FakeConvRepo,
     )
 

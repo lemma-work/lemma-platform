@@ -29,7 +29,7 @@ from pydantic_ai.exceptions import (
     UsageLimitExceeded,
 )
 
-from app.modules.agent.tools.tool_errors import AgentInputRequired
+from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
 from app.core.domain.errors import DomainError
 
 __all__ = [

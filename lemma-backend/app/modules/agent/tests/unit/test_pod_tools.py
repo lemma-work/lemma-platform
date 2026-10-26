@@ -20,10 +20,10 @@ from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.pod import pod_common
-from app.modules.agent.tools.pod import pod_file_tools as pod_files
-from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
-from app.modules.agent.tools.pod.models import (
+from app.modules.agent.infrastructure.tools.pod import pod_common
+from app.modules.agent.infrastructure.tools.pod import pod_file_tools as pod_files
+from app.modules.agent.infrastructure.tools.pod import pydantic_adapter as pod_adapter
+from app.modules.agent.infrastructure.tools.pod.models import (
     GetFileUrlRequest,
     PodGetRecordsRequest,
     QueryRequest,
@@ -34,7 +34,7 @@ from app.modules.agent.tools.pod.models import (
     SearchFilesRequest,
     ViewDocumentPagesRequest,
 )
-from app.modules.agent.tools.registry import resolve_agent_toolsets
+from app.modules.agent.infrastructure.tools.registry import resolve_agent_toolsets
 from app.modules.datastore.domain.errors import DatastoreConflictError
 
 
@@ -1008,7 +1008,10 @@ def _edit_services(stored: list[bytes], checksums: list[str]) -> SimpleNamespace
 async def test_pod_edit_file_reapplies_to_what_the_file_says_now(monkeypatch):
     """Somebody saved between the read and the write: the edit lands on their
     version rather than writing the stale one over it."""
-    from app.modules.agent.tools.pod.models import FileEdit, PodEditFileRequest
+    from app.modules.agent.infrastructure.tools.pod.models import (
+        FileEdit,
+        PodEditFileRequest,
+    )
 
     services = _edit_services(
         [b"# Draft\n\nold line\n", b"# Draft\n\nold line\n\nadded by a person\n"],
@@ -1031,7 +1034,10 @@ async def test_pod_edit_file_reapplies_to_what_the_file_says_now(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pod_edit_file_writes_nothing_while_the_file_keeps_changing(monkeypatch):
-    from app.modules.agent.tools.pod.models import FileEdit, PodEditFileRequest
+    from app.modules.agent.infrastructure.tools.pod.models import (
+        FileEdit,
+        PodEditFileRequest,
+    )
 
     services = _edit_services([b"# Draft\n"] * 3, ["a", "b", "c"])
     moving = iter(["b", "c", "d"])

@@ -67,7 +67,7 @@ from app.modules.agent.infrastructure.harnesses.remote_payload import (
     token_expires_at,
 )
 from app.modules.agent.infrastructure.mcp import exported_tool_name
-from app.modules.agent.tools.final_answer.final_answer_toolset import (
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_TOOL_NAME,
     final_answer_expected,
 )

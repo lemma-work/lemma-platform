@@ -9,14 +9,14 @@ from app.modules.agent.infrastructure.harness.lemma.run_options import (
 )
 import pytest
 
-import app.modules.agent.tools.user_interaction.pydantic_adapter as user_interaction_adapter
+import app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter as user_interaction_adapter
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.prompt.templates import build_agent_instructions
 from app.modules.agent.domain.prompt.run_context import task_list_section
-from app.modules.agent.tools.toolset_selection import (
+from app.modules.agent.infrastructure.tools.toolset_selection import (
     AgentGrantSummary,
     resolve_toolset_names,
 )
@@ -41,36 +41,48 @@ from app.modules.agent.domain.runtime_history import (
     FULL_HISTORY_AGENT_RUN_COUNT,
     select_runtime_history,
 )
-from app.modules.agent.tools.callable_tool_factory import (
+from app.modules.agent.infrastructure.tools.callables import (
     AgentCallableToolFactory,
     inline_schema,
     normalize_json_schema,
     _schema_preview,
 )
-from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
-from app.modules.agent.tools.pod import pod_toolset
-from app.modules.agent.tools.skills import skills_toolset
-from app.modules.agent.tools.registry import (
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_tool import (
+    FinalAgentResult,
+)
+from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import pod_toolset
+from app.modules.agent.infrastructure.tools.skills.pydantic_adapter import (
+    skills_toolset,
+)
+from app.modules.agent.infrastructure.tools.registry import (
     POD_DEFAULT_AGENT_TOOLSETS,
     resolve_agent_toolsets,
 )
-from app.modules.agent.tools.user_interaction import user_interaction_toolset
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
+    user_interaction_toolset,
+)
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,
     validate_display_payload,
 )
-from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
-from app.modules.agent.tools.tool_assembler import RunToolAssembler
-from app.modules.agent.tools.tool_errors import AgentInputRequired
-from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.subagents.pydantic_adapter import (
+    subagents_toolset,
+)
+from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
+from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
     ask_user,
     display_resource,
     request_approval,
 )
-from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
-from app.modules.agent.tools.workspace_cli import workspace_cli_toolset
+from app.modules.agent.infrastructure.tools.web.pydantic_adapter import (
+    web_search_toolset,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
+    workspace_cli_toolset,
+)
 from app.modules.function.domain.entities import FunctionEntity, FunctionType
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.todos import Todo
@@ -245,7 +257,7 @@ async def test_todo_reaches_an_agent_that_never_declared_it(monkeypatch):
     # and a task list is conversation-scoped scratch with no access implication —
     # so it is universal rather than a switch. The prompt still says nothing when
     # the conversation has never planned anything.
-    from app.modules.agent.tools import callable_tool_factory as ctf
+    from app.modules.agent.infrastructure.tools import callables as ctf
 
     async def _no_dynamic(self, *, agent, allow_subagents, grants=None):  # noqa: ANN001
         return []
@@ -715,7 +727,9 @@ async def test_request_approval_auto_executes_on_exact_session_match(monkeypatch
     """A request_approval call identical to one already approved for session
     runs immediately with no pause, executing the wrapped tool as the user."""
     from app.core.authorization import session_approvals
-    from app.modules.agent.tools.approval.executor import ApprovalExecutor
+    from app.modules.agent.infrastructure.tools.approval.executor import (
+        ApprovalExecutor,
+    )
 
     async def fake_has_session_approval(**kwargs):
         return True
@@ -778,7 +792,9 @@ async def test_request_approval_auto_execute_failure_reports_error(monkeypatch):
     """If the auto-executed tool itself fails, that's reported back — never a
     silent success and never a fall-through to re-pausing."""
     from app.core.authorization import session_approvals
-    from app.modules.agent.tools.approval.executor import ApprovalExecutor
+    from app.modules.agent.infrastructure.tools.approval.executor import (
+        ApprovalExecutor,
+    )
 
     async def fake_has_session_approval(**kwargs):
         return True

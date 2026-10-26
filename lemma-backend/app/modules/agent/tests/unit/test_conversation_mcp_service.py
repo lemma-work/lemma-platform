@@ -13,7 +13,7 @@ from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.infrastructure.tools.toolset_selection import AgentGrantSummary
 from app.modules.agent.domain.value_objects import ConversationOrigin
 
 
@@ -93,12 +93,12 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
     # reads them before building any tool. Same reason as the stub above:
     # this is a unit test and must not reach Postgres.
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
+        "app.modules.agent.infrastructure.tools.callables."
         "AgentCallableToolFactory.load_grant_summary",
         _no_grant_summary,
     )
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
+        "app.modules.agent.infrastructure.tools.callables."
         "AgentCallableToolFactory.build_toolsets",
         fake_callable_toolsets,
     )
@@ -161,12 +161,12 @@ async def test_conversation_mcp_exposes_todo_tools_when_agent_has_todo(monkeypat
     # reads them before building any tool. Same reason as the stub above:
     # this is a unit test and must not reach Postgres.
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
+        "app.modules.agent.infrastructure.tools.callables."
         "AgentCallableToolFactory.load_grant_summary",
         _no_grant_summary,
     )
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
+        "app.modules.agent.infrastructure.tools.callables."
         "AgentCallableToolFactory.build_toolsets",
         fake_callable_toolsets,
     )
@@ -239,12 +239,12 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
     # reads them before building any tool. Same reason as the stub above:
     # this is a unit test and must not reach Postgres.
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
+        "app.modules.agent.infrastructure.tools.callables."
         "AgentCallableToolFactory.load_grant_summary",
         _no_grant_summary,
     )
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
+        "app.modules.agent.infrastructure.tools.callables."
         "AgentCallableToolFactory.build_toolsets",
         fake_callable_toolsets,
     )
@@ -323,12 +323,12 @@ async def test_an_ordinary_tool_is_not_put_on_the_record_first(monkeypatch):
     # reads them before building any tool. Same reason as the stub above:
     # this is a unit test and must not reach Postgres.
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
+        "app.modules.agent.infrastructure.tools.callables."
         "AgentCallableToolFactory.load_grant_summary",
         _no_grant_summary,
     )
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory."
+        "app.modules.agent.infrastructure.tools.callables."
         "AgentCallableToolFactory.build_toolsets",
         fake_callable_toolsets,
     )

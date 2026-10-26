@@ -31,9 +31,11 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     seeded_conversation,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.messaging.models import ChannelPostRequest
-from app.modules.agent.tools.messaging.people import call_a_person_in
-from app.modules.agent.tools.messaging.pydantic_adapter import channel_post
+from app.modules.agent.infrastructure.tools.messaging.models import ChannelPostRequest
+from app.modules.agent.infrastructure.tools.messaging.people import call_a_person_in
+from app.modules.agent.infrastructure.tools.messaging.pydantic_adapter import (
+    channel_post,
+)
 from app.modules.agent_surfaces.services.direct_messages import tell_member
 from app.modules.channels.contracts import (
     Delivery,

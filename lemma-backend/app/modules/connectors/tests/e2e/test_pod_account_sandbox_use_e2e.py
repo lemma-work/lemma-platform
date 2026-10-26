@@ -23,7 +23,9 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    github_credential_bridge as bridge,
+)
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.repositories.account_repository import (

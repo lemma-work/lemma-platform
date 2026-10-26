@@ -15,13 +15,16 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.context import ToolContext, ApprovedExecution
-from app.modules.agent.tools.authority import workload_actor_id, workspace_principal
+from app.modules.agent.infrastructure.tools.authority import (
+    workload_actor_id,
+    workspace_principal,
+)
 from app.modules.test_support import source_tree
 
 pytestmark = pytest.mark.unit
 
 _AGENT_MODULE = Path(__file__).resolve().parents[2]
-_THE_ONE_PLACE = _AGENT_MODULE / "tools" / "authority.py"
+_THE_ONE_PLACE = _AGENT_MODULE / "infrastructure" / "tools" / "authority.py"
 
 
 def _context(**overrides) -> ToolContext:
@@ -65,7 +68,7 @@ def test_no_agent_module_builds_its_own_delegated_context() -> None:
             ):
                 offenders.append(f"{path.relative_to(_AGENT_MODULE)}:{node.lineno}")
     assert offenders == [], (
-        "build the context with app.modules.agent.tools.authority."
+        "build the context with app.modules.agent.infrastructure.tools.authority."
         f"tool_authorization_context instead: {offenders}"
     )
 

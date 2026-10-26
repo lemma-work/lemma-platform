@@ -41,12 +41,12 @@ from app.modules.agent.services.host_execution_selection import (
     triggered_by_run_user,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.browser.vm_browser import vm_browser_toolset
-from app.modules.agent.tools.tool_assembler import (
+from app.modules.agent.infrastructure.tools.browser.vm_browser import vm_browser_toolset
+from app.modules.agent.infrastructure.tools.tool_assembler import (
     RunToolAssembler,
     _for_host_execution,
 )
-from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
     is_workspace_cli_toolset,
 )
 from app.modules.workspace.contracts.host_execution import (

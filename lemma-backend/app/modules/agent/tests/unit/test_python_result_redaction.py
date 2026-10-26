@@ -8,7 +8,9 @@ emitted and reading, to the agent, like an error.
 
 from __future__ import annotations
 
-from app.modules.agent.tools.workspace_cli.helper import replace_result_if_present
+from app.modules.agent.infrastructure.tools.workspace_cli.helper import (
+    replace_result_if_present,
+)
 from app.modules.workspace.contracts.execution import PythonExecutionResult
 
 _MARKER = "[Result REDACTED as it is given in `result` field]"

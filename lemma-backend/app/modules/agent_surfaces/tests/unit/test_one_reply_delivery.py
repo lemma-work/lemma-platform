@@ -24,12 +24,12 @@ from app.modules.agent_surfaces.caches import (
     surface_caches,
 )
 
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
     DisplayResourceRequest,
     DisplayResourceResponse,
     DisplayResourceType,
 )
-from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
     _maybe_deliver_to_surface,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (

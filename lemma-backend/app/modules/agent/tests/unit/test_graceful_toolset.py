@@ -16,8 +16,8 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.graceful_toolset import GracefulToolset
-from app.modules.agent.tools.tool_errors import (
+from app.modules.agent.infrastructure.tools.graceful_toolset import GracefulToolset
+from app.modules.agent.infrastructure.tools.tool_errors import (
     format_tool_error,
     is_control_flow_exception,
 )

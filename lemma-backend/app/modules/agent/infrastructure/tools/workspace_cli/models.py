@@ -1,0 +1,321 @@
+from __future__ import annotations
+
+from typing import Literal, Optional, List
+
+from pydantic import BaseModel, Field
+
+from app.modules.agent.infrastructure.tools.responses import (
+    TOOL_COMMENT_DESC,
+    BaseToolResponse,
+)
+
+
+class ExecCommandRequest(BaseModel):
+    cmd: str = Field(description="Shell command to run, exactly as in a terminal.")
+    comment: Optional[str] = Field(
+        default=None,
+        description=TOOL_COMMENT_DESC,
+    )
+    max_output_tokens: int = Field(
+        default=10000,
+        description="Truncate stdout/stderr past this many tokens.",
+    )
+    tty: bool = Field(
+        default=False,
+        description=(
+            "Allocate an interactive terminal. Required for commands that stay "
+            "alive or wait for input (`npm run dev`, `python`). Such a process "
+            "does not survive an idle pause."
+        ),
+    )
+    cols: int = Field(
+        default=120,
+        ge=20,
+        le=500,
+        description="Terminal width for `tty` commands; widen for wide output.",
+    )
+    rows: int = Field(
+        default=40,
+        ge=5,
+        le=200,
+        description="Terminal height for `tty` commands.",
+    )
+    workdir: Optional[str] = Field(
+        default=None,
+        description="Working directory; relative paths resolve inside the workspace.",
+    )
+    yield_time_ms: Optional[int] = Field(
+        default=None,
+        description=(
+            "Return after this many milliseconds even if the command is still "
+            "running (you get its `process_id`). Defaults to 30000; when you "
+            "set `timeout_seconds` instead, the call waits that long."
+        ),
+    )
+    timeout_seconds: Optional[int] = Field(
+        default=None,
+        ge=10,
+        le=600,
+        description=(
+            "How long to wait for the command before returning, up to 600s, "
+            "instead of the default 60s. This is THIS CALL'S patience, not a "
+            "limit on the command: if the command is still running when the wait is up you "
+            "get `completed: false` and a `process_id`, and the command keeps "
+            "running in the background. Hand that id to `wait_for` rather than "
+            "raising this — waiting there costs nothing and costs no model "
+            "calls. Never re-run the command."
+        ),
+    )
+
+
+class WriteStdinRequest(BaseModel):
+    comment: Optional[str] = Field(
+        default=None,
+        description=TOOL_COMMENT_DESC,
+    )
+    process_id: str = Field(
+        description=(
+            "Interactive process ID returned by `exec_command` when the command "
+            "has not completed yet."
+        )
+    )
+    chars: Optional[str] = Field(
+        default=None,
+        description=(
+            "Characters to send to stdin. Omit this field entirely to poll "
+            "output without sending input. Include `\\n` when pressing Enter is "
+            "required. Control keys "
+            "are sent as their characters: `\\u0003` interrupts (Ctrl-C), "
+            "`\\u0004` sends EOF (Ctrl-D) to exit a REPL, and `\\u001b[A` / "
+            "`\\u001b[B` are the up and down arrows. Prefer interrupting a stuck "
+            "process over abandoning it."
+        ),
+    )
+    max_output_tokens: int = Field(
+        default=10000,
+        description=(
+            "Maximum output tokens to return for this stdin write or poll call. "
+            "Defaults to 10000."
+        ),
+    )
+    yield_time_ms: Optional[int] = Field(
+        default=None,
+        description=(
+            "How long to wait for new output after writing stdin, in milliseconds."
+        ),
+    )
+
+
+class TerminateProcessRequest(BaseModel):
+    comment: Optional[str] = Field(
+        default=None,
+        description=TOOL_COMMENT_DESC,
+    )
+    process_id: str = Field(
+        description="Process ID returned by `exec_command` for the process to stop."
+    )
+
+
+class ListProcessesRequest(BaseModel):
+    comment: Optional[str] = Field(
+        default=None,
+        description=TOOL_COMMENT_DESC,
+    )
+
+
+class ManageProcessRequest(BaseModel):
+    """Drive a process started by `exec_command` (interactive or long-running)."""
+
+    action: Literal["input", "kill", "list", "resize"] = Field(
+        description="What to do with the process."
+    )
+    process_id: Optional[str] = Field(
+        default=None,
+        description="From `exec_command`. Required for every action but 'list'.",
+    )
+    chars: Optional[str] = Field(
+        default=None,
+        description=(
+            'Stdin for action="input". Omit this field to poll output without '
+            "sending. Include `\\n` for Enter. `\\u0003` is Ctrl-C, "
+            "`\\u0004` is Ctrl-D."
+        ),
+    )
+    cols: int = Field(default=120, ge=20, le=500, description="Width, for 'resize'.")
+    rows: int = Field(default=40, ge=5, le=200, description="Height, for 'resize'.")
+    max_output_tokens: int = Field(
+        default=10000,
+        description="Truncate returned output past this many tokens.",
+    )
+    yield_time_ms: Optional[int] = Field(
+        default=None,
+        description="Milliseconds to wait for new output.",
+    )
+    comment: Optional[str] = Field(
+        default=None,
+        description=TOOL_COMMENT_DESC,
+    )
+
+
+class ExecutePythonRequest(BaseModel):
+    comment: Optional[str] = Field(
+        default=None,
+        description=TOOL_COMMENT_DESC,
+    )
+    code: str = Field(
+        description="Python code to execute in the shared task kernel. The final expression value is returned separately when available."
+    )
+    timeout_seconds: int = Field(
+        default=60,
+        ge=1,
+        le=300,
+        description=(
+            "How long to wait before giving up, up to 300s. Unlike "
+            "`exec_command` there is no handle to come back to: this runs in "
+            "the shared kernel and a timeout ends it. For work that may take "
+            "longer, run it with `exec_command` and wait for the process."
+        ),
+    )
+
+
+class ViewImageRequest(BaseModel):
+    pod_file_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Image in the pod datastore, e.g. `/me/photo.jpg`. Set this or "
+            "`workspace_file_path`, not both."
+        ),
+    )
+    workspace_file_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Image in the workspace sandbox, e.g. `images/output.png` — for "
+            "artifacts you just produced. Set this or `pod_file_path`, not both."
+        ),
+    )
+    instructions: Optional[str] = Field(
+        default=None,
+        description=(
+            "What you need from this image — 'read the axis labels', "
+            "'transcribe the table', 'describe the architecture diagram and "
+            "which way the arrows point'. Always set it: if this agent's model "
+            "cannot read images itself, this is the question a vision model "
+            "answers on your behalf, and a vague question gets a vague answer."
+        ),
+    )
+    # NB: the "exactly one path" rule is enforced in view_image_internal, not via a
+    # model_validator. A raising validator is an argument-validation error that
+    # bypasses the graceful tool-error boundary, burns the agent's retry budget,
+    # and can abort the run — so we return a structured success=False instead.
+
+
+class ExecCommandResult(BaseToolResponse):
+    stdout: Optional[str] = Field(
+        default=None,
+        description="Captured standard output from the command or interactive session.",
+    )
+    stderr: Optional[str] = Field(
+        default=None,
+        description="Captured standard error from the command or interactive session.",
+    )
+    exit_code: Optional[int] = Field(
+        default=None,
+        description="Process exit code when the command has completed.",
+    )
+    completed: bool = Field(
+        default=True,
+        description=(
+            "Whether the process has finished. `false` whenever the command "
+            "outlived this call's wait window — a long build or test run as "
+            "much as an interactive TTY session. The command is still running; "
+            "it was not cancelled."
+        ),
+    )
+    notice: Optional[str] = Field(
+        default=None,
+        description=(
+            "Something about this call that is not about the command itself — "
+            "most often that a wait you asked for was longer than one call can "
+            "give. Read it: it usually explains an empty result."
+        ),
+    )
+    process_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Handle for a process that is still running. Wait for it with "
+            "`wait_for(process_id=...)`; read its output so far or send it input "
+            "with `manage_process(action='input', process_id=...)`. Present "
+            "whenever `completed` is false."
+        ),
+    )
+
+
+class ResizeTerminalRequest(BaseModel):
+    comment: Optional[str] = Field(
+        default=None,
+        description=TOOL_COMMENT_DESC,
+    )
+    process_id: str = Field(
+        description="Interactive process ID returned by `exec_command`."
+    )
+    cols: int = Field(
+        ge=20,
+        le=500,
+        description="New terminal width in columns.",
+    )
+    rows: int = Field(
+        ge=5,
+        le=200,
+        description="New terminal height in rows.",
+    )
+
+
+class ProcessInfo(BaseModel):
+    process_id: str
+    # What the agent needs to act: which process, and whether it is still
+    # going. Everything below is descriptive.
+    completed: bool = False
+    exit_code: Optional[int] = None
+    # Populated when the provider's own process index has them (it records the
+    # command and cwd at start), and blank when the in-sandbox runtime is the
+    # source, because that tracks what is running rather than how it was asked
+    # for. Blank means "not recorded", never "no command" -- inventing one
+    # would tell an agent a process is somewhere it is not.
+    cmd: str = ""
+    cwd: str = ""
+    tty: bool = False
+    started_at: float = 0.0
+
+
+class ListProcessesResult(BaseToolResponse):
+    processes: List[ProcessInfo] = Field(
+        default_factory=list,
+        description=(
+            "Processes this conversation started, plus any unowned one running "
+            "under its working directory. A sandbox belongs to a person, not a "
+            "conversation, so this is deliberately not every process in it."
+        ),
+    )
+    note: Optional[str] = Field(
+        default=None,
+        description="Present when processes were filtered out of this listing.",
+    )
+
+
+class ViewImageResponse(BaseToolResponse):
+    file_path: Optional[str] = Field(
+        default=None,
+        description="Resolved file path of the image that was loaded.",
+    )
+    media_type: Optional[str] = Field(
+        default=None,
+        description="Detected MIME type for the returned image content.",
+    )
+    source: Optional[str] = Field(
+        default=None,
+        description="Which store served the image: 'datastore' or 'workspace'.",
+    )
+    size_bytes: Optional[int] = Field(
+        default=None,
+        description="Size of the image in bytes.",
+    )

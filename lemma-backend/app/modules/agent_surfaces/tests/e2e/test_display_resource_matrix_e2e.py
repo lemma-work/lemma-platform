@@ -49,7 +49,7 @@ from sandbox_runtime.protocol import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent.tools.user_interaction import (
+from app.modules.agent.infrastructure.tools.user_interaction import (
     pydantic_adapter as user_interaction_adapter,
 )
 from app.modules.agent_surfaces.config import surface_settings

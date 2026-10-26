@@ -2,7 +2,7 @@
 
 Offered only there. In a group it would let whoever is talking open more groups
 in a member's name, and a run answering somebody outside the pod gets no
-platform tools at all (see ``agent/tools/tool_assembler``).
+platform tools at all (see ``agent/infrastructure/tools/tool_assembler``).
 """
 
 from __future__ import annotations

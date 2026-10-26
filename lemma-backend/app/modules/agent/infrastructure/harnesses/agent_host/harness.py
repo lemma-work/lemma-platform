@@ -96,7 +96,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.stream_resume import 
 from app.modules.agent.infrastructure.agent_host.final_answer import (
     adopt_recorded_final_answer,
 )
-from app.modules.agent.tools.final_answer.final_answer_toolset import (
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
     agent_output_schema,
     final_answer_expected,
 )

@@ -32,7 +32,7 @@ from types import SimpleNamespace
 from app.modules.agent.capabilities.prompt_caching import PromptCachingCapability
 from app.modules.agent.capabilities.run_context import RunContextCapability
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.tools.registry import (
+from app.modules.agent.infrastructure.tools.registry import (
     pod_toolset,
     web_search_toolset,
     workspace_cli_toolset,
@@ -132,7 +132,7 @@ def test_agent_has_toolset_detects_todo():
 
 def test_web_search_capability_bundles_tool_and_prompt():
     from app.modules.agent.capabilities.assembler import _visible_capability
-    from app.modules.agent.tools.graceful_toolset import GracefulToolset
+    from app.modules.agent.infrastructure.tools.graceful_toolset import GracefulToolset
 
     # Built the way the assembler builds it. Web search used to have a bespoke
     # capability class that did exactly what the generic instructed path does.
@@ -158,7 +158,7 @@ def test_showing_your_work_is_taught_on_both_paths():
     """
     from app.modules.agent.capabilities.assembler import _instructions_for
     from app.modules.agent.domain.prompt.templates import FRAGMENT_BY_TOOLSET
-    from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
         user_interaction_toolset,
     )
 
@@ -198,7 +198,7 @@ def test_independent_calls_are_invited_into_one_turn_on_both_paths():
 def test_the_workspace_contract_follows_the_machine_the_commands_run_on():
     """A run whose `exec_command` is on the user's Mac is told about the Mac."""
     from app.modules.agent.capabilities.assembler import _instructions_for
-    from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
         workspace_cli_toolset,
     )
 
@@ -233,7 +233,10 @@ def test_the_memory_contract_is_written_down_exactly_once():
     the `pod_write_file` and `pod_read_file` docstrings. Two of those could
     drift from the truth without anything failing."""
     from app.modules.agent.domain.prompt.templates import load_workspace_cli_prompt
-    from app.modules.agent.tools.pod.pod_file_tools import pod_read_file, pod_write_file
+    from app.modules.agent.infrastructure.tools.pod.pod_file_tools import (
+        pod_read_file,
+        pod_write_file,
+    )
 
     for docstring in (pod_write_file.__doc__ or "", pod_read_file.__doc__ or ""):
         assert "AGENTS.md" not in docstring
@@ -889,7 +892,7 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
     from app.modules.agent.domain.context import ToolContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+    from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
@@ -971,7 +974,7 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
         InstructedToolsetCapability,
     )
     from app.modules.agent.domain.context import ToolContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+    from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
@@ -1014,8 +1017,8 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
         InstructedToolsetCapability,
     )
     from app.modules.agent.domain.context import ToolContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
-    from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
+    from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
         view_image_toolset,
     )
 
@@ -1089,7 +1092,7 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
         InstructedToolsetCapability,
     )
     from app.modules.agent.domain.context import ToolContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+    from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
@@ -1173,7 +1176,7 @@ async def test_pod_is_visible_and_names_itself_the_default_for_pod_data(monkeypa
         InstructedToolsetCapability,
     )
     from app.modules.agent.domain.context import ToolContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+    from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
@@ -1263,7 +1266,7 @@ async def test_every_deferred_group_is_labelled(monkeypatch):
     that give the model no reason to search for it.
     """
     from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+    from app.modules.agent.infrastructure.tools.registry import EXTRA_TOOLSET_OBJECTS
 
     hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))
 
@@ -1285,7 +1288,7 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
     from app.modules.agent.domain.value_objects import AgentToolset
     from app.modules.agent.domain.context import ToolContext
-    from app.modules.agent.tools.registry import resolve_agent_toolsets
+    from app.modules.agent.infrastructure.tools.registry import resolve_agent_toolsets
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
@@ -1327,7 +1330,7 @@ def test_the_deferred_hint_is_byte_stable_across_builds():
     ~300 tokens the descriptions add.
     """
     from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+    from app.modules.agent.infrastructure.tools.registry import EXTRA_TOOLSET_OBJECTS
 
     toolsets = list(EXTRA_TOOLSET_OBJECTS)
     assert build_deferred_tools_hint(toolsets) == build_deferred_tools_hint(toolsets)
@@ -1336,7 +1339,7 @@ def test_the_deferred_hint_is_byte_stable_across_builds():
 def test_tool_names_are_sorted_within_each_group():
     """Group order follows the caller's list; names within a group must not."""
     from app.modules.agent.capabilities.deferred_hint import _tool_summaries
-    from app.modules.agent.tools.registry import pod_toolset
+    from app.modules.agent.infrastructure.tools.registry import pod_toolset
 
     names = [name for name, _summary in _tool_summaries(pod_toolset)]
     assert names == sorted(names)
@@ -1345,7 +1348,7 @@ def test_tool_names_are_sorted_within_each_group():
 def test_every_deferred_tool_carries_a_description():
     """A name with no summary is the failure mode this replaced."""
     from app.modules.agent.capabilities.deferred_hint import _tool_summaries
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+    from app.modules.agent.infrastructure.tools.registry import EXTRA_TOOLSET_OBJECTS
 
     for toolset in EXTRA_TOOLSET_OBJECTS:
         for name, summary in _tool_summaries(toolset):
@@ -1359,7 +1362,7 @@ def test_the_hint_stays_within_a_token_budget():
     schemas it stands in for."""
     from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
     from app.modules.agent.infrastructure.providers.tokens import count_text_tokens
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+    from app.modules.agent.infrastructure.tools.registry import EXTRA_TOOLSET_OBJECTS
 
     hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))
     assert count_text_tokens(hint) < 900
@@ -1369,7 +1372,7 @@ def test_the_hint_does_not_name_a_provider_specific_search_tool():
     """`search_tools` is only the local fallback: on Anthropic and OpenAI the
     reveal is provider-native and no such tool exists to call."""
     from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+    from app.modules.agent.infrastructure.tools.registry import EXTRA_TOOLSET_OBJECTS
 
     hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))
     assert "search_tools" not in hint

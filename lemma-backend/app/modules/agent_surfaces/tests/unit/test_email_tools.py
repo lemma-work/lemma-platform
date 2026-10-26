@@ -43,9 +43,13 @@ async def test_ask_user_pauses_on_an_email_surface_too(platform):
     delivery cardinality -- the question has to ride in the reply -- and an
     agent facing a destructive action can now ask instead of guessing.
     """
-    from app.modules.agent.tools.tool_errors import AgentInputRequired
-    from app.modules.agent.tools.user_interaction.models import AskUserRequest
-    from app.modules.agent.tools.user_interaction.pydantic_adapter import ask_user
+    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.infrastructure.tools.user_interaction.models import (
+        AskUserRequest,
+    )
+    from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
+        ask_user,
+    )
 
     request = AskUserRequest.model_validate(
         {
@@ -70,8 +74,8 @@ async def test_request_approval_pauses_on_an_email_surface_too(platform):
     It previously either happened unapproved or silently did not happen, because
     the agent was told to pick a default and proceed.
     """
-    from app.modules.agent.tools.tool_errors import AgentInputRequired
-    from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
         request_approval,
     )
 
@@ -87,9 +91,13 @@ async def test_request_approval_pauses_on_an_email_surface_too(platform):
 @pytest.mark.asyncio
 async def test_ask_user_still_pauses_on_chat_surface():
     """The email guard must not affect chat surfaces — ask_user still pauses."""
-    from app.modules.agent.tools.tool_errors import AgentInputRequired
-    from app.modules.agent.tools.user_interaction.models import AskUserRequest
-    from app.modules.agent.tools.user_interaction.pydantic_adapter import ask_user
+    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.infrastructure.tools.user_interaction.models import (
+        AskUserRequest,
+    )
+    from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
+        ask_user,
+    )
 
     request = AskUserRequest.model_validate(
         {

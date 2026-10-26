@@ -41,8 +41,12 @@ from app.modules.agent.tests.e2e.system_lemma_helpers import (
 )
 from app.modules.test_support.e2e.worker_process import production_worker_process
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
-from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandRequest,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+    exec_command_internal,
+)
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
 
 pytestmark = [

@@ -71,19 +71,31 @@ from app.modules.agent.domain.prompt.templates import (
 )
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.services.run_phase_spans import run_phase
-from app.modules.agent.tools.graceful_toolset import GracefulToolset
-from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
-from app.modules.agent.tools.skills.pydantic_adapter import skills_toolset
-from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.graceful_toolset import GracefulToolset
+from app.modules.agent.infrastructure.tools.registry import EXTRA_TOOLSET_OBJECTS
+from app.modules.agent.infrastructure.tools.skills.pydantic_adapter import (
+    skills_toolset,
+)
+from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
     user_interaction_toolset,
 )
-from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
-from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
-from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
-from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
-from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
-from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
-from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.speech.pydantic_adapter import (
+    speech_toolset,
+)
+from app.modules.agent.infrastructure.tools.messaging.pydantic_adapter import (
+    messaging_toolset,
+)
+from app.modules.agent.infrastructure.tools.subagents.pydantic_adapter import (
+    subagents_toolset,
+)
+from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
+    connectors_toolset,
+)
+from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import pod_toolset
+from app.modules.agent.infrastructure.tools.web.pydantic_adapter import (
+    web_search_toolset,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
     is_workspace_cli_toolset,
 )
 from app.modules.agent_surfaces.contracts.platforms import platform_is_known

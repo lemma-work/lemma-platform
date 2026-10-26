@@ -30,7 +30,7 @@ from app.modules.agent.domain.wait_decision import (
     deadline_of,
     decide_wait,
 )
-from app.modules.agent.tools.waiting.models import (
+from app.modules.agent.infrastructure.tools.waiting.models import (
     POLL_CAP_SECONDS,
     POLL_START_SECONDS,
     next_poll_delay,

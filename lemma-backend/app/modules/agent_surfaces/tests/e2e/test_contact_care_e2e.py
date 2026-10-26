@@ -46,7 +46,7 @@ from app.modules.agent_surfaces.composition import (
     build_surface_turn_starter,
 )
 from app.modules.contacts.config import contacts_settings
-from app.modules.agent.tools.messaging.people import call_a_person_in
+from app.modules.agent.infrastructure.tools.messaging.people import call_a_person_in
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,

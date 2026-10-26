@@ -75,7 +75,7 @@ from app.modules.agent.services.runtime_resolution import (
     resolve_runtime,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.pod.memory_pass_tools import (
+from app.modules.agent.infrastructure.tools.pod.memory_pass_tools import (
     MemoryScope,
     memory_pass_toolset,
 )

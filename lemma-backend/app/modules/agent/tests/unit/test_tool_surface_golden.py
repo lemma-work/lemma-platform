@@ -56,9 +56,9 @@ from app.modules.agent.services.pod_mcp_service import (
     VerifiedSession,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher
-from app.modules.agent.tools.tool_assembler import RunToolAssembler
-from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.infrastructure.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
+from app.modules.agent.infrastructure.tools.toolset_selection import AgentGrantSummary
 from app.modules.mcp_access.contracts import McpPrincipal, Scope
 from app.modules.workspace.contracts.host_execution import HostWorkspace
 
@@ -245,7 +245,7 @@ def _scenarios() -> dict[str, dict[str, Any]]:
 def _stubbed_loads(monkeypatch: pytest.MonkeyPatch) -> None:
     """The reads a run's tools make while being built, answered without a database."""
     from app.modules.agent.infrastructure.repositories import AgentRepository
-    from app.modules.agent.tools.connectors import (
+    from app.modules.agent.infrastructure.tools.connectors import (
         pydantic_adapter as connectors_adapter,
     )
     from app.modules.agent_surfaces.domain.credentials import SlackCredentials
@@ -463,7 +463,7 @@ async def _standalone_toolsets() -> dict[str, Any]:
     from pydantic_ai.capabilities import Toolset
 
     from app.modules.agent.domain.agent_memory_paths import agent_memory_paths
-    from app.modules.agent.tools.pod.memory_pass_tools import (
+    from app.modules.agent.infrastructure.tools.pod.memory_pass_tools import (
         MemoryScope,
         memory_pass_toolset,
     )

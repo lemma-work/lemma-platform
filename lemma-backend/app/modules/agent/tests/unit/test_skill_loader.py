@@ -7,15 +7,17 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.tools.skills import skill_loader
-from app.modules.agent.tools.skills.skill_loader import (
+from app.modules.agent.infrastructure.tools.skills import skill_loader
+from app.modules.agent.infrastructure.tools.skills.skill_loader import (
     list_workspace_skill_resources,
     list_workspace_skills,
     read_workspace_skill,
     read_workspace_skill_resource,
 )
-from app.modules.agent.tools.skills import pydantic_adapter as skills_adapter
-from app.modules.agent.tools.skills.models import (
+from app.modules.agent.infrastructure.tools.skills import (
+    pydantic_adapter as skills_adapter,
+)
+from app.modules.agent.infrastructure.tools.skills.models import (
     SkillLookupRequest,
     SkillResourceSummary,
     SkillSummary,

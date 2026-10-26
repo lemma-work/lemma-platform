@@ -23,7 +23,7 @@ from app.mcp_server import build_pod_mcp_server
 from app.modules.agent.services.pod_mcp_service import as_mcp_tool
 from app.modules.agent.services.pod_mcp_tool_policy import POD_TOOL_POLICIES
 from app.modules.agent.services.pod_mcp_views import POD_MCP_VIEWS, TABLE_VIEW
-from app.modules.agent.tools.dispatcher import ToolInfo
+from app.modules.agent.infrastructure.tools.dispatcher import ToolInfo
 
 pytestmark = pytest.mark.unit
 

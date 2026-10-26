@@ -23,13 +23,15 @@ from fastapi import status
 from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )
-from app.modules.agent.tools.approval_denials import (
+from app.modules.agent.infrastructure.tools.approval.denials import (
     card_lends,
     lent_to_the_sandbox,
     show_card,
 )
-from app.modules.agent.tools.authority import conversation_workload_actor_id
-from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.authority import (
+    conversation_workload_actor_id,
+)
+from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
     _run_if_exact_match_already_approved,
 )
 from app.modules.test_support.e2e.function_helpers import create_table
@@ -150,7 +152,7 @@ async def test_allowing_a_script_for_the_conversation_does_not_lend_what_it_late
         return {"ok": True}
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.approval.executor.ApprovalExecutor.execute_as_user",
+        "app.modules.agent.infrastructure.tools.approval.executor.ApprovalExecutor.execute_as_user",
         run_it,
     )
 

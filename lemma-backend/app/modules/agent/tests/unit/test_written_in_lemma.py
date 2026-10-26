@@ -52,8 +52,10 @@ from app.modules.agent.domain.prompt.user_turn_text import (
 from app.modules.agent.application.turns import admit as turns
 from app.modules.agent.services.context_brief.outsider import render_outsider_brief
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.messaging.models import AskAPersonRequest
-from app.modules.agent.tools.messaging.pydantic_adapter import ask_a_person
+from app.modules.agent.infrastructure.tools.messaging.models import AskAPersonRequest
+from app.modules.agent.infrastructure.tools.messaging.pydantic_adapter import (
+    ask_a_person,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -363,7 +365,7 @@ async def test_the_keepers_own_question_is_never_passed_back_to_them(monkeypatch
         return True
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
+        "app.modules.agent.infrastructure.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(
@@ -384,7 +386,7 @@ async def test_a_strangers_run_still_calls_the_keeper_in(monkeypatch):
         return True
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
+        "app.modules.agent.infrastructure.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(

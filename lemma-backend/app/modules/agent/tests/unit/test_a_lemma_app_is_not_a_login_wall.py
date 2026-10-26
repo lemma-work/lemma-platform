@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.tools.browser.sign_in import _pod_app_slug
+from app.modules.agent.infrastructure.tools.browser.sign_in import _pod_app_slug
 
 pytestmark = pytest.mark.unit
 

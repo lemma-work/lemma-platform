@@ -21,8 +21,8 @@ from pydantic_ai.toolsets import AbstractToolset
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.tools.graceful_toolset import GracefulToolset
-from app.modules.agent.tools.messaging.answer import answer_toolset
+from app.modules.agent.infrastructure.tools.graceful_toolset import GracefulToolset
+from app.modules.agent.infrastructure.tools.messaging.answer import answer_toolset
 from app.modules.channels.contracts import (
     ChannelKind,
     ChannelMessage,

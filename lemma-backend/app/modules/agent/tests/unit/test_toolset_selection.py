@@ -13,7 +13,7 @@ import pytest
 from app.core.authorization.context import ResourceType
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import AgentToolset, ConversationOrigin
-from app.modules.agent.tools.toolset_selection import (
+from app.modules.agent.infrastructure.tools.toolset_selection import (
     ALWAYS_ON_TOOLSETS,
     DECLARABLE_TOOLSETS,
     AgentGrantSummary,
@@ -179,7 +179,9 @@ def test_an_unknown_name_on_an_old_row_is_skipped():
 def test_the_pod_default_assistant_still_gets_its_fixed_set():
     """A run with no agent is Lem, which has no grants of its own — it runs with
     the user's permissions and takes its toolsets from the default set."""
-    from app.modules.agent.tools.registry import POD_DEFAULT_AGENT_TOOLSETS
+    from app.modules.agent.infrastructure.tools.registry import (
+        POD_DEFAULT_AGENT_TOOLSETS,
+    )
 
     resolved = resolve_toolsets(None, _conversation())
 
@@ -191,7 +193,9 @@ def test_a_new_agent_starts_with_web_search_and_memory():
     two defaults are the ones every author turns on anyway; the expensive
     decisions -- a sandbox, fan-out, a voice bill -- stay off."""
     from app.modules.agent.api.schemas import CreateAgentRequest
-    from app.modules.agent.tools.toolset_selection import NEW_AGENT_DEFAULT_TOOLSETS
+    from app.modules.agent.infrastructure.tools.toolset_selection import (
+        NEW_AGENT_DEFAULT_TOOLSETS,
+    )
 
     request = CreateAgentRequest(name="scout", instruction="look things up")
 

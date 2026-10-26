@@ -42,11 +42,11 @@ from pydantic_ai.usage import RunUsage  # noqa: E402
 from app.modules.agent.capabilities.todo import build_todo_toolset  # noqa: E402
 from app.modules.agent.domain.entities import Agent  # noqa: E402
 from app.modules.agent.domain.value_objects import AgentToolset  # noqa: E402
-from app.modules.agent.tools.final_answer.final_answer_tool import (  # noqa: E402
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_tool import (  # noqa: E402
     get_final_answer_tool,
 )
-from app.modules.agent.tools.messaging.answer import answer_toolset  # noqa: E402
-from app.modules.agent.tools.registry import resolve_agent_toolsets  # noqa: E402
+from app.modules.agent.infrastructure.tools.messaging.answer import answer_toolset  # noqa: E402
+from app.modules.agent.infrastructure.tools.registry import resolve_agent_toolsets  # noqa: E402
 
 
 def _build_toolsets() -> list[tuple[str, AbstractToolset[Any]]]:

@@ -8,18 +8,19 @@ from fastapi import APIRouter, Request, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.modules.agent.infrastructure.models import AgentFeedbackModel
-from app.modules.agent.tools.feedback.models import (
+from app.modules.agent.api.tool_feedback import (
     ReportFeedbackRequest,
     ReportFeedbackResponse,
-)
-from app.modules.agent.tools.web.web import (
-    web_search_internal,
 )
 from app.core.authorization.delegation import (
     DEFAULT_POD_AGENT_ID,
     WorkloadPrincipalType,
 )
-from app.core.web_search.web_search import WebSearchRequest, WebSearchResponse
+from app.core.web_search.web_search import (
+    WebSearchRequest,
+    WebSearchResponse,
+    search_web,
+)
 
 router = APIRouter(prefix="/tools", tags=["agent-tools"])
 
@@ -58,7 +59,7 @@ def _delegated_agent_id(request: Request) -> UUID | None:
 async def web_search(
     data: WebSearchRequest,
 ) -> WebSearchResponse:
-    return await web_search_internal(None, data)
+    return await search_web(data)
 
 
 @router.post(

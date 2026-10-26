@@ -17,7 +17,7 @@ from fastapi import status
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.pod.models import (
+from app.modules.agent.infrastructure.tools.pod.models import (
     PodGetRecordsRequest,
     PodListFilesRequest,
     PodReadFileRequest,
@@ -26,12 +26,12 @@ from app.modules.agent.tools.pod.models import (
     PodWriteRecordRequest,
     RecordFilter,
 )
-from app.modules.agent.tools.pod.pod_file_tools import (
+from app.modules.agent.infrastructure.tools.pod.pod_file_tools import (
     pod_list_files,
     pod_read_file,
     pod_write_file,
 )
-from app.modules.agent.tools.pod.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import (
     pod_get_records,
     pod_tables,
     pod_write_record,
@@ -181,8 +181,12 @@ async def test_view_image_reads_a_pod_image_intact_without_leaking_bytes(
 
     from app.modules.agent.domain.vision import AgentVisionMode
     from app.modules.agent.infrastructure.mcp_content import tool_call_result
-    from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
-    from app.modules.agent.tools.workspace_cli.workspace_cli import view_image_internal
+    from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+        ViewImageRequest,
+    )
+    from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+        view_image_internal,
+    )
 
     pod_id = await _create_pod(authenticated_client, fixed_test_org)
     png = _probe_png_bytes()

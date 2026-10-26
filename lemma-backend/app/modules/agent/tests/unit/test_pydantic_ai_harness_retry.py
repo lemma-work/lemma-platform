@@ -527,7 +527,9 @@ class TestTheHarnessDoesNotBill:
     async def test_a_paused_run_reports_no_usage_event(self, monkeypatch) -> None:
         from pydantic_ai.toolsets import FunctionToolset
 
-        from app.modules.agent.tools.tool_errors import AgentInputRequired
+        from app.modules.agent.infrastructure.tools.tool_errors import (
+            AgentInputRequired,
+        )
 
         async def request_approval() -> str:
             raise AgentInputRequired("call-1", "request_approval")

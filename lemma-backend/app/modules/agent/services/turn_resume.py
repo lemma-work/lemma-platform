@@ -58,8 +58,8 @@ from app.modules.agent.domain.live_events import message_payload
 from app.modules.agent.services.run_finalizer import RunFinalizer
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.domain.live_events import message_to_payload
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher
-from app.modules.agent.tools.tool_errors import (
+from app.modules.agent.infrastructure.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.infrastructure.tools.tool_errors import (
     format_tool_error,
     is_control_flow_exception,
 )

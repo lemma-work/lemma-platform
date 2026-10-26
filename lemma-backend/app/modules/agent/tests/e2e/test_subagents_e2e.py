@@ -45,11 +45,11 @@ from app.modules.agent.tests.e2e.test_agent_e2e import (
     _post_sse,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.subagents.models import (
+from app.modules.agent.infrastructure.tools.subagents.models import (
     InteractSubagentRequest,
     QuerySubagentsRequest,
 )
-from app.modules.agent.tools.subagents.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.subagents.pydantic_adapter import (
     interact_subagent,
     query_subagents,
 )

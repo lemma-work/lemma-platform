@@ -57,11 +57,14 @@ from app.modules.agent.infrastructure.mcp import (
     exported_tool_name,
     normalize_local_mcp_tool_name,
 )
-from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
+from app.modules.agent.infrastructure.tools.callables import inline_tool_schema_refs
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher, ToolInfo
-from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
-from app.modules.agent.tools.tool_errors import (
+from app.modules.agent.infrastructure.tools.dispatcher import (
+    AgentToolDispatcher,
+    ToolInfo,
+)
+from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import pod_toolset
+from app.modules.agent.infrastructure.tools.tool_errors import (
     is_control_flow_exception,
 )
 from app.modules.mcp_access.contracts import (

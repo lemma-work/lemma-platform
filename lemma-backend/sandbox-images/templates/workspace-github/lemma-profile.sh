@@ -3,7 +3,7 @@
 #
 # The credential itself is not here. `GH_CONFIG_DIR` points at the directory
 # the credential bridge writes `hosts.yml` into
-# (app/modules/agent/tools/workspace_cli/github_credential_bridge.py), so `gh`
+# (app/modules/agent/infrastructure/tools/workspace_cli/github_credential_bridge.py), so `gh`
 # authenticates as the same account `git` does without the token ever entering
 # the environment. Exporting GH_TOKEN would put it in the environment of every
 # process the agent starts, where an ordinary `env` prints it into a tool

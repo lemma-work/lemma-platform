@@ -384,9 +384,9 @@ AGENT_HARNESS_TYPED_PATHS := \
 	app/modules/agent/services/runtime_resolution.py \
 	app/modules/agent/infrastructure/providers/summarization.py \
 	app/modules/agent/services/vision_service.py \
-	app/modules/agent/tools/graceful_toolset.py \
-	app/modules/agent/tools/registry.py \
-	app/modules/agent/tools/tool_assembler.py \
+	app/modules/agent/infrastructure/tools/graceful_toolset.py \
+	app/modules/agent/infrastructure/tools/registry.py \
+	app/modules/agent/infrastructure/tools/tool_assembler.py \
 	app/modules/agent_surfaces/contracts/egress.py \
 	app/modules/agent_surfaces/infrastructure/adapters/platform_tool_factory.py
 

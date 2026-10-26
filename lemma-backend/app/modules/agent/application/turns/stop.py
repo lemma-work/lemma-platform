@@ -40,7 +40,7 @@ from app.modules.agent.domain.live_events import message_payload
 from app.modules.agent.services.run_stop import stop_run
 from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.agent.services.wait_timers import disarm_wait
-from app.modules.agent.tools.waiting.models import (
+from app.modules.agent.infrastructure.tools.waiting.models import (
     build_wait_result,
     elapsed_seconds,
 )

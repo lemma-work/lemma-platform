@@ -14,9 +14,9 @@ from app.modules.agent.domain.calls import (
     coordinator_brief,
     worker_canvas_note,
 )
-from app.modules.agent.tools.call.models import RelayToVoiceRequest
-from app.modules.agent.tools.call.pydantic_adapter import relay_to_voice
-from app.modules.agent.tools.tool_assembler import _call_toolsets
+from app.modules.agent.infrastructure.tools.call.models import RelayToVoiceRequest
+from app.modules.agent.infrastructure.tools.call.pydantic_adapter import relay_to_voice
+from app.modules.agent.infrastructure.tools.tool_assembler import _call_toolsets
 
 pytestmark = pytest.mark.unit
 

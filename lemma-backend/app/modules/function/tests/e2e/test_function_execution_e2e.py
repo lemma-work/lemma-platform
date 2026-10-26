@@ -1014,7 +1014,7 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
 # upsert_function_for_import (bundle import), execute_function_as_workload
 # (agent-as-tool), the workflow step's dispatch and cancel_function_run
 # (workflow node control) have no HTTP surface at all -- they're built the same
-# way their real callers build them (app/modules/agent/tools/
+# way their real callers build them (app/modules/agent/infrastructure/tools/
 # callable_tool_factory.py, function/infrastructure/workflow_control.py) via
 # `build_function_use_cases`, against the live e2e database and the real Docker
 # sandbox, same pattern as test_function_sandbox_execution_e2e.py's
@@ -1105,7 +1105,7 @@ async def test_execute_function_as_workload_runs_under_the_agent_delegated_conte
     authenticated_client, test_pod, fixed_test_user, db_manager
 ):
     """``execute_function_as_workload`` is the agent-as-tool delegated path
-    (``app/modules/agent/tools/callable_tool_factory.py``): it authorizes as
+    (``app/modules/agent/infrastructure/tools/callables.py``): it authorizes as
     the delegated AGENT principal on behalf of the calling user and runs the
     sandbox with no ctx held. Drive it exactly the way the tool factory does."""
     from uuid import UUID

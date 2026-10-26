@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.tools.tool_errors import (
+from app.modules.agent.infrastructure.tools.tool_errors import (
     format_tool_error,
     safe_described_error,
     safe_error_text,
@@ -91,7 +91,9 @@ class TestTheApprovalPathsRedactToo:
         it: the redacted line was the only record, so a failing approved action
         left nothing to diagnose from."""
         from app.modules.agent.services import approval_reconciliation
-        from app.modules.agent.tools.approval import executor as approval_executor
+        from app.modules.agent.infrastructure.tools.approval import (
+            executor as approval_executor,
+        )
 
         class _Uow:
             async def commit(self) -> None:
@@ -127,9 +129,13 @@ class TestTheApprovalPathsRedactToo:
     ) -> None:
         from uuid import uuid4
 
-        from app.modules.agent.tools.approval import executor as approval_executor
+        from app.modules.agent.infrastructure.tools.approval import (
+            executor as approval_executor,
+        )
         from app.modules.agent.domain.context import ToolContext
-        from app.modules.agent.tools.user_interaction import pydantic_adapter
+        from app.modules.agent.infrastructure.tools.user_interaction import (
+            pydantic_adapter,
+        )
 
         async def _granted(**_kwargs) -> bool:
             return True

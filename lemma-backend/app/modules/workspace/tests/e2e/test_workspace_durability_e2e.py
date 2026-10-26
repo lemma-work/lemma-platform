@@ -27,8 +27,12 @@ from fastapi import status
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
-from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandRequest,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
+    exec_command_internal,
+)
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper

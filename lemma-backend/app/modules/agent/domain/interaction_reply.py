@@ -24,7 +24,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
 )
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
     AskUserQuestion,
     AskUserRequest,
 )

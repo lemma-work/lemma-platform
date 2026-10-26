@@ -55,12 +55,12 @@ from app.modules.agent.services.pod_ask_service import PodAskService
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.pod.models import (
+from app.modules.agent.infrastructure.tools.pod.models import (
     PodGetRecordsRequest,
     PodTablesRequest,
     PodWriteRecordRequest,
 )
-from app.modules.agent.tools.pod.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import (
     pod_get_records,
     pod_tables,
     pod_write_record,

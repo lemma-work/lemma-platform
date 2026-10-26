@@ -90,8 +90,8 @@ from app.modules.agent.services.runtime_resolution import (
 from app.modules.agent.services.surface_context import surface_context_for_run
 from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.callable_tool_factory import grant_summary_of
-from app.modules.agent.tools.toolset_selection import (
+from app.modules.agent.infrastructure.tools.callables import grant_summary_of
+from app.modules.agent.infrastructure.tools.toolset_selection import (
     AgentGrantSummary,
     resolve_toolset_names,
 )

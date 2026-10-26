@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.tools.browser.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.browser.pydantic_adapter import (
     BROWSER_TOOLS,
     browser_toolset,
 )

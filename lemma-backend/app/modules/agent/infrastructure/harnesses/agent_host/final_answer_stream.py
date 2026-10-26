@@ -23,7 +23,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.tools.final_answer.final_answer_toolset import (
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_MARKER,
     FINAL_ANSWER_TOOL_NAME,
 )

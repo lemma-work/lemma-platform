@@ -27,7 +27,9 @@ from app.modules.agent.capabilities.prompt_caching import (
     _ANTHROPIC_CACHE_TTL,
     PromptCachingCapability,
 )
-from app.modules.agent.tools.toolset_selection import resolve_toolset_names
+from app.modules.agent.infrastructure.tools.toolset_selection import (
+    resolve_toolset_names,
+)
 from app.modules.agent.domain.todos import Todo
 
 pytestmark = pytest.mark.unit

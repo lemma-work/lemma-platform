@@ -23,7 +23,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 
 from app.core.log.log import get_logger
-from app.modules.agent.tools.outsider_tools import outsider_may_call
+from app.modules.agent.infrastructure.tools.outsider_tools import outsider_may_call
 
 logger = get_logger(__name__)
 

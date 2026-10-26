@@ -42,17 +42,17 @@ from app.modules.agent.services.conversation_resume_return import (
 )
 from app.modules.agent.services.run_event_pump import RunOutcome
 from app.modules.agent.services.run_identity import RunIdentity
-from app.modules.agent.tools.approval.executor import ApprovalExecutor
+from app.modules.agent.infrastructure.tools.approval.executor import ApprovalExecutor
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.final_answer.final_answer_toolset import (
+from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_TOOL_NAME,
     build_final_answer_toolset,
 )
 from app.modules.agent.infrastructure.agent_host.final_answer import (
     read_final_answer,
 )
-from app.modules.agent.tools.tool_errors import AgentInputRequired
-from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
     request_approval as request_approval_tool,
 )
 from app.modules.agent.tests.e2e.system_lemma_helpers import (

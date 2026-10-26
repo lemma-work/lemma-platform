@@ -13,7 +13,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.tools.contact_tools import (
+from app.modules.agent.infrastructure.tools.contact import (
     ContactFunctionRequest,
     ContactRecordsRequest,
     build_contact_toolset,

@@ -18,7 +18,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.contracts.agent_response import AgentResponse
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,

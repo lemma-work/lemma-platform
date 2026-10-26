@@ -26,7 +26,7 @@ from app.core.ports.widget_content import (
     WidgetContentReader,
     WidgetSourceUnavailable,
 )
-from app.modules.agent.tools.user_interaction.models import widget_data
+from app.modules.agent.infrastructure.tools.user_interaction.models import widget_data
 from app.modules.agent.infrastructure.widget_asset_repository import (
     WidgetAssetRepository,
 )

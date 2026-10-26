@@ -31,7 +31,7 @@ from app.core.authorization.delegation import (
 from app.core.config import settings
 from app.core.security import PrincipalLookups
 from app.modules.agent.services.pod_mcp_service import PodMCPService, VerifiedSession
-from app.modules.agent.tools.authority import workload_principal_type
+from app.modules.agent.infrastructure.tools.authority import workload_principal_type
 
 pytestmark = pytest.mark.unit
 

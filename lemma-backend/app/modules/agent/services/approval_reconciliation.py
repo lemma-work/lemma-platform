@@ -31,7 +31,7 @@ from app.modules.agent.domain.value_objects import (
     to_json_value,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.tool_errors import safe_error_text
+from app.modules.agent.infrastructure.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -186,12 +186,14 @@ async def record_session_approvals(
         exact_command_permission_id,
         record_session_approval,
     )
-    from app.modules.agent.tools.approval_denials import (
+    from app.modules.agent.infrastructure.tools.approval.denials import (
         SANDBOX_COMMAND_TOOLS,
         answered,
         card_lends,
     )
-    from app.modules.agent.tools.authority import conversation_workload_actor_id
+    from app.modules.agent.infrastructure.tools.authority import (
+        conversation_workload_actor_id,
+    )
 
     workload_actor_id = conversation_workload_actor_id(agent_id=agent_id, pod_id=pod_id)
 
@@ -255,7 +257,9 @@ async def agent_host_permission_tool_return(
     proceeds, or does not, on its own.
     """
     # Lazy: the tool models import the tool registry, which imports back here.
-    from app.modules.agent.tools.user_interaction.models import RequestApprovalResponse
+    from app.modules.agent.infrastructure.tools.user_interaction.models import (
+        RequestApprovalResponse,
+    )
 
     host_id = await stage_agent_host_permission(
         uow, request=request, agent_run_id=agent_run_id, decision=decision
@@ -383,7 +387,9 @@ async def execute_approved_tool_as_user(
 ) -> dict[str, object]:
     """Run an approved tool outside the database transaction; never raise."""
     # Lazy to avoid importing the tool registry back through the pause use cases.
-    from app.modules.agent.tools.approval.executor import ApprovalExecutor
+    from app.modules.agent.infrastructure.tools.approval.executor import (
+        ApprovalExecutor,
+    )
 
     try:
         # Approved commands may run for minutes. Release the checked-out DB
@@ -450,7 +456,7 @@ def unconfirmed_execution_return(
     )
     # Lazy: the tool models import the tool registry, which imports back
     # through these reconciliation helpers.
-    from app.modules.agent.tools.user_interaction.models import (
+    from app.modules.agent.infrastructure.tools.user_interaction.models import (
         RequestApprovalResponse,
     )
 

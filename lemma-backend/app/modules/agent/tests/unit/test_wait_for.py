@@ -12,21 +12,21 @@ from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 
 import app.modules.agent.application.turns.stop as stops
 from app.modules.agent.domain.value_objects import ConversationStatus
-import app.modules.agent.tools.waiting.pydantic_adapter as adapter
+import app.modules.agent.infrastructure.tools.waiting.pydantic_adapter as adapter
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitStatus,
     AgentWaitType,
     AgentWaitWakeReason,
 )
-from app.modules.agent.tools.waiting.models import (
+from app.modules.agent.infrastructure.tools.waiting.models import (
     DEFAULT_TARGET_DEADLINE_SECONDS,
     MAX_WAIT_SECONDS,
     MIN_WAIT_SECONDS,
     WaitForRequest,
 )
-from app.modules.agent.tools.waiting.pydantic_adapter import wait_for
-from app.modules.agent.tools.tool_errors import AgentInputRequired
+from app.modules.agent.infrastructure.tools.waiting.pydantic_adapter import wait_for
+from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
 
 
 def _wait(**overrides) -> AgentConversationWaitEntity:

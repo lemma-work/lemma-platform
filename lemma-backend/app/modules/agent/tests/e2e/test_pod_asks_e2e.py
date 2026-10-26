@@ -50,8 +50,8 @@ from app.modules.agent.services.pod_ask_delivery import PodAskDelivery
 from app.modules.agent.services.pod_ask_service import PodAskService
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
-from app.modules.agent.tools.approval_denials import show_card
-from app.modules.agent.tools.authority import workload_actor_id
+from app.modules.agent.infrastructure.tools.approval.denials import show_card
+from app.modules.agent.infrastructure.tools.authority import workload_actor_id
 from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.scripted_model import script_text, script_tool_call
 from app.modules.test_support.e2e.waiters import eventually
@@ -61,7 +61,7 @@ from app.modules.test_support.e2e_authz import (
     invite_org_member,
     signup_user,
 )
-from app.modules.agent.tools.messaging.teammates import (
+from app.modules.agent.infrastructure.tools.messaging.teammates import (
     AskTeammateRequest,
     ask_permission_id,
     ask_teammate,

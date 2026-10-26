@@ -31,10 +31,10 @@ from app.modules.usage.domain.accounting import CONTACT_RUN, OUTSIDER_RUN
 from app.modules.agent.domain.prompt.channel_context import (
     channel_context_block as _channel_context_block,
 )
-from app.modules.agent.tools.authority import tool_authorization_context
+from app.modules.agent.infrastructure.tools.authority import tool_authorization_context
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.capabilities.assembler import _partition_core_extra
-from app.modules.agent.tools.messaging.models import (
+from app.modules.agent.infrastructure.tools.messaging.models import (
     AskAPersonRequest,
     ChannelListRequest,
     ChannelPostRequest,
@@ -42,7 +42,7 @@ from app.modules.agent.tools.messaging.models import (
     ChannelSearchRequest,
     ListPodMembersRequest,
 )
-from app.modules.agent.tools.messaging.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.messaging.pydantic_adapter import (
     ask_a_person,
     channel_list,
     channel_post,
@@ -51,7 +51,7 @@ from app.modules.agent.tools.messaging.pydantic_adapter import (
     list_pod_members,
     messaging_toolset,
 )
-from app.modules.agent.tools.toolset_selection import resolve_toolsets
+from app.modules.agent.infrastructure.tools.toolset_selection import resolve_toolsets
 
 pytestmark = pytest.mark.unit
 
@@ -252,7 +252,7 @@ async def test_calling_a_person_in_flags_the_member_who_looks_after_the_run(
         return True
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
+        "app.modules.agent.infrastructure.tools.messaging.people.call_a_person_in", _ask
     )
     deps = _deps(answers_outsider=True)
 
@@ -278,7 +278,7 @@ async def test_a_conversation_with_no_channel_says_nobody_can_be_called(monkeypa
         return False
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
+        "app.modules.agent.infrastructure.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(
@@ -297,7 +297,7 @@ async def test_a_members_run_has_nobody_to_call_in(monkeypatch):
         raise AssertionError("a member's run flagged a channel")
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.messaging.people.call_a_person_in", _ask
+        "app.modules.agent.infrastructure.tools.messaging.people.call_a_person_in", _ask
     )
 
     result = await ask_a_person(

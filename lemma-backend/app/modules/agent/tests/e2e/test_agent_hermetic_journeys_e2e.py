@@ -1904,7 +1904,7 @@ async def test_pod_skill_catalog_discovers_custom_skills_and_skips_malformed_one
     rather than failing the whole catalog, and a skill's nested resource files
     must be discoverable through the real recursive listing.
     """
-    from app.modules.agent.tools.skills.skill_loader import (
+    from app.modules.agent.infrastructure.tools.skills.skill_loader import (
         list_workspace_skill_resources,
         list_workspace_skills,
         read_workspace_skill,

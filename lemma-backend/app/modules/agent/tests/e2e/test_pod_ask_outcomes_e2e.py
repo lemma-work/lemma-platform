@@ -43,7 +43,7 @@ from app.modules.agent.tests.e2e.pod_link_helpers import (
     teammate,
 )
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
-from app.modules.agent.tools.messaging.teammates import (
+from app.modules.agent.infrastructure.tools.messaging.teammates import (
     AskTeammateRequest,
     ask_teammate,
     list_teammates,

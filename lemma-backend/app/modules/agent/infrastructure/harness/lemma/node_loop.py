@@ -49,7 +49,7 @@ from app.modules.agent.domain.run_budget_pause import (
     budget_pause_events,
     budget_pause_tool_call_id,
 )
-from app.modules.agent.tools.tool_errors import (
+from app.modules.agent.infrastructure.tools.tool_errors import (
     AgentInputRequired,
     result_is_failure,
 )

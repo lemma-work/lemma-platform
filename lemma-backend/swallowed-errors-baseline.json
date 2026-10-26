@@ -4,7 +4,7 @@
     "app/core/analytics/app_session.py::_record_app_session::debug-only-broad-catch::analytics.app_session.cache_unavailable": 1,
     "app/core/analytics/app_session.py::maybe_record_app_session::debug-only-broad-catch::analytics.app_session.record_failed": 1,
     "app/core/authorization/authorizer.py::Authorizer._describe_resource::silent-broad-catch::Exception -> return": 1,
-    "app/modules/agent/tools/skills/pydantic_adapter.py::load_skill::silent-broad-catch::Exception -> assign": 1,
+    "app/modules/agent/infrastructure/tools/skills/pydantic_adapter.py::load_skill::silent-broad-catch::Exception -> assign": 1,
     "app/modules/agent_surfaces/platforms/slack/channel_reads.py::SlackChannelReadsMixin.fetch_recent_context::debug-only-broad-catch::agent_surfaces.service.slack_fetch_recent_context_channel.diagnostic": 1,
     "app/modules/agent_surfaces/platforms/slack/service.py::SlackPlatformService.get_user_display_name::debug-only-broad-catch::agent_surfaces.service.slack_get_user_display_name.observed": 1,
     "app/modules/agent_surfaces/platforms/teams/adapter_egress.py::TeamsSurfaceEgress.stream_progress::silent-broad-catch::Exception -> return": 1,

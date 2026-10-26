@@ -14,7 +14,7 @@ from collections.abc import Sequence
 
 from pydantic_ai.capabilities import AbstractCapability
 
-from app.modules.agent.tools.registry import (
+from app.modules.agent.infrastructure.tools.registry import (
     browser_toolset,
     connectors_toolset,
     messaging_toolset,

@@ -35,19 +35,19 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )
-from app.modules.agent.tools.approval.executor import ApprovalExecutor
-from app.modules.agent.tools.approval_denials import (
+from app.modules.agent.infrastructure.tools.approval.executor import ApprovalExecutor
+from app.modules.agent.infrastructure.tools.approval.denials import (
     lent_to_the_sandbox,
     sandbox_refusals,
     show_card,
 )
-from app.modules.agent.tools.authority import (
+from app.modules.agent.infrastructure.tools.authority import (
     conversation_workload_actor_id,
     tool_authorization_context,
     workload_actor_id,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.infrastructure.tools.dispatcher import AgentToolDispatcher
 from app.modules.test_support.e2e.function_helpers import create_table
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,

@@ -195,7 +195,9 @@ class TestTheAgentCanUseATenantConnector:
     async def test_list_shows_the_pod_connector_and_whose_account_it_uses(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.pydantic_adapter import list_connectors
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
+            list_connectors,
+        )
 
         install, _org, _user = installed_connector
         result = await list_connectors(_run_context(agent_deps))
@@ -207,10 +209,10 @@ class TestTheAgentCanUseATenantConnector:
     async def test_search_finds_the_servers_own_tool(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             SearchConnectorOperationsRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
             search_connector_operations,
         )
 
@@ -228,10 +230,10 @@ class TestTheAgentCanUseATenantConnector:
     async def test_describe_returns_the_schema_the_server_published(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             DescribeConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
             describe_connector_operation,
         )
 
@@ -248,10 +250,10 @@ class TestTheAgentCanUseATenantConnector:
     async def test_running_it_returns_the_servers_answer(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
             run_connector_operation,
         )
 
@@ -274,10 +276,10 @@ class TestTheAgentCanUseATenantConnector:
         # Not an exception: an exception ends the run, whereas a structured
         # result lets the model correct itself on the next turn. The schema is
         # returned with it so it can do that without another round trip.
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
             run_connector_operation,
         )
 
@@ -301,13 +303,13 @@ class TestTheAgentCanUseATenantConnector:
         "Connector rejected the operation request" and nothing else: not which
         install, not which tool, not the server's reason. And with no
         `success: false` the failure counted as a successful tool call."""
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
             run_connector_operation,
         )
-        from app.modules.agent.tools.tool_errors import result_is_failure
+        from app.modules.agent.infrastructure.tools.tool_errors import result_is_failure
 
         install, _org, _user = installed_connector
         result = await run_connector_operation(
@@ -330,10 +332,10 @@ class TestTheAgentCanUseATenantConnector:
     async def test_an_unknown_operation_is_reported_not_raised(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
             run_connector_operation,
         )
 
@@ -357,7 +359,9 @@ class TestTheAgentCanUseATenantConnector:
         # already behave that way, and raising would end the agent's run over
         # something it can simply report.
         from app.modules.agent.domain.context import ToolContext
-        from app.modules.agent.tools.connectors.pydantic_adapter import list_connectors
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
+            list_connectors,
+        )
 
         install, _org, user_id = installed_connector
         elsewhere = uuid4()
@@ -412,10 +416,10 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
     ):
         """Refused as data, not as an exception: the toolset reports it so the
         model can say so, rather than ending the run."""
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
             run_connector_operation,
         )
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
 
@@ -450,10 +454,10 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
         sees what it may run and nothing else, so a search across connectors
         comes back empty rather than full of operations it would be refused.
         """
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
             search_connector_operations,
         )
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             SearchConnectorOperationsRequest,
         )
 
@@ -479,10 +483,10 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
     async def test_a_granted_named_agent_reaches_the_real_server(
         self, installed_connector, connector_test_pod, authenticated_client
     ):
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
             run_connector_operation,
         )
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
 

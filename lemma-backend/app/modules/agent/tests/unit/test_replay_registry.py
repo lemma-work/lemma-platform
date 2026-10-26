@@ -18,7 +18,7 @@ from app.modules.agent.domain.replay import (
     is_replayable_call,
     replay_class,
 )
-from app.modules.agent.tools.registry import _TOOLSET_BY_NAME
+from app.modules.agent.infrastructure.tools.registry import _TOOLSET_BY_NAME
 
 pytestmark = pytest.mark.unit
 

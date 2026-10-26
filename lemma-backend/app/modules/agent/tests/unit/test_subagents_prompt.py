@@ -18,7 +18,9 @@ from app.modules.agent.domain.prompt.templates import (
     load_subagents_prompt,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
+from app.modules.agent.infrastructure.tools.subagents.pydantic_adapter import (
+    subagents_toolset,
+)
 
 _FRAGMENT_HEADING = "# Sub-agents"
 

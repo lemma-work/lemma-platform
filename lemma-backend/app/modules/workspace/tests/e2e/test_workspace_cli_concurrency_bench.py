@@ -25,8 +25,10 @@ import pytest
 from fastapi import status
 
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli import workspace_cli
-from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
+from app.modules.agent.infrastructure.tools.workspace_cli import workspace_cli
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandRequest,
+)
 
 # Mostly measurement, with fixed sleeps: nightly, not a pull-request gate.
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace, pytest.mark.slow]

@@ -54,7 +54,7 @@ from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
 from app.modules.agent.services.send_window import SendWindow
-from app.modules.agent.tools.approval_denials import show_card
+from app.modules.agent.infrastructure.tools.approval.denials import show_card
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.message_state import MessageState

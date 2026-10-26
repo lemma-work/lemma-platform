@@ -118,10 +118,10 @@ async def _declared(db_session, pod_id: UUID, auth_config_id) -> list[PodConnect
 async def test_the_assistant_lists_and_runs_the_persons_own_installation(
     own_installation, db_session
 ):
-    from app.modules.agent.tools.connectors.models import (
+    from app.modules.agent.infrastructure.tools.connectors.models import (
         RunConnectorOperationRequest,
     )
-    from app.modules.agent.tools.connectors.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
         list_connectors,
         run_connector_operation,
     )
@@ -165,10 +165,10 @@ async def test_a_named_agent_is_refused_with_what_a_grant_card_needs(
     """The declaration is the same; the grant is not implied. The refusal
     names the declared connector and the agent, and the connector stays
     declared so the grant can be given on it."""
-    from app.modules.agent.tools.connectors.models import (
+    from app.modules.agent.infrastructure.tools.connectors.models import (
         RunConnectorOperationRequest,
     )
-    from app.modules.agent.tools.connectors.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
         run_connector_operation,
     )
     from app.modules.connectors.contracts.pod_connectors import (
@@ -176,7 +176,9 @@ async def test_a_named_agent_is_refused_with_what_a_grant_card_needs(
         resolve_pod_connector,
     )
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent.tools.authority import tool_authorization_context
+    from app.modules.agent.infrastructure.tools.authority import (
+        tool_authorization_context,
+    )
 
     install, _org, _user, pod_id = own_installation
     agent = await _create_agent(authenticated_client, connector_test_pod)

@@ -27,7 +27,7 @@ from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
 from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
 from app.modules.agent.infrastructure.harness.lemma import driver as pydantic_ai_driver
 from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
-from app.modules.agent.tools.tool_errors import AgentInputRequired
+from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
 
 
 class _ScopedRequestStream:

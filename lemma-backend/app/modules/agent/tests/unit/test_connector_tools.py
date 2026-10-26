@@ -17,8 +17,10 @@ from uuid import uuid4
 import pytest
 
 from app.core.domain.errors import DomainError
-from app.modules.agent.tools.connectors import pydantic_adapter as adapter
-from app.modules.agent.tools.connectors.models import (
+from app.modules.agent.infrastructure.tools.connectors import (
+    pydantic_adapter as adapter,
+)
+from app.modules.agent.infrastructure.tools.connectors.models import (
     RunConnectorOperationRequest,
     SearchConnectorOperationsRequest,
 )

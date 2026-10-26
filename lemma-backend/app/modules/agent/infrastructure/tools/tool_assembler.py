@@ -1,0 +1,351 @@
+"""Assembles the full toolset list available to an agent in a conversation.
+
+One place resolves builtin toolsets, dynamic function/agent tools, and surface
+platform tools, so the runner, the MCP services, and the approval executor all
+see the exact same tools for a given (agent, conversation).
+"""
+
+from __future__ import annotations
+
+from typing import Literal, cast
+
+from pydantic_ai.toolsets import AbstractToolset
+from app.modules.agent.domain.context import ToolContext
+
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.outsiders import Audience
+from app.modules.agent.infrastructure.tools.contact import build_contact_toolset
+from app.modules.agent.infrastructure.tools.form import build_form_toolset
+from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
+from app.modules.agent.domain.vision import AgentVisionMode
+from app.modules.agent.infrastructure.tools.callables import AgentCallableToolFactory
+from app.modules.agent.infrastructure.tools.toolset_selection import (
+    AgentGrantSummary,
+    resolve_toolset_names,
+)
+from app.modules.agent.infrastructure.tools.registry import (
+    resolve_agent_toolsets,
+)
+from app.modules.agent.services.run_phase_spans import run_phase
+from app.modules.agent.infrastructure.tools.browser.vm_browser import vm_browser_toolset
+from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
+    is_workspace_cli_toolset,
+)
+
+
+async def load_agent_grant_summary(
+    uow_factory: UnitOfWorkFactory, *, agent: Agent
+) -> AgentGrantSummary:
+    """This agent's grant summary, or an empty one where it cannot have grants.
+
+    The pod default assistant is the empty case and not an error: it has no
+    ``Agent`` row of its own, runs with the user's permissions, and takes its
+    toolsets from the fixed default set rather than from anything granted to it.
+    """
+    if agent.pod_id is None or agent.id is None:
+        return AgentGrantSummary()
+    return await AgentCallableToolFactory(uow_factory).load_grant_summary(
+        pod_id=agent.pod_id, agent_id=agent.id
+    )
+
+
+HostExecutionMode = Literal["native", "sandbox"]
+
+
+def question_toolset() -> AbstractToolset[ToolContext]:
+    """The tool that answers a question waiting on the person.
+
+    Wrapped the way the capability wraps them: the transitions they call
+    refuse by raising -- answering something already answered, or a form
+    by free text -- and that has to reach the agent as an error it can read,
+    not end its run.
+    """
+    from app.modules.agent.infrastructure.tools.graceful_toolset import GracefulToolset
+    from app.modules.agent.infrastructure.tools.messaging.answer import answer_toolset
+
+    return cast(AbstractToolset[ToolContext], GracefulToolset(answer_toolset))
+
+
+def _for_host_execution(
+    toolsets: list[AbstractToolset[ToolContext]],
+    mode: HostExecutionMode,
+) -> list[AbstractToolset[ToolContext]]:
+    """The toolsets of a run whose commands execute on the user's Mac."""
+    had_shell = any(is_workspace_cli_toolset(toolset) for toolset in toolsets)
+    if mode == "native":
+        toolsets = [t for t in toolsets if not is_workspace_cli_toolset(t)]
+    if had_shell and vm_browser_toolset not in toolsets:
+        toolsets = [*toolsets, vm_browser_toolset]
+    return toolsets
+
+
+class RunToolAssembler:
+    """Builds the ordered toolset list for an agent run / tool call."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self.uow_factory = uow_factory
+
+    async def assemble(
+        self,
+        *,
+        agent: Agent | None,
+        conversation: Conversation | None,
+        include_final_answer: bool = False,
+        vision_mode: AgentVisionMode | None = None,
+        grants: AgentGrantSummary | None = None,
+        host_execution: HostExecutionMode | None = None,
+        include_question_tools: bool = False,
+        harness_kind: HarnessKind | None = None,
+        surface_platform: str | None = None,
+    ) -> list[AbstractToolset[ToolContext]]:
+        """Every tool this (agent, conversation) can reach.
+
+        ``surface_platform`` is the platform the run talks over, from its
+        context (``surface_context_for_run``): a run asked in Lemma has none,
+        and gets no platform's tools, whichever platform its conversation was
+        last heard on.
+
+        ``include_question_tools`` adds ``answer_question`` for a run whose
+        harness reaches tools only through this list -- an Agent Host run over
+        MCP. The in-process harness gets it from its open-questions capability
+        instead, so it leaves this off rather than see it twice. ``harness_kind`` decides it for
+        the runner: any harness but the in-process one is served over MCP.
+
+        ``host_execution`` is set on a run whose commands execute on the
+        user's Mac (docs/architecture/desktop-host-execution.md §7):
+
+        * ``"native"`` -- an Agent Host run. Lemma's command tools are withheld:
+          the coding agent already has a shell and file tools in the same
+          folder on the same Mac, and two tools that do one thing in one place
+          only confuse the model.
+        * ``"sandbox"`` -- an in-process run whose ``exec_command`` runs on the
+          Mac.
+
+        Either way the browser the person watches is still in the VM, and
+        ``agent-browser`` was reached through the shell that is now elsewhere,
+        so an agent that had the workspace CLI gets the ``browser`` tool in its
+        place. Pod, connectors, ``ask_user``, ``display_resource`` and the rest
+        stay.
+
+        ``grants`` lets a caller that already loaded the agent's grant summary
+        (the runner does, to build its context brief) hand it over instead of
+        paying for the same query twice. Callers without one -- the MCP server
+        and the approval executor -- leave it unset and it is loaded here, so
+        every path still resolves the same toolsets.
+        """
+        with run_phase("tool_assembly") as span:
+            toolsets = await self._assemble(
+                agent=agent,
+                conversation=conversation,
+                include_final_answer=include_final_answer,
+                vision_mode=vision_mode,
+                grants=grants,
+                surface_platform=surface_platform,
+            )
+            if host_execution is not None:
+                toolsets = _for_host_execution(toolsets, host_execution)
+            if harness_kind is not None and harness_kind != HarnessKind.LEMMA:
+                include_question_tools = True
+            # Answering what was asked of somebody is theirs to do, in their
+            # own thread; a stranger's turn must not be able to do it for them.
+            if (
+                include_question_tools
+                and conversation is not None
+                and not Audience.of(conversation).answers_outsiders
+            ):
+                toolsets = [*toolsets, question_toolset()]
+            span.set_attribute("lemma.toolsets", len(toolsets))
+            return toolsets
+
+    def _final_answer_toolsets(
+        self,
+        *,
+        agent: Agent | None,
+        conversation: Conversation | None,
+        include_final_answer: bool,
+    ) -> list[AbstractToolset[ToolContext]]:
+        """The `final_answer` tool, on the runs that reach it as a tool.
+
+        Remote (Agent Host) runs only. The in-process LEMMA harness gets
+        `final_answer` through pydantic-ai's `output_type`, so adding it here as
+        well would expose the same tool twice -- hence opt-in from the caller
+        rather than derived from the agent, which cannot tell the two harnesses
+        apart.
+        """
+        if not include_final_answer or conversation is None:
+            return []
+        from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
+            build_final_answer_toolset,
+            final_answer_expected,
+        )
+
+        if not final_answer_expected(agent=agent, conversation=conversation):
+            return []
+        return [
+            build_final_answer_toolset(
+                agent=agent,
+                uow_factory=self.uow_factory if callable(self.uow_factory) else None,
+            )
+        ]
+
+    async def _assemble(
+        self,
+        *,
+        agent: Agent | None,
+        conversation: Conversation | None,
+        include_final_answer: bool,
+        vision_mode: AgentVisionMode | None = None,
+        grants: AgentGrantSummary | None = None,
+        surface_platform: str | None = None,
+    ) -> list[AbstractToolset[ToolContext]]:
+        if grants is None and agent is not None and callable(self.uow_factory):
+            grants = await load_agent_grant_summary(self.uow_factory, agent=agent)
+        toolset_names, allow_subagents = resolve_toolset_names(
+            agent, conversation, grants=grants
+        )
+        toolsets: list[AbstractToolset[ToolContext]] = list(
+            resolve_agent_toolsets(toolset_names)
+        )
+        # TODO is conversation-scoped (its list lives in conversation metadata), so
+        # it isn't a static singleton in the registry — build it per conversation
+        # here. Included in the assembled list so BOTH the in-process LEMMA harness
+        # and the remote MCP path expose write_todos, and only when the agent's
+        # toolsets actually include TODO.
+        if (
+            conversation is not None
+            and AgentToolset.TODO in toolset_names
+            and callable(self.uow_factory)
+        ):
+            from app.modules.agent.capabilities.todo import build_todo_toolset
+
+            toolsets.append(
+                build_todo_toolset(
+                    uow_factory=self.uow_factory,
+                    conversation_id=conversation.id,
+                )
+            )
+        # A run answering somebody outside the pod gets neither the agent's
+        # functions and sub-agents nor its surface's platform tools: a function
+        # tool runs on behalf of the conversation's user, who on such a run is
+        # the member looking after it, not the stranger asking.
+        audience = Audience.of(conversation)
+        for_outsider = audience.answers_outsiders
+        if agent is not None and callable(self.uow_factory) and not for_outsider:
+            toolsets.extend(
+                await AgentCallableToolFactory(self.uow_factory).build_toolsets(
+                    agent=agent,
+                    allow_subagents=allow_subagents,
+                    grants=grants,
+                )
+            )
+        if not for_outsider:
+            toolsets.extend(
+                await self._surface_toolsets(conversation, surface_platform)
+            )
+        toolsets.extend(self._outside_toolsets(conversation, audience))
+        toolsets.extend(_call_toolsets(conversation))
+        toolsets.extend(
+            self._final_answer_toolsets(
+                agent=agent,
+                conversation=conversation,
+                include_final_answer=include_final_answer,
+            )
+        )
+        # Not for an outsider's run: `view_image` opens files in the owner's
+        # sandbox.
+        if not for_outsider:
+            _add_view_image(toolsets, vision_mode)
+        return toolsets
+
+    def _outside_toolsets(
+        self, conversation: Conversation | None, audience: Audience
+    ) -> list[AbstractToolset[ToolContext]]:
+        """What a run answering somebody outside the pod adds: a contact's own
+        rows and functions, and filling the form on a web visitor's page.
+
+        A contact's own rows only where they alone read the answer -- their
+        private chat, email thread or web page. In a group everybody in it
+        would read what the agent quoted from them.
+        """
+        if not callable(self.uow_factory):
+            return []
+        toolsets: list[AbstractToolset[ToolContext]] = []
+        if audience.is_contact and not _in_a_group(conversation):
+            toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
+        if audience.answers_outsiders and _on_a_web_page(conversation):
+            toolsets.append(build_form_toolset(uow_factory=self.uow_factory))
+        return toolsets
+
+    async def _surface_toolsets(
+        self, conversation: Conversation | None, surface_platform: str | None
+    ) -> list[AbstractToolset[ToolContext]]:
+        """The tools the run's chat platform adds, if it talks over one."""
+        if conversation is None or not surface_platform:
+            return []
+        from app.modules.agent_surfaces.contracts.egress import (
+            build_surface_toolsets,
+        )
+
+        return await build_surface_toolsets(self.uow_factory, conversation)
+
+
+def _add_view_image(
+    toolsets: list[AbstractToolset[ToolContext]],
+    vision_mode: AgentVisionMode | None,
+) -> None:
+    """Offer `view_image` whenever the run can interpret an image at all.
+
+    Directly, or by delegating to a configured vision model, which answers in
+    text and so is safe on a text-only model.
+
+    Here rather than in the runner, because the runner is not the only
+    assembler. A remote harness reaches every tool through the MCP server, which
+    re-assembles from scratch, so appending it in the runner left `view_image`
+    unreachable on every Agent Host run whatever its vision mode -- while the
+    run spec still advertised it, because that list is the runner's copy.
+    Prompts and `web_fetch`'s own result message tell the model to use the tool
+    unconditionally.
+    """
+    if vision_mode is None or not vision_mode.can_see:
+        return
+    from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
+        view_image_toolset,
+    )
+
+    if view_image_toolset not in toolsets:
+        toolsets.append(view_image_toolset)
+
+
+def _call_toolsets(
+    conversation: Conversation | None,
+) -> list[AbstractToolset[ToolContext]]:
+    """The voice, for a live call's coordinator.
+
+    By the conversation's call mark rather than a declared toolset: an agent
+    gets it by being called, whatever it was configured with. Its sub-agents
+    show things with `display_resource` like any run, and only it speaks.
+    """
+    from app.modules.agent.domain.calls import CallRole
+
+    mark = getattr(conversation, "call", None)
+    if mark is None or mark.role is not CallRole.COORDINATOR:
+        return []
+    from app.modules.agent.infrastructure.tools.call.pydantic_adapter import (
+        coordinator_toolset,
+    )
+
+    return [cast(AbstractToolset[ToolContext], coordinator_toolset)]
+
+
+def _in_a_group(conversation: Conversation | None) -> bool:
+    """Whether the conversation lives in a chat several people read."""
+    metadata = (conversation.metadata if conversation is not None else None) or {}
+    return metadata.get("conversation_kind") == "CHANNEL"
+
+
+def _on_a_web_page(conversation: Conversation | None) -> bool:
+    """A visitor chatting on a web page, where a form may sit beside the chat."""
+    return bool(
+        conversation is not None and (conversation.metadata or {}).get("web_widget_id")
+    )

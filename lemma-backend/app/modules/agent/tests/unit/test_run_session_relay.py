@@ -13,7 +13,7 @@ from app.modules.agent.services.run_session_relay import (
     RunInputsCache,
     without_provider_config,
 )
-from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.infrastructure.tools.toolset_selection import AgentGrantSummary
 
 pytestmark = pytest.mark.unit
 

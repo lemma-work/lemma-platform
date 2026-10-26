@@ -17,10 +17,10 @@ import pytest
 from pydantic_ai import ToolReturn
 
 from app.modules.agent.domain.vision import AgentVisionMode, resolve_vision_mode
-from app.modules.agent.tools import vision_delegation
-from app.modules.agent.tools.pod import pod_common
-from app.modules.agent.tools.pod import pod_file_tools as pod_files
-from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
+from app.modules.agent.infrastructure.tools import vision_delegation
+from app.modules.agent.infrastructure.tools.pod import pod_common
+from app.modules.agent.infrastructure.tools.pod import pod_file_tools as pod_files
+from app.modules.agent.infrastructure.tools.pod.models import ViewDocumentPagesRequest
 from app.modules.agent.domain.context import ToolContext
 
 pytestmark = pytest.mark.unit
@@ -223,8 +223,12 @@ class TestViewImageRespectsTheMode:
     async def test_delegated_view_image_returns_a_description(
         self, monkeypatch
     ) -> None:
-        from app.modules.agent.tools.workspace_cli import view_image as workspace_cli
-        from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
+        from app.modules.agent.infrastructure.tools.workspace_cli import (
+            view_image as workspace_cli,
+        )
+        from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+            ViewImageRequest,
+        )
 
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 

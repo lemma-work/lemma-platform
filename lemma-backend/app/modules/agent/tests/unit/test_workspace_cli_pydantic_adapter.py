@@ -7,8 +7,10 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.usage import RunUsage
 
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.tools.workspace_cli import pydantic_adapter
-from app.modules.agent.tools.workspace_cli.models import ExecCommandResult
+from app.modules.agent.infrastructure.tools.workspace_cli import pydantic_adapter
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+    ExecCommandResult,
+)
 
 
 @pytest.mark.asyncio
@@ -23,7 +25,7 @@ async def test_workspace_cli_pydantic_wrapper_uses_docstring_description(
         )
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.workspace_cli.workspace_cli.exec_command_internal",
+        "app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli.exec_command_internal",
         fake_exec_command,
     )
     run_ctx = RunContext(

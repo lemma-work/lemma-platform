@@ -90,8 +90,8 @@ from app.modules.usage.contracts.execution import (
     usage_context_from_agent_context,
 )
 from app.modules.usage.contracts.metering import metering_execution
-from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
-from app.modules.agent.tools.tool_assembler import RunToolAssembler
+from app.modules.agent.infrastructure.tools.callables import AgentCallableToolFactory
+from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
 from app.modules.agent.services.run_input_settings import (
     run_input_text,
     with_reply_budget,
