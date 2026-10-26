@@ -63,8 +63,7 @@ on:
   # on top of the latest main. The e2e shards and the coverage floor run on the
   # pull request and again on the push to main, where a failure posts to Slack
   # (notify-failure.yml). Rerunning the shards here doubled every merge's wait
-  # -- 16 minutes median, 26 under runner contention -- and in the queue's
-  # first 16 groups they caught nothing the pull request run had not.
+  # and caught nothing the pull request run had not.
   merge_group:
     types: [checks_requested]
 
@@ -547,7 +546,7 @@ jobs:
         working-directory: lemma-frontend
         run: npx --no-install playwright install --with-deps chromium
       # Saved from main only: a pull request restores main's copy and never
-      # writes its own, which is what kept the cache over its 10 GB limit.
+      # writes its own, which kept the repository over its cache limit.
       - name: Save the app test browser
         if: (matrix.shard.catch_all || contains(matrix.shard.args, 'app/modules/apps')) && github.ref == 'refs/heads/main' && steps.app-browser-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6

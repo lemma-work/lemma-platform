@@ -94,8 +94,8 @@ updates:
       interval: monthly
       time: "04:15"
       timezone: Asia/Kolkata
-    # Three groups, so three slots: at two, a React PR and a routine PR open
-    # together hold both and the security group has nowhere to go.
+    # A slot per group: the React pair and the routine group are separate
+    # version-update PRs, and both can be open at once.
     open-pull-requests-limit: 3
     groups:
       # React refuses to render unless `react` and `react-dom` are the exact

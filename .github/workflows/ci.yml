@@ -9,12 +9,12 @@ on:
   #
   # The queue runs the light suites only: lint, types, unit, the SDKs, the
   # frontend, migrations and codegen. The four desktop suites -- the macOS and
-  # Windows builds, launch smoke and contracts, 6 to 20 minutes each -- run on
+  # Windows builds, launch smoke and contracts, the slowest jobs here -- run on
   # the pull request and again on the push to main, where a failure posts to
-  # Slack (notify-failure.yml), but not in between. In its first 16 groups the
-  # queue's full rerun caught nothing the pull request had not, and it doubled
-  # the wait for every merge. Each of those jobs says so as
-  # `github.event_name != 'merge_group'`, which check_ci_job_results.py reads.
+  # Slack (notify-failure.yml), but not in between: a full rerun in the queue
+  # doubled the wait for every merge and caught nothing the pull request had
+  # not. Each of those jobs says so as `github.event_name != 'merge_group'`,
+  # which check_ci_job_results.py reads.
   merge_group:
     types: [checks_requested]
   push:
@@ -630,7 +630,7 @@ jobs:
             echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
           fi
       # Saved from main only: a pull request restores main's copy and never
-      # writes its own, which is what kept the cache over its 10 GB limit.
+      # writes its own, which kept the repository over its cache limit.
       - name: Save the auth test browser
         if: github.ref == 'refs/heads/main' && steps.auth-browser-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -831,8 +831,8 @@ jobs:
           prefix-key: desktop-contract
           # Saved from main only. A pull request's own copy held the same
           # dependencies as main's (they differ only when Cargo.lock does), and
-          # at 1-2 GB each those copies pushed the repository past its 10 GB
-          # cache limit, evicting the main caches every pull request restores.
+          # those copies pushed the repository past its cache limit, evicting
+          # the main caches every pull request restores.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The host-pack layout locald hard-codes, and the guest protocol the
@@ -940,7 +940,7 @@ jobs:
             echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
           fi
       # Saved from main only: a pull request restores main's copy and never
-      # writes its own, which is what kept the cache over its 10 GB limit.
+      # writes its own, which kept the repository over its cache limit.
       - name: Save the Playwright browser
         if: github.ref == 'refs/heads/main' && steps.chat-ui-browser-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -1113,7 +1113,7 @@ jobs:
           npm test
           npm run test:browser
       # Saved from main only: a pull request restores main's copy and never
-      # writes its own, which is what kept the cache over its 10 GB limit.
+      # writes its own, which kept the repository over its cache limit.
       - name: Save the Playwright browser
         if: github.ref == 'refs/heads/main' && steps.macos-browser-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -1159,15 +1159,15 @@ jobs:
       # packaging change, and every push to main.
       #
       # The same trade the Windows job makes for NSIS. This step is a release
-      # compile plus an ad hoc codesign -- 6 of the 12 minutes this job took on
-      # every desktop pull request -- and what it and the two checks after it
+      # compile plus an ad hoc codesign, half of this job's time on every
+      # desktop pull request, and what it and the two checks after it
       # assert (the app codesigns, the sidecars are embedded with their
       # entitlements, the refusal marker survives) is decided by the packaging
       # inputs, which `desktop_packaging` lists, entitlements and the macOS
       # sidecar script included. Clippy and the tests above still compile
       # everything on every desktop change. `bundle_dmg.sh` is also the
-      # flakiest thing in this job -- a busy `hdiutil` failed it twice in
-      # twenty runs -- which is noise on an ordinary Rust pull request.
+      # flakiest thing in this job -- a busy `hdiutil` fails it now and then --
+      # which is noise on an ordinary Rust pull request.
       - name: Build and codesign the online app
         if: >-
           github.event_name == 'push'
@@ -1420,7 +1420,7 @@ jobs:
           cd ~/supertokens
           "${JAVA_HOME_21_arm64:-$JAVA_HOME}/bin/java" -classpath "./downloader/*" io.supertokens.downloader.Main
       # Saved from main only: a pull request restores main's copy and never
-      # writes its own, which is what kept the cache over its 10 GB limit.
+      # writes its own, which kept the repository over its cache limit.
       - name: Save the SuperTokens core
         if: github.ref == 'refs/heads/main' && steps.supertokens-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -1702,7 +1702,7 @@ jobs:
           npm test
           npm run test:browser
       # Saved from main only: a pull request restores main's copy and never
-      # writes its own, which is what kept the cache over its 10 GB limit.
+      # writes its own, which kept the repository over its cache limit.
       - name: Save the Playwright browser
         if: github.ref == 'refs/heads/main' && steps.windows-browser-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6

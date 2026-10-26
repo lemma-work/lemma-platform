@@ -1,5 +1,6 @@
 """Contracts that keep dependency automation and CI runner usage bounded."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -30,9 +31,9 @@ def test_native_desktop_dependency_caches_are_shared_across_build_workflows() ->
                 assert step["uses"] == "Swatinem/rust-cache@v2"
                 assert settings["workspaces"] == "desktop"
                 assert settings["shared-key"] == "${{ runner.os }}-${{ runner.arch }}"
-                # Saved from main only in ci.yml: a pull request's 1-2 GB copy
-                # held the same dependencies as main's and, over the 10 GB
-                # repository limit, evicted the main caches every pull request
+                # Saved from main only in ci.yml: a pull request's copy held
+                # the same dependencies as main's and, over the repository's
+                # cache limit, evicted the main caches every pull request
                 # restores. The release workflows run on main and tags only.
                 if path == ".github/workflows/ci.yml":
                     assert (
@@ -173,10 +174,9 @@ def test_backend_e2e_triggers_directly_without_a_label() -> None:
 
 # The suites the merge queue deliberately does not run. Each runs on the pull
 # request and again on the push to main, where a failure posts to Slack; the
-# queue keeps the light suites, which is what took a merge's wait from two
-# full runs to one. Adding a job here is a decision about the merge gate, so it
-# has to be made in this list rather than by an `if:` that quietly stops
-# matching.
+# queue keeps the light suites, so a merge waits for one full run rather than
+# two. Adding a job here is a decision about the merge gate, so it has to be
+# made in this list rather than by an `if:` that quietly stops matching.
 _KEPT_OUT_OF_THE_QUEUE = {
     ".github/workflows/ci.yml": {
         "desktop",
@@ -191,6 +191,33 @@ _KEPT_OUT_OF_THE_QUEUE = {
         "service-images",
     },
 }
+
+
+# Every condition a kept-out job's `if:` is made of, besides the event: each
+# is taken as satisfied, so what is left decides whether the event can run
+# the job at all. An atom outside this list fails the test rather than being
+# guessed at.
+_SATISFIED_ATOMS = re.compile(
+    r"!cancelled\(\)"
+    r"|needs\.[A-Za-z0-9_-]+\.result\s*==\s*'success'"
+    r"|needs\.changes\.outputs\.[A-Za-z0-9_-]+\s*==\s*'true'"
+    r"|needs\.changes\.outputs\.[A-Za-z0-9_-]+\s*!=\s*'\[\]'"
+    r"|contains\(fromJSON\('\[[^\]]*\]'\),\s*github\.event\.action\)"
+)
+_EVENT_ATOM = re.compile(r"github\.event_name\s*(==|!=)\s*'([a-z_]+)'")
+
+
+def _runs_on(condition: str, event: str) -> bool:
+    """Whether a job's `if:` lets `event` run it, every other condition met."""
+    skeleton = _EVENT_ATOM.sub(
+        lambda match: str((event == match.group(2)) == (match.group(1) == "==")),
+        _SATISFIED_ATOMS.sub("True", condition),
+    )
+    skeleton = " ".join(skeleton.replace("&&", " and ").replace("||", " or ").split())
+    assert re.fullmatch(r"[\s()]*(?:(?:True|False|and|or)[\s()]*)*", skeleton), (
+        f"an `if:` this test cannot read: {condition}"
+    )
+    return bool(eval(skeleton, {"__builtins__": {}}, {}))  # noqa: S307
 
 
 def test_every_gated_job_runs_in_the_merge_queue() -> None:
@@ -224,15 +251,12 @@ def test_every_gated_job_runs_in_the_merge_queue() -> None:
         for name in [aggregator, *jobs[aggregator]["needs"], *kept_out]:
             condition = str(jobs[name].get("if", ""))
             if name in kept_out:
-                # Out of the queue either by saying so, or by an event
-                # allowlist that leaves it out -- and that allowlist has to
-                # name the push to main, or the suite stops running anywhere
-                # after the pull request.
-                assert "== 'merge_group'" not in condition, f"{path}: {name}"
-                if "!= 'merge_group'" not in condition:
-                    assert "== 'push'" in condition, (
-                        f"{path}: {name} must still run on the push to main"
-                    )
+                # Evaluated, not searched: out of the queue, and still on both
+                # the pull request and the push to main -- the backstop that
+                # makes leaving the queue safe.
+                assert not _runs_on(condition, "merge_group"), f"{path}: {name}"
+                assert _runs_on(condition, "pull_request"), f"{path}: {name}"
+                assert _runs_on(condition, "push"), f"{path}: {name}"
                 continue
             # `!= 'pull_request'` already lets a merge group through; only an
             # allowlist that names the pull request event has to name it too.
