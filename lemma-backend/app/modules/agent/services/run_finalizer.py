@@ -37,9 +37,8 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     JsonValue,
 )
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories.run_last_words import (
     mark_final_answer,
@@ -111,7 +110,7 @@ async def waiting_on_work(uow: Any, conversation_id: UUID) -> bool:
     Said on the ``completed`` frame so a client can tell the two apart without
     reading back: only this one has a run coming that it should follow.
     """
-    return await AgentConversationWaitRepository(uow).has_active(conversation_id)
+    return bool(await Pauses(uow).pending(conversation_id, kinds=(PauseKind.WAIT,)))
 
 
 def completed_event(

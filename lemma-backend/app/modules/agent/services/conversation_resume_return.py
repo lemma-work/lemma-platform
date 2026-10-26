@@ -28,20 +28,17 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.domain.agent_host_permissions import (
-    agent_host_permission_request,
-)
 from app.modules.agent.domain.approvals import expired_unanswered
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.pauses import Pause
 from app.modules.agent.domain.ports import AgentRepository
-from app.modules.agent.domain.run_budget_pause import is_budget_pause
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.services.approval_reconciliation import (
     agent_host_permission_tool_return,
     execute_approved_tool_as_user,
     record_session_approvals,
 )
-from app.modules.agent.domain.pausing_tools import PausingKind
 
 if TYPE_CHECKING:
     from app.modules.agent.domain.context import ToolContext
@@ -97,6 +94,11 @@ def _denied_message(inner_tool: str, response: dict[str, object]) -> str:
     return f"User denied running {inner_tool}."
 
 
+def _decision_of(pause: Pause) -> AgentRunApprovalDecision:
+    """What was decided; a pause ended with no decision returns as a denial."""
+    return pause.decision or AgentRunApprovalDecision.DENY
+
+
 class ResumeToolReturnBuilder:
     """Builds the synthesized tool return that unblocks a resumed run."""
 
@@ -113,28 +115,24 @@ class ResumeToolReturnBuilder:
         *,
         conversation: Conversation,
         user_id: UUID,
-        kind: str,
-        tool_args: dict[str, object],
-        decision: AgentRunApprovalDecision,
-        response: dict[str, object],
-        paused_agent_run_id: UUID,
+        pause: Pause,
         deliver_to_host: bool = True,
-        tool_call_id: str | None = None,
     ) -> tuple[str, object]:
-        """Return ``(tool_name, tool_result)`` for the synthesized resume message."""
+        """``(tool_name, tool_result)`` for a decided pause's return."""
         from app.modules.agent.infrastructure.tools.user_interaction.models import (
             AskUserResponse,
             RequestApprovalResponse,
         )
 
-        if is_budget_pause(tool_args):
-            # Before the `agent_host_permission_request` check and before
-            # `inner_tool = tool_args.get("tool_name")` below: the card names a
-            # tool (`continue_running`) that does not exist, and the executor
-            # branch would try to run it.
-            return "request_approval", _budget_decision_return(decision)
+        decision = _decision_of(pause)
+        response = pause.response
+        tool_args = pause.call_args
+        if pause.kind is PauseKind.BUDGET:
+            # The card names a tool (`continue_running`) that does not exist,
+            # which the executor branch below would try to run.
+            return pause.tool_name, _budget_decision_return(decision)
 
-        if kind == PausingKind.ASK_USER:
+        if pause.kind is PauseKind.QUESTION:
             if decision == AgentRunApprovalDecision.DENY:
                 content = AskUserResponse(
                     success=False,
@@ -152,10 +150,10 @@ class ResumeToolReturnBuilder:
                     answers=answers,
                     message="User answered the questions.",
                 )
-            return "ask_user", content.model_dump(mode="json")
+            return pause.tool_name, content.model_dump(mode="json")
 
-        if kind == PausingKind.BROWSER_SIGN_IN:
-            return "browser_sign_in", await self._browser_sign_in_return(
+        if pause.kind is PauseKind.SIGN_IN:
+            return pause.tool_name, await self._browser_sign_in_return(
                 tool_args=tool_args,
                 decision=decision,
                 response=response,
@@ -163,15 +161,15 @@ class ResumeToolReturnBuilder:
                 conversation_id=conversation.id,
             )
 
-        host_permission = agent_host_permission_request(tool_args)
+        host_permission = pause.host_permission
         if host_permission is not None and deliver_to_host:
             # Checked before the denial branch below: a denial must reach the
             # host too, or its ACP agent sits blocked until the request times
             # out half an hour later.
-            return "request_approval", await agent_host_permission_tool_return(
+            return pause.tool_name, await agent_host_permission_tool_return(
                 uow=self.uow,
                 request=host_permission,
-                agent_run_id=paused_agent_run_id,
+                agent_run_id=pause.run_id,
                 decision=decision,
                 response=response,
             )
@@ -182,7 +180,7 @@ class ResumeToolReturnBuilder:
             # back. The run this belonged to is over, so there is nothing to
             # unblock; a host still executing an orphaned run is stopped by
             # reconcile_agent_host_dispatch, which cancels it outright.
-            return "request_approval", RequestApprovalResponse(
+            return pause.tool_name, RequestApprovalResponse(
                 success=False,
                 message="The request was superseded before it was answered.",
                 decision=decision,
@@ -201,9 +199,9 @@ class ResumeToolReturnBuilder:
                 executed=False,
                 response=response,
             )
-            return "request_approval", content.model_dump(mode="json")
+            return pause.tool_name, content.model_dump(mode="json")
 
-        if _remembered_for_the_session(decision, inner_tool):
+        if decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION:
             # Beyond the one-off run below, remember the approval so the
             # workload can keep performing this action type in this
             # conversation (the authorizer honors it as an ephemeral grant,
@@ -225,17 +223,17 @@ class ResumeToolReturnBuilder:
                     pod_id=conversation.pod_id,
                     tool_args=tool_args,
                     user_id=user_id,
-                    approval_id=tool_call_id,
+                    approval_id=pause.tool_call_id,
                 )
             )
 
         executed = await self._execute_approved_tool_as_user(
             conversation=conversation,
             user_id=user_id,
-            agent_run_id=paused_agent_run_id,
+            agent_run_id=pause.run_id,
             tool_name=inner_tool,
             args=dict(inner_args),
-            approval_id=tool_call_id,
+            approval_id=pause.tool_call_id,
         )
         if executed["ok"]:
             content = RequestApprovalResponse(
@@ -254,7 +252,7 @@ class ResumeToolReturnBuilder:
                 executed=False,
                 response=response,
             )
-        return "request_approval", content.model_dump(mode="json")
+        return pause.tool_name, content.model_dump(mode="json")
 
     async def _browser_sign_in_return(
         self,
@@ -394,11 +392,3 @@ class ResumeToolReturnBuilder:
                 uow_factory
             ).resolve_configured_accounts,
         )
-
-
-def _remembered_for_the_session(
-    decision: AgentRunApprovalDecision, tool_name: str
-) -> bool:
-    """Whether this approval also stands for later calls in the conversation."""
-    del tool_name
-    return decision == AgentRunApprovalDecision.APPROVE_FOR_SESSION

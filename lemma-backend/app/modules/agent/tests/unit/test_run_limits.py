@@ -282,7 +282,7 @@ async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
     import asyncio
 
     from app.modules.agent.domain.harness_options import HarnessOptions
-    from app.modules.agent.domain.run_budget_pause import is_budget_pause
+    from app.modules.agent.domain.state_kinds import PauseKind
     from app.modules.agent.domain.value_objects import AgentEventType
     from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
@@ -318,7 +318,8 @@ async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
     assert raised.value.kind == "request_approval"
     (_label, event) = queue.get_nowait()
     assert event.type is AgentEventType.MESSAGE
-    assert is_budget_pause(event.data.tool_args)
+    assert event.data.pause.kind is PauseKind.BUDGET
+    assert event.data.pause.budget.spent == 2
     # The card must not name a real tool, or the approval executor tries to run
     # it when the person says yes.
     assert event.data.tool_args.get("args") is None

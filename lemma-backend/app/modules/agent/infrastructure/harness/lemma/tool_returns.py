@@ -9,7 +9,8 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
 )
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.pauses import CALL_NAMES
+from app.modules.agent.domain.state_kinds import PauseKind
 
 
 def missing_tool_return_events(
@@ -29,7 +30,10 @@ def missing_tool_return_events(
                     **(
                         {"interaction_fallback": True}
                         if tool_name
-                        in {PausingKind.ASK_USER, PausingKind.REQUEST_APPROVAL}
+                        in {
+                            CALL_NAMES[PauseKind.QUESTION],
+                            CALL_NAMES[PauseKind.APPROVAL],
+                        }
                         else {}
                     ),
                 },

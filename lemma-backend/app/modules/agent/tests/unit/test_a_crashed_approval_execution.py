@@ -7,8 +7,7 @@ when its holder dies: an approval nothing can finish, because the tool return is
 the only record the resumed run replays.
 
 Left alone, the next reconcile skipped the execution (the claim is gone),
-`unresolved_pausing_call_ids` reported nothing outstanding (it counts a decision
-as an answer), and the resume run rebuilt a history with the pausing call
+nothing was outstanding (a decided pause counts as answered), and the resume run rebuilt a history with the pausing call
 dropped. The agent carried on as though it had never asked, and the person
 believed their approval had been carried out -- PS-AGENT-020 says an approval
 means the described action is performed.
@@ -26,7 +25,10 @@ from uuid import uuid4, uuid7
 
 import pytest
 
-from app.modules.agent.tests.unit.repository_fakes import wire_repositories
+from app.modules.agent.tests.unit.repository_fakes import (
+    pause_for_call,
+    wire_repositories,
+)
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -39,7 +41,6 @@ from app.modules.agent.application.pauses.resume import ResumeRun
 from app.modules.agent.services.approval_reconciliation import (
     unconfirmed_execution_return,
 )
-from app.modules.agent.services.pause_resume import paused_call
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.test_support.fakes import EmptyResultSession
 
@@ -82,17 +83,10 @@ class _Repository:
         self.appended: list[Message] = []
         self.created_runs = 0
 
-    # The claim is already held by the attempt that died, and it is one-shot.
-    async def claim_approval_execution(self, **_kwargs) -> bool:
-        return False
+        self.pause = pause_for_call(self.call)
+        self.pause.resolve(AgentRunApprovalDecision.APPROVE_ONCE, by=uuid4())
 
-    async def get_approval_decision(self, **_kwargs):
-        return (AgentRunApprovalDecision.APPROVE_ONCE, {})
-
-    async def get_tool_call(self, **_kwargs):
-        return self.call
-
-    async def get_tool_return(self, **_kwargs):
+    async def tool_return(self, **_kwargs):
         return next(
             (m for m in self.appended if m.kind == MessageKind.TOOL_RETURN), None
         )
@@ -119,9 +113,9 @@ class _Repository:
     async def lock_conversation(self, _conversation_id) -> None:
         return None
 
-    async def unresolved_pausing_call_ids(self, **_kwargs) -> list[str]:
-        # The real query counts a call with a decision row as answered, which is
-        # exactly why the resume used to start with this pause unrecorded.
+    async def pending(self, *_args, **_kwargs) -> list:
+        # A decided pause counts as answered, which is exactly why the resume
+        # used to start with this pause unrecorded.
         return []
 
     async def get_active_agent_run_for_update(self, _conversation_id):
@@ -189,30 +183,20 @@ def _conversation(repository: _Repository) -> Conversation:
 
 
 async def _record_and_resume(resume, repository, *, claimed: bool) -> None:
-    paused = await paused_call(
-        repository, conversation_id=repository.conversation_id, approval_id=_APPROVAL_ID
-    )
-    assert paused is not None
+    paused = repository.pause
     conversation = _conversation(repository)
-    tool_return = unconfirmed_execution_return(
-        conversation_id=conversation.id,
-        approval_id=_APPROVAL_ID,
-        paused=paused,
-        decision=AgentRunApprovalDecision.APPROVE_ONCE,
-        response={},
-        claimed=claimed,
-    )
+    tool_return = unconfirmed_execution_return(paused, claimed=claimed)
     # The resume run is counted where it is created; staging its turn needs a
     # database this fake does not have.
     with suppress_agent_run_enqueue():
         await resume.resume(
             conversation=conversation,
-            paused_run_id=paused.agent_run_id,
+            paused_run_id=paused.run_id,
             tool_call_id=_APPROVAL_ID,
             user_id=uuid4(),
             trigger=RunTrigger.RESUME,
             tool_return=tool_return,
-            decided_call_args=paused.tool_args,
+            decided=paused,
         )
 
 

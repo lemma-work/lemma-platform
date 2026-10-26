@@ -14,8 +14,7 @@ REPOSITORY_ATTRIBUTES = (
     "runs",
     "messages",
     "queued_messages",
-    "pausing_calls",
-    "approval_decisions",
+    "pauses",
 )
 
 #: The use cases a use case is built with, which hold repositories of their own.
@@ -48,3 +47,48 @@ def wire_repositories[T](target: T, fake: object) -> T:
 
     visit(target)
     return target
+
+
+def pause_for_call(call, *, kind=None, **fields):
+    """The pause a stored call opened, as the writer would have opened it."""
+    from uuid import uuid4
+
+    from app.modules.agent.domain.agent_host_permissions import (
+        AGENT_HOST_PERMISSION_KEY,
+    )
+    from app.modules.agent.domain.pause_opening import AgentHostPermissionRequest
+    from app.modules.agent.domain.pauses import Pause
+    from app.modules.agent.domain.state_kinds import PauseKind
+
+    args = call.tool_args if isinstance(call.tool_args, dict) else {}
+    marker = args.get(AGENT_HOST_PERMISSION_KEY)
+    if kind is None:
+        kind = {
+            "ask_user": PauseKind.QUESTION,
+            "browser_sign_in": PauseKind.SIGN_IN,
+            "wait_for": PauseKind.WAIT,
+        }.get(call.tool_name)
+    if kind is None:
+        kind = (
+            PauseKind.HOST_PERMISSION
+            if isinstance(marker, dict)
+            else PauseKind.APPROVAL
+        )
+    host_permission = (
+        AgentHostPermissionRequest.model_validate(
+            {**marker, "tool_name": args.get("tool_name")}
+        )
+        if kind is PauseKind.HOST_PERMISSION
+        else None
+    )
+    return Pause(
+        conversation_id=call.conversation_id,
+        run_id=call.agent_run_id or uuid4(),
+        pod_id=uuid4(),
+        tool_call_id=call.tool_call_id,
+        tool_name=call.tool_name,
+        kind=kind,
+        host_permission=host_permission,
+        call=call,
+        **fields,
+    )

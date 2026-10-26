@@ -33,7 +33,7 @@ from app.modules.agent.infrastructure.harness.lemma.thinking import (
     PendingThoughts,
 )
 from app.modules.agent.domain.entities import Message
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import PAUSING_CALL_NAMES
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.prompt.user_turn_text import (
     timed_user_prompt_text,
@@ -351,15 +351,12 @@ def _build_tool_batch(
         # pairing that Anthropic requires.
         #
         # Pausing tools are the exception: an unmatched `ask_user` /
-        # `request_approval` / `wait_for` is not a failure, it is the marker that
-        # the conversation is waiting on a human (see
-        # `domain/pausing_tools.PAUSING_TOOL_NAMES`, and the pending-approval
-        # detection that keys on exactly this shape). Synthesizing a failure
-        # there would tell the model its question failed while the user is still
-        # being asked it.
+        # `request_approval` / `wait_for` is not a failure but an open pause
+        # (`domain/pauses`). Synthesizing a failure there would tell the model
+        # its question failed while the user is still being asked it.
         synthetic_error: str | None = None
         if matched is None:
-            if getattr(msg, "tool_name", None) in PAUSING_TOOL_NAMES:
+            if getattr(msg, "tool_name", None) in PAUSING_CALL_NAMES:
                 if not (user_turn_follows or _user_moved_on(messages, index)):
                     logger.debug(
                         "agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic",

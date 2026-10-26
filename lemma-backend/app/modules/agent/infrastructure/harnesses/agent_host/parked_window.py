@@ -4,9 +4,9 @@ A remote harness cannot pause inside a tool call, so a question or an approval
 it raises is parked in its turn: the host's bridge holds the MCP call open (or
 the host holds its ACP permission request open) until the person decides, and
 the run -- and the worker job reading it -- stay RUNNING the whole time.
-Pauses never expire and nothing reminds anybody, so that can be hours: a worker
-slot held for nothing, every message typed meanwhile joined to a turn that
-cannot read it, and an "interrupted" run at the next deploy.
+A pause waits days before it expires and nothing reminds anybody, so that can
+be hours: a worker slot held for nothing, every message typed meanwhile joined
+to a turn that cannot read it, and an "interrupted" run at the next deploy.
 
 So the wait is bounded. Past ``window_seconds`` the run is marked and its turn
 ended with the ordinary ``CANCEL_RUN`` -- the same request Stop and ``wait_for``
@@ -22,27 +22,95 @@ A person who answers inside the window is answered inside the turn, as before.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
+from sqlalchemy import update
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.modules.agent.domain.pauses import PERSON_KINDS
+from app.modules.agent.domain.run_state import ParkedSuspension
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.db.parked_pauses import (
-    ParkedPause,
-    mark_suspended_while_parked,
-    oldest_parked_pause,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 
 logger = get_logger(__name__)
 
 #: How often a running turn asks whether it is parked past its window. The
 #: window is minutes wide, so this only has to be a small fraction of it; each
-#: look is one indexed read of the run's own messages.
+#: look is one indexed read of the run's own pauses.
 DEFAULT_PARKED_CHECK_SECONDS = 30.0
+
+
+@dataclass(frozen=True, slots=True)
+class ParkedPause:
+    """The oldest unanswered pause a run is parked on, and the database's now:
+    how long it has waited is measured on one clock, however far this worker's
+    own has drifted."""
+
+    tool_call_id: str
+    tool_name: str
+    asked_at: datetime
+    now: datetime
+
+
+async def oldest_parked_pause(
+    uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, agent_run_id: UUID
+) -> ParkedPause | None:
+    """The run's oldest pause still waiting on a person, parked *inside* it: a
+    call Lemma recorded over MCP, or an ACP permission request the host holds.
+    A ``wait_for`` already ends its run, and an in-process pause never leaves
+    one running at all."""
+    pauses = Pauses(uow)
+    parked = [
+        pause
+        for pause in await pauses.pending(
+            conversation_id, run_id=agent_run_id, kinds=PERSON_KINDS
+        )
+        if pause.parked or pause.kind is PauseKind.HOST_PERMISSION
+    ]
+    if not parked:
+        return None
+    pause = parked[0]
+    return ParkedPause(
+        tool_call_id=pause.tool_call_id,
+        tool_name=pause.tool_name,
+        asked_at=pause.call.created_at if pause.call else pause.created_at,
+        now=await pauses.database_now(),
+    )
+
+
+async def mark_suspended_while_parked(
+    uow: SqlAlchemyUnitOfWork, *, agent_run_id: UUID, pause: ParkedPause
+) -> bool:
+    """Record on a still-RUNNING run that its turn is being ended for ``pause``.
+
+    False when the run has moved on -- a Stop already requested, or the run
+    finished: a Stop means stop, and a finished run needs nothing.
+    """
+    marked = await uow.session.execute(
+        update(AgentRunModel)
+        .where(
+            AgentRunModel.id == agent_run_id,
+            AgentRunModel.status == AgentRunStatus.RUNNING.value,
+        )
+        .values(
+            suspended_while_parked=ParkedSuspension(
+                tool_call_id=pause.tool_call_id, tool_name=pause.tool_name
+            ).to_json()
+        )
+        .returning(AgentRunModel.id)
+        .execution_options(synchronize_session=False)
+    )
+    return marked.scalar_one_or_none() is not None
 
 
 def parked_too_long(pause: ParkedPause, *, window_seconds: float) -> bool:
@@ -107,13 +175,13 @@ async def suspend_if_parked_too_long(
             AgentHostRunLeaseModel, agent_run_id, with_for_update=True
         )
         pause = await oldest_parked_pause(
-            uow.session, conversation_id=conversation_id, agent_run_id=agent_run_id
+            uow, conversation_id=conversation_id, agent_run_id=agent_run_id
         )
         if pause is None or not parked_too_long(pause, window_seconds=window_seconds):
             await uow.commit()
             return False
         if not await mark_suspended_while_parked(
-            uow.session, agent_run_id=agent_run_id, pause=pause
+            uow, agent_run_id=agent_run_id, pause=pause
         ):
             # A Stop got there first; it ends the turn its own way.
             await uow.commit()
@@ -135,7 +203,10 @@ async def suspend_if_parked_too_long(
 
 __all__ = [
     "DEFAULT_PARKED_CHECK_SECONDS",
+    "ParkedPause",
     "ParkedWindow",
+    "mark_suspended_while_parked",
+    "oldest_parked_pause",
     "parked_too_long",
     "suspend_if_parked_too_long",
 ]

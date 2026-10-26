@@ -12,8 +12,14 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from app.modules.agent.domain.entities import Message as MessageEntity
-from app.modules.agent.domain.value_objects import MessageDraft, to_json_value
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.value_objects import (
+    MessageDraft,
+    MessageKind,
+    to_json_value,
+)
 from app.modules.agent.infrastructure.db.base import UnitOfWorkRepository
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.conversation_activity import (
     is_activity,
     touch_activity as _touch_activity,
@@ -83,6 +89,19 @@ class Messages(UnitOfWorkRepository):
         )
         self.session.add(model)
         await self.session.flush()
+        if _opens_a_pause(draft) and agent_run_id is not None and draft.pause:
+            # The pause a call opens is written with it, in this transaction:
+            # there is no moment at which the call is on record and nothing
+            # knows it is waiting. A wait's row is its tool's, written beside
+            # its timer instead.
+            await Pauses(self.uow).open_for_call(
+                draft.pause,
+                conversation_id=conversation.id,
+                run_id=agent_run_id,
+                pod_id=conversation.pod_id,
+                tool_call_id=draft.tool_call_id or "",
+                tool_name=draft.tool_name or "",
+            )
         return model.to_entity()
 
     async def list_messages(
@@ -178,3 +197,12 @@ class Messages(UnitOfWorkRepository):
                 if text and str(item.get("path") or "") in wanted:
                     return text
         return None
+
+
+def _opens_a_pause(draft: MessageDraft) -> bool:
+    return (
+        draft.kind is MessageKind.TOOL_CALL
+        and draft.pause is not None
+        and draft.pause.kind is not PauseKind.WAIT
+        and bool(draft.tool_call_id)
+    )

@@ -107,10 +107,8 @@ async def test_waiting_conversation_reports_wait_when_a_wait_is_active(monkeypat
             return_value=SimpleNamespace(status=ConversationStatus.WAITING, output=None)
         )
     )
-    adapter.wait_repo = Mock(
-        find_active_for_conversation=AsyncMock(
-            return_value=SimpleNamespace(scheduled_at=wakes_at)
-        )
+    adapter.pauses = Mock(
+        pending=AsyncMock(return_value=[SimpleNamespace(wake_at=wakes_at)])
     )
 
     status = await adapter.get_conversation_status(conversation_id)
@@ -129,7 +127,7 @@ async def test_waiting_conversation_still_reports_human_without_a_wait():
             return_value=SimpleNamespace(status=ConversationStatus.WAITING, output=None)
         )
     )
-    adapter.wait_repo = Mock(find_active_for_conversation=AsyncMock(return_value=None))
+    adapter.pauses = Mock(pending=AsyncMock(return_value=[]))
 
     status = await adapter.get_conversation_status(uuid4())
 

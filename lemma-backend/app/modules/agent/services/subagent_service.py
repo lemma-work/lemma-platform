@@ -33,7 +33,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     JsonObject,
 )
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import PERSON_KINDS
 from app.modules.agent.domain.subagent_results import (
     DELIVERED_STATUSES,
 )
@@ -538,16 +538,12 @@ async def _open_question(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> dict[str, object]:
     """What a waiting child asked, for the parent to answer or pass on."""
-    pending = await Pauses(uow).pausing_calls_awaiting_a_decision(
-        conversation_id=conversation_id,
-        pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-        limit=1,
-    )
+    pending = await Pauses(uow).pending(conversation_id, kinds=PERSON_KINDS, limit=1)
     asked = pending[0] if pending else None
     return {
         "needs_input": True,
         "waiting_on": (
-            {"kind": asked.tool_name, "asked": asked.tool_args}
+            {"kind": asked.tool_name, "asked": asked.call_args}
             if asked is not None
             else None
         ),

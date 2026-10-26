@@ -19,11 +19,12 @@ stop has to be a yielded event rather than a raised exception.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any
 from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -80,8 +81,10 @@ class ModelRequestStreamer:
         emit_tokens: bool,
         agent_run_id: UUID,
         should_stop: StopChecker | None,
+        pauses: Mapping[str, PauseKind] | None = None,
     ) -> None:
         self.emit_tokens = emit_tokens
+        self.pauses = pauses
         self.agent_run_id = agent_run_id
         self.should_stop = should_stop
 
@@ -95,6 +98,7 @@ class ModelRequestStreamer:
         parts = StreamingParts(
             emit_tokens=self.emit_tokens,
             malformed_tool_call_ids=malformed_tool_call_ids,
+            pauses=self.pauses,
         )
 
         # A stop is held back rather than returned on, so a part still in

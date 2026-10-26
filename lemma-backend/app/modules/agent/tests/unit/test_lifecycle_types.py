@@ -13,12 +13,12 @@ from app.modules.agent.domain.conversation_lifecycle import (
     TERMINAL_CONVERSATION_STATUSES,
     conversation_status_for,
 )
-from app.modules.agent.domain.pausing_tools import (
-    PAUSING_TOOL_NAMES,
-    USER_PAUSING_TOOL_NAMES,
-    PausingKind,
-    PendingPause,
+from app.modules.agent.domain.pauses import (
+    CALL_NAMES,
+    PAUSING_CALL_NAMES,
+    PERSON_KINDS,
 )
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     TERMINAL_AGENT_RUN_STATUSES,
@@ -59,9 +59,10 @@ def test_stored_statuses_have_one_spelling(enum: type) -> None:
         enum(member.value.lower())
 
 
-def test_pausing_kinds_are_the_pausing_tool_names() -> None:
-    assert {kind.value for kind in PausingKind} == set(PAUSING_TOOL_NAMES)
-    assert PausingKind.WAIT_FOR.value not in USER_PAUSING_TOOL_NAMES
+def test_every_pause_kind_names_the_call_it_is_stored_under() -> None:
+    assert set(CALL_NAMES) == set(PauseKind)
+    assert set(CALL_NAMES.values()) == PAUSING_CALL_NAMES
+    assert PauseKind.WAIT not in PERSON_KINDS
 
 
 def test_approval_resolution_statuses_keep_the_api_spelling() -> None:
@@ -73,27 +74,16 @@ def test_approval_resolution_statuses_keep_the_api_spelling() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_oldest_unresolved_pause_is_a_typed_pending_pause() -> None:
-    run_id = uuid4()
+async def test_the_oldest_unresolved_pause_is_read_once_for_every_kind() -> None:
+    asked: list[dict[str, object]] = []
+    pause = object()
 
-    async def _awaiting(**_):
-        return [
-            SimpleNamespace(
-                tool_call_id="call-1",
-                tool_name="request_approval",
-                tool_args={"action": "deploy"},
-                agent_run_id=run_id,
-            )
-        ]
+    async def _pending(conversation_id, **kwargs):
+        asked.append(kwargs)
+        return [pause]
 
     reads = ConversationReads.__new__(ConversationReads)
-    reads.pausing_calls = SimpleNamespace(pausing_calls_awaiting_a_decision=_awaiting)
+    reads.pauses = SimpleNamespace(pending=_pending)
 
-    pause = await reads.pending_user_interaction(conversation_id=uuid4())
-
-    assert pause == PendingPause(
-        tool_call_id="call-1",
-        kind=PausingKind.REQUEST_APPROVAL,
-        tool_args={"action": "deploy"},
-        agent_run_id=run_id,
-    )
+    assert await reads.pending_user_interaction(conversation_id=uuid4()) is pause
+    assert asked == [{"kinds": frozenset(PauseKind), "limit": 1}]

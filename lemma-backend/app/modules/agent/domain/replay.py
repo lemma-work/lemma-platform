@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import PAUSING_CALL_NAMES
 from app.modules.agent.domain.tools import ReplayClass, ToolSpec
 
 
@@ -54,7 +54,7 @@ def request_body(args: Mapping[str, object]) -> Mapping[str, object]:
 
 def is_replayable_call(tool_name: str | None) -> bool:
     """Whether a resumed turn settles this open call at all (pauses it does not)."""
-    return bool(tool_name) and tool_name not in PAUSING_TOOL_NAMES
+    return bool(tool_name) and tool_name not in PAUSING_CALL_NAMES
 
 
 def replay_class(spec: ToolSpec | None, args: object = None) -> ReplayClass:

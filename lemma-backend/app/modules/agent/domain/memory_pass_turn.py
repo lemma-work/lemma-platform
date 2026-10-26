@@ -22,7 +22,8 @@ from dataclasses import dataclass
 from datetime import date
 
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.pauses import CALL_NAMES
+from app.modules.agent.domain.state_kinds import PauseKind
 
 #: One message the person sent or the agent answered.
 WORDS_MAX_CHARS = 6000
@@ -133,7 +134,7 @@ def _is_the_persons(message: TurnMessage) -> bool:
     return (
         # The ask_user return is the person's own answer to the agent's question.
         message.kind is MessageKind.TOOL_RETURN
-        and message.tool_name == PausingKind.ASK_USER
+        and message.tool_name == CALL_NAMES[PauseKind.QUESTION]
     )
 
 

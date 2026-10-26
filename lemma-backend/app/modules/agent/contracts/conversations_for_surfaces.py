@@ -57,10 +57,7 @@ from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.outsiders import (
     Audience,
 )
-from app.modules.agent.domain.pausing_tools import (
-    USER_PAUSING_TOOL_NAMES,
-    PendingPause,
-)
+from app.modules.agent.domain.pauses import APPROVAL_KINDS, PERSON_KINDS, Pause
 from app.modules.agent.domain.private_notes import answers_lemma_message
 from app.modules.agent.domain.conversations import surface_origin
 from app.modules.agent.domain.value_objects import (
@@ -75,7 +72,6 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
-from app.modules.agent.domain.pausing_tools import PausingKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,21 +102,18 @@ class SurfaceConversation:
 
 @dataclass(frozen=True, slots=True)
 class PendingInteraction:
-    """A paused ``ask_user`` or ``request_approval`` awaiting a person."""
+    """A pause awaiting a person, as a surface renders it."""
 
     tool_call_id: str
-    #: ``"ask_user"`` or ``"request_approval"``.
+    #: The name the call is stored under: ``"ask_user"``, ``"request_approval"``.
     kind: str
     #: The tool call's own arguments, as stored. Unvalidated on purpose: the
     #: surface validates them against `AskUserRequest` and must be able to tell
     #: an unparseable payload from an absent one.
     tool_args: dict[str, object]
     agent_run_id: UUID | None
-
-    @property
-    def is_approval(self) -> bool:
-        # The pausing kind a surface renders as a decision, not a question.
-        return self.kind == PausingKind.REQUEST_APPROVAL
+    #: Rendered as a decision, not a question.
+    is_approval: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,14 +133,15 @@ class SurfaceAgentIdentity:
     icon_url: str | None
 
 
-def _pending(pause: PendingPause | None) -> PendingInteraction | None:
+def _pending(pause: Pause | None) -> PendingInteraction | None:
     if pause is None:
         return None
     return PendingInteraction(
         tool_call_id=pause.tool_call_id,
-        kind=pause.kind.value,
-        tool_args=pause.tool_args,
-        agent_run_id=pause.agent_run_id,
+        kind=pause.tool_name,
+        tool_args=pause.call_args,
+        agent_run_id=pause.run_id,
+        is_approval=pause.kind in APPROVAL_KINDS,
     )
 
 
@@ -352,11 +346,8 @@ async def undecided_pauses(
     Exactly what starting a new turn denies on the person's behalf, so a
     surface that reads it first knows which of its cards the turn cancels.
     """
-    calls = await Pauses(uow).pausing_calls_awaiting_a_decision(
-        conversation_id=conversation_id,
-        pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-    )
-    return [call.tool_call_id for call in calls if call.tool_call_id]
+    pending = await Pauses(uow).pending(conversation_id, kinds=PERSON_KINDS)
+    return [pause.tool_call_id for pause in pending]
 
 
 async def pending_question(

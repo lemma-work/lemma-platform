@@ -25,18 +25,15 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.pausing_tools import (
-    ParkedSuspension,
-)
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.run_state import ParkedSuspension
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.domain.wait import AgentConversationWaitEntity
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
     AgentHostDispatchRepository,
 )
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
 
 
 async def suspend_remote_run(
@@ -61,7 +58,7 @@ async def run_suspended_on(
     uow: SqlAlchemyUnitOfWork,
     *,
     agent_run_id: UUID,
-) -> AgentConversationWaitEntity | None:
+) -> Pause | None:
     """The wait this run stopped for, if it stopped for one.
 
     Read at the end of a remote run to tell a turn that finished from one that
@@ -71,7 +68,8 @@ async def run_suspended_on(
     and which of those happens is a race between a poke and a model deciding to
     stop talking. Neither answers the question being asked.
     """
-    return await AgentConversationWaitRepository(uow).find_active_for_run(agent_run_id)
+    waits = await Pauses(uow).pending(run_id=agent_run_id, kinds=(PauseKind.WAIT,))
+    return waits[0] if waits else None
 
 
 async def run_suspended_while_parked(

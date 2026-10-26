@@ -8,9 +8,9 @@ because every one of those paths can be retried.
 Three things are idempotent for three different reasons, and they are the
 substance of this use case and the two it hands on to:
 
-* The **decision** is guarded by a unique ``(conversation_id, approval_id)`` row.
-  That constraint is the double-submit lock; a second click adopts the first
-  decision rather than recording a new one.
+* The **decision** is the pause ending once (``Pause.resolve``), written fenced
+  on its PENDING status. That fence is the double-submit lock; a second click
+  adopts the first decision rather than recording a new one.
 * The **tool return** is guarded by checking for an existing return before
   building one (``ReconcileDecision``). This is the one that matters most:
   building an approved ``request_approval`` return *runs the wrapped tool*, so a
@@ -26,6 +26,8 @@ the conversation's owner; an expiry acts for nobody.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from enum import Enum
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -39,15 +41,21 @@ from app.modules.agent.domain.errors import (
     ApprovalNotOwnedError,
     UnknownApprovalError,
 )
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
-from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.approval_reconciliation import (
     runs_in_worker,
     stage_approval_execution,
 )
-from app.modules.agent.services.pause_resume import paused_call
-from app.modules.agent.domain.pausing_tools import PausingKind
+
+
+class Ending(Enum):
+    """How the pause ends: a person's decision, or its time running out."""
+
+    DECISION = "decision"
+    EXPIRY = "expiry"
 
 
 class ResolvePause:
@@ -57,8 +65,7 @@ class ResolvePause:
         self, uow: SqlAlchemyUnitOfWork, *, reconcile: ReconcileDecision
     ) -> None:
         self.uow = uow
-        self.pausing_calls = Pauses(uow)
-        self.approval_decisions = ApprovalDecisions(uow)
+        self.pauses = Pauses(uow)
         self.reconcile = reconcile
 
     @classmethod
@@ -75,15 +82,15 @@ class ResolvePause:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
+        ending: Ending = Ending.DECISION,
     ) -> ApprovalResolution:
         """Resume a paused run for an already-authorized + loaded conversation.
 
-        Idempotent and self-healing. Classifies the approval three ways:
-          * neither a paused call nor a recorded decision exists -> it is unknown
-            (``UnknownApprovalError`` -> 404);
-          * no decision yet -> record it (the unique (conversation, approval) row
-            is the double-submit lock), then reconcile;
-          * a decision already exists -> adopt it and reconcile (the retry /
+        Idempotent and self-healing:
+          * no pause for the call -> it is unknown (``UnknownApprovalError``);
+          * still PENDING -> end it (fenced on PENDING, so a concurrent
+            double-submit loses), then reconcile;
+          * already ended -> adopt what was recorded and reconcile (the retry /
             self-heal path) instead of erroring.
 
         An approved ``request_approval`` runs its wrapped tool, which can take
@@ -95,89 +102,20 @@ class ResolvePause:
         """
         # The approvals list's `id` is the message's; accept it for the call.
         approval_id = await self._canonical_approval_id(conversation.id, approval_id)
-        decision_row = await self.approval_decisions.get_approval_decision(
-            conversation_id=conversation.id,
-            approval_id=approval_id,
+        pause = await self.pauses.get(
+            conversation_id=conversation.id, tool_call_id=approval_id
         )
-        paused = await paused_call(
-            self.pausing_calls,
-            conversation_id=conversation.id,
-            approval_id=approval_id,
-        )
-        if decision_row is None and paused is None:
-            # Nothing to resolve and nothing to heal — the approval never existed
-            # or its call was never persisted.
+        if pause is None or pause.kind is PauseKind.WAIT:
             raise UnknownApprovalError()
-
-        if paused is None:
-            # Unreachable in practice: the pausing tool call message is never
-            # deleted, so a recorded decision always has its call. Guard anyway —
-            # we cannot faithfully rebuild a resume without the original call.
-            raise UnknownApprovalError()
-        kind = paused.kind
-        tool_args = paused.tool_args
-        paused_run_id = paused.agent_run_id
-
-        if decision_row is None:
-            if kind != PausingKind.ASK_USER and user_id != conversation.user_id:
-                # An approved call runs with the owner's authority (see
-                # `ApprovedExecution`), so only the owner may decide it. Every
-                # entry point checks this already; this is the one place all
-                # of them pass through, so it is enforced here too.
-                raise ApprovalNotOwnedError()
-            # Fresh resolve: record the decision. The unique (conversation,
-            # approval) row locks out a concurrent double-submit before any
-            # side-effecting tool runs.
-            decision_tool_name = (
-                PausingKind.ASK_USER.value
-                if kind == PausingKind.ASK_USER
-                else str(
-                    tool_args.get("tool_name") or PausingKind.REQUEST_APPROVAL.value
-                )
-            )
-            recorded = await self.approval_decisions.record_approval_decision(
-                conversation_id=conversation.id,
-                approval_id=approval_id,
-                agent_run_id=paused_run_id,
-                tool_name=decision_tool_name,
-                decision=decision,
-                response=response or {},
-                resolved_by_user_id=user_id,
-            )
-            if recorded:
-                effective_decision, effective_response, status = (
-                    decision,
-                    response or {},
-                    ApprovalResolutionStatus.RESOLVED,
-                )
-            else:
-                # A concurrent resolve won the race; adopt its stored decision and
-                # reconcile (idempotent) rather than raising "already resolved".
-                stored = await self.approval_decisions.get_approval_decision(
-                    conversation_id=conversation.id,
-                    approval_id=approval_id,
-                )
-                effective_decision, effective_response = (
-                    stored if stored is not None else (decision, response or {})
-                )
-                status = ApprovalResolutionStatus.RECONCILED
-        else:
-            # Decision already recorded (retry / self-heal). Do NOT re-record or
-            # re-run the tool; adopt the stored decision and finish whatever the
-            # prior attempt left undone.
-            effective_decision, effective_response = decision_row
-            status = ApprovalResolutionStatus.RECONCILED
-
-        existing_return = await self.pausing_calls.get_tool_return(
-            conversation_id=conversation.id,
-            tool_call_id=approval_id,
+        won, pause = await self._end(
+            pause, conversation, user_id, decision, response, ending
         )
-        if runs_in_worker(
-            kind=kind,
-            tool_args=tool_args,
-            decision=effective_decision,
-            has_tool_return=existing_return is not None,
-        ):
+        status = (
+            ApprovalResolutionStatus.RESOLVED
+            if won
+            else ApprovalResolutionStatus.RECONCILED
+        )
+        if runs_in_worker(pause):
             # In the decision's transaction, so the two commit together: the
             # old post-commit enqueue could die between the commit and Redis
             # and leave a decision nothing would ever carry out. A second
@@ -191,22 +129,51 @@ class ResolvePause:
             )
             await self.uow.commit()
             return ApprovalResolution(
-                status=ApprovalResolutionStatus.QUEUED, decision=effective_decision
+                status=ApprovalResolutionStatus.QUEUED, decision=_decided(pause)
             )
         await self.uow.commit()
-
         await self.reconcile.reconcile(
             conversation=conversation,
-            approval_id=approval_id,
-            paused_run_id=paused_run_id,
-            kind=kind,
-            tool_args=tool_args,
-            decision=effective_decision,
-            response=effective_response,
+            pause=pause,
             user_id=user_id,
             agent_name=agent_name,
         )
-        return ApprovalResolution(status=status, decision=effective_decision)
+        return ApprovalResolution(status=status, decision=_decided(pause))
+
+    async def _end(
+        self,
+        pause: Pause,
+        conversation: Conversation,
+        user_id: UUID,
+        decision: AgentRunApprovalDecision,
+        response: dict[str, object] | None,
+        ending: Ending,
+    ) -> tuple[bool, Pause]:
+        """End a PENDING pause: whether this call did, and the pause as it now
+        stands. One that lost the race is read again, for what the winner
+        recorded."""
+        if not pause.is_open:
+            if pause.decision is None and not pause.returned:
+                # Ended undecided (a stopped wait, a cancelled call): nothing
+                # is left to decide.
+                raise UnknownApprovalError()
+            return False, pause
+        if pause.kind is not PauseKind.QUESTION and user_id != conversation.user_id:
+            # An approved call runs with the owner's authority (see
+            # `ApprovedExecution`), so only the owner may decide it. Every
+            # entry point checks this already; this is the one place all of
+            # them pass through, so it is enforced here too.
+            raise ApprovalNotOwnedError()
+        if ending is Ending.EXPIRY:
+            pause.expire(datetime.now(UTC), on_behalf_of=user_id)
+        else:
+            pause.resolve(decision, response, by=user_id)
+        if await self.pauses.save(pause):
+            return True, pause
+        stored = await self.pauses.get(
+            conversation_id=pause.conversation_id, tool_call_id=pause.tool_call_id
+        )
+        return False, stored or pause
 
     async def _canonical_approval_id(
         self, conversation_id: UUID, approval_id: str
@@ -217,7 +184,11 @@ class ResolvePause:
             message_id = UUID(approval_id)
         except ValueError:
             return approval_id
-        found = await self.pausing_calls.tool_call_id_of_message(
+        found = await self.pauses.tool_call_id_of_message(
             conversation_id=conversation_id, message_id=message_id
         )
         return found or approval_id
+
+
+def _decided(pause: Pause) -> AgentRunApprovalDecision:
+    return pause.decision or AgentRunApprovalDecision.DENY

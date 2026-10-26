@@ -48,9 +48,8 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.infrastructure.conversation_idempotency_store import (
     create_conversation_for_id,
 )
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.workflow.contracts import AgentPort
 
 #: The run source whose opening message is a wake-up rather than a node's input.
@@ -125,7 +124,7 @@ class AgentControlAdapter(AgentPort):
         self.conversations = Conversations(uow)
         self.messages = Messages(uow)
         self.runs = Runs(uow)
-        self.wait_repo = AgentConversationWaitRepository(uow)
+        self.pauses = Pauses(uow)
 
     async def run_agent(
         self,
@@ -325,13 +324,12 @@ class AgentControlAdapter(AgentPort):
             # a waiting agent will wake itself and is perfectly healthy, so
             # failing its run would be a silent wrong outcome rather than a
             # visible error. See `run_resume_service._expire_overdue_wait`.
-            waiting_on = await self.wait_repo.find_active_for_conversation(
-                conversation_id
-            )
+            waits = await self.pauses.pending(conversation_id, kinds=(PauseKind.WAIT,))
+            wakes_at = waits[0].wake_at if waits else None
             return {
                 "status": "WAITING",
-                "wait_reason": "WAIT" if waiting_on else "HUMAN",
-                "wakes_at": waiting_on.scheduled_at.isoformat() if waiting_on else None,
+                "wait_reason": "WAIT" if waits else "HUMAN",
+                "wakes_at": wakes_at.isoformat() if wakes_at else None,
                 "output_data": output,
             }
         if conversation.status in {

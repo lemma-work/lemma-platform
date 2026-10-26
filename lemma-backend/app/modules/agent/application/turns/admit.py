@@ -23,7 +23,7 @@ from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
 from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.message_state import MessageState
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import PERSON_KINDS
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.private_notes import run_state_for
 from app.modules.agent.domain.run_state import RunState
@@ -43,7 +43,7 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure import repositories
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
-from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.pauses import Awaiting, Pauses
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.infrastructure.live import publish_conversation_event
@@ -73,24 +73,12 @@ async def _pause_holding_the_turn(
     include_undecided: bool,
 ) -> HeldTurn | None:
     """The pause a message must wait behind, if any. Caller holds the lock."""
-    in_flight = await repository.pausing_calls_decided_awaiting_a_return(
-        conversation_id=conversation_id,
-        pausing_tool_names=USER_PAUSING_TOOL_NAMES,
+    holding = await repository.pending(
+        conversation_id,
+        kinds=PERSON_KINDS,
+        awaiting=Awaiting.EITHER if include_undecided else Awaiting.RETURN,
     )
-    undecided = (
-        await repository.pausing_calls_awaiting_a_decision(
-            conversation_id=conversation_id,
-            pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-        )
-        if include_undecided
-        else []
-    )
-    holding = [call for call in (*in_flight, *undecided) if call.agent_run_id]
-    if not holding:
-        return None
-    newest = max(holding, key=lambda call: call.sequence)
-    assert newest.agent_run_id is not None
-    return HeldTurn(agent_run_id=newest.agent_run_id)
+    return HeldTurn(agent_run_id=holding[-1].run_id) if holding else None
 
 
 async def _hold_behind(repository: Conversations, conversation: Conversation) -> None:
@@ -125,7 +113,7 @@ class AdmitMessage:
         self.conversations = Conversations(uow)
         self.runs = Runs(uow)
         self.messages = Messages(uow)
-        self.pausing_calls = Pauses(uow)
+        self.pauses = Pauses(uow)
         self.agent_repository = agent_repository
         self.supersede = supersede
         self.usage_service = usage_service
@@ -209,7 +197,7 @@ class AdmitMessage:
                     user_id=user_id,
                 )
             held = await _pause_holding_the_turn(
-                self.pausing_calls,
+                self.pauses,
                 conversation.id,
                 include_undecided=not supersede_pauses,
             )

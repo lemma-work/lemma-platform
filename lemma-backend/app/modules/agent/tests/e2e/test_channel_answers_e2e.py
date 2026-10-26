@@ -24,7 +24,7 @@ from app.core.infrastructure.db.uow_factory import (
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
 from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import PERSON_KINDS
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRunStatus,
@@ -507,11 +507,7 @@ async def test_an_approval_nobody_decided_in_time_is_not_approved_anywhere(scena
     assert late.decision is AgentRunApprovalDecision.DENY
     async with create_uow_from_session_maker(async_session_maker) as uow:
         assert (
-            await Pauses(uow).pausing_calls_awaiting_a_decision(
-                conversation_id=seeded.conversation_id,
-                pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-            )
-            == []
+            await Pauses(uow).pending(seeded.conversation_id, kinds=PERSON_KINDS) == []
         )
 
 

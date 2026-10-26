@@ -14,11 +14,14 @@ the loop that drives it can be read without also holding the bookkeeping.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic_ai.messages import TextPart, ThinkingPart, ToolCallPart
 
 from app.core.log.log import get_logger
+from app.modules.agent.domain.pause_opening import PauseOpening
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import MessageDraft
 from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     parse_tool_call_args,
@@ -67,8 +70,16 @@ class StreamingParts:
     one place is what lets the callers stay linear.
     """
 
-    def __init__(self, *, emit_tokens: bool, malformed_tool_call_ids: set[str]) -> None:
+    def __init__(
+        self,
+        *,
+        emit_tokens: bool,
+        malformed_tool_call_ids: set[str],
+        pauses: Mapping[str, PauseKind] | None = None,
+    ) -> None:
         self._emit_tokens = emit_tokens
+        # Which of the run's tools pause, by name, from their ``ToolPolicy``.
+        self._pauses = pauses or {}
         self._malformed_tool_call_ids = malformed_tool_call_ids
         self._buffers = {kind: CharStreamBuffer(max_chars=50) for kind in _TOKEN_KINDS}
         self._tool_stream_started: set[int] = set()
@@ -175,4 +186,9 @@ class StreamingParts:
             tool_call_id=part.tool_call_id,
             tool_args=tool_args,
             metadata={"tool_name": part.tool_name, **tool_call_identity(part)},
+            pause=(
+                PauseOpening(kind=kind)
+                if (kind := self._pauses.get(part.tool_name)) is not None
+                else None
+            ),
         )

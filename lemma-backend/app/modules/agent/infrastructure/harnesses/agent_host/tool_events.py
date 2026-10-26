@@ -23,7 +23,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostToolSource,
     AgentHostToolStatus,
 )
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import PAUSING_CALL_NAMES
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -104,7 +104,7 @@ def left_to_lemma(tool: AgentHostToolRef) -> bool:
     Before the host said whose tool a call was, this matched on a guessed name,
     and never matched a Codex call.
     """
-    return tool.source is AgentHostToolSource.LEMMA and tool.name in PAUSING_TOOL_NAMES
+    return tool.source is AgentHostToolSource.LEMMA and tool.name in PAUSING_CALL_NAMES
 
 
 def open_tool_call(

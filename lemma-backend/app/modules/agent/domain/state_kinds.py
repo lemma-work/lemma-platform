@@ -123,3 +123,66 @@ class WrittenIn(str, Enum):
     GROUP = "GROUP"
     #: A thread where the bot answers people outside the pod.
     OUTSIDERS = "OUTSIDERS"
+
+
+class AgentRunApprovalDecision(str, Enum):
+    """User decision scope for a run approval."""
+
+    APPROVE_ONCE = "APPROVE_ONCE"
+    APPROVE_FOR_SESSION = "APPROVE_FOR_SESSION"
+    DENY = "DENY"
+
+    @classmethod
+    def _missing_(cls, value: object) -> AgentRunApprovalDecision | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.upper()
+        aliases = {
+            "APPROVE": cls.APPROVE_ONCE,
+            "ALLOW": cls.APPROVE_ONCE,
+            "ACCEPT": cls.APPROVE_ONCE,
+            "ONCE": cls.APPROVE_ONCE,
+            "SESSION": cls.APPROVE_FOR_SESSION,
+            "APPROVE_SESSION": cls.APPROVE_FOR_SESSION,
+            "DENIED": cls.DENY,
+            "DECLINE": cls.DENY,
+        }
+        if normalized in aliases:
+            return aliases[normalized]
+        for member in cls:
+            if member.value == normalized:
+                return member
+        return None
+
+
+class PauseKind(str, Enum):
+    """What a run stopped for (``domain/pauses``)."""
+
+    #: ``ask_user``: a person answers.
+    QUESTION = "QUESTION"
+    #: ``request_approval``: a person lets the agent run a tool as them.
+    APPROVAL = "APPROVAL"
+    #: ``browser_sign_in``: a person signs in somewhere.
+    SIGN_IN = "SIGN_IN"
+    #: The run spent its allowance between steps: "keep going?".
+    BUDGET = "BUDGET"
+    #: An Agent Host's coding agent asked to use a native tool.
+    HOST_PERMISSION = "HOST_PERMISSION"
+    #: ``wait_for``: a timer, a process or a sub-agent, nobody involved.
+    WAIT = "WAIT"
+
+
+class PauseStatus(str, Enum):
+    """Where a pause stands. Every status but PENDING is final."""
+
+    PENDING = "PENDING"
+    #: Decided by a person, or (a wait) woken.
+    RESOLVED = "RESOLVED"
+    #: Nobody decided in time: a DENY recorded for the owner.
+    EXPIRED = "EXPIRED"
+    #: The person moved past it: a DENY recorded on their behalf.
+    SUPERSEDED = "SUPERSEDED"
+    #: Ended undecided: a wait stopped, or a call its own return closed.
+    CANCELLED = "CANCELLED"
+    #: A wait whose wake kept failing; its conversation stays WAITING.
+    ABANDONED = "ABANDONED"

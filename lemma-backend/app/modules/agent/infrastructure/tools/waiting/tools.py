@@ -31,14 +31,11 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import WorkWriter
 from app.core.log.log import get_logger
 from app.modules.agent.domain.wait import (
-    AgentConversationWaitEntity,
     AgentWaitType,
     WaitSpec,
 )
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.run_suspension import suspend_remote_run
 from app.modules.agent.services.wait_timers import arm_wait
 from app.modules.agent.domain.context import ToolContext
@@ -48,7 +45,8 @@ from app.modules.agent.domain.tools import (
     ToolPolicy,
     tool,
 )
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.pauses import CALL_NAMES, Pause
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.infrastructure.tools.waiting.models import (
     DEFAULT_TARGET_DEADLINE_SECONDS,
     MAX_WAIT_SECONDS,
@@ -152,10 +150,10 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
 
     now = datetime.now(timezone.utc)
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        existing = await AgentConversationWaitRepository(uow).find_active_for_run(
-            deps.agent_run_id
+        existing = await Pauses(uow).pending(
+            run_id=deps.agent_run_id, kinds=(PauseKind.WAIT,)
         )
-    if existing is not None:
+    if existing:
         # One active wait per conversation is a database constraint, so without
         # this a second call inside one turn raises an IntegrityError from
         # inside a tool body rather than telling the model what it did.
@@ -197,15 +195,17 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
     # from resolving each other.
     wait_ref = uuid4()
 
-    wait = AgentConversationWaitEntity(
+    wait = Pause(
         conversation_id=deps.conversation_id,
-        agent_run_id=deps.agent_run_id,
+        run_id=deps.agent_run_id,
         pod_id=deps.pod_id,
         tool_call_id=ctx.tool_call_id,
+        tool_name=CALL_NAMES[PauseKind.WAIT],
+        kind=PauseKind.WAIT,
         wait_type=wait_type,
         external_ref=str(wait_ref),
-        scheduled_at=scheduled_at,
-        spec=WaitSpec(
+        wake_at=scheduled_at,
+        wait_spec=WaitSpec(
             reason=request.reason,
             note_to_self=request.note_to_self,
             started_at=now,
@@ -214,11 +214,13 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
             user_id=deps.user_id,
             requested_seconds=request.seconds,
             requested_max_seconds=request.max_seconds,
-        ).to_json(),
+        ),
     )
     suspends_itself = bool(getattr(deps, "supports_pause_signal", False))
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        await AgentConversationWaitRepository(uow).create(wait)
+        # Written by the tool rather than with its call, like no other pause:
+        # a wait exists only once its timer is armed beside it.
+        await Pauses(uow).open(wait)
         # The wait's timer is a work item committed with the row: there is no
         # window in which a wait exists that nothing will fire.
         await arm_wait(WorkWriter.of(uow), wait, scheduled_at)
@@ -236,13 +238,13 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
     logger.debug(
         "agent.wait.suspended",
         conversation_id=str(deps.conversation_id),
-        wait_type=wait.wait_type.value,
+        wait_type=wait_type.value,
     )
 
     if suspends_itself:
         # Ends the run cleanly (conversation -> WAITING). The resolution path
         # synthesizes this call's return and starts a fresh run that replays it.
-        raise AgentInputRequired(ctx.tool_call_id, PausingKind.WAIT_FOR)
+        raise AgentInputRequired(ctx.tool_call_id, PauseKind.WAIT)
 
     # A remote harness reads this and then stops, mid-sentence if that is where
     # the cancel catches it. Written for a model that may get no further turn to
@@ -296,6 +298,6 @@ SPECS = (
     tool(
         wait_for,
         ToolGroup.WAIT,
-        ToolPolicy(pauses=PausingKind.WAIT_FOR, deferrable=True),
+        ToolPolicy(pauses=PauseKind.WAIT, deferrable=True),
     ),
 )

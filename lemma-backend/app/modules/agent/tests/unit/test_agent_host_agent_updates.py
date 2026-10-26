@@ -20,10 +20,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostToolRef,
 )
 from app.modules.agent.domain.agent_host_link import HarnessesBody
-from app.modules.agent.domain.agent_host_permissions import (
-    agent_host_permission_request,
-    permission_approval_tool_args,
-)
+from app.modules.agent.domain.agent_host_permissions import permission_request
 from app.modules.agent.domain.agent_host_selections import (
     carry_agent_host_selections,
     validate_agent_host_model,
@@ -226,11 +223,7 @@ class TestEvents:
 
 class TestPermissionOptions:
     def _request(self, *options: dict[str, str]):
-        parsed = agent_host_permission_request(
-            permission_approval_tool_args({"options": list(options)}, request_id="r")
-        )
-        assert parsed is not None
-        return parsed
+        return permission_request({"options": list(options)}, request_id="r")
 
     def test_an_unknown_kind_is_never_selected_as_an_approval(self) -> None:
         request = self._request(

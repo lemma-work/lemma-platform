@@ -50,14 +50,9 @@ from app.core.log.log import get_logger
 from app.modules.agent.application.pauses.reconcile import ReconcileDecision
 from app.modules.agent.application.pauses.resume import ResumeRun
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.pausing_tools import PausedCall
-from app.modules.agent.domain.value_objects import (
-    AgentRunApprovalDecision,
-    JsonObject,
-    RunTrigger,
-)
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.value_objects import RunTrigger
 from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE
-from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.repositories import (
@@ -72,7 +67,6 @@ from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
 from app.modules.agent.services.pause_questions import tell_where_asked
-from app.modules.agent.services.pause_resume import paused_call
 from app.modules.agent.services.runtime_owned_uow import RuntimeOwnedUnitOfWork
 
 logger = get_logger(__name__)
@@ -92,28 +86,11 @@ class _Decided:
     """What a decision says to do, read in one short transaction."""
 
     conversation: Conversation
-    paused: PausedCall
-    decision: AgentRunApprovalDecision
-    response: JsonObject
-    has_return: bool
-
-
-def _unconfirmed_return(
-    payload: ApprovalExecution, decided: _Decided, *, claimed: bool
-) -> tuple[str, object]:
-    return unconfirmed_execution_return(
-        conversation_id=decided.conversation.id,
-        approval_id=payload.approval_id,
-        paused=decided.paused,
-        decision=decided.decision,
-        response=decided.response,
-        claimed=claimed,
-    )
+    pause: Pause
 
 
 async def _resume(
     uow: SqlAlchemyUnitOfWork,
-    payload: ApprovalExecution,
     decided: _Decided,
     *,
     tool_return: tuple[str, object] | None,
@@ -121,19 +98,19 @@ async def _resume(
     """Write ``tool_return`` and start the resume run (``ResumeRun``)."""
     await ResumeRun.build(uow).resume(
         conversation=decided.conversation,
-        paused_run_id=decided.paused.agent_run_id,
-        tool_call_id=payload.approval_id,
+        paused_run_id=decided.pause.run_id,
+        tool_call_id=decided.pause.tool_call_id,
         user_id=decided.conversation.user_id,
         trigger=RunTrigger.RESUME,
         tool_return=tool_return,
-        decided_call_args=decided.paused.tool_args,
+        decided=decided.pause,
     )
 
 
 async def _read(
     uow: SqlAlchemyUnitOfWork, payload: ApprovalExecution
 ) -> _Decided | None:
-    """The decision and its paused call, or None when there is nothing to do.
+    """The decided pause, or None when there is nothing to do.
 
     Both can legitimately be missing -- the conversation was deleted, or the
     call never persisted -- and neither is worth retrying.
@@ -141,21 +118,12 @@ async def _read(
     conversation = await Conversations(uow).get_conversation(payload.conversation_id)
     if conversation is None:
         return None
-    recorded = await ApprovalDecisions(uow).get_approval_decision(
-        conversation_id=payload.conversation_id, approval_id=payload.approval_id
-    )
-    paused = await paused_call(
-        Pauses(uow),
-        conversation_id=payload.conversation_id,
-        approval_id=payload.approval_id,
-    )
-    if recorded is None or paused is None:
-        return None
-    decision, response = recorded
-    existing = await Pauses(uow).get_tool_return(
+    pause = await Pauses(uow).get(
         conversation_id=payload.conversation_id, tool_call_id=payload.approval_id
     )
-    return _Decided(conversation, paused, decision, response, existing is not None)
+    if pause is None or pause.decision is None:
+        return None
+    return _Decided(conversation, pause)
 
 
 async def _owner_context(
@@ -207,22 +175,15 @@ async def _execute(
         if decided is None:
             return
         auth_ctx = await _owner_context(uow, decided.conversation)
-        executes = runs_in_worker(
-            kind=decided.paused.kind.value,
-            tool_args=decided.paused.tool_args,
-            decision=decided.decision,
-            has_tool_return=decided.has_return,
-        )
-        took_claim = executes and await ApprovalDecisions(uow).claim_approval_execution(
-            conversation_id=payload.conversation_id, approval_id=payload.approval_id
-        )
+        executes = runs_in_worker(decided.pause)
+        took_claim = executes and await Pauses(uow).claim_execution(decided.pause)
         # Committed by the checkpoint before the tool runs: the claim is the
         # evidence a lost lease leaves behind.
 
     async with context_scope(auth_ctx):
         built: tuple[str, object] | None = None
         if took_claim:
-            built = await _run_approved_tool(decided, payload, uow_factory=uow_factory)
+            built = await _run_approved_tool(decided, uow_factory=uow_factory)
         async with ctx.complete_work() as uow:
             await _finish(
                 RuntimeOwnedUnitOfWork(uow),
@@ -233,7 +194,7 @@ async def _execute(
 
 
 async def _run_approved_tool(
-    decided: _Decided, payload: ApprovalExecution, *, uow_factory: UnitOfWorkFactory
+    decided: _Decided, *, uow_factory: UnitOfWorkFactory
 ) -> tuple[str, object]:
     """Run the wrapped tool; never raises (failures become the tool's return).
 
@@ -245,12 +206,7 @@ async def _run_approved_tool(
         built = await ResumeToolReturnBuilder(uow, AgentRepository(uow)).build(
             conversation=decided.conversation,
             user_id=decided.conversation.user_id,
-            kind=decided.paused.kind.value,
-            tool_args=decided.paused.tool_args,
-            decision=decided.decision,
-            response=decided.response,
-            paused_agent_run_id=decided.paused.agent_run_id,
-            tool_call_id=payload.approval_id,
+            pause=decided.pause,
         )
         await uow.commit()
     return built
@@ -272,28 +228,22 @@ async def _finish(
     decided = await _read(uow, payload)
     if decided is None:
         return
-    if decided.has_return:
-        await _resume(uow, payload, decided, tool_return=None)
+    if decided.pause.returned:
+        await _resume(uow, decided, tool_return=None)
     elif built is not None:
-        await _resume(uow, payload, decided, tool_return=built)
+        await _resume(uow, decided, tool_return=built)
     elif lost_claim:
         await _resume(
             uow,
-            payload,
             decided,
-            tool_return=_unconfirmed_return(payload, decided, claimed=True),
+            tool_return=unconfirmed_execution_return(decided.pause, claimed=True),
         )
     else:
         # Runs nothing (an answer, a denial, a host permission): the inline
         # path, for an item written for an adopted one.
         await ReconcileDecision.build(uow).reconcile(
             conversation=decided.conversation,
-            approval_id=payload.approval_id,
-            paused_run_id=decided.paused.agent_run_id,
-            kind=decided.paused.kind.value,
-            tool_args=decided.paused.tool_args,
-            decision=decided.decision,
-            response=decided.response,
+            pause=decided.pause,
             user_id=decided.conversation.user_id,
             agent_name=None,
         )
@@ -312,18 +262,15 @@ async def on_approval_dead(ctx: DeadContext) -> None:
     uow = RuntimeOwnedUnitOfWork(ctx.uow)
     await Conversations(uow).lock_conversation(payload.conversation_id)
     decided = await _read(uow, payload)
-    if decided is None or decided.has_return:
+    if decided is None or decided.pause.returned:
         return
-    claimed = await ApprovalDecisions(uow).approval_execution_claimed(
-        conversation_id=payload.conversation_id, approval_id=payload.approval_id
-    )
+    claimed = decided.pause.execution_claimed_at is not None
     auth_ctx = await _owner_context(uow, decided.conversation)
     async with context_scope(auth_ctx):
         await _resume(
             uow,
-            payload,
             decided,
-            tool_return=_unconfirmed_return(payload, decided, claimed=claimed),
+            tool_return=unconfirmed_execution_return(decided.pause, claimed=claimed),
         )
 
 

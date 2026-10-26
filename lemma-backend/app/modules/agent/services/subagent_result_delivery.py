@@ -38,9 +38,8 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.application.turns.admit import AdmitMessage
 
 logger = get_logger(__name__)
@@ -90,9 +89,7 @@ class SubagentResultDelivery:
             parent = await conversations.get_conversation(parent_id, include_runs=True)
             if parent is None or parent.status is ConversationStatus.STOPPED:
                 return 0
-            if await AgentConversationWaitRepository(uow).find_active_for_conversation(
-                parent_id
-            ):
+            if await Pauses(uow).pending(parent_id, kinds=(PauseKind.WAIT,)):
                 return 0
             owed = await self._claim_owed(uow, parent)
             if not owed:

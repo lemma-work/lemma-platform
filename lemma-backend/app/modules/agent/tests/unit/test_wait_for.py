@@ -8,16 +8,13 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.agent.tests.unit.repository_fakes import wire_repositories
-
-import app.modules.agent.application.turns.stop as stops
-from app.modules.agent.domain.value_objects import ConversationStatus
+import app.modules.agent.application.pauses.supersede as supersede
 import app.modules.agent.infrastructure.tools.waiting.tools as adapter
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseKind, PauseStatus
 from app.modules.agent.domain.wait import (
-    AgentConversationWaitEntity,
-    AgentWaitStatus,
     AgentWaitType,
-    AgentWaitWakeReason,
+    WaitSpec,
 )
 from app.modules.agent.infrastructure.tools.waiting.models import (
     DEFAULT_TARGET_DEADLINE_SECONDS,
@@ -29,14 +26,18 @@ from app.modules.agent.infrastructure.tools.waiting.tools import wait_for
 from app.modules.agent.domain.tools import AgentInputRequired
 
 
-def _wait(**overrides) -> AgentConversationWaitEntity:
+def _wait(**overrides) -> Pause:
     defaults = {
         "conversation_id": uuid4(),
-        "agent_run_id": uuid4(),
+        "run_id": uuid4(),
         "pod_id": uuid4(),
         "tool_call_id": "tc-1",
+        "tool_name": "wait_for",
+        "kind": PauseKind.WAIT,
+        "wait_type": AgentWaitType.TIME,
+        "wait_spec": WaitSpec(),
     }
-    return AgentConversationWaitEntity(**{**defaults, **overrides})
+    return Pause(**{**defaults, **overrides})
 
 
 def _ctx(*, supports_pause_signal: bool = True, tool_call_id: str = "tc-1"):
@@ -60,28 +61,6 @@ def test_the_wait_types_are_the_three_an_agent_can_name():
         "PROCESS",
         "SUBAGENT",
     ]
-
-
-def test_complete_records_the_reason():
-    wait = _wait()
-    wait.complete(AgentWaitWakeReason.TIMER)
-    assert wait.status is AgentWaitStatus.COMPLETED
-    assert wait.spec["woke_because"] == AgentWaitWakeReason.TIMER.value
-    assert wait.completed_at is not None
-
-
-def test_cancel_is_distinguishable_from_a_normal_wake():
-    wait = _wait()
-    wait.cancel()
-    assert wait.status is AgentWaitStatus.CANCELLED
-    assert wait.spec["woke_because"] == AgentWaitWakeReason.CANCELLED.value
-
-
-def test_completing_preserves_the_original_spec():
-    wait = _wait(spec={"reason": "waiting for the build", "note_to_self": "post it"})
-    wait.complete(AgentWaitWakeReason.TIMER)
-    assert wait.spec["reason"] == "waiting for the build"
-    assert wait.spec["note_to_self"] == "post it"
 
 
 # -- request validation --------------------------------------------------------
@@ -184,22 +163,22 @@ def suspend_harness(monkeypatch):
     Both go in one transaction: a wait with nothing to fire it is an agent that
     sleeps forever.
     """
-    created: list[AgentConversationWaitEntity] = []
-    armed: list[tuple[AgentConversationWaitEntity, datetime | None]] = []
+    created: list[Pause] = []
+    armed: list[tuple[Pause, datetime | None]] = []
 
     class _FakeRepo:
         def __init__(self, uow):
             pass
 
-        async def create(self, wait):
+        async def open(self, wait):
             created.append(wait)
-            return wait
+            return True
 
-        async def find_active_for_run(self, agent_run_id):
+        async def pending(self, conversation_id=None, **_):
             # The tool checks for an existing wait before writing one, because
-            # the database's one-active-wait index would otherwise surface as an
-            # IntegrityError raised from inside a tool body.
-            return None
+            # the database's one-pending-wait index would otherwise surface as
+            # an IntegrityError raised from inside a tool body.
+            return []
 
     class _FakeUow:
         async def __aenter__(self):
@@ -221,7 +200,7 @@ def suspend_harness(monkeypatch):
     async def _fake_poke_host(host_id):
         poked.append(host_id)
 
-    monkeypatch.setattr(adapter, "AgentConversationWaitRepository", _FakeRepo)
+    monkeypatch.setattr(adapter, "Pauses", _FakeRepo)
     monkeypatch.setattr(
         adapter, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow()
     )
@@ -255,18 +234,15 @@ async def test_wait_for_arms_one_active_wait_and_pauses_the_run(suspend_harness)
 
     (wait,) = suspend_harness.created
     assert wait.conversation_id == ctx.conversation_id
-    assert wait.status is AgentWaitStatus.ACTIVE
+    assert wait.status is PauseStatus.PENDING
     assert wait.tool_call_id == "tc-1"
-    assert wait.spec["note_to_self"] is None
+    assert wait.wait_spec.note_to_self is None
     # Due when it was asked to be. A minute of slack, not a fixed clock, so
     # this does not flake.
-    assert (
-        timedelta(seconds=599) <= wait.scheduled_at - before <= timedelta(seconds=660)
-    )
+    assert timedelta(seconds=599) <= wait.wake_at - before <= timedelta(seconds=660)
     # And armed: the item is due exactly when the row says it wakes.
-    assert suspend_harness.armed == [(wait, wait.scheduled_at)]
-    # And resolvable to exactly one wait: `external_ref` is what
-    # `find_active_by_external_ref` joins on.
+    assert suspend_harness.armed == [(wait, wait.wake_at)]
+    # And resolvable to exactly one wait: a per-wait token.
     assert UUID(wait.external_ref)
 
 
@@ -306,7 +282,7 @@ async def test_a_remote_harness_sleeps_too_and_is_told_to_stop(suspend_harness):
     # Armed exactly as it is in-process: same ACTIVE row, same resolvable token.
     (wait,) = suspend_harness.created
     assert UUID(wait.external_ref)
-    assert wait.status is AgentWaitStatus.ACTIVE
+    assert wait.status is PauseStatus.PENDING
     assert wait.tool_call_id == "tc-1"
 
     # The turn is ended by Lemma, not left to the model to end politely.
@@ -358,89 +334,65 @@ async def test_wait_for_clamps_an_over_long_request(suspend_harness):
         )
 
     (wait,) = suspend_harness.created
-    slept = (
-        wait.scheduled_at - datetime.fromisoformat(wait.spec["started_at"])
-    ).total_seconds()
+    slept = (wait.wake_at - wait.wait_spec.started_at).total_seconds()
     assert slept == pytest.approx(MAX_WAIT_SECONDS, abs=1)
     # The unclamped ask is kept so the wake can see what the model actually wanted.
-    assert wait.spec["requested_seconds"] == MAX_WAIT_SECONDS * 10
+    assert wait.wait_spec.requested_seconds == MAX_WAIT_SECONDS * 10
 
 
-# -- Stop, on a sleeping agent -------------------------------------------------
+# -- Stop or a new message, on a sleeping agent ---------------------------------
 
 
 @pytest.mark.asyncio
-async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeypatch):
+async def test_moving_past_a_wait_cancels_it_and_drops_its_timer(monkeypatch):
     """Stop on a snoozed conversation used to do nothing at all.
 
-    ``StopConversation`` only acted when there was an active run, and a snoozed
-    turn has none by construction — the run ended cleanly when the tool paused
-    it. So Stop returned success, the conversation stayed WAITING, and the timer
-    still fired later and resumed the agent the user had just stopped.
+    A snoozed turn has no active run by construction -- the run ended cleanly
+    when the tool paused it -- so Stop returned success and the timer still
+    fired later, resuming the agent the user had just stopped. Stop and a new
+    message both close what the conversation sits on (``SupersedeStalePauses``).
     """
-
-    wait = _wait(external_ref=str(uuid4()), spec={"note_to_self": "post it"})
-    appended: list[dict] = []
-    statuses: list[object] = []
-
-    class _Waits:
-        def __init__(self, uow):
-            pass
-
-        async def find_active_for_conversation(self, conversation_id):
-            return wait
-
-        async def claim(self, wait_id):
-            return wait if wait.status is AgentWaitStatus.ACTIVE else None
-
-        async def update(self, updated):
-            return updated
-
+    wait = _wait(external_ref=str(uuid4()), wait_spec=WaitSpec(note_to_self="post it"))
+    appended: list = []
     disarmed: list = []
 
-    async def _disarm(work, ended):
-        disarmed.append(ended.id)
+    class _Pauses:
+        async def pending(self, conversation_id=None, *, kinds=(), **_):
+            return [wait] if PauseKind.WAIT in kinds and wait.is_open else []
+
+        async def by_id(self, pause_id, *, lock=False):
+            return wait
+
+        async def save(self, pause):
+            return True
 
     class _Conversations:
         async def lock_conversation(self, conversation_id):
             return None
 
-        async def set_conversation_status(self, *, conversation_id, status):
-            statuses.append(status)
+    class _Messages:
+        async def append_message(self, **kwargs):
+            appended.append(kwargs)
+            return kwargs
 
-    monkeypatch.setattr(stops, "AgentConversationWaitRepository", _Waits)
-    monkeypatch.setattr(stops, "disarm_wait", _disarm)
-    monkeypatch.setattr(stops.WorkWriter, "of", staticmethod(lambda uow: None))
+    async def _disarm(work, ended):
+        disarmed.append(ended.id)
 
-    conversations = _Conversations()
-    service = wire_repositories(
-        stops.StopConversation(None, agent_repository=None, supersede=None),
-        conversations,
-    )
+    monkeypatch.setattr(supersede, "disarm_wait", _disarm)
+    monkeypatch.setattr(supersede.WorkWriter, "of", staticmethod(lambda uow: None))
+    use_case = supersede.SupersedeStalePauses(None, resume_returns=None)
+    use_case.pauses, use_case.conversations = _Pauses(), _Conversations()
+    use_case.messages = _Messages()
 
-    async def _append(uow, **kwargs):
-        appended.append(kwargs)
-        return True
-
-    monkeypatch.setattr(stops, "append_pause_tool_return", _append)
-
-    conversation = SimpleNamespace(id=wait.conversation_id, status=None)
-    await service._cancel_active_wait(conversation=conversation)
+    conversation = SimpleNamespace(id=wait.conversation_id)
+    written = await use_case.supersede(conversation=conversation, user_id=uuid4())
 
     # CANCELLED, and its queued timer dropped in the same transaction; a
     # timer already running finds the wait ended under the row lock.
-    assert wait.status is AgentWaitStatus.CANCELLED
+    assert wait.status is PauseStatus.CANCELLED
     assert disarmed == [wait.id]
-    assert statuses == [ConversationStatus.STOPPED]
-    assert conversation.status is ConversationStatus.STOPPED
-
     # The paused call still gets a return: a tool call with no return is dropped
     # when history is rebuilt, and the model would see a turn ending mid-thought.
     (call,) = appended
-    assert call["tool_call_id"] == wait.tool_call_id
-    assert call["tool_result"]["woke_because"] == "CANCELLED"
-    assert call["tool_result"]["success"] is False
-
-    # But the agent must not wake. That is the whole point of Stop: the use case
-    # writes the return with the bare primitive and has no resume to start.
-    assert not hasattr(stops, "ResumeRun")
+    assert written == [call]
+    assert call["draft"].tool_call_id == wait.tool_call_id

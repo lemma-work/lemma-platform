@@ -415,6 +415,11 @@ class PydanticAIHarness:
             emit_tokens=self.emit_tokens,
             agent_run_id=agent_run_id,
             should_stop=should_stop,
+            pauses={
+                spec.name: spec.policy.pauses
+                for spec in options.tools
+                if spec.policy.pauses is not None
+            },
         )
 
         node_loop = NodeLoop(

@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
@@ -27,6 +28,7 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import (
+    AgentRunApprovalDecision,
     AgentRunStatus,
     AgentRuntimeConfig,
     ConversationStatus,
@@ -58,6 +60,14 @@ from app.modules.agent.infrastructure.tools.approval.denials import show_card
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.pause_opening import (
+    AgentHostPermissionRequest,
+    PauseOpening,
+)
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.wait import AgentWaitType, WaitSpec
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import QueueState
 
@@ -205,6 +215,24 @@ async def append(seeded: Seeded, run_id: UUID | None, draft: MessageDraft) -> Me
     return saved
 
 
+def opening_for(tool_name: str, tool_args: JsonObject) -> PauseOpening | None:
+    """The pause a stored call of ``tool_name`` opens, as the harness opens it."""
+    marker = tool_args.get("agent_host_permission")
+    if tool_name == "request_approval" and isinstance(marker, dict):
+        return PauseOpening(
+            kind=PauseKind.HOST_PERMISSION,
+            host_permission=AgentHostPermissionRequest.model_validate(
+                {**marker, "tool_name": tool_args.get("tool_name")}
+            ),
+        )
+    kind = {
+        "ask_user": PauseKind.QUESTION,
+        "request_approval": PauseKind.APPROVAL,
+        "browser_sign_in": PauseKind.SIGN_IN,
+    }.get(tool_name)
+    return PauseOpening(kind=kind) if kind is not None else None
+
+
 async def pausing_call(
     seeded: Seeded,
     run_id: UUID,
@@ -222,6 +250,7 @@ async def pausing_call(
             tool_call_id=tool_call_id,
             tool_args=tool_args,
             state=state,
+            pause=opening_for(tool_name, tool_args),
         ),
     )
     inner = tool_args.get("tool_name")
@@ -318,3 +347,54 @@ async def refused_before_asking(
         args=dict(args),
         permission_ids=permission_ids,
     )
+
+
+def wait_pause(
+    *,
+    conversation_id: UUID,
+    run_id: UUID,
+    pod_id: UUID,
+    tool_call_id: str,
+    wait_type: AgentWaitType,
+    wake_at: datetime | None,
+    spec: JsonObject,
+    external_ref: str | None = None,
+) -> Pause:
+    """A ``wait_for`` pause as its tool writes it, for ``Pauses.open``."""
+    return Pause(
+        conversation_id=conversation_id,
+        run_id=run_id,
+        pod_id=pod_id,
+        tool_call_id=tool_call_id,
+        tool_name="wait_for",
+        kind=PauseKind.WAIT,
+        wait_type=wait_type,
+        external_ref=external_ref or str(uuid4()),
+        wake_at=wake_at,
+        wait_spec=WaitSpec.model_validate(spec),
+    )
+
+
+async def pause_by_id(pause_id: UUID) -> Pause | None:
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        return await Pauses(uow).by_id(pause_id)
+
+
+async def record_decision(
+    conversation_id: UUID,
+    tool_call_id: str,
+    *,
+    decision: AgentRunApprovalDecision,
+    by: UUID,
+    response: JsonObject | None = None,
+) -> None:
+    """A decision committed with nothing after it: no return, no resume."""
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        pauses = Pauses(uow)
+        pause = await pauses.get(
+            conversation_id=conversation_id, tool_call_id=tool_call_id
+        )
+        assert pause is not None, "no pause was opened for the call"
+        assert pause.resolve(decision, response, by=by)
+        assert await pauses.save(pause)
+        await uow.commit()

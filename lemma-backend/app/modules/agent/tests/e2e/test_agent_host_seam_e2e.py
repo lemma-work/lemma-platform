@@ -14,7 +14,7 @@ intake and the shipped reader, and asserts on what a conversation ends up with.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.state_kinds import PauseKind
 
 import asyncio
 import base64
@@ -56,7 +56,6 @@ from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
 )
-from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import (
@@ -65,9 +64,7 @@ from app.modules.agent.infrastructure.runtime_models import (
 )
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.mcp_pausing_calls import (
     close_pausing_tool_call,
     record_pausing_tool_call,
@@ -656,7 +653,8 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
         lambda: SqlAlchemyUnitOfWork(db_session),
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        pauses=PausingKind.WAIT_FOR,
+        tool_name="wait_for",
+        pauses=PauseKind.WAIT,
         arguments={"reason": "waiting for the nightly build", "seconds": 600},
     )
     await db_session.commit()
@@ -729,8 +727,7 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
     await db_session.commit()
 
     uow = SqlAlchemyUnitOfWork(db_session)
-    waits = AgentConversationWaitRepository(uow)
-    wait = await waits.find_active_for_run(run_id)
+    (wait,) = await Pauses(uow).pending(run_id=run_id, kinds=(PauseKind.WAIT,))
     assert wait is not None and wait.tool_call_id == tool_call_id
 
     woke = await AgentWaitService(uow).wake(wait=wait)
@@ -800,7 +797,8 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         uow_factory,
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        pauses=PausingKind.WAIT_FOR,
+        tool_name="wait_for",
+        pauses=PauseKind.WAIT,
         arguments={"reason": "polling", "seconds": 5},
     )
     refusal = await wait_for(
@@ -813,7 +811,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         conversation_id=conversation_id,
         agent_run_id=run_id,
         tool_call_id=rejected_id,
-        tool_name=WAIT_TOOL_NAME,
+        tool_name="wait_for",
         result=refusal,
     )
     await db_session.commit()
@@ -822,7 +820,8 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         uow_factory,
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        pauses=PausingKind.WAIT_FOR,
+        tool_name="wait_for",
+        pauses=PauseKind.WAIT,
         arguments={"reason": "the nightly build", "seconds": 600},
     )
     slept = await wait_for(
@@ -835,7 +834,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         conversation_id=conversation_id,
         agent_run_id=run_id,
         tool_call_id=real_id,
-        tool_name=WAIT_TOOL_NAME,
+        tool_name="wait_for",
         result=slept,
     )
     await Runs(uow_factory()).finish_agent_run(
@@ -844,7 +843,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
     await db_session.commit()
 
     uow = uow_factory()
-    wait = await AgentConversationWaitRepository(uow).find_active_for_run(run_id)
+    (wait,) = await Pauses(uow).pending(run_id=run_id, kinds=(PauseKind.WAIT,))
     assert wait is not None and wait.tool_call_id == real_id
     assert await AgentWaitService(uow).wake(wait=wait) is True
     await db_session.commit()

@@ -7,7 +7,7 @@ from app.modules.agent.infrastructure.tools.browser.models import (
 )
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.tools import ToolGroup, ToolPolicy, tool
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.state_kinds import PauseKind
 
 
 async def browser_sign_in(
@@ -62,6 +62,6 @@ SPECS = (
     tool(
         browser_sign_in,
         ToolGroup.BROWSER,
-        ToolPolicy(pauses=PausingKind.BROWSER_SIGN_IN, deferrable=True),
+        ToolPolicy(pauses=PauseKind.SIGN_IN, deferrable=True),
     ),
 )

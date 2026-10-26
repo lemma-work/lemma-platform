@@ -1,5 +1,4 @@
-"""The primitives every pause shares: find its call, write its return, start its
-resume run.
+"""The primitives every pause shares: write its return, start its resume run.
 
 Any tool that raises ``AgentInputRequired`` -- ``ask_user``,
 ``request_approval``, ``browser_sign_in``, ``wait_for`` -- ends its run and
@@ -22,11 +21,6 @@ from app.core.log.log import get_logger
 from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.pausing_tools import (
-    PAUSING_TOOL_NAMES,
-    PausedCall,
-    PausingKind,
-)
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.run_state import RunPrivacy, RunState
 from app.modules.agent.domain.value_objects import MessageDraft, RunTrigger
@@ -51,34 +45,6 @@ logger = get_logger(__name__)
 ResumeStarted = tuple[UUID, list[Message]]
 
 
-async def paused_call(
-    pausing_calls: Pauses, *, conversation_id: UUID, approval_id: str
-) -> PausedCall | None:
-    """The pausing tool call for an approval, regardless of decision state.
-
-    Addressed directly by ``tool_call_id`` (not a message-window scan) so a
-    long conversation can't hide the original call during resume
-    reconciliation.
-    """
-    message = await pausing_calls.get_tool_call(
-        conversation_id=conversation_id,
-        tool_call_id=approval_id,
-    )
-    if (
-        message is None
-        or message.tool_name is None
-        or message.tool_name not in PAUSING_TOOL_NAMES
-        or message.agent_run_id is None
-    ):
-        return None
-    tool_args = message.tool_args if isinstance(message.tool_args, dict) else {}
-    return PausedCall(
-        agent_run_id=message.agent_run_id,
-        kind=PausingKind(message.tool_name),
-        tool_args=tool_args,
-    )
-
-
 def publish_after_commit(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID, frames: list[dict[str, object]]
 ) -> None:
@@ -101,7 +67,7 @@ def publish_after_commit(
 async def append_pause_tool_return(
     uow: SqlAlchemyUnitOfWork,
     *,
-    pausing_calls: Pauses,
+    pauses: Pauses,
     messages: Messages,
     conversation: Conversation,
     paused_run_id: UUID,
@@ -117,7 +83,7 @@ async def append_pause_tool_return(
     reconstructed per conversation and ``_build_tool_batch`` pairs a return
     with its call regardless of which run each lives in.
     """
-    existing = await pausing_calls.get_tool_return(
+    existing = await pauses.tool_return(
         conversation_id=conversation.id,
         tool_call_id=tool_call_id,
     )

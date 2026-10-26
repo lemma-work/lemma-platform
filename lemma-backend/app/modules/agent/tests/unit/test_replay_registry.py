@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import CALL_NAMES, PAUSING_CALL_NAMES
 from app.modules.agent.domain.replay import (
     ReplayClass,
     is_replayable_call,
@@ -48,10 +48,18 @@ def _class(tool: str | None, args: object = None) -> ReplayClass:
 
 def test_pauses_are_never_settled_by_a_resumed_turn() -> None:
     specs = _specs()
-    for name in PAUSING_TOOL_NAMES:
+    for name in PAUSING_CALL_NAMES:
         assert specs[name].policy.pauses is not None
         assert not is_replayable_call(name)
     assert is_replayable_call("pod_read_file")
+
+
+def test_the_stored_call_names_are_the_tools_that_pause() -> None:
+    """``CALL_NAMES`` is read only by transcript readers; it must agree with
+    ``ToolPolicy.pauses``, which is what says a tool pauses."""
+    for spec in _specs().values():
+        if spec.policy.pauses is not None:
+            assert CALL_NAMES[spec.policy.pauses] == spec.name
 
 
 @pytest.mark.parametrize(

@@ -113,7 +113,7 @@ class ConversationMCPService:
         return been written yet".
         """
         async with self.uow_factory() as uow:
-            message = await Pauses(uow).get_tool_return(
+            message = await Pauses(uow).tool_return(
                 conversation_id=conversation_id,
                 tool_call_id=tool_call_id,
             )
@@ -171,6 +171,7 @@ class ConversationMCPService:
                 self.uow_factory,
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
+                tool_name=spec.name,
                 pauses=spec.policy.pauses,
                 arguments=arguments,
             )

@@ -28,9 +28,8 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.wait import AgentWaitWakeReason
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.wait_wake_service import AgentWaitService
 
 logger = get_logger(__name__)
@@ -64,7 +63,7 @@ class MessageReplyService:
         self.uow = uow
         self.conversations = Conversations(uow)
         self.messages = Messages(uow)
-        self.waits = AgentConversationWaitRepository(uow)
+        self.pauses = Pauses(uow)
 
     async def deliver(
         self, *, conversation_id: UUID, pod_id: UUID, batch_id: str | None = None
@@ -93,13 +92,13 @@ class MessageReplyService:
             await self._context_for(conversation.user_id, pod_id)
         )
         try:
-            wait = await self.waits.find_active_for_conversation(conversation_id)
-            if wait is not None:
+            waits = await self.pauses.pending(conversation_id, kinds=(PauseKind.WAIT,))
+            if waits:
                 # Asleep for its own reasons. Resolving the pause it is holding
                 # is the way back in: a new message would supersede that pause
                 # while leaving its wait row armed to fire a second time later.
                 return await AgentWaitService(self.uow).wake(
-                    wait=wait, reason=AgentWaitWakeReason.ANSWERED
+                    wait=waits[0], reason=AgentWaitWakeReason.ANSWERED
                 )
 
             # Never past a question the owner has not answered: this is news,

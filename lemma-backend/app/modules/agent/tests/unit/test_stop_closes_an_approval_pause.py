@@ -1,7 +1,7 @@
 """Stop must close whatever pause the conversation is sitting on.
 
 ``StopConversation`` handled two states: a run in flight, and a snoozed turn.
-A conversation paused on ``ask_user``/``request_approval`` is neither — the run
+A conversation paused on ``ask_user``/``request_approval`` was neither — the run
 that asked finished when the tool paused it — so Stop returned the conversation
 unchanged, with no error and no state change, on the state where a person most
 wants to abandon a turn: an approval they do not want to grant.
@@ -113,7 +113,7 @@ async def test_stopping_a_waiting_conversation_denies_the_open_request(
         published=published,
     )
 
-    await coordinator._deny_unresolved_pauses(
+    await coordinator._close_open_pauses(
         conversation=conversation, user_id=conversation.user_id
     )
 
@@ -137,7 +137,7 @@ async def test_a_conversation_with_nothing_open_is_left_alone(
         monkeypatch, superseded=[], published=published
     )
 
-    await coordinator._deny_unresolved_pauses(
+    await coordinator._close_open_pauses(
         conversation=conversation, user_id=conversation.user_id
     )
 
@@ -161,10 +161,7 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
     conversation = _conversation()
     closed: list[str] = []
 
-    async def _cancel_wait(*, conversation):
-        closed.append("wait")
-
-    async def _deny_pauses(*, conversation, user_id):
+    async def _close_pauses(*, conversation, user_id):
         closed.append("pauses")
 
     async def _hold_decided(*, conversation):
@@ -185,8 +182,7 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
         stops, "validate_conversation_access", lambda loaded, **_kwargs: loaded
     )
     monkeypatch.setattr(stops, "require_agent_action", AsyncMock())
-    monkeypatch.setattr(coordinator, "_cancel_active_wait", _cancel_wait)
-    monkeypatch.setattr(coordinator, "_deny_unresolved_pauses", _deny_pauses)
+    monkeypatch.setattr(coordinator, "_close_open_pauses", _close_pauses)
     monkeypatch.setattr(
         coordinator, "_keep_a_decided_pause_from_resuming", _hold_decided
     )
@@ -197,7 +193,7 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
         pod_id=conversation.pod_id,
     )
 
-    assert closed == ["wait", "pauses", "decided"]
+    assert closed == ["pauses", "decided"]
     assert result is conversation
     stops.require_agent_action.assert_awaited_once()
     assert (

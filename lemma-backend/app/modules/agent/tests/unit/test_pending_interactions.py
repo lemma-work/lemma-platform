@@ -11,6 +11,7 @@ from app.modules.agent.api.controllers.conversation_pending_controller import (
     encode_pending_page_token,
     parse_pending_page_token,
 )
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.pending_interactions import (
     SUMMARY_CHARACTERS,
     PendingInteractionCursor,
@@ -20,22 +21,18 @@ from app.modules.agent.domain.pending_interactions import (
 
 
 @pytest.mark.parametrize(
-    "tool_name, is_host_permission, kind",
+    "pause, kind",
     [
-        ("ask_user", False, PendingInteractionKind.QUESTION),
-        ("request_approval", False, PendingInteractionKind.APPROVAL),
-        ("request_approval", True, PendingInteractionKind.PERMISSION),
+        (PauseKind.QUESTION, PendingInteractionKind.QUESTION),
+        (PauseKind.APPROVAL, PendingInteractionKind.APPROVAL),
+        (PauseKind.BUDGET, PendingInteractionKind.APPROVAL),
+        (PauseKind.HOST_PERMISSION, PendingInteractionKind.PERMISSION),
     ],
 )
 def test_a_pause_is_named_by_what_it_asks_for(
-    tool_name: str, is_host_permission: bool, kind: PendingInteractionKind
+    pause: PauseKind, kind: PendingInteractionKind
 ) -> None:
-    assert (
-        PendingInteractionKind.of(
-            tool_name=tool_name, is_host_permission=is_host_permission
-        )
-        is kind
-    )
+    assert PendingInteractionKind.of(pause) is kind
 
 
 def test_a_summary_is_one_line() -> None:

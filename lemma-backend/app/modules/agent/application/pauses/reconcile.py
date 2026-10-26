@@ -14,10 +14,8 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.application.pauses.resume import ResumeRun
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.value_objects import (
-    AgentRunApprovalDecision,
-    RunTrigger,
-)
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.value_objects import RunTrigger
 from app.modules.agent.infrastructure import repositories
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.pauses import Pauses
@@ -38,7 +36,7 @@ class ReconcileDecision:
     ) -> None:
         self.uow = uow
         self.conversations = Conversations(uow)
-        self.pausing_calls = Pauses(uow)
+        self.pauses = Pauses(uow)
         self.resume_returns = resume_returns
         self.resume = resume
 
@@ -56,12 +54,7 @@ class ReconcileDecision:
         self,
         *,
         conversation: Conversation,
-        approval_id: str,
-        paused_run_id: UUID,
-        kind: str,
-        tool_args: dict[str, object],
-        decision: AgentRunApprovalDecision,
-        response: dict[str, object],
+        pause: Pause,
         user_id: UUID,
         agent_name: str | None,
     ) -> None:
@@ -78,29 +71,21 @@ class ReconcileDecision:
         # Two resolvers adopting one decision (a tap and a click) both get here;
         # the conversation lock makes the second see the first one's return.
         await self.conversations.lock_conversation(conversation.id)
-        existing_return = await self.pausing_calls.get_tool_return(
-            conversation_id=conversation.id,
-            tool_call_id=approval_id,
+        existing_return = await self.pauses.tool_return(
+            conversation_id=conversation.id, tool_call_id=pause.tool_call_id
         )
         tool_return = None
         if existing_return is None:
             tool_return = await self.resume_returns.build(
-                conversation=conversation,
-                user_id=user_id,
-                kind=kind,
-                tool_args=tool_args,
-                decision=decision,
-                response=response,
-                paused_agent_run_id=paused_run_id,
-                tool_call_id=approval_id,
+                conversation=conversation, user_id=user_id, pause=pause
             )
         await self.resume.resume(
             conversation=conversation,
-            paused_run_id=paused_run_id,
-            tool_call_id=approval_id,
+            paused_run_id=pause.run_id,
+            tool_call_id=pause.tool_call_id,
             user_id=user_id,
             agent_name=agent_name,
             trigger=RunTrigger.RESUME,
             tool_return=tool_return,
-            decided_call_args=tool_args,
+            decided=pause,
         )

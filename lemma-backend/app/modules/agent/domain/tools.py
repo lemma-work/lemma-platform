@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.json_schema import GenerateJsonSchema, JsonSchemaValue
 from pydantic_core import CoreConfig, SchemaValidator, core_schema
 
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import JsonObject
 
 
@@ -100,7 +100,7 @@ class ToolPolicy:
     title: str | None = None
     view: str | None = None
     #: Ends the run until something resolves it. Never derived from the name.
-    pauses: PausingKind | None = None
+    pauses: PauseKind | None = None
     #: Read and found to reach nothing but what the pod made Public, so a run
     #: answering somebody outside the pod may call it. Everything else is
     #: withheld from such a run.
@@ -241,18 +241,20 @@ def tool(
 
 
 class AgentInputRequired(Exception):
-    """Control-flow signal: the run pauses until ``kind`` is resolved.
+    """Control-flow signal: the run pauses until its pause is resolved.
 
     Raised by a pausing tool inside the in-process harness instead of blocking
-    the worker. The call is already persisted; the harness ends the run
-    cleanly and a fresh run replays the synthesized return.
-    ``tool_call_id`` is the durable pause id. ``kind`` is kept as the stored
-    name, since it travels on as event data that is serialized and logged.
+    the worker. The call and its pause are already persisted; the harness ends
+    the run cleanly and a fresh run replays the synthesized return.
+    ``tool_call_id`` is the durable pause id. ``kind`` is the name the call is
+    stored under, which the WAITING event carries on to the surfaces.
     """
 
-    def __init__(self, tool_call_id: str, kind: PausingKind | str) -> None:
+    def __init__(self, tool_call_id: str, kind: PauseKind | str) -> None:
+        from app.modules.agent.domain.pauses import CALL_NAMES
+
         self.tool_call_id = tool_call_id
-        self.kind: str = PausingKind(kind).value
+        self.kind: str = CALL_NAMES[kind] if isinstance(kind, PauseKind) else kind
         super().__init__(
             f"Agent run paused for user input ({self.kind}:{tool_call_id})"
         )

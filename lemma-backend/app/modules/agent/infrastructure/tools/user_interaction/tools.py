@@ -13,7 +13,7 @@ from app.modules.agent.domain.tools import (
     ToolPolicy,
     tool,
 )
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.infrastructure.tools.tool_errors import (
     safe_described_error,
     safe_error_text,
@@ -368,7 +368,7 @@ async def request_approval(
     # decision, runs the approved tool as the user (or denies), and feeds the
     # synthesized RequestApprovalResponse back as this call's return on a fresh
     # run. request_approval therefore runs only once.
-    raise AgentInputRequired(ctx.tool_call_id, PausingKind.REQUEST_APPROVAL)
+    raise AgentInputRequired(ctx.tool_call_id, PauseKind.APPROVAL)
 
 
 async def _show_card(
@@ -575,7 +575,7 @@ async def ask_user(
     # WAITING); on submit the approvals endpoint records the answers and starts a
     # fresh run that replays the synthesized AskUserResponse from history. A DENY
     # there means the user dismissed the questions. ask_user runs only once.
-    raise AgentInputRequired(ctx.tool_call_id, PausingKind.ASK_USER)
+    raise AgentInputRequired(ctx.tool_call_id, PauseKind.QUESTION)
 
 
 SPECS = (
@@ -588,7 +588,7 @@ SPECS = (
     tool(
         request_approval,
         ToolGroup.USER_INTERACTION,
-        ToolPolicy(pauses=PausingKind.REQUEST_APPROVAL),
+        ToolPolicy(pauses=PauseKind.APPROVAL),
     ),
-    tool(ask_user, ToolGroup.USER_INTERACTION, ToolPolicy(pauses=PausingKind.ASK_USER)),
+    tool(ask_user, ToolGroup.USER_INTERACTION, ToolPolicy(pauses=PauseKind.QUESTION)),
 )

@@ -23,10 +23,7 @@ from app.modules.agent.domain.agent_host import (
 )
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.pausing_tools import (
-    USER_PAUSING_TOOL_NAMES,
-    WAIT_TOOL_NAME,
-)
+from app.modules.agent.domain.pauses import PERSON_KINDS
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -55,6 +52,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
 from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
     record_steer_result,
 )
+from app.modules.agent.infrastructure.db.pauses import Awaiting, Pauses
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 from app.modules.agent.services.run_suspension import (
     run_suspended_on,
@@ -232,6 +230,7 @@ class RunEventApplier:
         """
         if not any(event.type in _ENDED_CLEANLY for event in events):
             return events
+        still_open: set[str] = set()
         async with self.uow_factory() as uow:
             wait = await run_suspended_on(uow, agent_run_id=agent_run_id)
             parked = (
@@ -239,11 +238,22 @@ class RunEventApplier:
                 if wait is None
                 else None
             )
+            if parked is not None:
+                still_open = {
+                    pause.tool_call_id
+                    for pause in await Pauses(uow).pending(
+                        run_id=agent_run_id,
+                        kinds=PERSON_KINDS,
+                        awaiting=Awaiting.EITHER,
+                    )
+                }
         if wait is not None:
-            pause_id, kind = wait.tool_call_id, WAIT_TOOL_NAME
+            pause_id, kind = wait.tool_call_id, wait.tool_name
         elif parked is not None:
             pause_id, kind = parked.tool_call_id, parked.tool_name
-            events = [event for event in events if not _closes_a_pause(event)]
+            events = [
+                event for event in events if not _closes_a_pause(event, still_open)
+            ]
         else:
             return events
         return [
@@ -265,14 +275,14 @@ class RunEventApplier:
         ]
 
 
-def _closes_a_pause(event: AgentEvent) -> bool:
+def _closes_a_pause(event: AgentEvent, still_open: set[str]) -> bool:
     """A return made up at the turn's end for a call a person still has to answer."""
     draft = event.data
     return (
         event.type is AgentEventType.MESSAGE
         and isinstance(draft, MessageDraft)
         and draft.kind is MessageKind.TOOL_RETURN
-        and draft.tool_name in USER_PAUSING_TOOL_NAMES
+        and draft.tool_call_id in still_open
         and draft.state.synthetic_tool_return
     )
 

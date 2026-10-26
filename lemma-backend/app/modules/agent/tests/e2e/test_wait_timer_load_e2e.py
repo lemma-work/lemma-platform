@@ -6,7 +6,7 @@ own dispatch loops and sized pool, events class only -- fires them: wait
 COMPLETED, tool return, resume run, item deleted, one transaction each.
 
 Measured, and printed as one JSON line (``WAIT_TIMER_LOAD_RESULT``): lateness
-(``completed_at - scheduled_at``) percentiles, and the runtime's pool size. Sized by ``WAIT_LOAD_WAITS``, ``WAIT_LOAD_PODS`` and
+(``resolved_at - wake_at``) percentiles, and the runtime's pool size. Sized by ``WAIT_LOAD_WAITS``, ``WAIT_LOAD_PODS`` and
 ``WAIT_LOAD_WINDOW_SECONDS``; the default is small enough for the protected
 lane, and ``WAIT_LOAD_WAITS=1000 WAIT_LOAD_PODS=100`` is the full measurement.
 """
@@ -30,19 +30,17 @@ from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.work import WorkClass, WorkWriter
 from app.core.infrastructure.work.db import DbBudget
 from app.core.infrastructure.work.runtime import WorkRuntime
-from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     AgentRuntimeConfig,
     ConversationStatus,
     MessageDraft,
 )
-from app.modules.agent.domain.wait import AgentConversationWaitEntity, AgentWaitType
+from app.modules.agent.domain.wait import AgentWaitType
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.tests.e2e.lifecycle_helpers import wait_pause
 from app.modules.agent.services.wait_timers import arm_wait
 from app.modules.test_support.e2e.agent_work import agent_wait_and_approval_registry
 from app.modules.test_support.e2e.builders import E2EScenario
@@ -96,7 +94,7 @@ async def _pause(conversation_id: UUID, pod_id: UUID, user_id: UUID) -> None:
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_tool_call(
-                tool_name=WAIT_TOOL_NAME,
+                tool_name="wait_for",
                 tool_call_id=call,
                 tool_args={"reason": "load", "seconds": 60},
             ),
@@ -106,18 +104,16 @@ async def _pause(conversation_id: UUID, pod_id: UUID, user_id: UUID) -> None:
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.WAITING,
         )
-        wait = await AgentConversationWaitRepository(uow).create(
-            AgentConversationWaitEntity(
-                conversation_id=conversation_id,
-                agent_run_id=run.id,
-                pod_id=pod_id,
-                tool_call_id=call,
-                wait_type=AgentWaitType.TIME,
-                external_ref=str(uuid4()),
-                scheduled_at=far,
-                spec={"reason": "load", "user_id": str(user_id)},
-            )
+        wait = wait_pause(
+            conversation_id=conversation_id,
+            run_id=run.id,
+            pod_id=pod_id,
+            tool_call_id=call,
+            wait_type=AgentWaitType.TIME,
+            wake_at=far,
+            spec={"reason": "load", "user_id": str(user_id)},
         )
+        assert await Pauses(uow).open(wait)
         await arm_wait(WorkWriter.of(uow), wait, far)
         await uow.commit()
 
@@ -154,8 +150,8 @@ async def test_a_thousand_timers_due_in_one_minute_fire_on_time(
         await session.execute(
             text(
                 "WITH ranked AS (SELECT id, row_number() OVER (ORDER BY random()) - 1 "
-                "AS i FROM agent_conversation_waits WHERE status = 'ACTIVE') "
-                "UPDATE agent_conversation_waits w SET scheduled_at = "
+                "AS i FROM agent_pauses WHERE kind = 'WAIT' AND status = 'PENDING') "
+                "UPDATE agent_pauses w SET wake_at = "
                 "CAST(:start AS timestamptz) + r.i * make_interval(secs => :step) "
                 "FROM ranked r WHERE w.id = r.id"
             ),
@@ -166,8 +162,8 @@ async def test_a_thousand_timers_due_in_one_minute_fire_on_time(
         )
         await session.execute(
             text(
-                "UPDATE work_items i SET run_at = w.scheduled_at "
-                "FROM agent_conversation_waits w "
+                "UPDATE work_items i SET run_at = w.wake_at "
+                "FROM agent_pauses w "
                 "WHERE i.dedup_key = 'wait:' || w.id::text"
             )
         )
@@ -189,8 +185,8 @@ async def test_a_thousand_timers_due_in_one_minute_fire_on_time(
         await eventually(
             label="every wait fired",
             probe=lambda: _scalar(
-                "SELECT count(*) FROM agent_conversation_waits "
-                "WHERE status = 'COMPLETED'"
+                "SELECT count(*) FROM agent_pauses "
+                "WHERE kind = 'WAIT' AND status = 'RESOLVED'"
             ),
             done=lambda n: int(n) >= total,  # type: ignore[call-overload]
             timeout_seconds=WINDOW.total_seconds() + 120,
@@ -208,8 +204,8 @@ async def test_a_thousand_timers_due_in_one_minute_fire_on_time(
         "'p95', percentile_cont(0.95) WITHIN GROUP (ORDER BY s), "
         "'p99', percentile_cont(0.99) WITHIN GROUP (ORDER BY s), "
         "'max', max(s), 'min', min(s), 'n', count(*)) FROM ("
-        "SELECT extract(epoch FROM completed_at - scheduled_at) AS s "
-        "FROM agent_conversation_waits WHERE status = 'COMPLETED') t"
+        "SELECT extract(epoch FROM resolved_at - wake_at) AS s "
+        "FROM agent_pauses WHERE kind = 'WAIT' AND status = 'RESOLVED') t"
     )
     assert isinstance(lateness, dict)
     resumed = await _scalar("SELECT count(*) FROM agent_runs WHERE trigger = 'WAKE'")

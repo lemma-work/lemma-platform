@@ -19,8 +19,7 @@ actually took effect -- a concurrent answer that won is what the line shows.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -35,19 +34,24 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.contracts import channel_conversations
 from app.modules.agent.domain.asked_questions import line_client_id
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import (
+    APPROVAL_KINDS,
+    ASKED_KINDS,
+    CALL_NAMES,
+    Pause,
+    deadline_for,
+)
+from app.modules.agent.domain.state_kinds import PauseKind, PauseStatus
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     MessageKind,
     MessageRole,
 )
 from app.modules.agent.infrastructure.models import AgentModel
-from app.modules.agent.infrastructure.models.approval import AgentApprovalDecisionModel
 from app.modules.agent.infrastructure.models.conversation import MessageModel
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.approval_action import approval_action
-from app.modules.agent.domain.approvals import SUPERSEDED_KEY
 from app.modules.agent.application.pauses.decide import DecidePause
 from app.modules.channels.contracts import (
     Asker,
@@ -68,13 +72,11 @@ from app.modules.channels.contracts import questions as channel_questions
 from app.modules.channels.contracts.answers import line_answered_in
 from app.modules.channels.contracts.lines import line_by_id
 from app.modules.channels.contracts.questions import AnswerRefused, Answering
-from app.modules.agent.domain.pausing_tools import PausingKind
 
 #: What a question's ``ref`` starts with: an agent's paused tool call.
 TOOL_REF = "tool"
-#: How long a question waits before it stops waiting.
-ASK_EXPIRES_AFTER = timedelta(hours=72)
-APPROVAL_EXPIRES_AFTER = timedelta(days=7)
+#: The name a question records for the call it asks about.
+_ASK, _APPROVE = CALL_NAMES[PauseKind.QUESTION], CALL_NAMES[PauseKind.APPROVAL]
 #: The most questions one conversation is shown waiting on at once.
 MAX_PAUSES = 20
 
@@ -94,27 +96,6 @@ def parse_tool_ref(ref: str) -> tuple[UUID, str] | None:
         return None
 
 
-@dataclass(frozen=True, slots=True)
-class Pause:
-    """A paused ``ask_user`` or ``request_approval`` nobody has decided."""
-
-    tool_call_id: str
-    kind: str
-    tool_args: dict[str, object]
-    agent_run_id: UUID | None
-    #: Where the call sits in its conversation, to find what led up to it.
-    sequence: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PauseDecision:
-    """How a pause was decided, as stored."""
-
-    decision: str
-    response: dict[str, object]
-    resolved_by_user_id: UUID | None
-
-
 def _questions(args: Mapping[str, object]) -> list[dict[str, object]]:
     raw = args.get("questions")
     return [q for q in raw if isinstance(q, dict)] if isinstance(raw, list) else []
@@ -128,8 +109,8 @@ def shown(pause: Pause) -> tuple[str, dict[str, object]]:
     approves running exactly that with their own access. Shown with any
     secret in it masked, and clipped (``approval_action``).
     """
-    args = pause.tool_args
-    if pause.kind == PausingKind.REQUEST_APPROVAL:
+    args = pause.call_args
+    if pause.kind in APPROVAL_KINDS:
         title = str(args.get("title") or "May I go ahead?")
         reason = args.get("reason")
         action = args.get("tool_name")
@@ -142,7 +123,7 @@ def shown(pause: Pause) -> tuple[str, dict[str, object]]:
         return (
             text,
             {
-                "tool": PausingKind.REQUEST_APPROVAL.value,
+                "tool": _APPROVE,
                 "prompt": title,
                 "reason": reason,
                 "action": action,
@@ -154,20 +135,21 @@ def shown(pause: Pause) -> tuple[str, dict[str, object]]:
     questions = _questions(args)
     asked = [str(q.get("question") or "") for q in questions if q.get("question")]
     return "\n".join(asked) or "A question for you", {
-        "tool": PausingKind.ASK_USER.value,
+        "tool": _ASK,
         "prompt": asked[0] if asked else "",
         "questions": questions,
     }
 
 
-def effective_answer(kind: str, decided: PauseDecision) -> dict[str, object]:
-    """What a decided pause shows on its line."""
-    if kind == PausingKind.ASK_USER:
+def effective_answer(tool: str, decided: Pause) -> dict[str, object]:
+    """What a decided pause shows on its line; ``tool`` is what the line asked."""
+    decision = decided.decision.value if decided.decision else None
+    if tool == _ASK:
         answers = decided.response.get("answers")
-        if decided.decision == AgentRunApprovalDecision.DENY.value:
-            return {"decision": decided.decision}
+        if decided.decision is AgentRunApprovalDecision.DENY:
+            return {"decision": decision}
         return {"answers": dict(answers) if isinstance(answers, dict) else {}}
-    return {"decision": decided.decision, **decided.response}
+    return {"decision": decision, **decided.response}
 
 
 # -- reading the conversation's pauses -------------------------------------------
@@ -176,50 +158,24 @@ def effective_answer(kind: str, decided: PauseDecision) -> dict[str, object]:
 async def undecided_pauses(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> list[Pause]:
-    calls = await Pauses(uow).pausing_calls_awaiting_a_decision(
-        conversation_id=conversation_id,
-        pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-        limit=MAX_PAUSES,
+    return await Pauses(uow).pending(
+        conversation_id, kinds=ASKED_KINDS, limit=MAX_PAUSES
     )
-    return [
-        Pause(
-            tool_call_id=call.tool_call_id,
-            kind=call.tool_name or "",
-            tool_args=dict(call.tool_args) if isinstance(call.tool_args, dict) else {},
-            agent_run_id=call.agent_run_id,
-            sequence=call.sequence,
-        )
-        for call in calls
-        if call.tool_call_id
-        and call.tool_name in (PausingKind.ASK_USER, PausingKind.REQUEST_APPROVAL)
-    ]
 
 
 async def pause_decisions(
     uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, tool_call_ids: Sequence[str]
-) -> dict[str, PauseDecision]:
-    if not tool_call_ids:
-        return {}
-    decision = AgentApprovalDecisionModel
-    rows = await uow.session.execute(
-        select(
-            decision.approval_id,
-            decision.decision,
-            decision.response,
-            decision.resolved_by_user_id,
-        ).where(
-            decision.conversation_id == conversation_id,
-            decision.approval_id.in_(list(tool_call_ids)),
+) -> dict[str, Pause]:
+    """The decided pauses among these calls, by call id."""
+    pauses = Pauses(uow)
+    decided: dict[str, Pause] = {}
+    for tool_call_id in tool_call_ids:
+        pause = await pauses.get(
+            conversation_id=conversation_id, tool_call_id=tool_call_id
         )
-    )
-    return {
-        approval_id: PauseDecision(
-            decision=str(made),
-            response=dict(response) if isinstance(response, dict) else {},
-            resolved_by_user_id=resolved_by,
-        )
-        for approval_id, made, response, resolved_by in rows.tuples()
-    }
+        if pause is not None and pause.decision is not None:
+            decided[tool_call_id] = pause
+    return decided
 
 
 # -- keeping the lines in line ---------------------------------------------------
@@ -256,7 +212,7 @@ async def sync_pause_questions(
 async def _ask(uow: SqlAlchemyUnitOfWork, conversation, pause: Pause, ref: str) -> None:
     member = Principal.member(conversation.user_id)
     channel_id, thread_root = await _where_to_ask(
-        uow, conversation, run_id=pause.agent_run_id
+        uow, conversation, run_id=pause.run_id
     )
     agent_id = effective_agent_id(conversation.agent_id, pod_id=conversation.pod_id)
     text, question = shown(pause)
@@ -264,7 +220,7 @@ async def _ask(uow: SqlAlchemyUnitOfWork, conversation, pause: Pause, ref: str) 
         # What the agent said leading up to the question: a platform's card
         # carries it, and the timeline should read the same.
         text = f"{narration}\n\n{text}"
-    approval = pause.kind == PausingKind.REQUEST_APPROVAL
+    approval = pause.kind in APPROVAL_KINDS
     await post(
         uow,
         channel_id=channel_id,
@@ -279,7 +235,7 @@ async def _ask(uow: SqlAlchemyUnitOfWork, conversation, pause: Pause, ref: str) 
             text=text,
             client_message_id=line_client_id(ref),
             conversation_id=conversation.id,
-            agent_run_id=pause.agent_run_id,
+            agent_run_id=pause.run_id,
             thread_root_id=thread_root,
         ),
         question=NewQuestion(
@@ -288,8 +244,10 @@ async def _ask(uow: SqlAlchemyUnitOfWork, conversation, pause: Pause, ref: str) 
             asker=Asker.tool(conversation.id, pause.tool_call_id),
             question={"conversation_id": str(conversation.id), **question},
             awaits=member,
-            expires_at=datetime.now(UTC)
-            + (APPROVAL_EXPIRES_AFTER if approval else ASK_EXPIRES_AFTER),
+            # The pause's own deadline: the line's expiry is what expires it.
+            expires_at=pause.deadline
+            or deadline_for(pause.kind, datetime.now(UTC))
+            or datetime.now(UTC),
         ),
     )
 
@@ -299,7 +257,7 @@ async def _narration(
 ) -> str | None:
     """The agent's words just before it paused -- its last message in the run
     before the call, when that is what it said rather than another tool call."""
-    if pause.agent_run_id is None or pause.sequence is None:
+    if pause.call is None:
         return None
     message = MessageModel
     before = (
@@ -307,8 +265,8 @@ async def _narration(
             select(message.role, message.kind, message.text)
             .where(
                 message.conversation_id == conversation_id,
-                message.agent_run_id == pause.agent_run_id,
-                message.sequence < pause.sequence,
+                message.agent_run_id == pause.run_id,
+                message.sequence < pause.call.sequence,
                 message.kind != MessageKind.THINKING.value,
             )
             .order_by(message.sequence.desc())
@@ -362,7 +320,7 @@ async def _close_stale(
     )
     for question in stale:
         decided = decisions.get(calls.get(question.ref, ""))
-        if decided is None or decided.response.get(SUPERSEDED_KEY) is True:
+        if decided is None or decided.status is PauseStatus.SUPERSEDED:
             # Nobody decided -- or the member wrote past it, which denies it
             # for the run's sake (``SupersedeStalePauses``) but answers nothing:
             # the line was not answered, it stopped waiting.
@@ -376,8 +334,8 @@ async def _close_stale(
             state=QuestionState.ANSWERED,
             answer=effective_answer(str(question.question.get("tool")), decided),
             by=(
-                Principal.member(decided.resolved_by_user_id)
-                if decided.resolved_by_user_id
+                Principal.member(decided.resolution.resolved_by_user_id)
+                if decided.resolution and decided.resolution.resolved_by_user_id
                 else None
             ),
         )
@@ -513,7 +471,7 @@ def _cleaned(value: object) -> str | list[str]:
 def _decision(
     question: Mapping[str, object], given: Mapping[str, object]
 ) -> tuple[str, dict[str, object]]:
-    if question.get("tool") == PausingKind.REQUEST_APPROVAL:
+    if question.get("tool") == _APPROVE:
         decision = str(given.get("decision") or "").upper()
         if decision not in channel_questions.APPROVAL_DECISIONS:
             raise AnswerRefused("Approve or deny it", status_code=422)
@@ -569,8 +527,6 @@ async def answer_tool(answering: Answering) -> Mapping[str, object] | None:
 
 __all__ = [
     "TOOL_REF",
-    "Pause",
-    "PauseDecision",
     "answer_tool",
     "ask_response",
     "effective_answer",

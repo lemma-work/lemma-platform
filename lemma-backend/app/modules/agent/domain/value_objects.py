@@ -15,7 +15,9 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.pause_opening import PauseOpening
 from app.modules.agent.domain.state_kinds import (
+    AgentRunApprovalDecision as AgentRunApprovalDecision,
     FINAL_ANSWER_KINDS as FINAL_ANSWER_KINDS,
     UNANSWERED_QUEUE_STATES as UNANSWERED_QUEUE_STATES,
     AnswerKind as AnswerKind,
@@ -140,36 +142,6 @@ class ConversationStatus(str, Enum):
     STOPPED = "STOPPED"
 
 
-class AgentRunApprovalDecision(str, Enum):
-    """User decision scope for a run approval."""
-
-    APPROVE_ONCE = "APPROVE_ONCE"
-    APPROVE_FOR_SESSION = "APPROVE_FOR_SESSION"
-    DENY = "DENY"
-
-    @classmethod
-    def _missing_(cls, value: object) -> "AgentRunApprovalDecision | None":
-        if not isinstance(value, str):
-            return None
-        normalized = value.upper()
-        aliases = {
-            "APPROVE": cls.APPROVE_ONCE,
-            "ALLOW": cls.APPROVE_ONCE,
-            "ACCEPT": cls.APPROVE_ONCE,
-            "ONCE": cls.APPROVE_ONCE,
-            "SESSION": cls.APPROVE_FOR_SESSION,
-            "APPROVE_SESSION": cls.APPROVE_FOR_SESSION,
-            "DENIED": cls.DENY,
-            "DECLINE": cls.DENY,
-        }
-        if normalized in aliases:
-            return aliases[normalized]
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return None
-
-
 @dataclass(slots=True)
 class AgentRunFinishResult:
     """Result of attempting to move an agent run into a terminal state."""
@@ -248,6 +220,8 @@ class MessageDraft(BaseModel):
     metadata: JsonObject | None = None
     #: What the server records about the message beyond its body.
     state: MessageState = MessageState()
+    #: The pause this tool call opens, written with it (``domain/pauses``).
+    pause: PauseOpening | None = None
 
     @classmethod
     def of_text(
@@ -310,6 +284,7 @@ class MessageDraft(BaseModel):
         role: MessageRole = MessageRole.ASSISTANT,
         metadata: JsonObject | None = None,
         state: MessageState | None = None,
+        pause: PauseOpening | None = None,
     ) -> "MessageDraft":
         return cls(
             role=role,
@@ -319,6 +294,7 @@ class MessageDraft(BaseModel):
             tool_args=tool_args,
             metadata=metadata,
             state=state or MessageState(),
+            pause=pause,
         )
 
     @classmethod

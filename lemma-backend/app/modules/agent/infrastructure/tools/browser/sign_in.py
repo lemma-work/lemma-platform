@@ -32,6 +32,7 @@ from app.modules.agent.infrastructure.tools.browser.models import (
     BrowserSignInResponse,
 )
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.tools import AgentInputRequired
 from app.modules.web_login.contracts import InvalidOrigin, normalize_origin
 
@@ -167,7 +168,7 @@ async def sign_in_internal(
     # Ends the run cleanly. The person's answer -- in the app, or from a button
     # on whatever surface reached them -- starts a fresh run that replays this
     # call with a real outcome in place of this raise.
-    raise AgentInputRequired(tool_call_id, SIGN_IN_TOOL_NAME)
+    raise AgentInputRequired(tool_call_id, PauseKind.SIGN_IN)
 
 
 async def _delegated_context(deps: ToolContext):

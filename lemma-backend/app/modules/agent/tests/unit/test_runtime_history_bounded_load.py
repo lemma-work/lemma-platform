@@ -202,7 +202,7 @@ class TestAnElidedRunNeverFabricatesAnInterruptedTool:
 
     A pausing tool is never in this position -- its return is appended to the
     run it ended, so such a run is two messages long and exempt from elision --
-    which is why the `PAUSING_TOOL_NAMES` exemption does not cover this.
+    which is why the pausing-call exemption does not cover this.
     """
 
     @staticmethod

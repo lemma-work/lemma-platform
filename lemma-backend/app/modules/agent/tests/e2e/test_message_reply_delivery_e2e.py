@@ -35,10 +35,8 @@ from app.core.infrastructure.work import (
     pod_namespace,
 )
 from app.core.infrastructure.work.testing import run_until_idle
-from app.modules.agent.domain.pausing_tools import (
-    USER_PAUSING_TOOL_NAMES,
-    WAIT_TOOL_NAME,
-)
+from app.modules.agent.domain.pauses import PERSON_KINDS
+from app.modules.agent.domain.state_kinds import PauseStatus
 from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     MessageKind,
@@ -47,15 +45,8 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.events.run_followup_work import register_run_followup_work
 from app.modules.agent.events.turn_payloads import RepliesArrived
 from app.modules.agent.events.work_kinds import AGENT_REPLIES_ARRIVED, replies_key
-from app.modules.agent.domain.wait import (
-    AgentConversationWaitEntity,
-    AgentWaitStatus,
-    AgentWaitType,
-)
+from app.modules.agent.domain.wait import AgentWaitType
 from app.modules.agent.infrastructure.db.pauses import Pauses
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
 from app.modules.agent.services.message_reply_service import (
     REPLY_SOURCE,
     MessageReplyService,
@@ -64,7 +55,9 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     finish,
     messages,
+    pause_by_id,
     pausing_call,
+    wait_pause,
     running_run,
     runs,
     seeded_conversation,
@@ -158,9 +151,8 @@ async def test_an_open_question_is_not_answered_by_the_news(scenario):
 
     assert [run.id for run in await runs(seeded.conversation_id)] == [asking]
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        open_questions = await Pauses(uow).pausing_calls_awaiting_a_decision(
-            conversation_id=seeded.conversation_id,
-            pausing_tool_names=USER_PAUSING_TOOL_NAMES,
+        open_questions = await Pauses(uow).pending(
+            seeded.conversation_id, kinds=PERSON_KINDS
         )
     assert [call.tool_call_id for call in open_questions] == [approval_id]
     found = await messages(seeded.conversation_id)
@@ -174,23 +166,21 @@ async def test_a_sleeping_conversation_is_woken_rather_than_written_past(scenari
     seeded = await seeded_conversation(scenario)
     sleeping = await running_run(seeded)
     tool_call_id = await pausing_call(
-        seeded, sleeping, tool_name=WAIT_TOOL_NAME, tool_args={"reason": "replies"}
+        seeded, sleeping, tool_name="wait_for", tool_args={"reason": "replies"}
     )
     await finish(sleeping, conversation_status=ConversationStatus.WAITING)
     now = datetime.now(timezone.utc)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        wait = await AgentConversationWaitRepository(uow).create(
-            AgentConversationWaitEntity(
-                conversation_id=seeded.conversation_id,
-                agent_run_id=sleeping,
-                pod_id=seeded.pod_id,
-                tool_call_id=tool_call_id,
-                wait_type=AgentWaitType.TIME,
-                external_ref=str(uuid4()),
-                scheduled_at=now + timedelta(hours=1),
-                spec={"started_at": now.isoformat(), "user_id": str(seeded.user_id)},
-            )
+        wait = wait_pause(
+            conversation_id=seeded.conversation_id,
+            run_id=sleeping,
+            pod_id=seeded.pod_id,
+            tool_call_id=tool_call_id,
+            wait_type=AgentWaitType.TIME,
+            wake_at=now + timedelta(hours=1),
+            spec={"started_at": now.isoformat(), "user_id": str(seeded.user_id)},
         )
+        assert await Pauses(uow).open(wait)
         await uow.commit()
 
     assert await _deliver(seeded) is True
@@ -200,9 +190,8 @@ async def test_a_sleeping_conversation_is_woken_rather_than_written_past(scenari
     (woke,) = [m for m in found if m.kind is MessageKind.TOOL_RETURN]
     assert woke.tool_call_id == tool_call_id
     assert woke.tool_result["woke_because"] == "ANSWERED"
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        reloaded = await AgentConversationWaitRepository(uow).get(wait.id)
-    assert reloaded is not None and reloaded.status is AgentWaitStatus.COMPLETED
+    reloaded = await pause_by_id(wait.id)
+    assert reloaded is not None and reloaded.status is PauseStatus.RESOLVED
 
 
 async def test_a_conversation_that_is_gone_is_not_an_error(scenario):

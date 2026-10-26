@@ -24,13 +24,17 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.agent_host_permissions import AGENT_HOST_PERMISSION_KEY
 from app.modules.agent.domain.value_objects import (
-    AgentRunApprovalDecision,
     AgentRuntimeConfig,
     ConversationStatus,
     MessageDraft,
 )
-from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
-from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
+from app.modules.agent.infrastructure.models import (
+    AgentPauseModel,
+    ConversationModel,
+    MessageModel,
+)
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.tests.e2e.lifecycle_helpers import opening_for
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.identity.infrastructure.models.user_models import User
@@ -119,7 +123,10 @@ async def _pause(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_tool_call(
-                tool_call_id=tool_call_id, tool_name=tool_name, tool_args=tool_args
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                pause=opening_for(tool_name, tool_args),
             ),
         )
         # Scenery written straight in: how the run got here is not the subject.
@@ -134,21 +141,27 @@ async def _pause(
                 .where(MessageModel.id == message.id)
                 .values(created_at=MessageModel.created_at - asked_ago)
             )
+            await uow.session.execute(
+                update(AgentPauseModel)
+                .where(
+                    AgentPauseModel.conversation_id == conversation_id,
+                    AgentPauseModel.tool_call_id == tool_call_id,
+                )
+                .values(created_at=AgentPauseModel.created_at - asked_ago)
+            )
         await uow.commit()
     return tool_call_id
 
 
 async def _decide(conversation_id: UUID, tool_call_id: str, user_id: str) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ApprovalDecisions(uow).record_approval_decision(
-            conversation_id=conversation_id,
-            approval_id=tool_call_id,
-            agent_run_id=None,
-            tool_name="request_approval",
-            decision=AgentRunApprovalDecision.DENY,
-            response={"superseded_by_new_message": True},
-            resolved_by_user_id=UUID(user_id),
+        pauses = Pauses(uow)
+        pause = await pauses.get(
+            conversation_id=conversation_id, tool_call_id=tool_call_id
         )
+        assert pause is not None
+        assert pause.supersede(by=UUID(user_id))
+        assert await pauses.save(pause)
         await uow.commit()
 
 

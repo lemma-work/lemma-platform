@@ -5,6 +5,8 @@ import json
 from uuid import uuid4
 
 import pytest
+
+from app.modules.agent.domain.state_kinds import PauseKind
 from pydantic import BaseModel
 
 from app.modules.agent.domain.entities import Agent, Conversation
@@ -240,7 +242,8 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
     assert answer["parked_tool_call_id"] == "lemma-mcp-deadbeef", answer
     # Recorded before the tool ran, against the run that made the call, with the
     # arguments the card is rendered from.
-    assert recorded[0]["pauses"] == "ask_user"
+    assert recorded[0]["tool_name"] == "ask_user"
+    assert recorded[0]["pauses"] is PauseKind.QUESTION
     assert recorded[0]["agent_run_id"] == agent_run_id
     asked = recorded[0]["arguments"]["questions"][0]
     assert asked["question"] == "Which one?"

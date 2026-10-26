@@ -16,7 +16,6 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
 from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import (
@@ -26,7 +25,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure import repositories
 from app.modules.agent.infrastructure.db.conversations import Conversations
-from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.pauses import Awaiting, Pauses
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.pause_resume import start_resume_run
@@ -124,7 +123,7 @@ class StartQueuedFollowUp:
         self.conversations = Conversations(uow)
         self.runs = Runs(uow)
         self.queued_messages = QueuedMessages(uow)
-        self.pausing_calls = Pauses(uow)
+        self.pauses = Pauses(uow)
         self.agent_repository = agent_repository
         self.supersede = supersede
         self.usage_service = usage_service
@@ -300,19 +299,12 @@ class StartQueuedFollowUp:
             # this run's pause is no longer the conversation's.
             await self.uow.commit()
             return None
-        asked = await self.pausing_calls.pausing_call_ids_of_run(
-            conversation_id=conversation.id,
-            agent_run_id=paused_run_id,
-            pausing_tool_names=PAUSING_TOOL_NAMES,
+        asked = await self.pauses.pending(
+            conversation.id, run_id=paused_run_id, awaiting=Awaiting.ANY
         )
-        awaiting = {
-            message.tool_call_id
-            for message in await self.pausing_calls.pausing_calls_awaiting_a_return(
-                conversation_id=conversation.id,
-                pausing_tool_names=PAUSING_TOOL_NAMES,
-            )
-            if message.agent_run_id == paused_run_id
-        }
+        awaiting = await self.pauses.pending(
+            conversation.id, run_id=paused_run_id, awaiting=Awaiting.EITHER
+        )
         if asked and not awaiting:
             return await start_resume_run(
                 self.uow,
@@ -322,7 +314,7 @@ class StartQueuedFollowUp:
                 usage_service=self.usage_service,
                 conversation=conversation,
                 paused_run_id=paused_run_id,
-                resumed_tool_call_id=asked[-1],
+                resumed_tool_call_id=asked[-1].tool_call_id,
                 user_id=conversation.user_id,
                 agent_name=None,
                 trigger=RunTrigger.RESUME,

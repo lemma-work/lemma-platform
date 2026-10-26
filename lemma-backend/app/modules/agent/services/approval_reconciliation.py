@@ -18,12 +18,9 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import WorkWriter, pod_namespace
-from app.modules.agent.domain.agent_host_permissions import (
-    AgentHostPermissionRequest,
-    agent_host_permission_request,
-)
-from app.modules.agent.domain.pausing_tools import PausedCall
-from app.modules.agent.domain.run_budget_pause import is_budget_pause
+from app.modules.agent.domain.pause_opening import AgentHostPermissionRequest
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.events.work_kinds import AGENT_APPROVAL_EXECUTE, approval_key
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -33,7 +30,6 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
-from app.modules.agent.domain.pausing_tools import PausingKind
 
 logger = get_logger(__name__)
 
@@ -61,7 +57,7 @@ async def stage_approval_execution(
 ) -> None:
     """Hand a recorded decision to the worker, in the decision's transaction.
 
-    Written beside the decision row, so the two commit together: a process
+    Written beside the decision, so the two commit together: a process
     that dies after the commit leaves an item a worker will run, where the old
     post-commit enqueue left a decision nothing would ever carry out.
 
@@ -86,29 +82,21 @@ async def stage_approval_execution(
     )
 
 
-def runs_in_worker(
-    *,
-    kind: str,
-    tool_args: JsonObject,
-    decision: AgentRunApprovalDecision,
-    has_tool_return: bool,
-) -> bool:
+def runs_in_worker(pause: Pause) -> bool:
     """Whether this decision's follow-up work belongs in a worker item.
 
     Only an approved ``request_approval`` runs something slow: commands can
     legitimately take minutes, and keeping that inside the request made a
     browser's 30-second timeout cancel reconciliation after the decision had
-    already committed. ``ask_user``, denials, already-executed approvals,
-    budget pauses (no tool behind them) and Agent Host permissions (a queued
-    command plus a wake-up, measured in milliseconds) stay inline, since
-    deferring them would only add latency to someone who is waiting.
+    already committed. Answers, denials, already-executed approvals, budget
+    pauses (no tool behind them) and Agent Host permissions (a queued command
+    plus a wake-up, measured in milliseconds) stay inline, since deferring
+    them would only add latency to someone who is waiting.
     """
     return (
-        kind == PausingKind.REQUEST_APPROVAL
-        and decision != AgentRunApprovalDecision.DENY
-        and not has_tool_return
-        and agent_host_permission_request(tool_args) is None
-        and not is_budget_pause(tool_args)
+        pause.kind is PauseKind.APPROVAL
+        and pause.decision not in (None, AgentRunApprovalDecision.DENY)
+        and not pause.returned
     )
 
 
@@ -430,15 +418,7 @@ async def execute_approved_tool_as_user(
         return {"ok": False, "error": safe_error_text(exc)}
 
 
-def unconfirmed_execution_return(
-    *,
-    conversation_id: UUID,
-    approval_id: str,
-    paused: PausedCall,
-    decision: AgentRunApprovalDecision,
-    response: JsonObject,
-    claimed: bool,
-) -> tuple[str, object]:
+def unconfirmed_execution_return(pause: Pause, *, claimed: bool) -> tuple[str, object]:
     """The honest return for an approval whose execution never reported.
 
     ``claimed``: an executor took the one-shot claim and then lost its lease --
@@ -449,8 +429,8 @@ def unconfirmed_execution_return(
     """
     logger.error(
         "agent.conversation_approvals.approved_tool_never_confirmed.failed",
-        conversation_id=str(conversation_id),
-        approval_id=approval_id,
+        conversation_id=str(pause.conversation_id),
+        approval_id=pause.tool_call_id,
         claimed=claimed,
     )
     # Lazy: the tool models import the tool registry, which imports back
@@ -469,10 +449,10 @@ def unconfirmed_execution_return(
             "run. Ask again if it is still needed."
         )
     )
-    return paused.kind.value, RequestApprovalResponse(
+    return pause.tool_name, RequestApprovalResponse(
         success=False,
         error=error,
-        decision=decision,
+        decision=pause.decision,
         executed=False,
-        response=response,
+        response=pause.response,
     ).model_dump(mode="json")

@@ -218,7 +218,7 @@ from app.modules.agent.events import approval_work
 from app.modules.test_support.e2e.agent_work import run_approval_work
 
 
-async def _hang(decided, payload, *, uow_factory):
+async def _hang(decided, *, uow_factory):
     # The claim committed (its checkpoint returned); the tool is "running".
     print("CLAIMED", flush=True)
     await asyncio.sleep(3600)
@@ -282,8 +282,8 @@ async def test_a_worker_killed_after_the_claim_never_runs_the_tool_again(
             executor.kill()
 
     claimed_at = await _scalar(
-        "SELECT execution_claimed_at FROM agent_approval_decisions "
-        "WHERE conversation_id = :c AND approval_id = :a",
+        "SELECT execution_claimed_at FROM agent_pauses "
+        "WHERE conversation_id = :c AND tool_call_id = :a",
         c=seeded.conversation_id,
         a=approval_id,
     )

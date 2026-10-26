@@ -77,7 +77,7 @@ def _sleeping_since(*, tool_call_id: str):
 
     async def _lookup(uow, *, agent_run_id):
         del uow, agent_run_id
-        return SimpleNamespace(tool_call_id=tool_call_id)
+        return SimpleNamespace(tool_call_id=tool_call_id, tool_name="wait_for")
 
     return _lookup
 

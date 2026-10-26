@@ -31,7 +31,8 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
-from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.tests.e2e.lifecycle_helpers import opening_for
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.db.messages import Messages
@@ -150,6 +151,7 @@ async def _seed_paused_interaction(
                 tool_args=tool_args,
                 role=MessageRole.ASSISTANT,
                 metadata={"tool_name": tool_name},
+                pause=opening_for(tool_name, tool_args),
             ),
         )
         # The pause shape: COMPLETED run, WAITING conversation.
@@ -238,6 +240,7 @@ async def _seed_paused_interactions(
                     tool_args=tool_args,
                     role=MessageRole.ASSISTANT,
                     metadata={"tool_name": tool_name},
+                    pause=opening_for(tool_name, tool_args),
                 ),
             )
         await runs.finish_agent_run(
@@ -1168,16 +1171,17 @@ class TestPodAgentLifecycle:
 
         # Simulate the wedge: decision committed, resume never finished.
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            recorded = await ApprovalDecisions(uow).record_approval_decision(
-                conversation_id=conversation_id,
-                approval_id=approval_id,
-                agent_run_id=paused_run.id,
-                tool_name="ask_user",
-                decision=AgentRunApprovalDecision.APPROVE_ONCE,
-                response={"answers": {"Auth": "OAuth"}},
-                resolved_by_user_id=UUID(fixed_test_user["id"]),
+            pauses = Pauses(uow)
+            pause = await pauses.get(
+                conversation_id=conversation_id, tool_call_id=approval_id
             )
-            assert recorded is True
+            assert pause is not None
+            pause.resolve(
+                AgentRunApprovalDecision.APPROVE_ONCE,
+                {"answers": {"Auth": "OAuth"}},
+                by=UUID(fixed_test_user["id"]),
+            )
+            assert await pauses.save(pause) is True
             await uow.commit()
 
         # Precondition: genuinely stuck — no synthesized return, no resume run.

@@ -9,7 +9,7 @@ repository answers whatever the test tells it to and the races live in SQL.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.state_kinds import PauseKind
 
 from uuid import UUID
 
@@ -29,7 +29,6 @@ from app.modules.agent.events.run_followup_work import start_queued_followup_for
 from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.infrastructure.db.approvals import ApprovalDecisions
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.services.approval_reconciliation import (
     stage_approval_execution,
@@ -37,6 +36,7 @@ from app.modules.agent.services.approval_reconciliation import (
 from app.modules.test_support.e2e.agent_work import run_approval_work
 from app.modules.agent.services.mcp_pausing_calls import record_pausing_tool_call
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
+    record_decision,
     RECORD_DELETE_REFUSALS,
     Seeded,
     conversation,
@@ -157,17 +157,12 @@ async def test_a_message_sent_while_an_approved_tool_runs_rides_the_resume(
     await finish(paused, conversation_status=ConversationStatus.WAITING)
     # Approved: the decision is committed and the tool handed to a worker,
     # which has not written its result yet.
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ApprovalDecisions(uow).record_approval_decision(
-            conversation_id=seeded.conversation_id,
-            approval_id=approval_id,
-            agent_run_id=paused,
-            tool_name="pod_write_record",
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            response={},
-            resolved_by_user_id=seeded.user_id,
-        )
-        await uow.commit()
+    await record_decision(
+        seeded.conversation_id,
+        approval_id,
+        decision=AgentRunApprovalDecision.APPROVE_ONCE,
+        by=seeded.user_id,
+    )
 
     sent = await scenario.owner_client.post(
         f"/pods/{scenario.pod_id}/conversations/{seeded.conversation_id}/messages/append",
@@ -303,14 +298,16 @@ async def test_a_remote_harness_question_is_answered_inside_its_own_run(
         uow_factory(),
         conversation_id=seeded.conversation_id,
         agent_run_id=working,
-        pauses=PausingKind.ASK_USER,
+        tool_name="ask_user",
+        pauses=PauseKind.QUESTION,
         arguments={"questions": ["Which branch?"]},
     )
     waiting = await record_pausing_tool_call(
         uow_factory(),
         conversation_id=seeded.conversation_id,
         agent_run_id=working,
-        pauses=PausingKind.WAIT_FOR,
+        tool_name="wait_for",
+        pauses=PauseKind.WAIT,
         arguments={"seconds": 60},
     )
     marks = {
@@ -347,17 +344,13 @@ async def test_stop_keeps_an_already_approved_pause_from_waking_the_agent(
         seeded, paused, tool_name="ask_user", tool_args={"questions": ["Go?"]}
     )
     await finish(paused, conversation_status=ConversationStatus.WAITING)
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ApprovalDecisions(uow).record_approval_decision(
-            conversation_id=seeded.conversation_id,
-            approval_id=question,
-            agent_run_id=paused,
-            tool_name="ask_user",
-            decision=AgentRunApprovalDecision.APPROVE_ONCE,
-            response={"answers": {"Go?": "yes"}},
-            resolved_by_user_id=seeded.user_id,
-        )
-        await uow.commit()
+    await record_decision(
+        seeded.conversation_id,
+        question,
+        decision=AgentRunApprovalDecision.APPROVE_ONCE,
+        by=seeded.user_id,
+        response={"answers": {"Go?": "yes"}},
+    )
 
     async with owner_uow(seeded) as uow:
         await stop_conversation(uow).stop(

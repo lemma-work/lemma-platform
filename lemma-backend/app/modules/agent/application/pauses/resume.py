@@ -17,16 +17,13 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host_permissions import (
-    agent_host_permission_request,
-)
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.pausing_tools import PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import Pause
 from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
-    JsonObject,
     RunTrigger,
 )
 from app.modules.agent.infrastructure.db.conversations import Conversations
@@ -57,7 +54,7 @@ class ResumeRun:
         self.runs = Runs(uow)
         self.messages = Messages(uow)
         self.queued_messages = QueuedMessages(uow)
-        self.pausing_calls = Pauses(uow)
+        self.pauses = Pauses(uow)
         self.agent_repository = agent_repository
         self.usage_service = usage_service
 
@@ -79,24 +76,23 @@ class ResumeRun:
         trigger: RunTrigger,
         agent_name: str | None = None,
         tool_return: tuple[str, object] | None = None,
-        decided_call_args: JsonObject | None = None,
+        decided: Pause | None = None,
     ) -> None:
         """Write ``tool_return`` (when given), then start the resume run if ready.
 
         ``tool_return`` is ``(tool_name, tool_result)``, written under the
         paused run unless a return already exists; it commits on its own.
 
-        ``decided_call_args`` marks the answer as a person's decision on the
-        paused call whose arguments these are. Such a decision may belong to a
-        run that is still going, and then it is not resumed: an Agent Host
-        permission is carried on by the host itself, and a parked call is
-        polled by the live run. A wait's wake passes none.
+        ``decided`` is the pause a person decided. Its run may still be going,
+        and then it is not resumed: an Agent Host permission is carried on by
+        the host itself, and a parked call is polled by the live run. A wait's
+        wake passes none.
         """
         if tool_return is not None:
             tool_name, tool_result = tool_return
             await append_pause_tool_return(
                 self.uow,
-                pausing_calls=self.pausing_calls,
+                pauses=self.pauses,
                 messages=self.messages,
                 conversation=conversation,
                 paused_run_id=paused_run_id,
@@ -104,12 +100,7 @@ class ResumeRun:
                 tool_name=tool_name,
                 tool_result=tool_result,
             )
-        if decided_call_args is not None and await self._answered_inside_a_live_run(
-            decided_call_args,
-            paused_run_id=paused_run_id,
-            conversation_id=conversation.id,
-            tool_call_id=tool_call_id,
-        ):
+        if decided is not None and await self._answered_inside_a_live_run(decided):
             return
         await self._start_if_ready(
             conversation=conversation,
@@ -120,16 +111,9 @@ class ResumeRun:
             trigger=trigger,
         )
 
-    async def _answered_inside_a_live_run(
-        self,
-        tool_args: JsonObject,
-        *,
-        paused_run_id: UUID,
-        conversation_id: UUID,
-        tool_call_id: str,
-    ) -> bool:
-        host_permission = agent_host_permission_request(tool_args) is not None
-        if host_permission and not await self._turn_ended_while_parked(paused_run_id):
+    async def _answered_inside_a_live_run(self, decided: Pause) -> bool:
+        host_permission = decided.kind is PauseKind.HOST_PERMISSION
+        if host_permission and not await self._turn_ended_while_parked(decided.run_id):
             # An Agent Host pauses *inside* a live run: the decision was just
             # handed to the host, which carries the same run on from where it
             # stopped. Starting a resume run here would dispatch a second,
@@ -137,21 +121,13 @@ class ResumeRun:
             # turn because the request sat past its parked window: then the
             # decision reaches the agent only by resuming, like any pause.
             return True
-        return await self._resume_would_duplicate_a_live_turn(
-            paused_run_id, conversation_id=conversation_id, tool_call_id=tool_call_id
-        )
+        return await self._resume_would_duplicate_a_live_turn(decided)
 
     async def _turn_ended_while_parked(self, paused_run_id: UUID) -> bool:
         run = await self.runs.get_agent_run(paused_run_id)
         return run is not None and run.state.suspended_while_parked is not None
 
-    async def _resume_would_duplicate_a_live_turn(
-        self,
-        paused_run_id: UUID,
-        *,
-        conversation_id: UUID,
-        tool_call_id: str,
-    ) -> bool:
+    async def _resume_would_duplicate_a_live_turn(self, decided: Pause) -> bool:
         """Is this call parked inside a run that is still going?
 
         A remote harness's `ask_user` / `request_approval` parks rather than
@@ -166,12 +142,9 @@ class ResumeRun:
         and nothing was polling for that answer, so skipping the resume left
         the conversation waiting on a question already answered.
         """
-        call = await self.pausing_calls.get_tool_call(
-            conversation_id=conversation_id, tool_call_id=tool_call_id
-        )
-        if call is None or call.state.parked_in_run_id is None:
+        if not decided.parked:
             return False
-        run = await self.runs.get_agent_run(paused_run_id)
+        run = await self.runs.get_agent_run(decided.run_id)
         return run is not None and run.status == AgentRunStatus.RUNNING
 
     async def _start_if_ready(
@@ -198,11 +171,7 @@ class ResumeRun:
         carry on: Stop leaves the conversation STOPPED, and that is read here.
         """
         await self.conversations.lock_conversation(conversation.id)
-        remaining = await self.pausing_calls.unresolved_pausing_call_ids(
-            conversation_id=conversation.id,
-            agent_run_id=paused_run_id,
-            pausing_tool_names=PAUSING_TOOL_NAMES,
-        )
+        remaining = await self.pauses.pending(conversation.id, run_id=paused_run_id)
         if remaining:
             # Still paused on something else; that resolution will start the run.
             await self.uow.commit()

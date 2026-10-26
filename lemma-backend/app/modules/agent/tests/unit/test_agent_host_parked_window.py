@@ -15,14 +15,12 @@ from app.modules.agent.domain.agent_host_permissions import (
     AgentHostPermissionOption,
     AgentHostPermissionRequest,
 )
-from app.modules.agent.domain.pausing_tools import ParkedSuspension
+from app.modules.agent.domain.run_state import ParkedSuspension
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.infrastructure.harnesses.agent_host.parked_window import (
+    ParkedPause,
     ParkedWindow,
     parked_too_long,
-)
-from app.modules.agent.infrastructure.db.parked_pauses import (
-    ParkedPause,
 )
 from app.modules.agent.services.approval_reconciliation import (
     _permission_decision_message,

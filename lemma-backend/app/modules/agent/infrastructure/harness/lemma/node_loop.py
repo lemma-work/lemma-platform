@@ -50,7 +50,7 @@ from app.modules.agent.domain.run_budget_pause import (
     budget_pause_tool_call_id,
 )
 from app.modules.agent.domain.tools import AgentInputRequired
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.infrastructure.tools.tool_errors import result_is_failure
 
 from app.modules.agent.config import agent_settings
@@ -333,7 +333,7 @@ class NodeLoop[DepsT]:
             agent_run_id=str(self.agent_run_id),
             dimension=exhausted.dimension.value,
         )
-        raise AgentInputRequired(tool_call_id, PausingKind.REQUEST_APPROVAL)
+        raise AgentInputRequired(tool_call_id, PauseKind.BUDGET)
 
     async def _pump_model_request(
         self,

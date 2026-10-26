@@ -29,6 +29,18 @@ conversation), `private_note`, `private_note_in_dm`, `written_in`, `answer`
 `synthetic_tool_return` and `parked_in_run_id` (the call's own run, where
 `parked_in_run` was true).
 
+`agent_pauses` is new: one row per pausing tool call, the `Pause` aggregate.
+It is backfilled from `agent_conversation_waits` (same ids, so a queued
+`wait:<id>` timer still finds its wait), from `agent_approval_decisions` (each
+joined to its call for the kind; a decision recorded on a `wait_for` call is
+the wait's, already covered), and from every pausing call still open -- no
+return, no decision. The kind of a `request_approval` call comes from the
+markers in its arguments (`run_budget_pause`, `agent_host_permission`), which
+become the typed `budget` and `host_permission`. Rows that cannot be mapped --
+an unknown status, a call that is gone, a run that is gone, an open `wait_for`
+with no wait -- are counted and logged. The two old tables stay, unwritten, for
+one release; the downgrade copies what the new table holds back into them.
+
 A value that does not read as its column's type -- an unknown `source`, an id
 that is not a UUID, a timestamp that is not one -- is left out (a default
 `origin` of `CHAT`, a `trigger` of `MESSAGE`) and counted; the counts are
@@ -514,6 +526,295 @@ def _report(conn, table: str, unmapped: dict[str, str]) -> None:
             _log().info("0065: every %s %r read.", table, key)
 
 
+# -- agent_pauses ---------------------------------------------------------------
+
+#: One stored call per (conversation, call id), the first written.
+_CALLS = """
+calls AS (
+  SELECT DISTINCT ON (conversation_id, tool_call_id) *
+  FROM agent_messages
+  WHERE kind = 'TOOL_CALL' AND tool_call_id IS NOT NULL
+    AND tool_name IN ('ask_user', 'request_approval', 'browser_sign_in')
+  ORDER BY conversation_id, tool_call_id, sequence
+)
+"""
+
+_KIND = """
+CASE
+  WHEN m.tool_name = 'ask_user' THEN 'QUESTION'
+  WHEN m.tool_name = 'browser_sign_in' THEN 'SIGN_IN'
+  WHEN jsonb_typeof(m.tool_args->'run_budget_pause') = 'object' THEN 'BUDGET'
+  WHEN jsonb_typeof(m.tool_args->'agent_host_permission') = 'object'
+    AND m.tool_args->'agent_host_permission'->>'request_id' <> ''
+    THEN 'HOST_PERMISSION'
+  ELSE 'APPROVAL'
+END
+"""
+
+_PAUSE_COLUMNS = (
+    "id, created_at, updated_at, conversation_id, run_id, pod_id, tool_call_id, "
+    "tool_name, kind, status, deadline, resolution, host_permission, budget, "
+    "execution_claimed_at, resolved_at"
+)
+
+
+def _from_calls(status: str, resolution: str, claimed: str, resolved: str) -> str:
+    """The SELECT list of a pause opened by call ``m`` (its kind as ``k.kind``)."""
+    return f"""
+  m.created_at, m.created_at, m.conversation_id, m.agent_run_id, c.pod_id,
+  m.tool_call_id, m.tool_name, k.kind, {status},
+  CASE WHEN k.kind = 'QUESTION' THEN m.created_at + interval '72 hours'
+       WHEN k.kind IN ('APPROVAL', 'BUDGET', 'HOST_PERMISSION')
+       THEN m.created_at + interval '7 days' END,
+  {resolution},
+  CASE WHEN k.kind = 'HOST_PERMISSION' THEN jsonb_build_object(
+    'request_id', m.tool_args->'agent_host_permission'->>'request_id',
+    'options', CASE WHEN jsonb_typeof(m.tool_args->'agent_host_permission'->'options')
+      = 'array' THEN m.tool_args->'agent_host_permission'->'options' ELSE '[]' END,
+    'input', CASE WHEN jsonb_typeof(m.tool_args->'agent_host_permission'->'input')
+      = 'object' THEN m.tool_args->'agent_host_permission'->'input' ELSE '{{}}' END,
+    'tool_name', m.tool_args->>'tool_name') END,
+  CASE WHEN k.kind = 'BUDGET' THEN m.tool_args->'run_budget_pause' END,
+  {claimed}, {resolved}
+"""
+
+
+_WAKE_REASONS = (
+    "'TIMER', 'CANCELLED', 'ANSWERED', 'TARGET_FINISHED', 'TARGET_GONE', "
+    "'DEADLINE', 'TARGET_NEEDS_INPUT', 'TARGET_UNREADABLE'"
+)
+
+_WAITS = f"""
+INSERT INTO agent_pauses ({_PAUSE_COLUMNS}, wait_type, external_ref, wake_at,
+  wait_spec)
+SELECT w.id, w.created_at, w.updated_at, w.conversation_id, w.agent_run_id,
+  w.pod_id, w.tool_call_id, 'wait_for', 'WAIT',
+  CASE w.status WHEN 'ACTIVE' THEN 'PENDING' WHEN 'COMPLETED' THEN 'RESOLVED'
+    WHEN 'CANCELLED' THEN 'CANCELLED' WHEN 'FAILED' THEN 'ABANDONED' END,
+  NULL,
+  CASE WHEN w.spec->>'woke_because' IN ({_WAKE_REASONS})
+    THEN jsonb_build_object('woke_because', w.spec->>'woke_because') END,
+  NULL, NULL, NULL, w.completed_at,
+  w.wait_type, w.external_ref, w.scheduled_at, coalesce(w.spec, '{{}}')
+FROM agent_conversation_waits w
+WHERE w.status IN ('ACTIVE', 'COMPLETED', 'CANCELLED', 'FAILED')
+  AND w.wait_type IN ('TIME', 'PROCESS', 'SUBAGENT')
+ON CONFLICT (conversation_id, tool_call_id) DO NOTHING
+"""
+
+_DECIDED = _from_calls(
+    status="CASE WHEN d.response->>'superseded_by_new_message' = 'true' "
+    "THEN 'SUPERSEDED' WHEN d.response->>'expired_unanswered' = 'true' "
+    "THEN 'EXPIRED' ELSE 'RESOLVED' END",
+    resolution="jsonb_build_object('decision', d.decision, 'response', "
+    "coalesce(d.response, '{}'), 'resolved_by_user_id', d.resolved_by_user_id)",
+    claimed="d.execution_claimed_at",
+    resolved="d.created_at",
+)
+_UNDECIDED = _from_calls(
+    status="'PENDING'", resolution="NULL", claimed="NULL", resolved="NULL"
+)
+
+_DECISIONS = f"""
+WITH {_CALLS}
+INSERT INTO agent_pauses ({_PAUSE_COLUMNS})
+SELECT d.id, {_DECIDED}
+FROM agent_approval_decisions d
+JOIN calls m ON m.conversation_id = d.conversation_id
+  AND m.tool_call_id = d.approval_id
+JOIN agent_conversations c ON c.id = d.conversation_id
+CROSS JOIN LATERAL (SELECT {_KIND} AS kind) k
+WHERE d.decision IN ('APPROVE_ONCE', 'APPROVE_FOR_SESSION', 'DENY')
+  AND EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = m.agent_run_id)
+ON CONFLICT (conversation_id, tool_call_id) DO NOTHING
+"""
+
+_OPEN_CALLS = f"""
+WITH {_CALLS}
+INSERT INTO agent_pauses ({_PAUSE_COLUMNS})
+SELECT gen_random_uuid(), {_UNDECIDED}
+FROM calls m
+JOIN agent_conversations c ON c.id = m.conversation_id
+CROSS JOIN LATERAL (SELECT {_KIND} AS kind) k
+WHERE EXISTS (SELECT 1 FROM agent_runs r WHERE r.id = m.agent_run_id)
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_messages r WHERE r.conversation_id = m.conversation_id
+      AND r.tool_call_id = m.tool_call_id AND r.kind = 'TOOL_RETURN')
+  AND NOT EXISTS (
+    SELECT 1 FROM agent_approval_decisions d
+    WHERE d.conversation_id = m.conversation_id AND d.approval_id = m.tool_call_id)
+ON CONFLICT (conversation_id, tool_call_id) DO NOTHING
+"""
+
+#: What the backfill could not carry over, counted after it ran.
+_PAUSES_UNMAPPED = {
+    "waits": "SELECT count(*) FROM agent_conversation_waits w WHERE NOT EXISTS ("
+    "SELECT 1 FROM agent_pauses p WHERE p.id = w.id)",
+    "approval decisions": """
+      SELECT count(*) FROM agent_approval_decisions d
+      WHERE NOT EXISTS (SELECT 1 FROM agent_pauses p
+        WHERE p.conversation_id = d.conversation_id AND p.tool_call_id = d.approval_id)
+      AND NOT EXISTS (SELECT 1 FROM agent_messages m
+        WHERE m.conversation_id = d.conversation_id
+          AND m.tool_call_id = d.approval_id AND m.tool_name = 'wait_for')
+    """,
+    "open pausing calls": """
+      SELECT count(*) FROM agent_messages m
+      WHERE m.kind = 'TOOL_CALL' AND m.tool_call_id IS NOT NULL
+        AND m.tool_name IN ('ask_user', 'request_approval', 'browser_sign_in',
+          'wait_for')
+        AND NOT EXISTS (SELECT 1 FROM agent_messages r
+          WHERE r.conversation_id = m.conversation_id
+            AND r.tool_call_id = m.tool_call_id AND r.kind = 'TOOL_RETURN')
+        AND NOT EXISTS (SELECT 1 FROM agent_pauses p
+          WHERE p.conversation_id = m.conversation_id
+            AND p.tool_call_id = m.tool_call_id)
+    """,
+}
+
+
+def _create_pauses() -> None:
+    jsonb = postgresql.JSONB(astext_type=sa.Text())
+    timestamp = sa.DateTime(timezone=True)
+    op.create_table(
+        "agent_pauses",
+        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("created_at", timestamp, nullable=False),
+        sa.Column("updated_at", timestamp, nullable=False),
+        sa.Column(
+            "conversation_id",
+            sa.Uuid(),
+            sa.ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "run_id",
+            sa.Uuid(),
+            sa.ForeignKey("agent_runs.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "pod_id",
+            sa.Uuid(),
+            sa.ForeignKey("pods.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("tool_call_id", sa.String(255), nullable=False),
+        sa.Column("tool_name", sa.String(255), nullable=False),
+        sa.Column(
+            "kind",
+            _enum(
+                "pausekind",
+                "QUESTION",
+                "APPROVAL",
+                "SIGN_IN",
+                "BUDGET",
+                "HOST_PERMISSION",
+                "WAIT",
+                length=32,
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "status",
+            _enum(
+                "pausestatus",
+                "PENDING",
+                "RESOLVED",
+                "EXPIRED",
+                "SUPERSEDED",
+                "CANCELLED",
+                "ABANDONED",
+                length=32,
+            ),
+            nullable=False,
+            server_default="PENDING",
+        ),
+        sa.Column("deadline", timestamp, nullable=True),
+        sa.Column("resolution", jsonb, nullable=True),
+        sa.Column("host_permission", jsonb, nullable=True),
+        sa.Column("budget", jsonb, nullable=True),
+        sa.Column(
+            "wait_type",
+            _enum("agentwaittype", "TIME", "PROCESS", "SUBAGENT", length=30),
+            nullable=True,
+        ),
+        sa.Column("external_ref", sa.String(), nullable=True),
+        sa.Column("wake_at", timestamp, nullable=True),
+        sa.Column("wait_spec", jsonb, nullable=True),
+        sa.Column("execution_claimed_at", timestamp, nullable=True),
+        sa.Column("resolved_at", timestamp, nullable=True),
+        sa.UniqueConstraint(
+            "conversation_id", "tool_call_id", name="uq_agent_pause_tool_call"
+        ),
+    )
+    op.create_index("ix_agent_pauses_run_id", "agent_pauses", ["run_id"])
+    op.create_index(
+        "ix_agent_pause_conversation_status",
+        "agent_pauses",
+        ["conversation_id", "status"],
+    )
+    op.create_index(
+        "uq_agent_pause_one_pending_wait",
+        "agent_pauses",
+        ["conversation_id"],
+        unique=True,
+        postgresql_where=sa.text("kind = 'WAIT' AND status = 'PENDING'"),
+    )
+
+
+def _backfill_pauses(conn) -> None:
+    waits = conn.execute(sa.text(_WAITS)).rowcount
+    decisions = conn.execute(sa.text(_DECISIONS)).rowcount
+    open_calls = conn.execute(sa.text(_OPEN_CALLS)).rowcount
+    _log().info(
+        "0065: agent_pauses backfilled from %d waits, %d approval decisions and "
+        "%d open pausing calls.",
+        waits,
+        decisions,
+        open_calls,
+    )
+    for source, count_sql in _PAUSES_UNMAPPED.items():
+        found = conn.execute(sa.text(count_sql)).scalar_one()
+        if found:
+            _log().warning(
+                "0065: %d %s could not be carried into agent_pauses; the old "
+                "table keeps them.",
+                found,
+                source,
+            )
+        else:
+            _log().info("0065: every one of the %s carried into agent_pauses.", source)
+
+
+#: The downgrade's way back: what the old code reads, from what the new wrote.
+_RESTORE_WAITS = """
+INSERT INTO agent_conversation_waits (id, created_at, updated_at, conversation_id,
+  agent_run_id, pod_id, tool_call_id, wait_type, status, external_ref,
+  scheduled_at, spec, completed_at)
+SELECT id, created_at, updated_at, conversation_id, run_id, pod_id, tool_call_id,
+  wait_type, CASE status WHEN 'PENDING' THEN 'ACTIVE' WHEN 'RESOLVED' THEN 'COMPLETED'
+    WHEN 'ABANDONED' THEN 'FAILED' ELSE 'CANCELLED' END,
+  external_ref, wake_at, wait_spec, resolved_at
+FROM agent_pauses WHERE kind = 'WAIT' AND wait_type IS NOT NULL
+ON CONFLICT (id) DO UPDATE SET status = excluded.status, spec = excluded.spec,
+  scheduled_at = excluded.scheduled_at, completed_at = excluded.completed_at
+"""
+
+_RESTORE_DECISIONS = """
+INSERT INTO agent_approval_decisions (id, created_at, conversation_id, agent_run_id,
+  approval_id, tool_name, decision, response, resolved_by_user_id,
+  execution_claimed_at)
+SELECT id, coalesce(resolved_at, updated_at), conversation_id, run_id, tool_call_id,
+  CASE WHEN kind = 'QUESTION' THEN 'ask_user' ELSE tool_name END,
+  resolution->>'decision', resolution->'response',
+  (resolution->>'resolved_by_user_id')::uuid, execution_claimed_at
+FROM agent_pauses
+WHERE kind <> 'WAIT' AND resolution->>'decision' IS NOT NULL
+ON CONFLICT (conversation_id, approval_id) DO NOTHING
+"""
+
+
 def upgrade() -> None:
     conn = op.get_bind()
     _add_columns()
@@ -566,8 +867,15 @@ def upgrade() -> None:
         postgresql_where=sa.text("queue_state <> 'NONE'"),
     )
 
+    _create_pauses()
+    _backfill_pauses(conn)
+
 
 def downgrade() -> None:
+    conn = op.get_bind()
+    conn.execute(sa.text(_RESTORE_WAITS))
+    conn.execute(sa.text(_RESTORE_DECISIONS))
+    op.drop_table("agent_pauses")
     op.drop_index("ix_agent_message_queued", table_name="agent_messages")
     op.drop_index("uq_agent_message_client_id", table_name="agent_messages")
     op.drop_index("ix_agent_conv_ask", table_name="agent_conversations")

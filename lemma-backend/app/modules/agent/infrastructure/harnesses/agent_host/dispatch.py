@@ -32,6 +32,7 @@ from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.pauses import Pause
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
@@ -39,6 +40,7 @@ from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
 )
 from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.agent_host import run_resume, session_memory
 from app.modules.agent.infrastructure.agent_host.repository_common import (
@@ -180,6 +182,17 @@ def _resumed_tool_call_id(run: AgentRun | None) -> str | None:
     return run.state.resumed_tool_call_id if run is not None else None
 
 
+async def _resumed_pause(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, tool_call_id: str | None
+) -> Pause | None:
+    """The pause this run was started to answer, if any."""
+    if tool_call_id is None:
+        return None
+    return await Pauses(uow).get(
+        conversation_id=conversation_id, tool_call_id=tool_call_id
+    )
+
+
 async def enqueue_run[DepsT: ToolContext](
     *,
     uow_factory: UnitOfWorkFactory,
@@ -231,6 +244,12 @@ async def enqueue_run[DepsT: ToolContext](
         # the run rather than passed in, because the run row is where the
         # resume recorded it and a second copy could only ever disagree.
         run = await Runs(uow).get_agent_run(agent_run_id)
+        resumed_tool_call_id = _resumed_tool_call_id(run)
+        # Read only for a host that honours pre-approvals; any other is sent
+        # none, and asks the person again.
+        resumed = await _resumed_pause(
+            uow, conversation.id, resumed_tool_call_id if pre_approving else None
+        )
         # Messages that joined this run before it was dispatched are carried in
         # the prompt below, so they are this run's to answer and must not also
         # be sent as steers. Only noted here: they are claimed in the one
@@ -251,7 +270,6 @@ async def enqueue_run[DepsT: ToolContext](
             for message in messages
             if message.agent_run_id == agent_run_id and message.state.is_queued
         )
-    resumed_tool_call_id = _resumed_tool_call_id(run)
     admission = _Admission(
         resume_session_id=session.session_id if session is not None else None,
         session_last_run_id=session.last_run_id if session is not None else None,
@@ -264,11 +282,7 @@ async def enqueue_run[DepsT: ToolContext](
         resumed_tool_call_id=resumed_tool_call_id,
         # Only to a host that says it honours them; any other would ignore the
         # field and ask the person again, which is what it does without one.
-        pre_approvals=tuple(
-            pre_approvals_for(messages, resumed_tool_call_id=resumed_tool_call_id)
-            if pre_approving
-            else ()
-        ),
+        pre_approvals=tuple(pre_approvals_for(resumed)),
     )
     # The prompt is built with no transaction open, so the person can withdraw
     # a carried message while it is being built. The admission then finds it

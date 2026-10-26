@@ -23,7 +23,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.text.thinking_tags import has_thinking_tokens, split_thinking_segments
 from app.modules.agent.domain.entities import Message
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -116,6 +116,16 @@ _ANSWER_ONLY_METADATA = frozenset(
 )
 
 
+def _opens_with_its_call(draft: MessageDraft) -> bool:
+    """A person's pause, written with its call. A wait's row is the tool's to
+    write, beside its timer."""
+    return (
+        draft.kind is MessageKind.TOOL_CALL
+        and draft.pause is not None
+        and draft.pause.kind is not PauseKind.WAIT
+    )
+
+
 class RunMessageWriter:
     def __init__(self, uow_factory: UnitOfWorkFactory):
         self.uow_factory = uow_factory
@@ -146,26 +156,31 @@ class RunMessageWriter:
         draft = draft.model_copy(update={"metadata": metadata, "state": state})
 
         async with self.uow_factory() as uow:
-            messages = Messages(uow)
-            pausing_calls = Pauses(uow)
+            pauses = Pauses(uow)
             existing = await self._answered_already(
-                pausing_calls,
+                pauses,
                 conversation_id=conversation_id,
                 draft=draft,
             )
             if existing is not None:
                 return existing
             draft = await self._unique_pause_id(
-                pausing_calls,
+                pauses,
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
             )
-            return await messages.append_message(
+            saved = await Messages(uow).append_message(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
             )
+            if draft.kind is MessageKind.TOOL_RETURN and draft.tool_call_id:
+                # The call's own return: a pause it opened never paused.
+                await pauses.close_by_return(
+                    conversation_id=conversation_id, tool_call_id=draft.tool_call_id
+                )
+            return saved
 
     async def notice(
         self, *, conversation_id: UUID, text: str, metadata: JsonObject
@@ -206,16 +221,15 @@ class RunMessageWriter:
         Not ``wait_for``: its wait row keeps the id the tool was called with,
         and the wake writes the return under that.
         """
-        if (
-            draft.kind is not MessageKind.TOOL_CALL
-            or draft.tool_name not in USER_PAUSING_TOOL_NAMES
-            or not draft.tool_call_id
-        ):
+        if not _opens_with_its_call(draft) or not draft.tool_call_id:
             return draft
-        earlier = await repository.get_tool_call(
+        earlier = await repository.get(
             conversation_id=conversation_id, tool_call_id=draft.tool_call_id
         )
-        if earlier is None or earlier.agent_run_id == agent_run_id:
+        answered = await repository.tool_return(
+            conversation_id=conversation_id, tool_call_id=draft.tool_call_id
+        )
+        if answered is None and (earlier is None or earlier.run_id == agent_run_id):
             return draft
         renamed = f"{draft.tool_call_id}-{agent_run_id.hex[-12:]}"
         logger.info(
@@ -244,7 +258,7 @@ class RunMessageWriter:
             return None
         if not draft.state.synthetic_tool_return:
             return None
-        return await repository.get_tool_return(
+        return await repository.tool_return(
             conversation_id=conversation_id,
             tool_call_id=draft.tool_call_id,
         )

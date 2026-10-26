@@ -21,22 +21,20 @@ import pytest
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.work import WorkWriter
-from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseStatus
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     MessageDraft,
 )
 from app.modules.agent.domain.wait import (
-    AgentConversationWaitEntity,
-    AgentWaitStatus,
     AgentWaitType,
     AgentWaitWakeReason,
 )
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.tests.e2e.lifecycle_helpers import pause_by_id, wait_pause
 from app.modules.agent.services.wait_timers import arm_wait
 from app.modules.agent.services.wait_wake_service import AgentWaitService
 from app.modules.test_support.e2e.agent_work import run_wait_work
@@ -86,7 +84,7 @@ async def _a_wait(
     target_ref: str,
     scheduled_in: timedelta = timedelta(seconds=10),
     deadline_in: timedelta = timedelta(hours=1),
-) -> AgentConversationWaitEntity:
+) -> Pause:
     """A suspended turn: the pausing tool call, and the wait row that wakes it."""
     now = datetime.now(timezone.utc)
     tool_call_id = f"call-{uuid4().hex[:12]}"
@@ -103,18 +101,17 @@ async def _a_wait(
             agent_run_id=run.id,
             draft=MessageDraft.of_tool_call(
                 tool_call_id=tool_call_id,
-                tool_name=WAIT_TOOL_NAME,
+                tool_name="wait_for",
                 tool_args={"reason": "waiting"},
             ),
         )
-        wait = AgentConversationWaitEntity(
+        wait = wait_pause(
             conversation_id=waiting_conversation["conversation_id"],
-            agent_run_id=run.id,
+            run_id=run.id,
             pod_id=waiting_conversation["pod_id"],
             tool_call_id=tool_call_id,
             wait_type=wait_type,
-            external_ref=str(uuid4()),
-            scheduled_at=now + scheduled_in,
+            wake_at=now + scheduled_in,
             spec={
                 "reason": "waiting",
                 "started_at": now.isoformat(),
@@ -123,15 +120,14 @@ async def _a_wait(
                 "user_id": str(uuid4()),
             },
         )
-        await AgentConversationWaitRepository(uow).create(wait)
-        await arm_wait(WorkWriter.of(uow), wait, wait.scheduled_at)
+        assert await Pauses(uow).open(wait)
+        await arm_wait(WorkWriter.of(uow), wait, wait.wake_at)
         await uow.commit()
     return wait
 
 
-async def _reload(wait_id: UUID) -> AgentConversationWaitEntity | None:
-    async with create_uow_from_session_maker(async_session_maker) as uow:
-        return await AgentConversationWaitRepository(uow).get(wait_id)
+async def _reload(wait_id: UUID) -> Pause | None:
+    return await pause_by_id(wait_id)
 
 
 @pytest.mark.drives_work
@@ -157,8 +153,8 @@ async def test_a_process_whose_sandbox_is_gone_wakes_rather_than_waiting_out_the
 
     resolved = await _reload(wait.id)
     assert resolved is not None
-    assert resolved.status is AgentWaitStatus.COMPLETED
-    assert resolved.spec["woke_because"] == AgentWaitWakeReason.TARGET_GONE.value
+    assert resolved.status is PauseStatus.RESOLVED
+    assert resolved.wait_spec.woke_because is AgentWaitWakeReason.TARGET_GONE
 
 
 @pytest.mark.drives_work
@@ -176,8 +172,8 @@ async def test_a_subagent_run_that_no_longer_exists_wakes_as_gone(
 
     resolved = await _reload(wait.id)
     assert resolved is not None
-    assert resolved.status is AgentWaitStatus.COMPLETED
-    assert resolved.spec["woke_because"] == AgentWaitWakeReason.TARGET_GONE.value
+    assert resolved.status is PauseStatus.RESOLVED
+    assert resolved.wait_spec.woke_because is AgentWaitWakeReason.TARGET_GONE
 
 
 async def test_a_second_resolution_does_not_start_a_second_run(
@@ -220,8 +216,8 @@ async def test_a_wait_fires_when_due_and_its_item_goes_with_it(
 
     resolved = await _reload(wait.id)
     assert resolved is not None
-    assert resolved.status is AgentWaitStatus.COMPLETED
-    assert resolved.spec["woke_because"] == AgentWaitWakeReason.TIMER.value
+    assert resolved.status is PauseStatus.RESOLVED
+    assert resolved.wait_spec.woke_because is AgentWaitWakeReason.TIMER
 
 
 @pytest.mark.drives_work
@@ -244,4 +240,4 @@ async def test_a_healthy_future_wait_is_left_alone(
 
     untouched = await _reload(wait.id)
     assert untouched is not None
-    assert untouched.status is AgentWaitStatus.ACTIVE
+    assert untouched.status is PauseStatus.PENDING

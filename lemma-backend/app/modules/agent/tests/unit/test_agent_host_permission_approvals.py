@@ -17,12 +17,16 @@ import pytest
 
 from app.modules.agent.domain.agent_host_permissions import (
     AGENT_HOST_PERMISSION_KEY,
-    agent_host_permission_request,
     permission_approval_tool_args,
     permission_approval_tool_call_id,
+    permission_request,
 )
 from app.modules.agent.domain.entities import Message
-from app.modules.agent.tests.unit.repository_fakes import wire_repositories
+from app.modules.agent.domain.state_kinds import PauseStatus
+from app.modules.agent.tests.unit.repository_fakes import (
+    pause_for_call,
+    wire_repositories,
+)
 from app.modules.agent.domain.errors import ApprovalNotOwnedError
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -62,10 +66,7 @@ _PAYLOAD = {
 
 
 def _request(payload: dict = _PAYLOAD):
-    args = permission_approval_tool_args(payload, request_id="call-9")
-    parsed = agent_host_permission_request(args)
-    assert parsed is not None
-    return parsed
+    return permission_request(payload, request_id="call-9")
 
 
 class TestApprovalShape:
@@ -99,8 +100,10 @@ class TestApprovalShape:
             "kind": "allowalways",
             "name": "Always allow",
         } in marker["options"]
-        # Still read back the same way.
-        assert agent_host_permission_request(args) is not None
+        # The same request the pause carries.
+        assert marker == _request().model_dump(
+            mode="json", include={"request_id", "input", "options"}
+        )
 
     def test_a_request_without_input_carries_an_empty_one(self) -> None:
         payload = {key: value for key, value in _PAYLOAD.items() if key != "input"}
@@ -114,10 +117,6 @@ class TestApprovalShape:
         tool_call_id address two different calls."""
         assert permission_approval_tool_call_id("call-9") != "call-9"
         assert "call-9" in permission_approval_tool_call_id("call-9")
-
-    def test_an_ordinary_request_approval_is_not_mistaken_for_one(self) -> None:
-        assert agent_host_permission_request({"tool_name": "exec_command"}) is None
-        assert agent_host_permission_request({AGENT_HOST_PERMISSION_KEY: {}}) is None
 
 
 class TestDecisionMapping:
@@ -446,27 +445,34 @@ class _Repositories:
 
     def __init__(self, call: Message) -> None:
         self.call = call
-        self.decision: tuple | None = None
+        self.pause = None
         self.appended: list[Message] = []
         self.created_runs = 0
-        self.execution_claims = 0
 
-    async def claim_approval_execution(self, **_kwargs):
-        """One claim per approval, like the real conditional UPDATE."""
-        self.execution_claims += 1
-        return self.execution_claims == 1
+    @property
+    def decision(self):
+        return self.pause.decision if self.pause is not None else None
 
-    async def get_approval_decision(self, **_kwargs):
-        return self.decision
+    async def get(self, **_kwargs):
+        if self.pause is None:
+            self.pause = pause_for_call(self.call)
+        self.pause.returned = await self.tool_return() is not None
+        return self.pause
 
-    async def record_approval_decision(self, *, decision, response, **_kwargs):
-        self.decision = (decision, response)
+    async def save(self, pause):
+        """Fenced on the status it was read with, like the real UPDATE."""
+        if pause.read_as is not PauseStatus.PENDING:
+            return False
+        pause.saved()
         return True
 
-    async def get_tool_call(self, **_kwargs):
-        return self.call
+    async def pending(self, *_args, **_kwargs):
+        return [self.pause] if self.pause is not None and self.pause.is_open else []
 
-    async def get_tool_return(self, **_kwargs):
+    async def tool_call_id_of_message(self, **_kwargs):
+        return None
+
+    async def tool_return(self, **_kwargs):
         return next(
             (m for m in self.appended if m.kind == MessageKind.TOOL_RETURN), None
         )

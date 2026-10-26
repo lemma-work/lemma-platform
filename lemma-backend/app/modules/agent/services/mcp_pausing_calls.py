@@ -34,16 +34,15 @@ from uuid import UUID, uuid4
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.message_state import MessageState
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.pause_opening import PauseOpening
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageDraft,
     to_json_value,
 )
 from app.modules.agent.infrastructure.db.messages import Messages
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.live import publish_conversation_event
 from app.modules.agent.domain.live_events import message_payload
 from app.modules.agent.domain.live_events import message_to_payload
@@ -61,7 +60,8 @@ async def record_pausing_tool_call(
     *,
     conversation_id: UUID,
     agent_run_id: UUID | None,
-    pauses: PausingKind,
+    tool_name: str,
+    pauses: PauseKind,
     arguments: JsonObject | None,
 ) -> str | None:
     """Record the call and return the id it is addressed by.
@@ -73,23 +73,21 @@ async def record_pausing_tool_call(
     if agent_run_id is None:
         return None
     tool_call_id = f"{_ID_PREFIX}-{uuid4().hex}"
+    waits = pauses is PauseKind.WAIT
     async with uow_factory() as uow:
         saved = await Messages(uow).append_message(
             conversation_id=conversation_id,
             agent_run_id=agent_run_id,
             draft=MessageDraft.of_tool_call(
-                tool_name=pauses.value,
+                tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 tool_args=dict(arguments or {}),
                 # A person's answer is delivered into this same run, which is
                 # still going while the host's bridge waits for it; a resume
                 # would put a second run on the turn (`ResumeRun`). A wait
                 # is not parked: it ends the remote run (`suspend_remote_run`).
-                state=(
-                    MessageState(parked_in_run_id=agent_run_id)
-                    if pauses is not PausingKind.WAIT_FOR
-                    else None
-                ),
+                state=None if waits else MessageState(parked_in_run_id=agent_run_id),
+                pause=PauseOpening(kind=pauses),
             ),
         )
         await uow.commit()
@@ -103,7 +101,7 @@ async def record_pausing_tool_call(
     logger.debug(
         "agent.mcp_pausing_calls.recorded",
         conversation_id=str(conversation_id),
-        tool_name=pauses.value,
+        tool_name=tool_name,
     )
     return tool_call_id
 
@@ -134,7 +132,7 @@ async def close_pausing_tool_call(
     """
     if await _still_waiting(
         uow_factory,
-        agent_run_id=agent_run_id,
+        conversation_id=conversation_id,
         tool_call_id=tool_call_id,
         result=result,
     ):
@@ -149,6 +147,9 @@ async def close_pausing_tool_call(
                 tool_result=to_json_value(result),
             ),
         )
+        await Pauses(uow).close_by_return(
+            conversation_id=conversation_id, tool_call_id=tool_call_id
+        )
         await uow.commit()
     await publish_conversation_event(
         conversation_id,
@@ -159,23 +160,21 @@ async def close_pausing_tool_call(
 async def _still_waiting(
     uow_factory: UnitOfWorkFactory,
     *,
-    agent_run_id: UUID | None,
+    conversation_id: UUID,
     tool_call_id: str,
     result: object,
 ) -> bool:
     """Whether this call is genuinely outstanding, asked two ways.
 
     ``parked_tool_call_id`` is how ``ask_user`` and ``request_approval`` say a
-    person is being waited on. ``wait_for`` says it by leaving an ACTIVE wait row,
+    person is being waited on. ``wait_for`` says it by leaving a PENDING wait,
     which is also the thing that will eventually wake the conversation — so
     reading the row rather than the response means the two cannot disagree.
     """
     if getattr(result, "parked_tool_call_id", None):
         return True
-    if agent_run_id is None:
-        return False
     async with uow_factory() as uow:
-        wait = await AgentConversationWaitRepository(uow).find_active_for_run(
-            agent_run_id
+        wait = await Pauses(uow).get(
+            conversation_id=conversation_id, tool_call_id=tool_call_id
         )
-    return wait is not None and wait.tool_call_id == tool_call_id
+    return wait is not None and wait.kind is PauseKind.WAIT and wait.is_open

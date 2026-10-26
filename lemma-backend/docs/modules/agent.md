@@ -51,8 +51,9 @@ to continue; nothing is replayed
 | `agent_conversations` | Pod thread, the agent it belongs to (the pod's assistant is a row like any other), parent/subagent and workspace metadata |
 | `agent_messages` | User/assistant/tool messages and structured parts |
 | `agent_runs` | One execution attempt, status, usage, errors, stop state, harness metadata |
-| `agent_conversation_waits` | What a paused turn is waiting on — wait type, external reference, wake deadline, and the fire lease a timer tick takes; a partial unique index allows one `ACTIVE` row per conversation, mirroring `workflow_run_waits` |
-| `agent_approval_decisions`, `agent_feedback` | Durable interaction/audit records |
+| `agent_pauses` | One row per pausing tool call — the `Pause` aggregate (`domain/pauses`): its kind (question, approval, sign-in, budget, Agent Host permission, wait), status, deadline, resolution, the typed host request or budget, a wait's type, token, wake time and spec, and the one-shot execution claim of an approved tool; a partial unique index allows one PENDING wait per conversation |
+| `agent_conversation_waits`, `agent_approval_decisions` | No longer written: kept one release after `agent_pauses` absorbed them (migration 0065) |
+| `agent_feedback` | Feedback a run leaves through its tools |
 
 ### Repositories
 
@@ -67,8 +68,7 @@ unit of work it shares a transaction with:
 | `messages.Messages` | Appending a message and reading the transcript |
 | `queued_messages.QueuedMessages` | Messages sent while a run was working: counting, claiming, steering, withdrawing |
 | `history_reads.HistoryReads` | The runs and run-less messages a prompt is built from |
-| `pauses.Pauses` | Pausing tool calls and what answers them, including the pending-interactions inbox |
-| `approvals.ApprovalDecisions` | The durable decision record and its one-shot execution claim |
+| `pauses.Pauses` | Every pause: opened with its call, one `pending()` read of what a conversation or run is waiting on, endings written fenced on the status they were read with, the execution claim, and the pending-interactions inbox |
 
 There is no port in front of them: each has one implementation, and their
 tests run against Postgres. Every turn transaction takes the conversation's row
@@ -109,8 +109,8 @@ object, and none inherits from another.
 
 Each commits where the step it absorbed always did; `StartConversation`,
 `UpdateConversation` and `SupersedeStalePauses` ride the caller's transaction.
-The steps several share and that do not stand alone -- finding a paused call,
-appending its return, starting a resume run (`services/pause_resume`), building
+The steps several share and that do not stand alone -- appending a pause's
+return, starting a resume run (`services/pause_resume`), building
 the return (`services/conversation_resume_return`), stopping one run
 (`services/run_stop`), the access checks (`services/conversation_access`) -- are
 in `services/`; what a message carries and the typed-reply vocabulary are pure

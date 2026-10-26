@@ -85,11 +85,9 @@ def _coordinator(
         # A run that ended by asking: its question is still unanswered.
         get_latest_agent_run_for_conversation=AsyncMock(return_value=finished),
         get_conversation_status=AsyncMock(return_value=ConversationStatus.WAITING),
-        pausing_call_ids_of_run=AsyncMock(return_value=["call-1"]),
-        pausing_calls_awaiting_a_return=AsyncMock(
-            return_value=[
-                SimpleNamespace(tool_call_id="call-1", agent_run_id=finished.id)
-            ]
+        # The run asked one question, still unanswered.
+        pending=AsyncMock(
+            return_value=[SimpleNamespace(tool_call_id="call-1", run_id=finished.id)]
         ),
         mark_queued_waiting_on_answer=AsyncMock(return_value=[]),
     )

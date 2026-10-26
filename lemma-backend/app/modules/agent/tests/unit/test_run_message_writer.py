@@ -14,15 +14,26 @@ from uuid import uuid7
 from app.modules.agent.domain.value_objects import MessageDraft
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.pause_opening import PauseOpening
+from app.modules.agent.domain.state_kinds import PauseKind
 
 
 class _Repository:
     def __init__(self, existing: object | None) -> None:
         self.existing = existing
         self.appended: list[MessageDraft] = []
+        self.closed: list[str] = []
+        self.looked_up = 0
 
-    async def get_tool_return(self, *, conversation_id, tool_call_id):  # noqa: ARG002
+    async def tool_return(self, *, conversation_id, tool_call_id):  # noqa: ARG002
+        self.looked_up += 1
         return self.existing
+
+    async def get(self, *, conversation_id, tool_call_id):  # noqa: ARG002
+        return None
+
+    async def close_by_return(self, *, conversation_id, tool_call_id):  # noqa: ARG002
+        self.closed.append(tool_call_id)
 
     async def append_message(self, *, conversation_id, agent_run_id, draft):  # noqa: ARG002
         self.appended.append(draft)
@@ -84,8 +95,9 @@ async def test_an_ordinary_tool_return_is_written_without_a_lookup(
     monkeypatch,
 ) -> None:
     """The check is scoped to synthesized returns: every other return is a fact
-    the harness just produced, and paying a query for each one would slow the
-    hot path to protect a case that cannot happen there."""
+    the harness just produced, and paying a read for each one would slow the
+    hot path to protect a case that cannot happen there. It still closes a
+    pause its call opened, if it did -- one indexed UPDATE."""
     repository = _Repository(existing="would be found if it looked")
     writer = _writer(monkeypatch, repository)
 
@@ -100,3 +112,26 @@ async def test_an_ordinary_tool_return_is_written_without_a_lookup(
     )
 
     assert len(repository.appended) == 1
+    assert repository.looked_up == 0
+    assert repository.closed == ["toolu_1"]
+
+
+async def test_a_pausing_call_is_written_with_the_pause_it_opens(monkeypatch) -> None:
+    """The append writes the pause in the call's transaction; the writer only
+    has to hand it on."""
+    repository = _Repository(existing=None)
+    writer = _writer(monkeypatch, repository)
+
+    await writer.persist(
+        conversation_id=uuid7(),
+        agent_run_id=uuid7(),
+        data=MessageDraft.of_tool_call(
+            tool_name="ask_user",
+            tool_call_id="call-1",
+            tool_args={},
+            pause=PauseOpening(kind=PauseKind.QUESTION),
+        ),
+    )
+
+    (draft,) = repository.appended
+    assert draft.pause == PauseOpening(kind=PauseKind.QUESTION)

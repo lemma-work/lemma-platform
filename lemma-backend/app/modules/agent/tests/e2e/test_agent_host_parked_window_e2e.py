@@ -17,7 +17,8 @@ exactly as before.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.infrastructure.db.pauses import Pauses
 
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -316,7 +317,8 @@ async def test_a_question_left_past_the_window_ends_the_run_waiting(scenario):
         uow_factory(),
         conversation_id=seeded.conversation_id,
         agent_run_id=run_id,
-        pauses=PausingKind.ASK_USER,
+        tool_name="ask_user",
+        pauses=PauseKind.QUESTION,
         arguments=_QUESTION,
     )
     # Asked eleven minutes ago, against the shipped ten-minute window.
@@ -450,7 +452,8 @@ async def test_a_question_answered_inside_the_window_is_answered_in_its_turn(
         uow_factory(),
         conversation_id=seeded.conversation_id,
         agent_run_id=run_id,
-        pauses=PausingKind.ASK_USER,
+        tool_name="ask_user",
+        pauses=PauseKind.QUESTION,
         arguments=_QUESTION,
     )
 
@@ -534,10 +537,12 @@ async def test_a_late_approval_is_carried_to_the_resumed_turn_once(scenario):
     )
     first, resumed = await runs(seeded.conversation_id)
     # What the resume run's START_RUN carries, from what is on the record.
-    carried = pre_approvals_for(
-        await messages(seeded.conversation_id),
-        resumed_tool_call_id=resumed.resumed_tool_call_id,
-    )
+    async with uow_factory()() as uow:
+        resumed_pause = await Pauses(uow).get(
+            conversation_id=seeded.conversation_id,
+            tool_call_id=resumed.resumed_tool_call_id,
+        )
+    carried = pre_approvals_for(resumed_pause)
     assert [approval.model_dump(mode="json") for approval in carried] == [
         {
             "approval_id": _PERMISSION_ID,

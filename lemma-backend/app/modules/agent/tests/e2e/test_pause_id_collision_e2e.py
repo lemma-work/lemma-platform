@@ -15,7 +15,8 @@ import pytest
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pause_opening import PauseOpening
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -76,6 +77,7 @@ async def _asks_again(run_id) -> AsyncIterator[AgentEvent]:
             tool_name="ask_user",
             tool_call_id=_REUSED,
             tool_args={"questions": ["And the colour?"]},
+            pause=PauseOpening(kind=PauseKind.QUESTION),
         ),
         agent_run_id=run_id,
     )
@@ -96,7 +98,10 @@ async def test_a_reused_provider_id_is_a_new_pause_with_its_own_answer(scenario)
             conversation_id=seeded.conversation_id,
             agent_run_id=first,
             draft=MessageDraft.of_tool_call(
-                tool_name="ask_user", tool_call_id=_REUSED, tool_args={}
+                tool_name="ask_user",
+                tool_call_id=_REUSED,
+                tool_args={},
+                pause=PauseOpening(kind=PauseKind.QUESTION),
             ),
         )
         await uow.commit()
@@ -136,10 +141,7 @@ async def test_a_reused_provider_id_is_a_new_pause_with_its_own_answer(scenario)
     # this question rather than the old one.
     assert [w["tool_call_id"] for w in surface.waiting] == [renamed]
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        open_now = await Pauses(uow).pausing_calls_awaiting_a_return(
-            conversation_id=seeded.conversation_id,
-            pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-        )
+        open_now = await Pauses(uow).pending(seeded.conversation_id)
     assert renamed in [m.tool_call_id for m in open_now], "the new card vanished"
 
     async with owner_uow(seeded) as uow:
