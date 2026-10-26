@@ -29,13 +29,15 @@ from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
 from app.core.log.log import get_logger
 from app.core.origin import Origin, OriginKind, origin_scope
 from app.modules.agent.agent_host.domain.link import (
+    DispatchedCallFailed,
+    InteractionRunEnded,
     InteractionWaitBody,
     LinkErrorCode,
+    LinkUnauthorized,
     McpBody,
 )
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.agent_host.link.tool_calls import (
-    DispatchedCallFailed,
     ToolCallLedger,
     ToolCallOutcome,
     keep_executing,
@@ -68,14 +70,6 @@ _TRANSIENT = (RedisError, OperationalError, InterfaceError, PoolTimeoutError, OS
 _UNFINISHED = (
     "Lemma could not finish this tool call. It may have run; it was not repeated."
 )
-
-
-class LinkUnauthorized(Exception):
-    """The request's token does not grant access to its conversation."""
-
-
-class InteractionRunEnded(Exception):
-    """The run a parked interaction belongs to has ended; nobody will resume it."""
 
 
 class NoticeStream:
@@ -206,7 +200,7 @@ class AgentHostLinkMcp:
         Everything before a ``tools/call`` is dispatched -- authorizing, taking
         the call's claim -- may fail retryably. Anything after raises
         ``DispatchedCallFailed``, which is never retryable. A call with a
-        ``request_id`` executes at most once; see ``agent_host_link_tool_calls``.
+        ``request_id`` executes at most once; see ``link/tool_calls``.
 
         ``host`` is the machine the link authenticated: a run's token is only
         honoured from the person it belongs to and the host leasing its run.

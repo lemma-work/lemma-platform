@@ -50,8 +50,8 @@ from app.modules.agent.agent_host.link.registry import (
 from app.modules.agent.agent_host.link.session import AgentHostLinkSession
 from app.modules.agent.agent_host.link.tool_calls import ToolCallLedger
 from app.modules.agent.agent_host.mcp_authorization import RelayingHost
+from app.modules.agent.agent_host.domain.link import ControlUpdates
 from app.modules.agent.agent_host.link.store import (
-    ControlUpdates,
     LinkedHost,
 )
 

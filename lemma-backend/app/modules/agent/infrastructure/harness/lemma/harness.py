@@ -6,7 +6,7 @@ from pydantic_ai.run import AgentRun
 from contextlib import AbstractAsyncContextManager
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from typing import AsyncIterator, Sequence
 from uuid import UUID
 
@@ -44,6 +44,7 @@ from app.modules.agent.infrastructure.harness.lemma.retry import (
 )
 from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
     ModelRequestStreamer,
+    StopChecker,
 )
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
@@ -108,9 +109,6 @@ logger = get_logger(__name__)
 #: enough that an ordinary consumer never waits, small enough that a stalled one
 #: stops the producer rather than growing without limit.
 _STREAM_QUEUE_ITEMS = 256
-
-StopChecker = Callable[[], Awaitable[bool]]
-
 
 DEFAULT_TOOL_RETRIES = 5
 

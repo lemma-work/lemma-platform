@@ -242,13 +242,13 @@ class TestAProviderRefusalSaysWhichRefusalItWas:
     """
 
     def _message(self, status_code: int, body: object) -> str:
-        from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
-            user_facing_error_message,
+        from app.modules.agent.infrastructure.harness.lemma.run_failure_classification import (
+            classify_run_failure,
         )
 
-        return user_facing_error_message(
+        return classify_run_failure(
             ModelHTTPError(status_code=status_code, model_name="m", body=body)
-        )
+        ).message
 
     def test_a_rejected_credential_says_so(self) -> None:
         message = self._message(401, {"error": {"type": "authentication_error"}})
@@ -313,11 +313,11 @@ class TestAFailureMessageNamesOnlyControlsThatWork:
     """
 
     def _message(self, exc: Exception) -> str:
-        from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
-            user_facing_error_message,
+        from app.modules.agent.infrastructure.harness.lemma.run_failure_classification import (
+            classify_run_failure,
         )
 
-        return user_facing_error_message(exc)
+        return classify_run_failure(exc).message
 
     def test_a_dropped_stream_does_not_advertise_retry(self) -> None:
         import httpx2

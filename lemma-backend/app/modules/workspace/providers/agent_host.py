@@ -70,7 +70,7 @@ HOST_OFFLINE = "host_offline"
 WORKSPACE_NOT_OPEN = "workspace_not_open"
 
 #: What an op on a host sandbox with no host to go to says: the sentence the
-#: link gives (``agent_host_ops.HOST_OFFLINE_MESSAGE``) when the host is not
+#: link gives (``agent_host.domain.ops.HOST_OFFLINE_MESSAGE``) when the host is not
 #: connected, repeated rather than imported so this module keeps to a shape.
 HOST_OFFLINE_SENTENCE = (
     "This Mac is not connected, so the command did not run. Lemma Desktop's "

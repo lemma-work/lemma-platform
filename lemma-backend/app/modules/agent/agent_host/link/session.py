@@ -6,14 +6,15 @@ server's half of it. Three things run per connection:
 * the **reader** takes frames off the socket in order. ``control``, ``events``,
   ``harnesses`` and ``revoke`` are answered before the next frame is read,
   because their order is their meaning -- two event batches for one run must
-  land in the order they were sent. ``mcp`` and ``interaction_wait`` are handed
+  land in the order they were sent. What each request means is
+  ``link/requests``; this decides only when it is answered. ``mcp`` and ``interaction_wait`` are handed
   to their own tasks instead: a tool call can take minutes and a parked
   interaction can take half an hour, and neither may stop the heartbeat that
   follows it from being read. Each kind has its own slots; a named
-  ``tools/call`` outlives the socket (``agent_host_link_tool_calls``).
+  ``tools/call`` outlives the socket (``link/tool_calls``).
 * the **pusher** listens on the host's notice channel and pushes commands on
   every poke and every 5 seconds, and ends the connection when it hears it was
-  superseded or revoked: see ``agent_host_link_pusher``.
+  superseded or revoked: see ``link/pusher``.
 * the **writer** is a lock, not a task: every frame goes out whole, from
   whichever task produced it, and never interleaved with another.
 
@@ -34,71 +35,48 @@ from pydantic import ValidationError
 from app.core.domain.realtime import RealtimeChannel
 from app.core.log.log import get_logger
 from app.modules.agent.agent_host.domain.host import (
-    AgentHostCapacity,
-    AgentHostEventBatch,
     AgentHostStatus,
-    HostHello,
 )
 from app.modules.agent.agent_host.domain.link import (
     AGENT_HOST_LINK_HEARTBEAT_MS,
     AGENT_HOST_LINK_MISSED_HEARTBEATS,
     REVOKED_OR_MISSING_REASON,
-    CommandsBody,
-    ControlBody,
-    ControlOkBody,
-    EventsOkBody,
-    HarnessesBody,
-    HarnessesOkBody,
     HelloBody,
     HostFrameType,
-    InteractionOkBody,
-    InteractionWaitBody,
     LinkCloseCode,
     LinkErrorCode,
     LinkFrame,
-    McpBody,
-    McpOkBody,
     PairBody,
     ReconnectBody,
     ServerFrameType,
     WelcomeBody,
 )
 from app.modules.agent.agent_host.control.repository_common import (
-    AgentHostNotFound,
-    AgentHostProtocolViolation,
     AgentHostRepositoryError,
 )
 from app.modules.agent.agent_host.control.transfers import (
     AgentHostTransferStore,
 )
 from app.modules.agent.agent_host.link.ops import LinkOpRelay
+from app.modules.agent.agent_host.link.requests import LinkedHostRequests
 from app.modules.agent.agent_host.link.outbound import (
     OutboundStager,
-    command_frames,
 )
 from app.modules.agent.agent_host.link.mcp_relay import AgentHostLinkMcp
-from app.modules.agent.agent_host.mcp_authorization import RelayingHost
 from app.modules.agent.agent_host.link.ownership import LinkOwnership
 from app.modules.agent.agent_host.link.pusher import LinkPusher
 from app.modules.agent.agent_host.link.store import (
     AgentHostLinkStore,
-    LinkedHost,
 )
 from app.modules.agent.agent_host.link.wire import (
     INTERNAL_ERROR_CLOSE,
     answer_request,
-    EmptyBody,
     LinkClose,
-    LinkRequestError,
     LinkSocket,
     LinkWriter,
-    OutboundFrameTooLarge,
     SentCommands,
-    TRANSIENT_ERRORS,
     bearer_secret,
-    event_error,
     log_host_reported_error,
-    parse_control_items,
     validation_summary,
 )
 
@@ -174,15 +152,11 @@ class AgentHostLinkSession:
         self._tasks: set[asyncio.Task[None]] = set()
         self._close_code: int | None = None
         self._close_reason = ""
-        self._host: LinkedHost | None = None
         self._ownership = LinkOwnership(
             store=store, channels=channels, connection_id=self.connection_id
         )
-        self._hello: HostHello | None = None
-        #: What is too large for this host's link is staged by this; set by
-        #: ``hello``, which says whether the host can fetch it.
-        self._stager: OutboundStager | None = None
-        self._capacity = AgentHostCapacity()
+        #: Set by the ``hello`` that opens the link, which says who the host is.
+        self._requests: LinkedHostRequests | None = None
         self._sent = SentCommands(
             RESEND_AFTER_SECONDS
             if resend_after_seconds is None
@@ -191,7 +165,7 @@ class AgentHostLinkSession:
 
     @property
     def host_id(self) -> UUID | None:
-        return self._host.host_id if self._host is not None else None
+        return self._requests.host.host_id if self._requests is not None else None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -270,9 +244,9 @@ class AgentHostLinkSession:
                     LinkCloseCode.PROTOCOL_VIOLATION,
                     "the first frame must be pair or hello",
                 )
-            await self._open(first)
+            requests = await self._open(first)
             while (frame := await self._next_frame()) is not None:
-                await self._dispatch(frame)
+                await self._dispatch(frame, requests)
         except LinkClose as close:
             self.stop(close.code, close.reason)
 
@@ -304,18 +278,18 @@ class AgentHostLinkSession:
                 LinkCloseCode.PROTOCOL_VIOLATION, "a frame is not a valid envelope"
             ) from None
 
-    async def _dispatch(self, frame: LinkFrame) -> None:
+    async def _dispatch(self, frame: LinkFrame, requests: LinkedHostRequests) -> None:
         in_order: dict[str, Callable[[LinkFrame], Awaitable[None]]] = {
-            HostFrameType.CONTROL: self._control,
-            HostFrameType.EVENTS: self._events,
-            HostFrameType.HARNESSES: self._harnesses,
-            HostFrameType.REVOKE: self._revoke,
+            HostFrameType.CONTROL: requests.control,
+            HostFrameType.EVENTS: requests.events,
+            HostFrameType.HARNESSES: requests.harnesses,
+            HostFrameType.REVOKE: requests.revoke,
         }
         concurrent: dict[
             str, tuple[Callable[[LinkFrame], Awaitable[None]], asyncio.Semaphore]
         ] = {
-            HostFrameType.MCP: (self._mcp_request, self._in_flight),
-            HostFrameType.INTERACTION_WAIT: (self._interaction_wait, self._waits),
+            HostFrameType.MCP: (requests.mcp_request, self._in_flight),
+            HostFrameType.INTERACTION_WAIT: (requests.interaction_wait, self._waits),
         }
         if frame.type in in_order:
             await self._supervised(frame, in_order[frame.type])
@@ -394,7 +368,7 @@ class AgentHostLinkSession:
         await self._writer.send_frame(ServerFrameType.PAIRED, paired, re=frame.id)
         raise LinkClose(LinkCloseCode.NORMAL, "paired")
 
-    async def _open(self, frame: LinkFrame) -> None:
+    async def _open(self, frame: LinkFrame) -> LinkedHostRequests:
         secret = bearer_secret(self._socket.headers)
         if secret is None:
             raise LinkClose(
@@ -419,13 +393,24 @@ class AgentHostLinkSession:
             raise LinkClose(LinkCloseCode.REVOKED_OR_MISSING, REVOKED_OR_MISSING_REASON)
         if host.status is AgentHostStatus.UPGRADE_REQUIRED:
             raise LinkClose(LinkCloseCode.UPGRADE_REQUIRED, "upgrade required")
-        self._host, self._hello, self._capacity = host, body.hello, body.capacity
         self._ownership.generation = host.link_generation
         self._writer.host_id = host.host_id
-        self._stager = OutboundStager(
+        # What is too large for this host's link is staged by this; the
+        # ``hello`` says whether the host can fetch it.
+        stager = OutboundStager(
             host_id=host.host_id,
             host_fetches_staged=body.staged_bodies,
             store=self._transfers,
+        )
+        requests = self._requests = LinkedHostRequests(
+            host=host,
+            hello=body.hello,
+            capacity=body.capacity,
+            store=self._store,
+            mcp=self._mcp,
+            writer=self._writer,
+            sent=self._sent,
+            stager=stager,
         )
         self.ops.host_moves_transfers = bool(
             body.host_execution and body.host_execution.transfers
@@ -456,138 +441,14 @@ class AgentHostLinkSession:
                 sent=self._sent,
                 connection_id=self.connection_id,
                 push_floor_seconds=self._push_floor_seconds,
-                available_runs=lambda: self._capacity.available_runs,
+                available_runs=lambda: requests.capacity.available_runs,
                 stop=self.stop,
-                stager=self._stager,
+                stager=stager,
             ).push_loop(host.host_id)
         )
         self._tasks.add(pusher)
         pusher.add_done_callback(self._pusher_ended)
-
-    # ----------------------------------------------------- request frames
-
-    def _linked(self) -> tuple[LinkedHost, HostHello]:
-        if self._host is None or self._hello is None:
-            raise LinkClose(LinkCloseCode.PROTOCOL_VIOLATION, "no hello on this link")
-        return self._host, self._hello
-
-    async def _control(self, frame: LinkFrame) -> None:
-        host, hello = self._linked()
-        updates, refused = parse_control_items(ControlBody.model_validate(frame.body))
-        try:
-            commands = await self._store.apply_control(
-                host_id=host.host_id, hello=hello, updates=updates
-            )
-        except AgentHostNotFound, AgentHostProtocolViolation:
-            # The host was revoked, or its identity no longer matches the
-            # credential, between frames.
-            raise LinkClose(
-                LinkCloseCode.REVOKED_OR_MISSING, REVOKED_OR_MISSING_REASON
-            ) from None
-        self._capacity = updates.capacity
-        self._sent.acknowledged(updates.acknowledged_command_ids)
-        fresh = self._sent.unsent(commands)
-        try:
-            frames = await command_frames(self._stager, fresh, host_id=host.host_id)
-        except TRANSIENT_ERRORS:
-            # The heartbeat is answered regardless: commands whose payload
-            # could not be staged go out on a later push.
-            self._sent.forget([command.command_id for command in fresh])
-            logger.warning(
-                "agent.agent_host_link.push_skipped.degraded",
-                host_id=str(host.host_id),
-                exc_info=True,
-            )
-            frames = []
-        await self._writer.send_frame(
-            ServerFrameType.CONTROL_OK,
-            ControlOkBody(commands=frames[0] if frames else [], refused=refused),
-            re=frame.id,
-        )
-        # What did not fit beside the answer follows it, a frame at a time.
-        for more in frames[1:]:
-            try:
-                await self._writer.send_frame(
-                    ServerFrameType.COMMANDS, CommandsBody(commands=more)
-                )
-            except OutboundFrameTooLarge:
-                continue  # Logged by the writer; see ``LinkPusher``.
-
-    async def _events(self, frame: LinkFrame) -> None:
-        host, _ = self._linked()
-        batch = AgentHostEventBatch.model_validate(frame.body)
-        try:
-            ack = await self._store.append_events(host_id=host.host_id, batch=batch)
-        except AgentHostRepositoryError as exc:
-            raise event_error(exc) from None
-        await self._writer.send_frame(
-            ServerFrameType.EVENTS_OK, EventsOkBody(ack=ack), re=frame.id
-        )
-
-    async def _harnesses(self, frame: LinkFrame) -> None:
-        host, _ = self._linked()
-        body = HarnessesBody.model_validate(frame.body)
-        for snapshot in body.harnesses:
-            # An option the agent added that this build cannot offer. Named by
-            # its type, never by its content; the rest of the harness stands.
-            if snapshot.skipped_config_options:
-                logger.info(
-                    "agent.agent_host_link.config_options_skipped",
-                    host_id=str(host.host_id),
-                    harness_key=snapshot.harness_key,
-                    skipped=sorted(set(snapshot.skipped_config_options)),
-                )
-        try:
-            items = await self._store.publish_harnesses(
-                host_id=host.host_id, snapshots=body.harnesses
-            )
-        except AgentHostRepositoryError as exc:
-            raise LinkRequestError(LinkErrorCode.INVALID_FRAME, str(exc)) from None
-        await self._writer.send_frame(
-            ServerFrameType.HARNESSES_OK, HarnessesOkBody(items=items), re=frame.id
-        )
-
-    async def _revoke(self, frame: LinkFrame) -> None:
-        host, _ = self._linked()
-        try:
-            await self._store.revoke_host(host_id=host.host_id, user_id=host.user_id)
-        except AgentHostNotFound:
-            raise LinkClose(
-                LinkCloseCode.REVOKED_OR_MISSING, REVOKED_OR_MISSING_REASON
-            ) from None
-        await self._writer.send_frame(ServerFrameType.REVOKED, EmptyBody(), re=frame.id)
-        raise LinkClose(LinkCloseCode.NORMAL, "revoked")
-
-    def _relaying_host(self) -> RelayingHost:
-        host, _ = self._linked()
-        return RelayingHost(host_id=host.host_id, user_id=host.user_id)
-
-    async def _mcp_request(self, frame: LinkFrame) -> None:
-        result = await self._mcp.relay_request(
-            McpBody.model_validate(frame.body), host=self._relaying_host()
-        )
-        if self._stager is not None:
-            result = await self._stager.tool_result(result)
-        await self._writer.send_frame(
-            ServerFrameType.MCP_OK, McpOkBody(result=result), re=frame.id
-        )
-
-    async def _interaction_wait(self, frame: LinkFrame) -> None:
-        host = self._relaying_host()
-        body = InteractionWaitBody.model_validate(frame.body)
-        try:
-            answer = await self._mcp.wait_for_interaction(body, host=host)
-        except TimeoutError:
-            raise LinkRequestError(
-                LinkErrorCode.UNAVAILABLE,
-                "the interaction was not decided in time",
-                retryable=True,
-            ) from None
-        await self._writer.send_frame(
-            ServerFrameType.INTERACTION_OK,
-            InteractionOkBody(answer=answer),
-            re=frame.id,
-        )
+        return requests
 
     # ---------------------------------------------------------------- pushing
 

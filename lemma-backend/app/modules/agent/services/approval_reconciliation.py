@@ -323,7 +323,7 @@ def _permission_decision_message(
         # Read by a resumed run, in a new turn. The ACP request it answers
         # was dropped with the turn that asked it. A host that honours
         # pre-approvals is handed this one with the resume, and allows the
-        # same action once without asking (`harnesses/agent_host/
+        # same action once without asking (`agent_host/harness/
         # pre_approvals.py`); an older one asks the person again.
         if decision == AgentRunApprovalDecision.DENY:
             return (

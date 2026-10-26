@@ -161,7 +161,7 @@ async def mcp_payload[DepsT: ToolContext](
 
     There is no URL in it. The bridge sends every tool call up the host's link
     as an ``mcp`` frame carrying ``conversation_id`` and ``token``, and Lemma
-    re-authorizes that pair on every call; see ``agent_host_link_mcp``. A
+    re-authorizes that pair on every call; see ``link/mcp_relay``. A
     conversation MCP mount used to be the other end of an HTTP URL here, and the
     Agent Host was its only caller.
 

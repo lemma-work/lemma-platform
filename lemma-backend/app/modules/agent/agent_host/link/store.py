@@ -28,17 +28,16 @@ from app.core.log.log import get_logger
 from app.modules.agent.agent_host.domain.host import (
     AgentHostCapacity,
     AgentHostCommand,
-    AgentHostCommandRejection,
     AgentHostEventAck,
     AgentHostEventBatch,
     AgentHostHarnessSnapshot,
     AgentHostPairingCompleted,
-    AgentHostRunCheckpoint,
     AgentHostStatus,
     HostHello,
 )
 from app.modules.agent.agent_host.domain.link import (
     AgentHostHarnessRecord,
+    ControlUpdates,
     HostExecutionCapability,
     PairBody,
 )
@@ -76,18 +75,6 @@ class LinkedHost:
     #: The link generation this ``hello`` claimed; 0 when it claimed none
     #: because the host must upgrade and the link is about to close.
     link_generation: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ControlUpdates:
-    """The parts of one ``control`` frame that parsed."""
-
-    capacity: AgentHostCapacity
-    acknowledged_command_ids: list[UUID]
-    checkpoints: list[AgentHostRunCheckpoint]
-    rejections: list[AgentHostCommandRejection]
-    #: None when the frame did not carry it, which means "unchanged".
-    host_execution: HostExecutionCapability | None = None
 
 
 def _stored_host_execution(
@@ -285,7 +272,7 @@ class AgentHostLinkStore:
                 reported_keys={snapshot.harness_key for snapshot in snapshots},
             )
             # Only the profiles of the harnesses just reported, through the
-            # `harness_id` index; see `agent_host_profile_refresh`.
+            # `harness_id` index; see `profile_refresh`.
             await refresh_harness_profiles(uow.session, published)
             records = [
                 AgentHostHarnessRecord.model_validate(harness) for harness in published

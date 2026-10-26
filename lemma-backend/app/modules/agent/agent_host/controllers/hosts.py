@@ -2,7 +2,7 @@
 
 These are the ``/me/runtime/*`` routes a person calls to manage their machines.
 The machine itself has no HTTP API: everything it says and hears travels on its
-link WebSocket, in ``agent_host_link_controller``.
+link WebSocket, in ``controllers/link``.
 """
 
 from __future__ import annotations

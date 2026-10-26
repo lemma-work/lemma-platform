@@ -18,6 +18,7 @@ update was refused, and a vocabulary of close codes.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
@@ -29,9 +30,11 @@ from app.modules.agent.agent_host.domain.host import (
     AGENT_HOST_PROTOCOL_VERSION,
     AgentHostCapacity,
     AgentHostCommand,
+    AgentHostCommandRejection,
     AgentHostEventAck,
     AgentHostHarnessSnapshot,
     AgentHostPairingComplete,
+    AgentHostRunCheckpoint,
     HostHello,
 )
 from app.modules.agent.domain.value_objects import JsonObject
@@ -309,7 +312,7 @@ class McpBody(BaseModel):
     params: JsonObject = Field(default_factory=dict)
     #: The host mints one per ``tools/call`` and sends the same one on every
     #: retry of that call, on any link. With ``run_id`` it makes the call
-    #: execute at most once (``agent_host_link_tool_calls``).
+    #: execute at most once (``link/tool_calls``).
     request_id: str | None = Field(default=None, pattern=_REQUEST_ID_PATTERN)
 
     @field_validator("params", mode="before")
@@ -365,7 +368,7 @@ class WelcomeBody(BaseModel):
     #: as expired or not yet valid.
     server_time: datetime = Field(default_factory=_utc_now)
     #: This server executes a ``tools/call`` carrying a ``request_id`` at most
-    #: once (``agent_host_link_tool_calls``), so the host may resend one after
+    #: once (``link/tool_calls``), so the host may resend one after
     #: a dropped link. A server without this field would run it twice.
     idempotent_tool_calls: bool = True
 
@@ -454,3 +457,39 @@ class ServerErrorBody(BaseModel):
     code: LinkErrorCode
     message: str
     retryable: bool = False
+
+
+# -- what the link's handlers raise and pass between them --------------------
+
+
+class LinkUnauthorized(Exception):
+    """The request's token does not grant access to its conversation."""
+
+
+class InteractionRunEnded(Exception):
+    """The run a parked interaction belongs to has ended; nobody will resume it."""
+
+
+class DispatchedCallFailed(Exception):
+    """A ``tools/call`` that failed once it had been dispatched.
+
+    Answered with ``retryable=False`` whatever the cause: the tool may already
+    have acted, so sending it again could act twice.
+    """
+
+    def __init__(self, code: LinkErrorCode, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+@dataclass(frozen=True, slots=True)
+class ControlUpdates:
+    """The parts of one ``control`` frame that parsed."""
+
+    capacity: AgentHostCapacity
+    acknowledged_command_ids: list[UUID]
+    checkpoints: list[AgentHostRunCheckpoint]
+    rejections: list[AgentHostCommandRejection]
+    #: None when the frame did not carry it, which means "unchanged".
+    host_execution: HostExecutionCapability | None = None

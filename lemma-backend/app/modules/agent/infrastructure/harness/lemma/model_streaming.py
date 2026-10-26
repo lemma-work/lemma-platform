@@ -19,8 +19,7 @@ stop has to be a yielded event rather than a raised exception.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from uuid import UUID
 
 from app.core.log.log import get_logger
@@ -55,7 +54,8 @@ from app.modules.agent.infrastructure.harness.lemma.stream_parts import (
 
 logger = get_logger(__name__)
 
-StopChecker = Any
+#: Whether the run has been asked to stop, polled between stream events.
+StopChecker = Callable[[], Awaitable[bool]]
 
 
 def _tool_call_delta_text(delta: ToolCallPartDelta) -> str:

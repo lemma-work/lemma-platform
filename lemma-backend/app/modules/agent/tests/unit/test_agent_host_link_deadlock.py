@@ -25,9 +25,9 @@ from sqlalchemy.exc import DBAPIError
 
 from app.modules.agent.agent_host.domain.host import AgentHostCapacity, HostHello
 from app.core.infrastructure.db.transient_errors import is_deadlock
+from app.modules.agent.agent_host.domain.link import ControlUpdates
 from app.modules.agent.agent_host.link.store import (
     AgentHostLinkStore,
-    ControlUpdates,
 )
 
 

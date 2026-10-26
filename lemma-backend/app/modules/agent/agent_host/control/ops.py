@@ -1,6 +1,6 @@
 """The caller's half of an ``op``: send one operation to a host, wait for it.
 
-See docs/architecture/desktop-host-execution.md §3 and ``domain/agent_host_ops``
+See docs/architecture/desktop-host-execution.md §3 and ``domain/ops``
 for the two Redis messages. The reply channel is subscribed *before* the notice
 is published, so an answer can never arrive ahead of the listener.
 

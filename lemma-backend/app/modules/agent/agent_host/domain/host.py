@@ -510,7 +510,7 @@ class AgentHostRunSpec(BaseModel):
         ),
     )
     # Filled only for a host whose harness publishes ``pre_approval``; see
-    # ``harnesses/agent_host/pre_approvals.py``.
+    # ``agent_host/harness/pre_approvals.py``.
     pre_approvals: list[AgentHostPreApproval] = Field(
         default_factory=list, max_length=8
     )

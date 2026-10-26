@@ -38,7 +38,6 @@ from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import AgentEventType
 from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
     failure_event,
-    user_facing_error_message,
 )
 from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
 from app.modules.agent.infrastructure.harness.lemma.run_failure_classification import (
@@ -128,7 +127,7 @@ _FAILURES: list[tuple[str, Exception]] = [
     "exc", [exc for _, exc in _FAILURES], ids=[name for name, _ in _FAILURES]
 )
 def test_the_harness_and_the_runner_say_the_same_thing(exc: Exception) -> None:
-    assert user_facing_error_message(exc) == run_failure_message(exc)
+    assert failure_event(exc, agent_run_id=uuid4()).data == run_failure_message(exc)
 
 
 @pytest.mark.parametrize(

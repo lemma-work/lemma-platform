@@ -14,6 +14,7 @@ intake and the shipped reader, and asserts on what a conversation ends up with.
 
 from __future__ import annotations
 
+from app.modules.agent.agent_host.control import admission
 from app.modules.agent.domain.state_kinds import PauseKind
 
 import asyncio
@@ -942,7 +943,8 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
         prompt=[{"role": "user", "content": "Say the dispatch secret."}],
         run_deadline=now + timedelta(minutes=30),
     )
-    admitted = await repository.enqueue_run(
+    admitted = await admission.enqueue_run(
+        repository.uow,
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
@@ -952,7 +954,8 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
     )
     assert admitted.kind == AgentHostCommandKind.START_RUN
     # Admission is exactly-once: re-admitting the same run returns the same command.
-    again = await repository.enqueue_run(
+    again = await admission.enqueue_run(
+        repository.uow,
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,
@@ -1102,7 +1105,8 @@ async def test_a_stale_revision_rejection_reaims_and_requeues_the_command(
         prompt=[{"role": "user", "content": "run"}],
         run_deadline=now + timedelta(minutes=30),
     )
-    _admitted = await repository.enqueue_run(
+    _admitted = await admission.enqueue_run(
+        repository.uow,
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
         runtime_profile_id=profile_id,

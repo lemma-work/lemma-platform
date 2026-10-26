@@ -4,7 +4,7 @@ See docs/architecture/desktop-host-execution.md. The selection itself -- is
 this run the owner's, is their Mac there -- belongs to the agent module, which
 knows about runs. This module is told the answer and does what a workspace
 does with it: make the sandbox row, open it on that host, and hand back the
-root the host chose. The run records both (``run_execution_record``); nothing
+root the host chose. The run records both (``control/run_records``); nothing
 here stores which host a sandbox is on or which folder it opened.
 """
 

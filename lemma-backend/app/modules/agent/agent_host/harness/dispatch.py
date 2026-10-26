@@ -42,7 +42,7 @@ from app.modules.agent.agent_host.control.repository import AgentHostRepository
 from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.db.runs import Runs
-from app.modules.agent.agent_host.control import run_resume
+from app.modules.agent.agent_host.control import admission, run_resume
 from app.modules.agent.agent_host.control import session_memory
 from app.modules.agent.agent_host.control.repository_common import (
     AgentHostRepositoryError,
@@ -429,7 +429,8 @@ async def _admission_transaction(
         # First, so a claim that comes back short rolls back before anything
         # else is written; see `claim_exactly`.
         await claim_exactly(uow, agent_run_id=run_id, carried=admitted.carried)
-        await AgentHostDispatchRepository(uow).enqueue_run(
+        await admission.enqueue_run(
+            uow,
             host_id=admitted.host_id,
             harness_id=admitted.run_config.harness_id,
             runtime_profile_id=admitted.run_config.runtime_profile_id,

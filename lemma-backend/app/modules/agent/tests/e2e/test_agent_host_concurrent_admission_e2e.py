@@ -34,6 +34,7 @@ from sqlalchemy import select, text
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.modules.agent.agent_host.control import admission
 from app.modules.agent.agent_host.domain.host import (
     TERMINAL_AGENT_HOST_RUN_STATES,
     AgentHostCommandKind,
@@ -144,7 +145,8 @@ def _spec(run_id: UUID, conversation_id: UUID, host: _Host) -> AgentHostRunSpec:
 
 
 async def _admit(uow: SqlAlchemyUnitOfWork, host: _Host, spec: AgentHostRunSpec):
-    return await AgentHostDispatchRepository(uow).enqueue_run(
+    return await admission.enqueue_run(
+        uow,
         host_id=host.host_id,
         harness_id=host.harness_id,
         runtime_profile_id=host.profile_id,

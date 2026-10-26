@@ -37,7 +37,10 @@ from redis.exceptions import RedisError
 from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
-from app.modules.agent.agent_host.domain.link import LinkErrorCode
+from app.modules.agent.agent_host.domain.link import (
+    DispatchedCallFailed,
+    LinkErrorCode,
+)
 from app.modules.agent.domain.value_objects import JsonObject
 
 logger = get_logger(__name__)
@@ -75,19 +78,6 @@ _OWNER_GONE = (
 #: How often a waiting duplicate re-reads the record, at first and at most.
 _POLL_FIRST_SECONDS = 0.2
 _POLL_MAX_SECONDS = 2.0
-
-
-class DispatchedCallFailed(Exception):
-    """A ``tools/call`` that failed once it had been dispatched.
-
-    Answered with ``retryable=False`` whatever the cause: the tool may already
-    have acted, so sending it again could act twice.
-    """
-
-    def __init__(self, code: LinkErrorCode, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
 
 
 class ToolCallOutcome(BaseModel):
@@ -257,7 +247,6 @@ def report_if_orphaned(task: asyncio.Task[JsonObject]) -> None:
 
 
 __all__ = [
-    "DispatchedCallFailed",
     "MAX_RECORDED_RESULT_BYTES",
     "TOOL_CALL_RECORD_TTL_SECONDS",
     "TOOL_CALL_WAIT_SECONDS",

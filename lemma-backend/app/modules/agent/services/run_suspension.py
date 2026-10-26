@@ -16,7 +16,7 @@ means STOPPED or WAITING.
 
 A turn parked on a person (``ask_user``, an approval, an ACP permission
 request) is ended the same way once it has waited past the parked window
-(``harnesses/agent_host/parked_window.py``); :func:`run_suspended_while_parked`
+(``agent_host/harness/parked_window.py``); :func:`run_suspended_while_parked`
 is its read-back, keyed on the mark that window writes on the run.
 """
 

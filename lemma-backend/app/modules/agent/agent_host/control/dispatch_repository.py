@@ -27,7 +27,7 @@ host for every run it is executing.
 
 "Poll" below means one read of the command queue: the link reads it whenever
 it applies a ``control`` frame, whenever the host's channel is poked, and every
-5 seconds as the floor under a lost poke (see ``agent_host_link_session``).
+5 seconds as the floor under a lost poke (see ``link/session``).
 """
 
 from __future__ import annotations
@@ -50,7 +50,6 @@ from app.modules.agent.agent_host.domain.host import (
     AgentHostEventAck,
     AgentHostEventBatch,
     AgentHostRunCheckpoint,
-    AgentHostRunSpec,
     AgentHostRunState,
 )
 from app.modules.agent.domain.value_objects import JsonObject
@@ -58,7 +57,6 @@ from app.modules.agent.agent_host.control.event_stream import (
     AgentHostEventStream,
     agent_host_event_stream,
 )
-from app.modules.agent.agent_host.control import admission
 from app.modules.agent.agent_host.control import control_updates
 from app.modules.agent.agent_host.control import event_intake
 from app.modules.agent.agent_host.control import recovery
@@ -118,29 +116,6 @@ class AgentHostDispatchRepository:
         self._events = event_stream or agent_host_event_stream()
 
     # ---------------------------------------------------------------- dispatch
-
-    async def enqueue_run(
-        self,
-        *,
-        host_id: UUID,
-        harness_id: UUID,
-        runtime_profile_id: UUID,
-        run_spec: AgentHostRunSpec,
-        encrypted_mcp_payload: dict,
-        now: datetime | None = None,
-        command_ttl_seconds: int = DEFAULT_COMMAND_TTL_SECONDS,
-    ) -> AgentHostCommandModel:
-        """Admit one run onto a host; see admission."""
-        return await admission.enqueue_run(
-            self.uow,
-            host_id=host_id,
-            harness_id=harness_id,
-            runtime_profile_id=runtime_profile_id,
-            run_spec=run_spec,
-            encrypted_mcp_payload=encrypted_mcp_payload,
-            now=now,
-            command_ttl_seconds=command_ttl_seconds,
-        )
 
     async def poll_commands(
         self,

@@ -1,6 +1,6 @@
 """Whether a relayed run token may use a conversation's tools, call by call.
 
-The caller is the Agent Host link (``agent_host_link_mcp``): every ``mcp`` and
+The caller is the Agent Host link (``link/mcp_relay``): every ``mcp`` and
 ``interaction_wait`` frame carries the run's own Lemma token and names the
 conversation and run it acts in. The link authenticated the *machine*; this
 decides what the *token* may do, and it is asked again on every call, because

@@ -16,7 +16,7 @@ auto-allow list and raised approval cards. And the question asked was whether
 the person had *any* usable host, not whether the run's own host was one.
 
 So it is decided when the run's context is first built, for the host the run's
-harness is on, and written on the run (``run_execution_record``); every later
+harness is on, and written on the run (``control/run_records``); every later
 context build for the run -- a reclaimed worker, every relayed tool call --
 reads it back.
 """

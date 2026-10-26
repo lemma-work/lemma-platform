@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
+from app.modules.agent.agent_host.control import admission
 from app.modules.agent.application.agents.manage_runtime_profiles import (
     RuntimeProfileCreation,
 )
@@ -297,9 +298,8 @@ async def _admit(
     )
     db_session.add(run)
     await db_session.flush()
-    command = await AgentHostDispatchRepository(
-        SqlAlchemyUnitOfWork(db_session)
-    ).enqueue_run(
+    command = await admission.enqueue_run(
+        SqlAlchemyUnitOfWork(db_session),
         host_id=machine["host_id"],
         harness_id=machine["harness_id"],
         runtime_profile_id=run_config.runtime_profile_id,

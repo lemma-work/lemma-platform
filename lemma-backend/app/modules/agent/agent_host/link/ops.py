@@ -13,7 +13,7 @@ request ids and these never meet: an ``error`` whose ``re`` is not one of ours
 is the host reporting something about its own request, and goes to the
 session's ordinary handling.
 
-Kept out of ``agent_host_link_session`` because it is a self-contained exchange
+Kept out of ``link/session`` because it is a self-contained exchange
 with its own bookkeeping, and the session is a lifecycle, not a router.
 """
 

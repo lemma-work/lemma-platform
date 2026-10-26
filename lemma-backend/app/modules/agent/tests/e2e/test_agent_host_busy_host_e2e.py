@@ -21,6 +21,7 @@ from sqlalchemy import select, update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.modules.agent.agent_host.control import admission
 from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostCommandState,
@@ -85,7 +86,8 @@ async def _queued_run(db_session, scenario) -> tuple[dict, UUID]:
 
     await _heartbeat(machine, active=_MAX_RUNS)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await AgentHostDispatchRepository(uow).enqueue_run(
+        await admission.enqueue_run(
+            uow,
             host_id=machine["host_id"],
             harness_id=machine["harness_id"],
             runtime_profile_id=profile.id,

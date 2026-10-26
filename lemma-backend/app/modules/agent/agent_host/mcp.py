@@ -1,7 +1,7 @@
 """Request-scoped tool resolution for conversation MCP calls.
 
 The caller is the Agent Host link: a local agent's Lemma tool calls arrive as
-``mcp`` frames (``agent_host_link_mcp``), each re-authorized here against the
+``mcp`` frames (``link/mcp_relay``), each re-authorized here against the
 run's token and its conversation.
 
 This service owns the run token's authorization and the run's session; the
@@ -76,7 +76,7 @@ class ConversationMCPService:
     ) -> bool:
         """Whether ``token`` may use ``conversation_id``'s tools as ``agent_run_id``.
 
-        See ``conversation_mcp_authorization`` for every rule it applies.
+        See ``mcp_authorization`` for every rule it applies.
         """
         return await authorize_run_token(
             self.uow_factory,

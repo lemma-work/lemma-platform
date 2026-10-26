@@ -7,7 +7,7 @@ and ``revoked`` and ends the connection for them, and on every floor tick reads
 the host's link generation again, so a lost notice cannot leave two links
 pushing for one host. Supersession is decided by the link generation each
 ``hello`` claims in the database, never by which notice arrived: see
-``agent_host_link_ownership``.
+``link/ownership``.
 
 Split from the session, which owns reading the socket; the two share only the
 writer, the ops relay and the session's ``stop``.

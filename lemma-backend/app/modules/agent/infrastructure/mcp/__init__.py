@@ -108,7 +108,7 @@ def normalize_local_mcp_tool_name(tool_name: str) -> str:
     analytics — has to see the same one either way.
 
     Its one remaining reader is Lemma's MCP server (``pod_mcp_service``,
-    ``conversation_mcp_service``), which is handed whatever name the calling
+    ``agent_host/mcp``), which is handed whatever name the calling
     agent chose. Agent Host *events* no longer need it: the host strips the
     namespace itself and says the call is Lemma's in ``tool.source``.
     """

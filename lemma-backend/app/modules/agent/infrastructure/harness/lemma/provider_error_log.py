@@ -61,15 +61,6 @@ def log_model_http_error(
     )
 
 
-def user_facing_error_message(exc: BaseException) -> str:
-    """A sanitized, actionable message for the UI: the runner's own sentence.
-
-    Never raw provider exception text, which may contain API keys, request
-    headers, or model-internal details.
-    """
-    return classify_run_failure(exc).message
-
-
 def failure_event(exc: BaseException, *, agent_run_id: UUID) -> AgentEvent:
     """The ERROR a run ends on: the sentence, and the code a client keys off.
 

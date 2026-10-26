@@ -10,7 +10,7 @@ really there is settled by the op itself: nothing picking the request up within
 **Which host, when a user has more than one.** A host is paired to one user,
 but a user may pair several Macs. Two questions are asked, and answered from
 rows that already exist -- the host rows, and the ``execution`` record each
-run keeps in its metadata (``run_execution_record``):
+run keeps in its metadata (``control/run_records``):
 
 * *Where a new run executes* (``host_execution_host_id``): among the user's
   usable hosts, the one the conversation's most recent host run chose, so a

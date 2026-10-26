@@ -6,14 +6,14 @@ nothing that reliably says "this was ``lemma_final_answer``". Recognising it fro
 the stream is therefore a heuristic that varies by adapter.
 
 So the tool records its own result here, and the run reads it back when it goes
-terminal (``harnesses/agent_host/harness_events.adopt_recorded_final_answer``).
+terminal (``harness/harness_events.adopt_recorded_final_answer``).
 The stream path stays as the fast path (it produces the answer without a
 database round trip when the adapter does echo enough), but this is the
 authority: last write wins, and a run that reaches terminal adopts whatever is
 stored over whatever was inferred.
 
 Both halves live in one file so the writer and the reader cannot drift apart —
-the same reason ``agent_host_session_memory`` is shaped this way.
+the same reason ``session_memory`` is shaped this way.
 """
 
 from __future__ import annotations

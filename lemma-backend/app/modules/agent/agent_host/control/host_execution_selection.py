@@ -40,7 +40,7 @@ delegated, as a wake does. A new trigger has to be added here on purpose.
 
 **Once.** The check runs the first time the run's context is built, and the
 answer -- host or VM, and for the host which Mac and which folder -- is
-written on the run (``run_execution_record``). A
+written on the run (``control/run_records``). A
 context rebuilt for the same run -- a worker reclaiming it, an approved tool
 executing after a pause -- reads that answer back instead of deciding again,
 so a run never moves. The host sandbox's id records the fabric, so its

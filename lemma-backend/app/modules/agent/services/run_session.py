@@ -15,7 +15,7 @@ Now every path loads a ``RunSession`` and asks it for the context:
   one chain, reads the grants, and builds the tools' context
   (``turn_context``) with the run's briefs (``context_brief.run_briefs``);
 * the resume path (``RunSession.for_resume``) rebuilds it for the paused run;
-* the Agent Host MCP path (``run_session_relay.load_relayed_session``) keeps
+* the Agent Host MCP path (``agent_host/relayed_session.load_relayed_session``) keeps
   the runtime and grants cached for the run's lease by grant generation, so a
   call does not re-derive what the session already holds;
 * the pod MCP server builds a pod-scoped context, with no run

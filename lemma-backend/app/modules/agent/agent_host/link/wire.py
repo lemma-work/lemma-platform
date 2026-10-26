@@ -1,8 +1,9 @@
 """The parts of the Agent Host link that are not one connection's state.
 
-Split from ``agent_host_link_session`` so the session reads as the lifecycle it
-is: what a frame means, how its failure is answered, and how one whole frame is
-written are here, where each can be read -- and tested -- on its own.
+Split from ``link/session`` so the session reads as the lifecycle it is: what a
+frame means, how its failure is answered, and how one whole frame is written
+are here, where each can be read -- and tested -- on its own. Plumbing only: it
+imports the link's domain and nothing from the store or the MCP relay.
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ from app.modules.agent.agent_host.domain.host import (
 )
 from app.modules.agent.agent_host.domain.link import (
     ControlBody,
+    ControlUpdates,
+    DispatchedCallFailed,
+    InteractionRunEnded,
+    LinkUnauthorized,
     LinkErrorCode,
     ErrorBody,
     HostFrameType,
@@ -42,12 +47,6 @@ from app.modules.agent.agent_host.control.repository_common import (
     AgentHostStaleLease,
     AgentHostTerminalRun,
 )
-from app.modules.agent.agent_host.link.mcp_relay import (
-    DispatchedCallFailed,
-    InteractionRunEnded,
-    LinkUnauthorized,
-)
-from app.modules.agent.agent_host.link.store import ControlUpdates
 
 
 logger = get_logger(__name__)
@@ -410,7 +409,7 @@ async def answer_request(
         # The link is closing: the request goes with it, unanswered. A
         # ``tools/call`` with a ``request_id`` is not cancelled by this -- its
         # execution is shielded and recorded, and the host's retry on the next
-        # link is answered from the record (``agent_host_link_tool_calls``).
+        # link is answered from the record (``link/tool_calls``).
         task.cancel()
         raise
     if task.cancelled() or task.exception() is None:
