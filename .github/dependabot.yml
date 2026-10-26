@@ -94,7 +94,9 @@ updates:
       interval: monthly
       time: "04:15"
       timezone: Asia/Kolkata
-    open-pull-requests-limit: 2
+    # Three groups, so three slots: at two, a React PR and a routine PR open
+    # together hold both and the security group has nowhere to go.
+    open-pull-requests-limit: 3
     groups:
       # React refuses to render unless `react` and `react-dom` are the exact
       # same version, and Dependabot bumps each on its own: the October routine
