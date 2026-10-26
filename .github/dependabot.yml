@@ -161,8 +161,16 @@ updates:
     # its own, apt could no longer find the kernel, and no macOS guest -- so no
     # Desktop release -- built for weeks. A new Ubuntu release is the two-line
     # change the Dockerfile describes; digest refreshes within one still come.
+    #
+    # The same for `python`. The backend's runtime stage runs a .venv built by
+    # the uv:python3.14 builder stage, and requires-python is <3.15: the
+    # October group PR moved only the runtime to python:3.15-slim, which has
+    # no interpreter for that venv. A new Python is a deliberate change to
+    # both stages and pyproject.toml; patch releases and digests still come.
     ignore:
       - dependency-name: ubuntu
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: python
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       docker-updates:
