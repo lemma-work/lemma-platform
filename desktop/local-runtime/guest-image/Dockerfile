@@ -13,7 +13,7 @@
 # installed from this release's archive, so a base bump on its own leaves apt
 # looking for a kernel the new release does not carry, and the macOS guest stops
 # building. Change both in the same commit, or neither.
-FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 AS runtime
+FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS runtime
 
 ARG TARGETARCH
 ARG NERDCTL_VERSION=2.3.4
