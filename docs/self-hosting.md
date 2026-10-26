@@ -171,7 +171,7 @@ docker compose up -d
 
 ```bash
 cp .env .env.before-bootstrap
-./bootstrap.sh --force --version 0.9.0
+./bootstrap.sh --force --version 0.10.0
 ```
 
 As with a new domain, copy the settings you added by hand back from

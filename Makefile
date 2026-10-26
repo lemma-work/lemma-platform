@@ -1288,6 +1288,10 @@ desktop-runtime-fetch:
 # adopt its runtime, and erase its pods on cleanup. The name is baked into the
 # binary at build time rather than passed at launch, so it holds however the
 # candidate is started.
+# A release build must not set LEMMA_DESKTOP_DATA_DIR_NAME at all. Passing it
+# empty made the app keep its data in Application Support itself rather than
+# Application Support/Lemma -- where "reset local data" would have reached every
+# other app's data too.
 ifeq ($(QA),1)
 DESKTOP_DMG_CONFIG   := tauri.qa.conf.json
 DESKTOP_DMG_DATA_DIR := Lemma Candidate QA
@@ -1352,7 +1356,7 @@ desktop-dmg:
 		$(if $(PYTHON_ROOT),--python-root $(PYTHON_ROOT),) >/dev/null
 	@echo "→ Bundling the self-contained DMG…"
 	@cd $(DESKTOP_DIR) && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" \
-		LEMMA_DESKTOP_DATA_DIR_NAME="$(DESKTOP_DMG_DATA_DIR)" \
+		$(if $(DESKTOP_DMG_DATA_DIR),LEMMA_DESKTOP_DATA_DIR_NAME="$(DESKTOP_DMG_DATA_DIR)",) \
 		npx -y $(TAURI_CLI) build --ci --config $(DESKTOP_DMG_CONFIG) \
 		--config tauri.lemma-cli.conf.json
 	@$(MAKE) --no-print-directory _desktop-verify-dist-app

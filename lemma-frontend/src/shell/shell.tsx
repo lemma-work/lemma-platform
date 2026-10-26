@@ -54,7 +54,7 @@ import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
 import { renamePage } from "@/docpages/rename";
 import { recordMove } from "@/docpages/moves";
 import { moveComments } from "@/docpages/comments/store";
-import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
+import { NOWHERE, TEAMMATES, isAlwaysListed, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
 import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
 import { NotYours } from "./not-yours";
 import { Mark } from "./mark";
@@ -984,8 +984,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         /* A channel lives in Channels, whichever page linked to it. */
         if (rebuilt) openTab(rebuilt, rebuilt.kind === "channel" ? "space:chats" : undefined);
         /* Only a tab that will exist: one that never arrives would hold the
-           mirror still for good. */
-        if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
+           mirror still for good. The conversation is one that will, and it is
+           the link people are sent most: it arrives with the pod's tab list,
+           and until then the shell draws Home in its place. Not waiting for it
+           let the mirror write that stand-in over the link -- `/home` for a
+           moment, long enough for the tour to be offered over the chat, and
+           on a slow enough load the address the conversation never came back
+           from. */
+        if (known || rebuilt || isAlwaysListed(wanted)) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
     }, [pathname, address, pod, allTabs, openTab, selection.id, setConversationId, preview]);
 
     /** The address bar, kept in step with where you actually are.
@@ -1089,6 +1095,11 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             if (!pod) return;
             setExpandedTab(null);
             setPeekedTab(null);
+            /* Choosing a tab replaces whatever a link was still waiting for.
+               A conversation link waits out the pod's tab list, and a tab
+               picked meanwhile would otherwise never be the pending one, so
+               the mirror would hold the address on the link for good. */
+            if (pendingTab.current !== tabId) pendingTab.current = null;
             setTabs((previous) => ({ ...previous, [pod.id]: tabId }));
         },
         [pod],

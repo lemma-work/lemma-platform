@@ -32,8 +32,10 @@ export interface CallStart {
 export interface CallSocketHandlers {
     onFrame(frame: CallFrame): void;
     onAudio(pcm: ArrayBuffer): void;
-    /** The socket closed: `reason` is a sentence for the person, or null for an ordinary end. */
-    onClose(reason: string | null): void;
+    /** The socket closed: `reason` is a sentence for the person, or null for an
+     *  ordinary end. `dropped` is a close neither side chose -- the network,
+     *  a server restart -- after which the same call can be joined again. */
+    onClose(reason: string | null, dropped: boolean): void;
 }
 
 export function callSocketUrl(apiUrl: string, podId: string, callId: string, token: string | null): string {
@@ -55,14 +57,24 @@ const CLOSE_REASONS: Record<number, string> = {
     4503: "The voice is not available right now.",
 };
 
+/** What a close means: an ordinary end (no reason), the server refusing or
+ *  ending the call on purpose (its sentence, not to be retried), or a drop
+ *  nobody chose, after which the same call can be joined again. */
+export function closeOutcome(code: number, reason = ""): { reason: string | null; dropped: boolean } {
+    if (code === 1000 || code === 1005) return { reason: null, dropped: false };
+    const refused = CLOSE_REASONS[code];
+    if (refused) return { reason: refused, dropped: false };
+    return { reason: reason || "The call dropped.", dropped: true };
+}
+
 export function openCallSocket(url: string, start: CallStart, handlers: CallSocketHandlers): CallConnection {
     const socket = new WebSocket(url);
     socket.binaryType = "arraybuffer";
     let ended = false;
-    const end = (reason: string | null) => {
+    const end = (reason: string | null, dropped = false) => {
         if (ended) return;
         ended = true;
-        handlers.onClose(reason);
+        handlers.onClose(reason, dropped);
     };
     socket.onopen = () => socket.send(JSON.stringify({ type: "start", ...start }));
     socket.onmessage = (event) => {
@@ -77,7 +89,10 @@ export function openCallSocket(url: string, start: CallStart, handlers: CallSock
         if (typed.type === "ended") end(typed.reason);
         else handlers.onFrame(typed);
     };
-    socket.onclose = (event) => end(event.code === 1000 || event.code === 1005 ? null : CLOSE_REASONS[event.code] ?? (event.reason || "The call dropped."));
+    socket.onclose = (event) => {
+        const outcome = closeOutcome(event.code, event.reason);
+        end(outcome.reason, outcome.dropped);
+    };
     socket.onerror = () => end("The call could not connect.");
     return new CallConnection(socket);
 }

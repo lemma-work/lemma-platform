@@ -432,3 +432,13 @@ def test_a_public_page_cannot_reach_the_mac_through_the_proxy(
         assert ask().endswith(b"the mac")
     finally:
         _stop(mac)
+
+
+def test_a_name_that_does_not_resolve_is_said_rather_than_a_bare_502(proxy) -> None:
+    """Chrome shows a refused CONNECT as ERR_TUNNEL_CONNECTION_FAILED, which is
+    how a sandbox with no working DNS looked -- with nothing logged anywhere."""
+    with socket.create_connection(("127.0.0.1", proxy), timeout=10) as client:
+        client.sendall(b"CONNECT no-such-host.invalid:443 HTTP/1.1\r\n\r\n")
+        answer = _read_all(client)
+    assert answer.startswith(b"HTTP/1.1 502 Bad Gateway")
+    assert b"could not resolve no-such-host.invalid" in answer

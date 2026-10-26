@@ -8,6 +8,7 @@ import { lemma } from "@/session/client";
 import { buildTurns } from "@/thread/turns";
 import { historyBrief } from "./history-brief";
 import { podBrief } from "./pod-brief";
+import { isCallConversation } from "./call-conversation";
 import { useCall } from "./use-call";
 
 /** A call with the pod's teammate.
@@ -48,14 +49,40 @@ export function useHuddle({ pod, teammate, conversationId }: {
         }).catch(() => null);
         if (profile) parts.push(podBrief(profile, teammate));
         if (conversationId && conversationId !== NEW_CONVERSATION) {
-            const page = await lemma(pod.id).conversations.messages.list(conversationId, { pod_id: pod.id, limit: 80 }).catch(() => null);
-            const history = page ? historyBrief(buildTurns(page.items), teammate) : "";
-            if (history) parts.push(history);
+            const client = lemma(pod.id);
+            /* Not when the open conversation is an earlier call's own: right
+               after a call that is where the shell is left, and briefing the
+               next call with it made the new voice talk about things "on the
+               screen" that were on the last call's canvas, not this one's. */
+            const open = await client.conversations.get(conversationId, { pod_id: pod.id }).catch(() => null);
+            // Unread is not "not a call": a conversation that cannot be told
+            // apart is left out rather than risk briefing from the last call.
+            if (open && !isCallConversation(open)) {
+                const page = await client.conversations.messages.list(conversationId, { pod_id: pod.id, limit: 80 }).catch(() => null);
+                const history = page ? historyBrief(buildTurns(page.items), teammate) : "";
+                if (history) parts.push(history);
+            }
         }
         return parts.join("\n\n");
     }, [queryClient, pod.id, teammate, conversationId]);
 
     const { start: startCall, end: endCall } = call;
+
+    /* Calling from a call's own conversation picks that call up again: the
+       same conversation, its agents still holding what they did, and its
+       canvas replayed as it was left. Anywhere else, a new call. */
+    const callToJoin = useCallback(async (): Promise<string> => {
+        const client = lemma(pod.id);
+        if (conversationId && conversationId !== NEW_CONVERSATION) {
+            const open = await client.conversations.get(conversationId, { pod_id: pod.id }).catch(() => null);
+            if (open && isCallConversation(open)) return conversationId;
+        }
+        const opened = await client.calls.open({
+            display_name: teammate || "your teammate",
+            title: `Call with ${teammate || "your teammate"}`,
+        });
+        return opened.call_id;
+    }, [pod.id, conversationId, teammate]);
 
     const start = useCallback(async () => {
         if (busy.current || call.active) { setExpanded(true); return; }
@@ -65,15 +92,12 @@ export function useHuddle({ pod, teammate, conversationId }: {
         setSetupError(null);
         setExpanded(true);
         try {
-            const opened = await lemma(pod.id).calls.open({
-                display_name: teammate || "your teammate",
-                title: `Call with ${teammate || "your teammate"}`,
-            });
+            const callId = await callToJoin();
             if (attempt !== setupAttempt.current) return;
-            setCallId(opened.call_id);
+            setCallId(callId);
             const brief = await context();
             if (attempt !== setupAttempt.current) return;
-            await startCall(opened.call_id, { teammate, pod: pod.name, context: brief });
+            await startCall(callId, { teammate, pod: pod.name, context: brief });
         } catch (problem) {
             if (attempt !== setupAttempt.current) return;
             setCallId(null);
@@ -82,7 +106,7 @@ export function useHuddle({ pod, teammate, conversationId }: {
         } finally {
             if (attempt === setupAttempt.current) { busy.current = false; setStarting(false); }
         }
-    }, [pod.id, pod.name, teammate, context, startCall, call.active]);
+    }, [pod.name, teammate, context, startCall, call.active, callToJoin]);
 
     /* The call's id goes with it: the shell adopts the call's conversation
        while one is set, and an ended call must not pull the person back to it

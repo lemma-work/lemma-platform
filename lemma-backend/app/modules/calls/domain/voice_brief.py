@@ -16,7 +16,9 @@ CANVAS_NOTE = "[canvas]"
 _MAX_CONTEXT_CHARS = 6000
 
 
-def voice_brief(*, teammate: str, pod: str, context: str | None = None) -> str:
+def voice_brief(
+    *, teammate: str, pod: str, context: str | None = None, earlier: str | None = None
+) -> str:
     parts = [
         (
             f'You are the live voice of "{teammate}" in "{pod}", on a call with the '
@@ -55,5 +57,14 @@ def voice_brief(*, teammate: str, pod: str, context: str | None = None) -> str:
         parts.append(
             "About the pod and what came before this call:\n"
             + context[:_MAX_CONTEXT_CHARS]
+        )
+    if earlier:
+        # The end, not the start: what was said last is what a resumed call
+        # picks up from.
+        parts.append(
+            "This call is being resumed: the line dropped or the person hung "
+            "up and called back. What was said on it before, most recent last "
+            "-- carry on from there rather than greeting them as if it were "
+            "new:\n" + earlier[-_MAX_CONTEXT_CHARS:]
         )
     return "\n\n".join(parts)

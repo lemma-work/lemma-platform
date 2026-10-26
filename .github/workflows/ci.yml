@@ -833,6 +833,19 @@ jobs:
         working-directory: lemma-backend
         run: uv sync --locked --extra local
 
+      # The e2e worker preloads the local embedding model before it reports
+      # started, and the harness waits 20 seconds for that. Without this cache
+      # every run downloaded the model from the Hugging Face Hub, unauthenticated,
+      # inside those 20 seconds -- and on a slow fetch every test here failed with
+      # "Timed out waiting for streaq worker startup". The same cache Backend E2E
+      # restores; e2e.yml warms it on main.
+      - name: Restore the local embedding model
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/lemma/fastembed
+          key: fastembed-${{ hashFiles('lemma-backend/app/core/config.py') }}
+          restore-keys: fastembed-
+
       - name: Real backend and Agent Host streaming
         run: make desktop-agent-host-e2e
 

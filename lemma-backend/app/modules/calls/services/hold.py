@@ -7,12 +7,13 @@ import contextlib
 from uuid import UUID
 
 from fastapi import WebSocket, WebSocketDisconnect, status
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.domain.errors import DomainError
 from app.core.live.pod_access import close_code_for, require_pod_access
 from app.core.live.protocol import CLOSE_NOT_FOUND
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.calls import owned_call
+from app.modules.agent.contracts.calls import owned_call, retire_empty_call
 from app.modules.calls.config import VoiceEngineName, calls_settings
 from app.modules.calls.domain.frames import decode
 from app.modules.calls.domain.party import CallParty
@@ -60,6 +61,10 @@ async def hold_call(
         await _hold_call(
             websocket, call_id=call_id, party=party, organization_id=organization_id
         )
+        # After a normal end only. A call that raised -- its transcript not
+        # saved -- may still have a turn on its way to the agents, and
+        # archiving it under that turn would hide a call something happened in.
+        await _retire_if_empty(party, call_id)
 
 
 async def _hold_call(
@@ -78,10 +83,13 @@ async def _hold_call(
             code=CLOSE_UNAVAILABLE, reason="That voice engine is not set up."
         )
         return
+    background = str(start.get("context") or "") or None
+    agents = CallAgents(call_id=call_id, party=party)
     instructions = voice_brief(
         teammate=str(start.get("teammate") or "your teammate")[:120],
         pod=str(start.get("pod") or "this pod")[:120],
-        context=str(start.get("context") or "") or None,
+        context=background,
+        earlier=await _earlier(agents),
     )
     talk_party = CallParty(
         user_id=party.user_id,
@@ -106,7 +114,6 @@ async def _hold_call(
         await engine.close()
         await websocket.close(code=CLOSE_UNAVAILABLE, reason=_reason(exc))
         return
-    agents = CallAgents(call_id=call_id, party=party)
     caller = Caller(
         user_id=party.user_id,
         organization_id=organization_id,
@@ -122,6 +129,7 @@ async def _hold_call(
             max_seconds=calls_settings.call_max_minutes * 60.0,
             quiet_window_ms=calls_settings.call_quiet_window_ms,
         ),
+        background=background,
     )
     logger.info(
         "calls.socket.started.observed", call_id=str(call_id), engine=engine_name
@@ -165,6 +173,29 @@ def _reason(exc: EngineUnavailable | DomainError) -> str:
     # Cut by bytes, dropping a character split at the edge: a longer reason
     # makes the close itself fail, and the caller sees a dropped call.
     return text.encode()[:_MAX_REASON_BYTES].decode(errors="ignore")
+
+
+async def _earlier(agents: CallAgents) -> str | None:
+    """What was said on this call before, when it is being resumed."""
+    try:
+        earlier = await agents.earlier()
+    except DomainError, SQLAlchemyError, OSError:
+        # A resumed call that cannot read its past is still a call; the voice
+        # just starts without it.
+        logger.warning("calls.socket.earlier.failed", exc_info=True)
+        return None
+    return "\n\n".join(earlier) or None
+
+
+async def _retire_if_empty(party: Party, call_id: UUID) -> None:
+    """Take a call that nothing was said in out of the chat list."""
+    try:
+        async with as_caller(party) as scope:
+            await retire_empty_call(scope.uow, call_id)
+    except DomainError, SQLAlchemyError, OSError:
+        logger.warning(
+            "calls.socket.retire.failed", call_id=str(call_id), exc_info=True
+        )
 
 
 def _engine_from(raw: object) -> VoiceEngineName | None:

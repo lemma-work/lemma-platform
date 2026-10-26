@@ -228,6 +228,17 @@ function tailOf(address: Address): string[] {
  *  only that list has — so the shell matches those by id once it arrives,
  *  rather than inventing an app frame pointed at nothing.
  */
+/** The tabs every source's `listTabs` returns for every pod, whatever else it
+ *  lists. Not rebuilt from an id (`tabFromId`), but a link to one names a tab
+ *  that will be in the strip once it loads — so the shell can wait for it,
+ *  which it must not do for an `app:` tab that may never arrive.
+ */
+const ALWAYS_LISTED = new Set(["conversation", "library", "profile"]);
+
+export function isAlwaysListed(tabId: string): boolean {
+    return ALWAYS_LISTED.has(tabId);
+}
+
 export function tabFromId(tabId: string): Tab | null {
     if (tabId === "history") return { id: "history", kind: "history", label: "History" };
     if (tabId === "computer") return { id: "computer", kind: "computer", label: "Computer" };

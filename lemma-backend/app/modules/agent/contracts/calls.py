@@ -16,7 +16,8 @@ from datetime import datetime
 from uuid import UUID
 
 from pydantic import JsonValue
-from sqlalchemy import or_, select
+from sqlalchemy import exists, or_, select, update
+from sqlalchemy.orm import aliased
 
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -88,6 +89,14 @@ async def open_call(
     return OpenedCall(conversation_id=conversation.id, title=conversation.title)
 
 
+#: Earlier connections a resumed call reads back, newest kept. The voice is
+#: given only the tail of them anyway.
+MAX_RESUMED_TRANSCRIPTS = 10
+
+#: The metadata key a connection's transcript is recorded under.
+CALL_TRANSCRIPT_KEY = "call_transcript"
+
+
 async def owned_call(
     uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, user_id: UUID, pod_id: UUID
 ) -> bool:
@@ -105,6 +114,47 @@ async def owned_call(
         return False
     mark = call_mark(row.conversation_metadata)
     return mark is not None and mark.role is CallRole.COORDINATOR
+
+
+async def retire_empty_call(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> bool:
+    """Archive a call's conversation that nothing was ever said in.
+
+    A call that never connected -- the microphone refused, the tab closed while
+    it was opening -- still made a conversation, and it sat in the chat list as
+    another "Call with ..." to open and find empty. Only one with no message
+    and no sub-agent at all, so a call anything happened in is never hidden.
+    """
+    child = aliased(ConversationModel)
+    result = await uow.session.execute(
+        update(ConversationModel)
+        .where(
+            ConversationModel.id == call_id,
+            ~exists().where(MessageModel.conversation_id == call_id),
+            ~exists().where(child.parent_id == call_id),
+        )
+        .values(is_archived=True)
+    )
+    return bool(result.rowcount)  # type: ignore[attr-defined]
+
+
+async def call_transcripts(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[str]:
+    """What was said on the call's earlier connections, oldest first.
+
+    Each connection records its transcript in the call's conversation as it
+    ends, marked ``call_transcript``; a call resumed after a drop or a hang-up
+    reads them back so the voice knows what it already said.
+    """
+    rows = await uow.session.execute(
+        select(MessageModel.text)
+        .where(
+            MessageModel.conversation_id == call_id,
+            MessageModel.kind == MessageKind.NOTIFICATION.value,
+            MessageModel.message_metadata.has_key(CALL_TRANSCRIPT_KEY),
+        )
+        .order_by(MessageModel.created_at.desc(), MessageModel.sequence.desc())
+        .limit(MAX_RESUMED_TRANSCRIPTS)
+    )
+    return [text for text in reversed(rows.scalars().all()) if text]
 
 
 async def call_conversations(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[UUID]:

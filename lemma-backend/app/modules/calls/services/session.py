@@ -79,6 +79,10 @@ class CallLimits:
     quiet_window_ms: int
 
 
+#: The background a coordinator is sent with its first turn, at most.
+_MAX_BACKGROUND_CHARS = 8_000
+
+
 @dataclass(slots=True)
 class CallStats:
     """What a call carried, for the log line that says how it ended: a call
@@ -99,6 +103,7 @@ class CallSession:
         agents: CallAgents,
         gate: Gate,
         limits: CallLimits,
+        background: str | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._socket = socket
@@ -118,6 +123,12 @@ class CallSession:
         self._routing = asyncio.Lock()
         self._titles: dict[str, str] = {}
         self._failures_reported: set[str] = set()
+        #: What the voice was told before the call (the pod, the chat it was
+        #: started from), told to the agents with their first turn. Without it
+        #: the two knew different things: the voice spoke of a chat the
+        #: coordinator had never seen, and the coordinator answered as if
+        #: nothing had been said.
+        self._background = (background or "").strip()[:_MAX_BACKGROUND_CHARS] or None
         self.end_reason: str | None = None
         self.stats = CallStats()
 
@@ -310,8 +321,15 @@ class CallSession:
                     "\n\nEarlier on the call (already handled, or no work needed):\n"
                     + "\n".join(earlier)
                 )
+            if self._background:
+                content += (
+                    "\n\nBefore the call, the voice was told:\n" + self._background
+                )
             try:
                 await self._agents.send_turn(content)
+                # Only once delivered: a turn the agents never got leaves the
+                # brief for the next one.
+                self._background = None
             except DomainError, SQLAlchemyError, OSError:
                 # The agents did not get it. The voice is told, so it does not
                 # promise work nobody is doing.
@@ -348,8 +366,11 @@ class CallSession:
         )
 
     async def _replay_canvas(self) -> None:
-        """A caller reconnecting gets the canvas as it stands."""
+        """A caller reconnecting gets the canvas as it stands, and the voice is
+        told what that screen now shows -- the newest item, with the rest a
+        page back -- so it never speaks of a screen the person is not seeing."""
         items = await self._agents.canvas()
+        described: list[tuple[str, str]] = []
         for item in items:
             shown = Shown(
                 conversation_id=item.conversation_id,
@@ -358,10 +379,14 @@ class CallSession:
                 args=item.args,
                 result=item.result,
             )
-            self._titles[item.tool_call_id] = _describe(shown)[0]
+            title, caption = _describe(shown)
+            self._titles[item.tool_call_id] = title
+            described.append((title, caption))
             await self.send(
                 {"type": "canvas.item", "item": shown.as_frame(), "replay": True}
             )
+        if described:
+            await self._engine.inject(_on_screen(described), Inject.CONTEXT)
 
     # -- the floor -----------------------------------------------------------
 
@@ -393,3 +418,15 @@ def _describe(shown: Shown) -> tuple[str, str]:
     )
     caption = args.get("fallback") or data.get("caption") or ""
     return str(title or "an item"), str(caption)
+
+
+def _on_screen(described: Sequence[tuple[str, str]]) -> str:
+    """The note that tells a resumed voice what the person's screen shows."""
+    title, caption = described[-1]
+    note = f"{CANVAS_NOTE} Back on the call, the person's screen shows: {title}"
+    if caption:
+        note += f" -- {caption}"
+    earlier = [each for each, _ in described[:-1]]
+    if earlier:
+        note += ". They can page back to: " + "; ".join(earlier[-10:])
+    return note + "."
