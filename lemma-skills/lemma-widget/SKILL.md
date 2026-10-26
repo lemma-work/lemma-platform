@@ -181,10 +181,15 @@ loaders, and malformed markup before display.
 - `content` — the HTML inline, for something small you will not revisit.
 - `public_url` — a URL to embed instead.
 
-Passing more than one, or none, is rejected. One more WIDGET-only field:
+Passing more than one, or none, is rejected. Three more fields, the first two
+WIDGET-only (setting them on any other resource type is rejected):
 
+- `data` — JSON the widget reads as `lemma.data`, with `path` or `content`.
+  This is how a library widget gets its record (above).
 - `loading_messages` — up to **4** short lines shown while the widget renders.
-  Setting them on any other resource type is rejected.
+- `fallback` — one or two plain-text lines carrying the names and numbers that
+  matter, for chat apps that cannot draw a widget (Slack, WhatsApp, Teams,
+  email). Write one for every widget.
 
 `name`, `filters`, and `query` belong to other types.
 
@@ -245,8 +250,9 @@ needs around it.
 - Loading, empty, error, and narrow-screen states are all deliberate.
 - Values reach the DOM through `textContent`, or escaped before `innerHTML`.
 - The view stays compact: no fixed positioning, no nested scrolling.
-- **Height is capped.** The inline view clips at **480px** with a fade and an
-  Expand control, and a self-reported height is clamped to 2400px. Design for
+- **Height is capped.** The inline view clips at most of the viewport (85%,
+  never less than **480px**) with an Expand control, and a self-reported height
+  is clamped to 2400px. Design for
   the fold: put the answer at the top, not below a long table. The frame follows
   the content both ways — a view that narrows itself shrinks the frame with it.
 - A follow-up for the agent goes through `lemma.compose`, which puts text in

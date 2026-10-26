@@ -180,7 +180,7 @@ See `people-outside.md`.
 ## Limits & Gotchas
 
 - **A value is capped at 256KB, and a whole record at 1MB.** Writes over either are refused, naming the column. Tables are for tabular data: the row is copied into every change event, so a megabyte column is a megabyte on every write, not once. Put documents in files and keep the path in a `FILE_PATH` column (`files.md`).
-- Change events carry the row so subscribers can read a column the writer never mentioned. Above 32KB the body is dropped and the event is flagged `payload_truncated` — a subscriber that needs it reads the record.
+- Change events carry the whole new row (and, on an update, the prior values) so a subscriber can read a column the writer never mentioned.
 - **No in-place column mutation** via import or update — columns can be added/removed only. Type changes = add new column, backfill, remove old.
 - ENUM `options` changes are a column change; plan them like migrations if records exist.
 - System columns are stripped from bundles on import; exporting then re-importing is safe.

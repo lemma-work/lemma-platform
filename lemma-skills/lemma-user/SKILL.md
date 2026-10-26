@@ -175,7 +175,7 @@ you probably have it.
 ### Write & transfer
 
 ```bash
-lemma files mkdir /knowledge
+lemma files mkdir /knowledge                                  # optional: upload and write create missing folders
 lemma files upload ./report.md /me/reports/report.md          # documents auto-index
 lemma files upload ./data.csv /scratch/data.csv --no-search   # skip indexing
 lemma files write /me/notes/draft.md "first line"             # create/overwrite (or pipe via stdin)
@@ -188,16 +188,18 @@ lemma files rm /scratch/data.csv
 
 Indexing lags briefly after upload — `stat` shows status (`COMPLETED` =
 searchable, `NOT_REQUIRED` = stored but not an indexed document,
-`PENDING`/`PROCESSING` = still working, `FAILED` = will be retried,
-`FAILED_PERMANENT` = out of retries or unprocessable, and never re-driven; only a
-fresh upload of the content re-opens it).
+`PENDING`/`PROCESSING` = still working, including a failed attempt waiting to
+be retried, `FAILED_PERMANENT` = out of retries or unprocessable, with the
+reason in `last_processing_error`; nothing re-drives it on its own. New bytes,
+or `pod.files.retry_processing(path)` once the cause is fixed, re-opens it;
+uploading the same bytes again does not).
 
 ### Link to a file — pick by who opens it
 
 ```bash
 lemma files url /reports/summary.pdf                           # app_url (in-app, signed-in member) + short-lived download url
 lemma files share /reports/summary.pdf --ttl 3h --max-hits 50  # public, no-login, expiring + hit-capped
-lemma files shares                                            # what you have handed out
+lemma files shares                                            # your live links (--all adds expired/revoked)
 lemma files unshare CwbaUB9gWY6l                              # kill one now
 ```
 
@@ -284,10 +286,11 @@ schedule's zone) say when it fires — read them instead of creating a test
 schedule and waiting.
 
 **`WAITING` on a run means a person, and only a person.** A run parked on an
-agent conversation, an async function, or a timer stays `RUNNING` — so `RUNNING`
+agent conversation, an async function, a decision, a timer, or its turn under
+the workflow's concurrency limit stays `RUNNING` — so `RUNNING`
 is not proof that anything is executing, and `WAITING` is not the general
 "blocked" state. `runs get` settles it via `active_wait`: `wait_type` is `HUMAN`,
-`AGENT`, `FUNCTION`, or `TIME`, alongside `node_id`, assignee, external
+`AGENT`, `FUNCTION`, `DECISION`, `TIME`, or `QUEUED`, alongside `node_id`, assignee, external
 reference, and the form schema for human waits. If a form wait is assigned to you
 (`runs waiting` lists them), `runs submit-form --data` with the form's fields
 completes it and advances the run. This is how you participate in human-agent
@@ -332,7 +335,7 @@ lemma conversations list --parent-id <conversation-id>              # what a sub
 lemma conversations messages <conversation-id>
 lemma conversations send <conversation-id> "Continue with the next batch"
 lemma conversations approvals <conversation-id>                     # gated tool calls / ask_user awaiting a decision
-lemma conversations approve <approval-id> -c <conversation-id>      # --deny to reject; --session for the whole run
+lemma conversations approve <approval-id> -c <conversation-id>      # --deny to reject; --session allows that kind of call for the rest of the conversation
 ```
 
 `lemma chat` takes an agent name, a message, or both, and tells them apart by
@@ -450,17 +453,18 @@ Two ways in, and which one you have depends on how the agent was granted:
   are *deferred*: they are not in your prompt prefix, so reach them with
   `search_tools` first, then `search_connector_operations` and
   `run_connector_operation`. Prefer this when you have it — no shell involved.
-  (`CONNECTORS` is not alone behind `search_tools`: `POD`, `SUBAGENTS`,
-  `MESSAGING`, `WAIT` and `BROWSER` are deferred the same way. Not seeing a
+  (`CONNECTORS` is not alone behind `search_tools`: `SUBAGENTS`, `MESSAGING`,
+  `WAIT`, `BROWSER` and `SPEECH` are deferred the same way; `POD` is not. Not seeing a
   tool in your prefix is not the same as not having it — go looking before
   concluding you cannot do something.)
 - **The CLI** (`lemma connectors …`, needs the `WORKSPACE_CLI` toolset) — same
   operations through a sandbox round trip. Use it when you are driving a shell
   anyway, or when you need the discovery views below.
 
-Either way the authorization is identical: a `connector:<name>:use` grant per
-app, executed through the invoking user's connected account. Having the toolset
-is not having access to any particular app.
+Either way the authorization is identical: a `connector:<slug>:use` grant per
+pod connector, and the call runs as the account that connector picks — the
+invoking person's own (per-member) or the one shared with the pod (shared).
+Having the toolset is not having access to any particular app.
 
 **Nothing has to be set up before the first call.** Name the app and run the
 operation — one call:
@@ -574,7 +578,7 @@ CHANGES data and was inferred from text rather than named is refused without
 When you want the wider picture rather than one call:
 
 ```bash
-lemma connectors overview             # installed connectors: auth-config name, kind, connected accounts
+lemma connectors overview             # org-level: every installation (auth config), kind, connected accounts
 lemma connectors status               # installed apps + your connected accounts
 lemma connectors describe gmail       # per-connector usage guide, per kind
                                       # (kinds: composio, http, sql, mcp)
@@ -596,7 +600,7 @@ to outside rows. Each contact has a `CONTACT` channel: answer them there with
 `lemma channels outreach <contact-id> <handle> "text"`. For the rest, use the Python SDK:
 
 ```python
-pod = Lemma().pod()
+pod = Pod.from_env()
 pod.contacts.list()                        # who has written; page with the response's next_cursor
 pod.contacts.outreach(contact_id, handle="sam@example.com", text="It's back in stock.")
                                            # email any time; WhatsApp only within 24h of their last message; never after a STOP
@@ -610,7 +614,8 @@ A refused handle posts nothing and says why. The line goes out as a delivery, so
 **Form responses are rows** of the opened table: read them like any records. To set
 up a new form, use `lemma-form`; to change who may answer, `pod.tables.open_public_rows`
 / `close_public_rows` (needs the right to change the table). Deleting a contact
-(`pod.contacts.delete`) also deletes their conversations — confirm with the person first.
+(`pod.contacts.delete`, pod admins only) also deletes their rows, handles and
+conversations — confirm with the person first.
 
 ## Workspace execution notes
 
@@ -655,7 +660,7 @@ up a new form, use `lemma-form`; to change who may answer, `pod.tables.open_publ
 - **Fresh upload not in search.** Indexing lag — `files stat` for status, retry
   shortly. `NOT_REQUIRED` means it isn't an indexed document (spreadsheets,
   presentations, images and email are stored but never searchable);
-  `FAILED_PERMANENT` means retrying will not help.
+  `FAILED_PERMANENT` will not retry by itself — read `last_processing_error`.
 - **A query's numbers look too round.** Check `truncated` on the `query run`
   payload before believing `total` — 1,000 rows exactly is usually the row cap,
   not the answer.

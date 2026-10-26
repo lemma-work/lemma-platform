@@ -27,8 +27,7 @@ Pod tables and files are the `pod_*` tools' job, not the CLI's. Use the CLI for
 the resources those tools do not reach:
 
 ```bash
-lemma pods describe                       # inventory except apps
-lemma apps list
+lemma pods describe                       # every resource: tables to apps, surfaces, files
 lemma pods members
 lemma chat <agent> "message"              # a separate conversation
 lemma functions run <fn> --data '{}'

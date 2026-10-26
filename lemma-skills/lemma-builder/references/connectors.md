@@ -7,7 +7,8 @@ credentials. Which account the operation runs as is the pod connector's
 decision: the invoking member's own, or one account its owner shared with the
 pod.
 
-> Grounds in `pod-model.md` (connectors are org-global capabilities). This is the
+> Grounds in `pod-model.md` (the catalog and installations are org-level; pod
+> connectors belong to the pod). This is the
 > build + CLI view; the `lemma-user` skill is the operator view of the same
 > commands.
 
@@ -172,8 +173,8 @@ lemma connectors overview
 `auth-configs update` additionally carries `--default/--no-default` (which install a
 bare connector id resolves to) and `--status ACTIVE|DISABLED`; `auth-configs
 refresh-operations` re-syncs the operation catalog — only meaningful for the
-per-install discovery kinds (`mcp`, `http`), since every other kind's operations come
-from the catalog.
+installs that discover per install (`mcp`, and the generic `openapi` entry), since
+every other connector's operations come from the catalog.
 
 ### Declare it in the pod
 
@@ -192,7 +193,13 @@ lemma connectors pod-add gmail workspace-gmail --mode PER_MEMBER --required \
 lemma connectors pod-share <your-account-id>                  # owner only; prints the pod account id
 lemma connectors pod-add support-inbox workspace-gmail --mode SHARED \
   --shared-account <pod-account-id>
+# ...or, when the owner may also manage pod connectors, both in one step:
+lemma connectors pod-share-as <pod-account-id> support-inbox
 ```
+
+`--required` asks every member to connect their own account. `pod-coverage
+<slug>` shows who has and who it is still waiting on; `pod-ask <slug>` nudges
+them (once a day at most per member).
 
 A pod may declare one installation twice — `gmail` (PER_MEMBER) for "my inbox"
 work beside `support-inbox` (SHARED) for the team mailbox.
@@ -596,9 +603,9 @@ A trigger id is **kind-qualified**: `{app}:{kind}:{slug}` (e.g.
 
 ## Patterns
 
-- **Outbound action from a workload.** Function/agent grants `connector.use`,
-  executes one operation (send email, post message, create event) on the user's
-  account. The hands-on half of most pods.
+- **Outbound action from a workload.** Function/agent is granted `connector.use`
+  on a pod connector and executes one operation (send email, post message, create
+  event) on the account that connector picks. The hands-on half of most pods.
 - **Inbound event → automation.** A connector trigger + WEBHOOK schedule +
   `filter_instruction` starts a workflow on real-world events (see
   `schedules-and-triggers.md`).
@@ -630,8 +637,8 @@ A trigger id is **kind-qualified**: `{app}:{kind}:{slug}` (e.g.
 ```bash
 lemma connectors overview                          # auth config + accounts wired?
 lemma connectors pod-list                          # declared in the pod, status READY?
-# read-only smoke test of one operation:
-lemma connectors operations execute gmail <read-only-op> --data '{"payload": {}}'
+# read-only smoke test of one operation, through the pod connector:
+lemma connectors run gmail <read-only-op-id>
 # then verify the delegated workload path end-to-end:
 lemma functions run <fn-that-calls-the-connector> --data '{...}'
 ```

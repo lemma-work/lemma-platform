@@ -27,8 +27,8 @@ import, apps, functions, workflows, schedules, members, connectors, and grants.
 A new table is one command — an `id` key is added for you, and
 `"enable_rls": false` makes it shared by the pod rather than private per person:
 `lemma tables create expenses --data '{"columns":[{"name":"day","type":"DATE"},{"name":"amount","type":"FLOAT"},{"name":"category","type":"TEXT"}],"enable_rls":false}'`.
-Column types: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, JSON, UUID, ENUM
-(with `"options"`). Then add its rows with `pod_write_record`.
+Column types: TEXT, INTEGER, FLOAT, BOOLEAN, DATE, DATETIME, JSON, UUID, USER,
+FILE_PATH, ENUM (with `"options"`). Then add its rows with `pod_write_record`.
 
 A recurring task is one command:
 `lemma schedules create --name daily-digest --agent POD_DEFAULT --instruction "…" --cron "0 9 * * 1-5" --timezone Europe/Berlin`.

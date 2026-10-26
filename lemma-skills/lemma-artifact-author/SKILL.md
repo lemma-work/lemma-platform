@@ -147,8 +147,7 @@ Keep working files local until the acceptance checks pass. Then upload the nativ
 source and requested exports to the selected destination:
 
 ```bash
-lemma files mkdir /reports
-lemma files upload ./quarterly-review.pptx /reports/quarterly-review.pptx
+lemma files upload ./quarterly-review.pptx /reports/quarterly-review.pptx   # creates /reports if missing
 lemma files upload ./quarterly-review.pdf /reports/quarterly-review.pdf
 lemma files stat /reports/quarterly-review.pdf
 lemma files url /reports/quarterly-review.pdf
@@ -157,12 +156,13 @@ lemma files url /reports/quarterly-review.pdf
 Use `/me/<folder>/...` instead for a private deliverable. `stat` reports indexing
 state: `PENDING` and `PROCESSING` are still in flight, so wait for `COMPLETED`
 before claiming an indexable prose document is searchable; `NOT_REQUIRED` is
-expected for stored binary/data formats such as XLSX. Treat `FAILED` as a delivery
-defect, not success — a recovery pass re-drives it after backoff, so re-`stat`
-before reporting either way. `FAILED_PERMANENT` is terminal: the file exhausted
-its retry budget and nothing will drive it again, so re-uploading is the only
-recovery. Never describe a document as searchable on the strength of a successful
-upload alone.
+expected for stored binary/data formats such as XLSX. A failure that may still be
+retried shows as `PENDING` again (with a backoff), so re-`stat` before reporting.
+`FAILED_PERMANENT` is terminal and a delivery defect: the reason is in
+`last_processing_error`, and nothing re-drives it on its own. Re-uploading the
+same bytes does not reopen it; new bytes or an explicit retry
+(`pod.files.retry_processing(path)` in the Python SDK) do. Never describe a
+document as searchable on the strength of a successful upload alone.
 
 For high-stakes delivery, download the exact uploaded bytes to a fresh temporary
 path, compare size or hash with the verified local final, and reopen that copy.
