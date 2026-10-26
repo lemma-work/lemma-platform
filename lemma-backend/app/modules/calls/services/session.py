@@ -29,7 +29,7 @@ import contextlib
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from pydantic import JsonValue
 from redis.exceptions import RedisError
@@ -165,7 +165,7 @@ class CallSession:
         #: Refusals already written into the conversation, so a call refused
         #: on every turn says so once rather than after each.
         self._noted: set[str] = set()
-        self._tasks: set[asyncio.Task[Any]] = set()
+        self._tasks: set[asyncio.Task[None]] = set()
         self.end_reason: str | None = None
         self.stats = CallStats()
 
@@ -175,14 +175,14 @@ class CallSession:
     async def send(self, frame: Frame) -> None:
         await self._socket.send_text(encode(frame))
 
-    def _spawn(self, work: Coroutine[Any, Any, None], name: str) -> None:
+    def _spawn(self, work: Coroutine[object, object, None], name: str) -> None:
         """A task of this call's: logged if it fails, finished or cancelled
         before the call is over."""
         task = create_inherited_task(work, name=name)
         self._tasks.add(task)
         task.add_done_callback(self._task_done)
 
-    def _task_done(self, task: asyncio.Task[Any]) -> None:
+    def _task_done(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
         if not task.cancelled() and task.exception() is not None:
             logger.warning(
@@ -194,8 +194,16 @@ class CallSession:
     async def run(self) -> None:
         # Subscribed before anything is read back, so what is shown or relayed
         # in between is not lost to the gap.
-        await self._agents.start()
-        await self._replay_canvas()
+        try:
+            await self._agents.start()
+            await self._replay_canvas()
+        except DomainError, SQLAlchemyError, RedisError, OSError:
+            # A call whose team cannot be reached would only promise work: it
+            # ends, and says why, rather than talking on with nobody behind it.
+            logger.warning("calls.session.start.failed", exc_info=True)
+            self.end_reason = "The call could not reach your team. Please call again."
+            await self._say_ended()
+            return
         loops = [
             create_inherited_task(self._caller(), name="calls.session.caller"),
             create_inherited_task(self._voice(), name="calls.session.voice"),
@@ -477,11 +485,15 @@ class CallSession:
                 case Shown():
                     await self._shown(signal)
                 case Working(running=running) if running != self._working:
+                    first = self._working is None
                     self._working = running
                     await self.send({"type": "work", "running": running})
-                    await self._engine.inject(
-                        narration.team_working(running), Inject.CONTEXT
-                    )
+                    # Not for the first word that nothing runs: the voice
+                    # assumes nothing until a note says otherwise.
+                    if not (first and not running):
+                        await self._engine.inject(
+                            narration.team_working(running), Inject.CONTEXT
+                        )
                 case Failed(reason=reason):
                     self._queue(narration.team_failed(reason), Urgency.NOW)
                     await self._notice(reason)

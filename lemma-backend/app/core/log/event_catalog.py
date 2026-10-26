@@ -691,6 +691,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'calls.session.note.failed': EventSpec('warning', frozenset()),
     'calls.session.recheck.failed': EventSpec('warning', frozenset()),
     'calls.session.render_failed.undelivered': EventSpec('warning', frozenset()),
+    'calls.session.start.failed': EventSpec('warning', frozenset()),
     'calls.session.task.failed': EventSpec('warning', frozenset({'task'})),
     'calls.session.transcript.failed': EventSpec('warning', frozenset()),
     'calls.session.update.dropped': EventSpec('warning', frozenset({'update'})),

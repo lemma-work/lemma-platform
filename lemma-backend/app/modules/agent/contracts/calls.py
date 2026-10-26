@@ -243,6 +243,12 @@ async def call_transcripts(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[str
     return [text for text in reversed(rows.scalars().all()) if text]
 
 
+async def _pod_of(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> UUID | None:
+    return await uow.session.scalar(
+        select(ConversationModel.pod_id).where(ConversationModel.id == call_id)
+    )
+
+
 async def call_conversations(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[UUID]:
     """The call's own conversation and every sub-agent's at any depth, oldest
     first.
@@ -251,11 +257,11 @@ async def call_conversations(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[U
     sub-agents are in the call too, and were missed after a reconnect when
     only direct children were read. The newest are kept when there are more.
     """
-    pod_id = select(ConversationModel.pod_id).where(ConversationModel.id == call_id)
+    pod_id = await _pod_of(uow, call_id)
     rows = await uow.session.execute(
         select(ConversationModel.id)
         .where(
-            ConversationModel.pod_id == pod_id.scalar_subquery(),
+            ConversationModel.pod_id == pod_id,
             or_(
                 ConversationModel.id == call_id,
                 ConversationModel.conversation_metadata[CALL_METADATA_KEY][
