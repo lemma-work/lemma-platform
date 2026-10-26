@@ -516,7 +516,7 @@ async def test_who_a_pod_can_ask_is_the_other_pods_the_person_is_in(
     # pod at all. Neither is offered Billing.
     for narrowed in (
         {"type": ConversationType.TASK},
-        {"metadata": {"conversation_kind": "CHANNEL"}},
+        {"surface_kind": "CHANNEL"},
     ):
         other = await _default_agent_brief(
             pod_id=support, user_id=fixed_test_user["id"], **narrowed
@@ -547,7 +547,7 @@ async def _default_agent_brief(
     pod_id: str,
     user_id: str,
     type: ConversationType = ConversationType.CHAT,
-    metadata: dict[str, object] | None = None,
+    surface_kind: str | None = None,
 ) -> str:
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     async with uow_factory() as uow:
@@ -555,14 +555,13 @@ async def _default_agent_brief(
             pod_id=UUID(pod_id), name=DEFAULT_POD_AGENT_NAME
         )
     assert agent is not None
-    conversation = Conversation(
-        user_id=UUID(user_id), pod_id=UUID(pod_id), type=type, metadata=metadata or {}
-    )
+    conversation = Conversation(user_id=UUID(user_id), pod_id=UUID(pod_id), type=type)
     brief = await AgentContextBriefBuilder(uow_factory).build(
         agent=agent,
         conversation=conversation,
         user_id=UUID(user_id),
         pod_id=UUID(pod_id),
+        surface_kind=surface_kind,
     )
     # Which pods may be asked depends on the conversation, so it rides in the
     # per-run part; the stable part is cached across conversations.

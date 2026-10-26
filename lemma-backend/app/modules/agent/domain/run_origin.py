@@ -26,8 +26,14 @@ RunOriginName = Literal[
 ]
 ParentKind = Literal["workflow", "agent", "pod_ask"]
 
-#: Keys a surface binding stamps on a conversation it answers on.
-_SURFACE_KEYS = ("surface_platform", "surface_id")
+#: What a chat surface opens: its own threads, a contact's, a notification's.
+_SURFACE_ORIGINS = frozenset(
+    {
+        ConversationOrigin.SURFACE,
+        ConversationOrigin.CONTACT,
+        ConversationOrigin.NOTIFICATION,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +43,6 @@ class RunOrigin:
     origin: RunOriginName
     parent_kind: ParentKind | None = None
     parent_ref: str | None = None
-    has_reply_target: bool = False
     #: Sub-agent results this conversation is owed or owes (either side).
     settles_subagents: bool = False
     #: Pod-to-pod answers this conversation is owed or owes (either side).
@@ -51,11 +56,8 @@ def run_origin(conversation: Conversation) -> RunOrigin:
     both wait on the outcome, a sub-agent's parent may; a schedule only records
     it, a surface only gets the reply.
     """
-    stored = conversation.metadata or {}
-    has_reply_target = any(stored.get(key) for key in _SURFACE_KEYS)
     owes_parent = conversation.parent_id is not None and conversation.reports_to_parent
     common = {
-        "has_reply_target": has_reply_target,
         "settles_subagents": owes_parent or conversation.delegations_out,
         "settles_pod_asks": conversation.ask is not None
         or conversation.delegations_out,
@@ -83,13 +85,12 @@ def run_origin(conversation: Conversation) -> RunOrigin:
         )
     if origin is ConversationOrigin.SCHEDULE:
         return RunOrigin(origin="schedule", **common)
-    if has_reply_target:
+    if origin in _SURFACE_ORIGINS:
         return RunOrigin(origin="surface", **common)
     return RunOrigin(origin="chat", **common)
 
 
-#: What fired a schedule, as the platform's origin. A schedule stamps its type
-#: on the conversation it opens (``schedule.services.target_start``).
+#: What fired a schedule, as the platform's origin (``Conversation.schedule_type``).
 _SCHEDULE_TYPE_ORIGINS: dict[str, OriginKind] = {
     "TIME": OriginKind.SCHEDULE,
     "DATASTORE": OriginKind.DATA_TRIGGER,
@@ -97,7 +98,9 @@ _SCHEDULE_TYPE_ORIGINS: dict[str, OriginKind] = {
 }
 
 
-def conversation_origin(conversation: Conversation) -> Origin | None:
+def conversation_origin(
+    conversation: Conversation, *, platform: str | None = None
+) -> Origin | None:
     """How a turn's work arrived (``app.core.origin``), as far as its row can say.
 
     A turn runs as a work item, which starts with no origin bound: the request
@@ -105,21 +108,18 @@ def conversation_origin(conversation: Conversation) -> Origin | None:
     gone by then. The conversation still records what started it, and for
     automation and surfaces that is the answer. A person's chat, a sub-agent and
     a pod's ask say nothing about which client was used, so they answer
-    ``None`` rather than a guess.
+    ``None`` rather than a guess. ``platform`` is the one its surface records.
     """
-    stored = conversation.metadata or {}
     kind = run_origin(conversation).origin
     if kind == "workflow":
         return Origin(OriginKind.WORKFLOW)
     if kind == "schedule":
-        schedule_type = str(stored.get("schedule_type") or "").upper()
+        schedule_type = (conversation.schedule_type or "").upper()
         return Origin(_SCHEDULE_TYPE_ORIGINS.get(schedule_type, OriginKind.SCHEDULE))
-    if kind == "surface":
-        platform = stored.get("surface_platform")
+    if kind == "surface" or platform:
         # Stored uppercase (`SurfacePlatform`); the origin allowlist is lowercase.
         return Origin(
-            OriginKind.SURFACE,
-            platform=platform.lower() if isinstance(platform, str) else None,
+            OriginKind.SURFACE, platform=platform.lower() if platform else None
         )
     return None
 

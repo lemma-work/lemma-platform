@@ -112,8 +112,12 @@ class Facts:
         async def host_cwd(conversation_id: UUID) -> str | None:
             return self.host_cwd
 
+        async def heard_on_platform(conversation_id: UUID) -> bool:
+            return conversation_id in _HEARD_ON_A_PLATFORM
+
         return HostExecutionFacts(
             host_cwd=host_cwd,
+            heard_on_platform=heard_on_platform,
             earlier_triggers=earlier_triggers,
             is_desktop=lambda: self.desktop,
             usable_host=usable_host,
@@ -123,14 +127,20 @@ class Facts:
         )
 
 
+#: Conversations a chat platform has been heard in, as agent_surfaces records.
+_HEARD_ON_A_PLATFORM: set[UUID] = set()
+
+
 def _conversation(
     user_id: UUID = PAIRED,
     *,
     origin: ConversationOrigin = ConversationOrigin.CHAT,
     cwd: str = "/home/user/lemma/c/2026-09-25/abc12345",
+    surface_platform: str | None = None,
     **metadata,
 ) -> Conversation:
-    return Conversation(
+    """``surface_platform`` is a platform heard in it; the rest are tags."""
+    conversation = Conversation(
         user_id=user_id,
         pod_id=uuid4(),
         origin=origin,
@@ -138,6 +148,9 @@ def _conversation(
         metadata=metadata,
         created_at=datetime(2026, 9, 25, tzinfo=timezone.utc),
     )
+    if surface_platform:
+        _HEARD_ON_A_PLATFORM.add(conversation.id)
+    return conversation
 
 
 _SYSTEM_RUNTIME = AgentRuntimeConfig(profile_id=SYSTEM_LEMMA_PROFILE_ID)
@@ -263,7 +276,12 @@ async def test_a_hosted_deployment_never_runs_on_a_host():
 )
 def test_which_triggers_count_as_the_run_user(trigger, expected):
     conversation = _conversation()
-    assert triggered_by_run_user(conversation, _run(conversation, trigger)) is expected
+    assert (
+        triggered_by_run_user(
+            conversation, _run(conversation, trigger), heard_on_platform=False
+        )
+        is expected
+    )
 
 
 _WAKE, _MESSAGE = RunTrigger.WAKE, RunTrigger.MESSAGE
@@ -289,10 +307,13 @@ def test_a_continuation_qualifies_only_through_the_run_it_continues(
     conversation = _conversation()
     run = _run(conversation, trigger)
     assert (
-        triggered_by_run_user(conversation, run, earlier_triggers=earlier) is expected
+        triggered_by_run_user(
+            conversation, run, heard_on_platform=False, earlier_triggers=earlier
+        )
+        is expected
     )
     # Without the earlier runs, a continuation never qualifies.
-    assert not triggered_by_run_user(conversation, run)
+    assert not triggered_by_run_user(conversation, run, heard_on_platform=False)
 
 
 @pytest.mark.parametrize(
@@ -337,13 +358,17 @@ async def test_a_wake_of_a_teammates_reply_stays_in_the_vm():
 
 def test_a_sub_agent_conversation_is_not_a_person_at_the_keyboard():
     conversation = _conversation(origin=ConversationOrigin.SUBAGENT)
-    assert not triggered_by_run_user(conversation, _run(conversation))
+    assert not triggered_by_run_user(
+        conversation, _run(conversation), heard_on_platform=False
+    )
 
 
 def test_metadata_a_client_wrote_does_not_make_a_chat_unattended():
     """The keys that used to stand for an origin are only tags now."""
     conversation = _conversation(source="SCHEDULE", workflow_run_id=str(uuid4()))
-    assert triggered_by_run_user(conversation, _run(conversation))
+    assert triggered_by_run_user(
+        conversation, _run(conversation), heard_on_platform=False
+    )
 
 
 async def test_a_bound_folder_is_the_root_hint():

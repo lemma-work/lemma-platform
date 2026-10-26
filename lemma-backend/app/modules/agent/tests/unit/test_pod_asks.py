@@ -39,7 +39,6 @@ from app.modules.agent.domain.pod_ask_rules import (
 from app.modules.agent.infrastructure.pod_ask_queries import Teammate
 from app.modules.agent.services.context_brief.askable_pods import narrowed
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.conversations import client_tags, with_client_tags
 from app.modules.agent.domain.value_objects import (
     ConversationOrigin,
     ConversationType,
@@ -144,16 +143,6 @@ class TestTheAskOnTheConversation:
         forged = _ask(for_user_id=uuid4())
         conversation = _conversation(ask=_ask(), metadata={"ask": forged.to_json()})
         assert ask_of(conversation) == conversation.ask != forged
-        assert with_client_tags({}, {"ask": {}, "pinned": False}) == {
-            "ask": {},
-            "pinned": False,
-        }
-
-    def test_a_client_cannot_open_a_conversation_claiming_one(self):
-        """What a client sends is kept as tags; the ask is the server's column."""
-        assert client_tags({"surface_id": "s", "lemma_resource": "x"}) == {
-            "lemma_resource": "x"
-        }
 
 
 class TestWhoMayAskAsTheirPerson:

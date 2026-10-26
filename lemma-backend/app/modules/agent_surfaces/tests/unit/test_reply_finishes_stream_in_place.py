@@ -48,6 +48,12 @@ STREAM = ProgressHandle(
 )
 
 
+def _run_ctx(conversation, **fields):
+    """A run's context, naming the platform its conversation's surface records."""
+    platform = (getattr(conversation, "metadata", None) or {}).get("surface_platform")
+    return SimpleNamespace(surface_platform=platform, **fields)
+
+
 @pytest.fixture(autouse=True)
 def _displays_in_redis():
     cache = RedisJsonCache(
@@ -291,7 +297,7 @@ async def _streamed_run(egress: _Egress, run_id) -> tuple:
     conversation = SimpleNamespace(
         id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
     )
-    ctx = SimpleNamespace(agent_run_id=run_id)
+    ctx = _run_ctx(conversation, agent_run_id=run_id)
     await observer.on_run_started(conversation, ctx)
     observer._token_buffer = "Here is the answer."  # noqa: SLF001 - unflushed tail
     return observer, conversation, ctx

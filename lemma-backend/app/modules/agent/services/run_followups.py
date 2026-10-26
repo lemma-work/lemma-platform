@@ -88,7 +88,6 @@ def run_finished_fact(
         parent_kind=origin.parent_kind,
         parent_ref=origin.parent_ref,
         origin=origin.origin,
-        has_reply_target=origin.has_reply_target,
         started_at=started_at,
     )
 

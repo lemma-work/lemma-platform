@@ -3,7 +3,6 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.contracts import Conversation
 from app.modules.agent.contracts.tools import ToolSpec
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
@@ -43,9 +42,15 @@ class SurfacePlatformToolFactory:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self.uow_factory = uow_factory
 
-    async def build_tools(self, *, conversation: Conversation) -> list[ToolSpec]:
-        metadata = conversation.metadata or {}
-        surface_type = str(metadata.get("surface_platform") or "")
+    async def build_tools(
+        self,
+        *,
+        platform: str,
+        surface_id: UUID | None,
+        conversation_kind: str | None,
+    ) -> list[ToolSpec]:
+        """The tools of the place a run talks over, as its context names it."""
+        surface_type = platform
         # Chat surfaces only: email's reply is sent by the observer, and an
         # unknown platform has nothing to build. A chat platform with no builder
         # of its own (WhatsApp, Telegram) still gets `surface_send_message` below.
@@ -54,7 +59,6 @@ class SurfacePlatformToolFactory:
             return []
         builder = _TOOLSET_BUILDERS.get(caps.platform)
 
-        surface_id = metadata.get("surface_id")
         if surface_id is None:
             # Conversations on system credentials carry no surface row.
             if builder is None or not has_native_credentials(surface_type):
@@ -62,7 +66,7 @@ class SurfacePlatformToolFactory:
             return list(builder(credentials=native_credentials(surface_type)))
 
         async with self.uow_factory() as uow:
-            surface = await SurfaceRepository(uow).get(UUID(str(surface_id)))
+            surface = await SurfaceRepository(uow).get(surface_id)
             if surface is None:
                 return []
             # One path, through the resolver, and ``prefer_native`` is the fast
@@ -84,7 +88,7 @@ class SurfacePlatformToolFactory:
         tools: list[ToolSpec] = []
         if builder is not None:
             tools.extend(builder(credentials=credentials))
-        if caps.bot_creates_groups and metadata.get("conversation_kind") == "DM":
+        if caps.bot_creates_groups and conversation_kind == "DM":
             # Only in a member's own chat: see `services/whatsapp_group_tool`.
             tools.extend(
                 whatsapp_group_tools(

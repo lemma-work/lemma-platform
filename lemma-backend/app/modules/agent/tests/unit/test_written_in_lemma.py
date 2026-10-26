@@ -94,11 +94,10 @@ _CONTACT_CHAT = {"surface_platform": "WHATSAPP", "conversation_kind": "DM"}
 def test_only_a_groups_conversation_marks_what_is_typed_into_it(
     conversation_metadata, contacts, expected
 ):
-    conversation = SimpleNamespace(
-        metadata=conversation_metadata, contact_id=uuid4() if contacts else None
-    )
+    conversation = SimpleNamespace(contact_id=uuid4() if contacts else None)
+    kind = (conversation_metadata or {}).get("conversation_kind")
 
-    assert written_in_lemma_into(conversation) == expected
+    assert written_in_lemma_into(conversation, kind) == expected
 
 
 def _runtime() -> AgentRuntimeConfig:
@@ -146,12 +145,18 @@ def _coordinator(conversation: Conversation):
         # The pod names no default runtime of its own.
         session=RecordingWorkSession(),
     )
+
+    async def surface_kind(_uow, _conversation_id):
+        # Where the conversation's surface heard it, as these tests state it.
+        return (conversation.metadata or {}).get("conversation_kind")
+
     coordinator = turns.AdmitMessage(
         uow,
         agent_repository=agents,
         supersede=SimpleNamespace(supersede=AsyncMock(return_value=[])),
         usage_service=None,
         runtime_check=_runtime_is_available,
+        surface_kind=surface_kind,
     )
     return wire_repositories(coordinator, repository), repository
 

@@ -38,6 +38,7 @@ def admitted_state(
     message_metadata: dict[str, object] | None,
     conversation: Conversation,
     *,
+    surface_kind: str | None,
     typed_in_lemma: bool,
     client_message_id: str | None,
 ) -> MessageState:
@@ -46,14 +47,18 @@ def admitted_state(
     A note is the one mark the caller asks for, and it is read off the request
     here, once. Where the message was written is never the caller's to say:
     the mark changes who the model takes the writer to be, so it comes from
-    whether a person typed it in Lemma, and into what.
+    whether a person typed it in Lemma, and into what: ``surface_kind`` is
+    the place's kind as its surface records it (``DM``, ``CHANNEL``).
     """
     private_note = requested_private_note(message_metadata)
     return MessageState(
         client_message_id=client_message_id,
         private_note=private_note,
-        private_note_in_dm=private_note and note_in_member_dm(conversation),
-        written_in=written_in_lemma_into(conversation) if typed_in_lemma else None,
+        private_note_in_dm=private_note
+        and note_in_member_dm(conversation, surface_kind),
+        written_in=written_in_lemma_into(conversation, surface_kind)
+        if typed_in_lemma
+        else None,
     )
 
 

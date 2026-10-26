@@ -123,6 +123,8 @@ class _StreamReads:
 class _ConversationListReads:
     def __init__(self) -> None:
         self.kwargs = None
+        #: Nothing is listed, so nothing is read for the surfaces either.
+        self.uow = None
 
     async def list_conversations(self, **kwargs):
         self.kwargs = kwargs

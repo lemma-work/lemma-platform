@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent.domain.entities import Conversation
 from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
     AgentSurfaceEntity,
@@ -31,40 +30,28 @@ class _FakeUoW:
         return None
 
 
-def _conversation_for_surface(surface: AgentSurfaceEntity) -> Conversation:
-    return Conversation(
-        id=uuid4(),
-        pod_id=surface.pod_id,
-        agent_id=surface.agent_id,
-        user_id=uuid4(),
-        title="external surface chat",
-        metadata={
-            "source": "agent_surfaces",
-            "surface_id": str(surface.id),
-            "surface_platform": surface.surface_type.value,
-        },
-    )
+def _place_of(surface: AgentSurfaceEntity) -> dict[str, object]:
+    """The place a run on this surface talks over, as its context names it."""
+    return {
+        "platform": surface.surface_type.value,
+        "surface_id": surface.id,
+        "conversation_kind": None,
+    }
 
 
 @pytest.mark.asyncio
 async def test_platform_tool_factory_adds_native_whatsapp_tools_for_default_agent_conversation(
     monkeypatch,
 ):
-    conversation = Conversation(
-        id=uuid4(),
-        pod_id=uuid4(),
-        agent_id=None,
-        user_id=uuid4(),
-        title="default agent whatsapp chat",
-        metadata={"source": "agent_surfaces", "surface_platform": "WHATSAPP"},
-    )
     factory = SurfacePlatformToolFactory(uow_factory=lambda: _FakeUoW())
 
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "native-wa-token")
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "phone-123")
     monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-123")
 
-    tools = await factory.build_tools(conversation=conversation)
+    tools = await factory.build_tools(
+        platform="WHATSAPP", surface_id=None, conversation_kind=None
+    )
 
     assert tools == []
 
@@ -208,7 +195,7 @@ async def test_a_pooled_surfaces_tools_are_built_with_that_numbers_credentials(
     )
 
     factory = SurfacePlatformToolFactory(uow_factory=lambda: _PooledUoW())
-    await factory.build_tools(conversation=_conversation_for_surface(surface))
+    await factory.build_tools(**_place_of(surface))
 
     assert built, "no WhatsApp toolset was built at all"
     assert built[0].access_token.get_secret_value() == "the-pools-token", (
@@ -250,6 +237,6 @@ async def test_a_chat_surface_without_a_toolset_still_gets_send_when_allowed(
     monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram-token")
 
     factory = SurfacePlatformToolFactory(uow_factory=lambda: _FakeUoW())
-    tools = await factory.build_tools(conversation=_conversation_for_surface(surface))
+    tools = await factory.build_tools(**_place_of(surface))
 
     assert [tool.name for tool in tools] == ["surface_send_message"]

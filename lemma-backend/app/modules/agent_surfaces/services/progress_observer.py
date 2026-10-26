@@ -55,7 +55,7 @@ from app.modules.agent_surfaces.services.progress_events import (
     _is_tool_activity_event,
     _join_text,
     _safe_run_error_text,
-    _surface_platform,
+    surface_platform_of,
 )
 
 logger = get_logger(__name__)
@@ -171,6 +171,9 @@ class SurfaceAgentRunProgressObserver(
         # platform -- no stream, no typing, no answer. See `domain/private_notes`
         # in the agent module; the run's context says so from its first event.
         self._stays_in_lemma = False
+        #: The platform the run talks over, from its context
+        #: (``agent_surfaces`` records it; the agent hands it to the run).
+        self._platform: str | None = None
 
     async def on_run_started(
         self,
@@ -180,7 +183,7 @@ class SurfaceAgentRunProgressObserver(
         self._run_files = RunFiles(ctx.agent_run_id)
         self._run_started_at = time.monotonic()
         self._stays_in_lemma = not getattr(ctx, "delivers_to_surface", True)
-        platform = _surface_platform(conversation)
+        platform = self._platform = surface_platform_of(ctx)
         if platform is None or self._stays_in_lemma:
             return
         if conversation.contact_id is not None and await self.contact_gate(
@@ -217,13 +220,12 @@ class SurfaceAgentRunProgressObserver(
         ctx: ToolContext,
     ) -> None:
         self._run_files = RunFiles(ctx.agent_run_id)
+        self._platform = surface_platform_of(ctx)
         if self._stays_in_lemma:
             return
         if event.type in {AgentEventType.ERROR, AgentEventType.REJECTED}:
             self._run_errored = True
-            self._run_error_text = _safe_run_error_text(
-                event, _surface_platform(conversation)
-            )
+            self._run_error_text = _safe_run_error_text(event, self._platform)
             return
 
         if event.type == AgentEventType.WAITING:
@@ -241,7 +243,7 @@ class SurfaceAgentRunProgressObserver(
             await self._handle_waiting_event(event, conversation, ends_run=False)
             return
 
-        platform = _surface_platform(conversation)
+        platform = self._platform
 
         # Assistant text is buffered, never sent mid-run, so intermediate
         # narration cannot leak as a separate chat message. The final answer is
@@ -323,6 +325,7 @@ class SurfaceAgentRunProgressObserver(
           there is one, arrives as the one message in the thread.
         """
         self._run_files = RunFiles(ctx.agent_run_id)
+        self._platform = surface_platform_of(ctx)
         if self._stays_in_lemma:
             return
         await self._stop_typing()
@@ -338,7 +341,7 @@ class SurfaceAgentRunProgressObserver(
             return False
         if handle.kind is not ProgressHandleKind.STREAM:
             return False
-        capabilities = PLATFORM_CAPABILITIES.get(_surface_platform(conversation) or "")
+        capabilities = PLATFORM_CAPABILITIES.get(self._platform or "")
         if capabilities is None or not capabilities.finishes_stream_with_answer:
             return False
         if not await self._reply_will_close(run_id):

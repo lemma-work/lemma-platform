@@ -181,6 +181,7 @@ class AgentRunnerService:
             agent_run_id=agent_run_id,
             user_id=user_id,
             usage_source=usage_source_for(Audience.of(conversation)),
+            platform=session.surface.surface_platform if session.surface else None,
         )
         if agent_run.status != AgentRunStatus.RUNNING:
             await self.finalizer.finish(

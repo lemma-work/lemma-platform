@@ -28,7 +28,6 @@ from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.conversations import client_tags
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.prompt.surface import audience_notice
@@ -72,7 +71,7 @@ def test_a_members_conversation_stays_theirs_whatever_its_metadata_claims():
 
 def test_a_client_cannot_create_a_contacts_conversation():
     """No key a client sends names a contact: the column is the server's."""
-    sent = client_tags({"audience": "contact", "contact_id": str(uuid4())})
+    sent = {"audience": "contact", "contact_id": str(uuid4())}
 
     assert Audience.of(_conversation(sent)) == Audience.member()
 

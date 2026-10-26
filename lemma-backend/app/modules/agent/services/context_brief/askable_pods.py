@@ -17,7 +17,6 @@ from app.modules.agent.services.context_brief.agent_self import READ_FAILED
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pod_ask_rules import AskingRun, OpenModes, open_modes
 from app.modules.agent.infrastructure.pod_ask_queries import Teammate
-from app.modules.agent.services.surface_context import surface_conversation_kind
 from app.modules.agent.infrastructure.context_brief_repository import RepositoryFactory
 
 logger = get_logger(__name__)
@@ -30,8 +29,11 @@ async def askable_pod_lines(
     conversation: Conversation,
     pod_id: UUID,
     user_id: UUID,
+    surface_kind: str | None = None,
 ) -> list[str]:
     """The section, or nothing when this conversation can ask no other pod.
+
+    ``surface_kind`` is its place's kind as its surface records it.
 
     Only the pods, and only the ways, that ``ask_teammate`` would allow from
     this conversation (``pod_asks.open_modes``): a scheduled run is not offered
@@ -47,7 +49,7 @@ async def askable_pod_lines(
             conversation=conversation,
             is_pod_default_agent=True,
             answers_outsider=False,
-            surface_conversation_kind=surface_conversation_kind(conversation),
+            surface_conversation_kind=surface_kind,
         )
     )
     if not (modes.as_person or modes.over_link):

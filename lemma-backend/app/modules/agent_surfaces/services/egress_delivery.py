@@ -44,6 +44,9 @@ from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface_repository import (
+    ConversationSurfaces,
+)
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
@@ -151,14 +154,12 @@ class SurfaceDelivery:
             # Except a conversation that *was* opened from a platform and whose
             # place has since gone -- a group the platform deleted. Then
             # somebody was waiting there, and the answer goes nowhere.
-            opened_on = await agent_conversations.conversation_metadata_value(
-                self.uow, conversation_id, "surface_id"
-            )
-            if opened_on is not None:
+            opened_on = await ConversationSurfaces(self.uow).of(conversation_id)
+            if opened_on is not None and opened_on.surface_id is not None:
                 logger.warning(
                     "agent_surfaces.egress.surface_conversation_lost_its_thread.degraded",
                     conversation_id=str(conversation_id),
-                    surface_id=opened_on,
+                    surface_id=str(opened_on.surface_id),
                 )
                 return None
             logger.debug(

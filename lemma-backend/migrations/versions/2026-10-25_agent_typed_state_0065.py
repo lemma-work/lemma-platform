@@ -9,7 +9,7 @@ keys (CONTRIBUTING: expand, then contract).
 
 `agent_conversations`: `origin` (what it is for, from `source` and the keys
 whose presence stood for it, in `run_origin`'s precedence), `workflow_run_id`,
-`parent_run_id`, `spawn_key`, `reports_to_parent`, `delegations_out`
+`schedule_type` (what fires a schedule's conversation), `parent_run_id`, `spawn_key`, `reports_to_parent`, `delegations_out`
 (`subagents_out` or `pod_asks_out`), `ask`, `call`, `cwd`, `workspace_id`,
 `workspace_name`, `repo` and `todos`. `started_by` gets none: every writer
 stamped the literal `SCHEDULE`, which `origin` now says.
@@ -52,6 +52,18 @@ the newest prompted run with how far into the conversation its prompt ran.
 object, and an unreadable value inside one, are counted and logged; the
 downgrade writes both tables back into the keys, so the code before this reads
 what the code after it wrote.
+
+agent_surfaces gets `surface_conversation_state`, one row per conversation a
+chat surface opened or heard: the place it was last written to from
+(`surface_id`, `surface_platform`, `conversation_kind`, the platform's
+`external_*` ids, `channel_name`, `route_key`, `routed_agent_id`,
+`agent_display_name`, `surface_event_metadata`), a web widget's visitor
+(`web_widget_id`, `web_session_id`), and the two records agent_surfaces kept
+in the conversation's metadata (`surface_held_replies` as `held_replies`,
+`surface_free_text_answer_for` as `free_text_answer_for`). Backfilled from
+those keys; a value that does not read as its column is counted and logged.
+The downgrade writes the table back into the keys, and `schedule_type` back
+into its key.
 
 A value that does not read as its column's type -- an unknown `source`, an id
 that is not a UUID, a timestamp that is not one -- is left out (a default
@@ -168,10 +180,17 @@ _REPO = (
     f"WHEN jsonb_typeof({_M}->'repo') = 'object' THEN {_M}->'repo' END"
 )
 
+#: What fires a schedule's conversation, as ``schedule.ScheduleType`` names it.
+_SCHEDULE_TYPE = (
+    f"CASE WHEN upper({_M}->>'schedule_type') IN ('TIME', 'DATASTORE', 'WEBHOOK') "
+    f"THEN upper({_M}->>'schedule_type') END"
+)
+
 _CONVERSATION_BACKFILL = f"""
 UPDATE agent_conversations SET
   origin = coalesce({_ORIGIN}, 'CHAT'),
   workflow_run_id = {_uuid(_M, "workflow_run_id")},
+  schedule_type = {_SCHEDULE_TYPE},
   parent_run_id = {_uuid(_M, "parent_run_id")},
   spawn_key = {_text(_M, "spawn_key")},
   reports_to_parent = {_flag(_M, "reports_to_parent")},
@@ -191,6 +210,7 @@ WHERE ({_M} IS NOT NULL AND {_M} <> '{{}}'::jsonb)
 
 _CONVERSATION_UNMAPPED = {
     "source": f"({_ORIGIN}) IS NULL",
+    "schedule_type": _unreadable(_M, "schedule_type", _SCHEDULE_TYPE),
     "workflow_run_id": _unreadable(_M, "workflow_run_id", _uuid(_M, "workflow_run_id")),
     "parent_run_id": _unreadable(_M, "parent_run_id", _uuid(_M, "parent_run_id")),
     "ask": _unreadable(_M, "ask", _object(_M, "ask")),
@@ -415,6 +435,7 @@ def _add_columns() -> None:
             server_default="CHAT",
         ),
         sa.Column("workflow_run_id", sa.Uuid(), nullable=True),
+        sa.Column("schedule_type", sa.String(16), nullable=True),
         sa.Column("parent_run_id", sa.Uuid(), nullable=True),
         sa.Column("spawn_key", sa.Text(), nullable=True),
         _flag_column("reports_to_parent"),
@@ -979,6 +1000,123 @@ FROM agent_host_run_records x WHERE x.run_id = r.id
 """
 
 
+# -- surface_conversation_state (agent_surfaces) ------------------------------
+
+#: ``(column, its key, how the key reads as the column)``.
+_SURFACE_COLUMNS = (
+    ("surface_id", "surface_id", _uuid(_M, "surface_id")),
+    ("surface_platform", "surface_platform", None),
+    ("conversation_kind", "conversation_kind", None),
+    ("external_channel_id", "external_channel_id", None),
+    ("external_thread_id", "external_thread_id", None),
+    ("external_user_id", "external_user_id", None),
+    ("external_message_id", "external_message_id", None),
+    ("channel_name", "channel_name", None),
+    ("route_key", "route_key", None),
+    ("routed_agent_id", "routed_agent_id", _uuid(_M, "routed_agent_id")),
+    ("agent_display_name", "agent_display_name", None),
+    (
+        "surface_event_metadata",
+        "surface_event_metadata",
+        _object(_M, "surface_event_metadata"),
+    ),
+    ("web_widget_id", "web_widget_id", _uuid(_M, "web_widget_id")),
+    ("web_session_id", "web_session_id", _uuid(_M, "web_session_id")),
+    ("held_replies", "surface_held_replies", _object(_M, "surface_held_replies")),
+    ("free_text_answer_for", "surface_free_text_answer_for", None),
+)
+
+#: The two short ones are capped by their columns; a longer value is no
+#: platform or kind any surface writes.
+_SURFACE_LENGTHS = {"surface_platform": 32, "conversation_kind": 16}
+
+
+def _surface_value(column: str, key: str, readable: str | None) -> str:
+    if readable is not None:
+        return readable
+    value = _text(_M, key)
+    limit = _SURFACE_LENGTHS.get(column)
+    return f"CASE WHEN length({value}) <= {limit} THEN {value} END" if limit else value
+
+
+_SURFACE_KEYS_SQL = ", ".join(f"'{key}'" for _, key, _ in _SURFACE_COLUMNS)
+
+_SURFACE_BACKFILL = f"""
+INSERT INTO surface_conversation_state (conversation_id,
+  {", ".join(column for column, _, _ in _SURFACE_COLUMNS)}, created_at, updated_at)
+SELECT id, {", ".join(_surface_value(*entry) for entry in _SURFACE_COLUMNS)},
+  now(), now()
+FROM agent_conversations
+WHERE {_M} ?| array[{_SURFACE_KEYS_SQL}]
+"""
+
+_SURFACE_UNMAPPED = {
+    key: _unreadable(_M, key, _surface_value(column, key, readable))
+    for column, key, readable in _SURFACE_COLUMNS
+}
+
+#: The downgrade's way back into the keys the old code reads.
+_RESTORE_SURFACES = f"""
+UPDATE agent_conversations c SET conversation_metadata =
+  coalesce(c.conversation_metadata, '{{}}'::jsonb) || jsonb_strip_nulls(jsonb_build_object(
+    {", ".join(f"'{key}', s.{column}" for column, key, _ in _SURFACE_COLUMNS)}))
+FROM surface_conversation_state s WHERE s.conversation_id = c.id
+"""
+
+_RESTORE_SCHEDULE_TYPES = f"""
+UPDATE agent_conversations SET conversation_metadata =
+  coalesce({_M}, '{{}}'::jsonb) || jsonb_build_object('schedule_type', schedule_type)
+WHERE schedule_type IS NOT NULL
+"""
+
+
+def _create_surface_table() -> None:
+    jsonb = postgresql.JSONB(astext_type=sa.Text())
+    op.create_table(
+        "surface_conversation_state",
+        sa.Column(
+            "conversation_id",
+            sa.Uuid(),
+            sa.ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+        sa.Column("surface_id", sa.Uuid(), nullable=True),
+        sa.Column("surface_platform", sa.String(32), nullable=True),
+        sa.Column("conversation_kind", sa.String(16), nullable=True),
+        sa.Column("external_channel_id", sa.Text(), nullable=True),
+        sa.Column("external_thread_id", sa.Text(), nullable=True),
+        sa.Column("external_user_id", sa.Text(), nullable=True),
+        sa.Column("external_message_id", sa.Text(), nullable=True),
+        sa.Column("channel_name", sa.Text(), nullable=True),
+        sa.Column("route_key", sa.Text(), nullable=True),
+        sa.Column("routed_agent_id", sa.Uuid(), nullable=True),
+        sa.Column("agent_display_name", sa.Text(), nullable=True),
+        sa.Column("surface_event_metadata", jsonb, nullable=True),
+        sa.Column("web_widget_id", sa.Uuid(), nullable=True),
+        sa.Column("web_session_id", sa.Uuid(), nullable=True),
+        sa.Column("held_replies", jsonb, nullable=True),
+        sa.Column("free_text_answer_for", sa.Text(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+    )
+
+
+def _backfill_surface_table(conn) -> None:
+    _report(conn, "agent_conversations", _SURFACE_UNMAPPED)
+    surfaces = conn.execute(sa.text(_SURFACE_BACKFILL)).rowcount
+    _log().info("0065: backfilled %d surface_conversation_state rows.", surfaces)
+
+
 def upgrade() -> None:
     conn = op.get_bind()
     _add_columns()
@@ -1035,6 +1173,8 @@ def upgrade() -> None:
     _backfill_pauses(conn)
     _create_agent_host_tables()
     _backfill_agent_host_tables(conn)
+    _create_surface_table()
+    _backfill_surface_table(conn)
 
 
 def downgrade() -> None:
@@ -1043,6 +1183,9 @@ def downgrade() -> None:
     conn.execute(sa.text(_RESTORE_DECISIONS))
     conn.execute(sa.text(_RESTORE_SESSIONS))
     conn.execute(sa.text(_RESTORE_RUN_RECORDS))
+    conn.execute(sa.text(_RESTORE_SURFACES))
+    conn.execute(sa.text(_RESTORE_SCHEDULE_TYPES))
+    op.drop_table("surface_conversation_state")
     op.drop_table("agent_host_run_records")
     op.drop_table("agent_host_sessions")
     op.drop_table("agent_pauses")
@@ -1091,6 +1234,7 @@ def downgrade() -> None:
             (
                 "origin",
                 "workflow_run_id",
+                "schedule_type",
                 "parent_run_id",
                 "spawn_key",
                 "reports_to_parent",

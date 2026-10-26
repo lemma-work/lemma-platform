@@ -17,6 +17,7 @@ from uuid import UUID
 import pytest
 from fastapi import status
 
+from app.modules.test_support.e2e.scripted_model import tag_conversation
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
@@ -111,9 +112,7 @@ async def _start_scripted(conversation_id: UUID, script: list[dict[str, object]]
     """
     async with create_uow_from_session_maker(async_session_maker) as uow:
         conversations = Conversations(uow)
-        await conversations.set_conversation_metadata_key(
-            conversation_id, MOCK_SCRIPT_METADATA_KEY, script
-        )
+        await tag_conversation(uow, conversation_id, MOCK_SCRIPT_METADATA_KEY, script)
         found = await conversations.get_conversation(conversation_id, include_runs=True)
         assert found is not None
         run = found.agent_runs[-1]

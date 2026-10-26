@@ -18,7 +18,6 @@ from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import AgentRun
-from app.modules.agent.domain.conversations import client_tags
 from app.modules.agent.services.runtime_availability import (
     check_conversation_runtime_for_pod,
 )
@@ -32,6 +31,8 @@ from app.modules.agent.api.controllers.shared import (
     PERSON_ANSWERS,
     _parse_message_page_token,
     _parse_metadata_filters,
+    conversation_response,
+    conversation_responses,
     member_unit_of_work,
     iter_subscription,
     parse_conversation_agent_selection,
@@ -72,6 +73,7 @@ from app.modules.agent.application.turns.retry import RetryFailedRun
 from app.modules.agent.application.turns.send_message import SendMessage
 
 logger = get_logger(__name__)
+
 
 router = APIRouter(
     prefix="/pods/{pod_id}/conversations",
@@ -128,11 +130,10 @@ async def create_conversation(
         agent_runtime=data.agent_runtime,
         parent_id=data.parent_id,
         type=data.type,
-        # Only the server opens a conversation for people outside the pod, or
-        # one answering another pod; a client cannot make one look like either.
-        metadata=client_tags(data.metadata),
+        # Only tags: nothing the server decides on (``domain/conversations``).
+        metadata=data.metadata,
     )
-    return ConversationResponse.model_validate(conversation)
+    return await conversation_response(start.uow, conversation)
 
 
 @router.get(
@@ -184,7 +185,7 @@ async def list_conversations(
         in_channel=in_channel,
     )
     return ConversationListResponse(
-        items=[ConversationResponse.model_validate(item) for item in conversations],
+        items=await conversation_responses(reads.uow, conversations),
         limit=limit,
         next_page_token=(
             encode_conversation_page_token(next_cursor) if next_cursor else None
@@ -211,7 +212,7 @@ async def get_conversation(
         user_id=user.id,
         pod_id=pod_id,
     )
-    return ConversationResponse.model_validate(conversation)
+    return await conversation_response(reads.uow, conversation)
 
 
 @router.patch(
@@ -252,7 +253,7 @@ async def update_conversation(
         pod_id=pod_id,
         **update_payload,
     )
-    return ConversationResponse.model_validate(conversation)
+    return await conversation_response(update.uow, conversation)
 
 
 @router.get(
@@ -596,4 +597,4 @@ async def stop_conversation(
         user_id=user.id,
         pod_id=pod_id,
     )
-    return ConversationResponse.model_validate(conversation)
+    return await conversation_response(stop.uow, conversation)

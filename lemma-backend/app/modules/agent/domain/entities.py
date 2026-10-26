@@ -194,13 +194,14 @@ class Conversation(Entity):
     type: ConversationType = ConversationType.CHAT
     status: ConversationStatus | None = None
     output: JsonValue | None = None
-    #: Client tags, plus -- until they get columns of their own -- the keys a
-    #: chat surface and the Agent Host keep here (``domain/conversations``).
+    #: Client tags (``domain/conversations``).
     metadata: JsonObject | None = None
     #: What it is for. Set once, by the code that opens it.
     origin: ConversationOrigin = ConversationOrigin.CHAT
     #: The workflow run it is a step of.
     workflow_run_id: UUID | None = None
+    #: A schedule's: what fires it -- ``TIME``, ``DATASTORE`` or ``WEBHOOK``.
+    schedule_type: str | None = None
     #: A sub-agent's: the parent's run that spawned it.
     parent_run_id: UUID | None = None
     #: A sub-agent's: what it was spawned to do, so one parent run spawning the

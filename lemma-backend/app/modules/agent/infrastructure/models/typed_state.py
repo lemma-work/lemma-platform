@@ -104,6 +104,7 @@ def conversation_state_fields(row: ConversationModel) -> dict[str, object]:
     return {
         "origin": row.origin or ConversationOrigin.CHAT,  # None until the INSERT.
         "workflow_run_id": row.workflow_run_id,
+        "schedule_type": row.schedule_type,
         "parent_run_id": row.parent_run_id,
         "spawn_key": row.spawn_key,
         "reports_to_parent": bool(row.reports_to_parent),
@@ -123,6 +124,7 @@ def conversation_state_values(conversation: Conversation) -> dict[str, object]:
     return {
         "origin": conversation.origin,
         "workflow_run_id": conversation.workflow_run_id,
+        "schedule_type": conversation.schedule_type,
         "parent_run_id": conversation.parent_run_id,
         "spawn_key": conversation.spawn_key,
         "reports_to_parent": conversation.reports_to_parent,

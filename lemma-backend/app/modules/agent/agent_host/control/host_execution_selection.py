@@ -106,16 +106,15 @@ _APP_ORIGINS = frozenset(
 _CWD_SUFFIX = re.compile(r"/c/(\d{4}-\d{2}-\d{2})/([A-Za-z0-9_-]{1,64})/?$")
 
 
-def opened_in_app(conversation: Conversation) -> bool:
+def opened_in_app(conversation: Conversation, *, heard_on_platform: bool) -> bool:
     """Whether a person opened this conversation in Lemma's own app.
 
     Every conversation something else opens says so in its ``origin``: a
     workflow, a schedule, a surface, a notification, a sub-agent, another
-    pod. A surface binding on a conversation the app opened is the platform's
-    too.
+    pod. A conversation the app opened that a platform has since been heard
+    in (``heard_on_platform``, agent_surfaces' record) is the platform's too.
     """
-    stored = conversation.metadata or {}
-    return conversation.origin in _APP_ORIGINS and not stored.get("surface_platform")
+    return conversation.origin in _APP_ORIGINS and not heard_on_platform
 
 
 def origin_trigger(earlier: list[RunTrigger]) -> RunTrigger | None:
@@ -131,6 +130,7 @@ def triggered_by_run_user(
     conversation: Conversation,
     agent_run: AgentRun,
     *,
+    heard_on_platform: bool,
     earlier_triggers: list[RunTrigger] | None = None,
 ) -> bool:
     """Whether the run's user, in Lemma's own app, started this run. See the module.
@@ -139,7 +139,7 @@ def triggered_by_run_user(
     one, newest first; only a continuation reads them, and without them a
     continuation does not qualify.
     """
-    if not opened_in_app(conversation):
+    if not opened_in_app(conversation, heard_on_platform=heard_on_platform):
         return False
     trigger = agent_run.state.trigger
     if trigger in PERSON_TRIGGERS:
@@ -157,6 +157,16 @@ async def _recorded_choice(run_id: UUID) -> dict[str, object] | None:
 async def _earlier_triggers(conversation_id: UUID, run_id: UUID) -> list[RunTrigger]:
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         return await earlier_run_triggers(uow, conversation_id, run_id)
+
+
+async def _heard_on_platform(conversation_id: UUID) -> bool:
+    from app.modules.agent_surfaces.contracts.conversations import (
+        conversation_surface,
+    )
+
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        surface = await conversation_surface(uow, conversation_id)
+    return surface is not None and bool(surface.surface_platform)
 
 
 async def _host_cwd(conversation_id: UUID) -> str | None:
@@ -227,6 +237,8 @@ class HostExecutionFacts:
     )
     #: ``conversation_id -> the directory its last Agent Host run reported``.
     host_cwd: Callable[[UUID], Awaitable[str | None]] = _host_cwd
+    #: ``conversation_id -> whether a chat platform has been heard in it``.
+    heard_on_platform: Callable[[UUID], Awaitable[bool]] = _heard_on_platform
 
 
 FACTS = HostExecutionFacts()
@@ -376,11 +388,21 @@ async def started_by_run_user(
     *,
     facts: HostExecutionFacts = FACTS,
 ) -> bool:
-    """``triggered_by_run_user``, reading the earlier runs a continuation needs."""
+    """``triggered_by_run_user``, reading what it needs: whether a platform
+    has been heard in the conversation, and the earlier runs a continuation
+    needs."""
+    if conversation.origin not in _APP_ORIGINS:
+        return False
+    heard = await facts.heard_on_platform(conversation.id)
     earlier: list[RunTrigger] | None = None
-    if opened_in_app(conversation) and agent_run.state.trigger in CONTINUATION_TRIGGERS:
+    if (
+        opened_in_app(conversation, heard_on_platform=heard)
+        and agent_run.state.trigger in CONTINUATION_TRIGGERS
+    ):
         earlier = await facts.earlier_triggers(conversation.id, agent_run.id)
-    return triggered_by_run_user(conversation, agent_run, earlier_triggers=earlier)
+    return triggered_by_run_user(
+        conversation, agent_run, heard_on_platform=heard, earlier_triggers=earlier
+    )
 
 
 async def host_runs_native_commands(

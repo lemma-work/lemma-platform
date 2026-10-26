@@ -141,9 +141,6 @@ async def _resume(
             ),
             side_effect=lookup_raises,
         ),
-        # `_is_an_answer` asks this when the words do not plainly answer.
-        "conversation_metadata_value": AsyncMock(return_value=None),
-        "set_conversation_metadata_value": AsyncMock(),
         "resolve_pending_interaction": resolve,
     }
     context = SimpleNamespace(conversation_id=uuid4(), user_id=uuid4(), pod_id=uuid4())

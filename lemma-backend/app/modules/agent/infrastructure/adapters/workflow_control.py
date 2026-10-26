@@ -73,7 +73,9 @@ _FIRING_FACTS = frozenset(
 
 
 def _schedule_firing(
-    input_data: dict[str, object], conversation_metadata: dict[str, object]
+    input_data: dict[str, object],
+    conversation_metadata: dict[str, object],
+    schedule_type: str | None,
 ) -> ScheduleFiring | None:
     """The facts about the firing that started this run, as the run keeps them."""
     raw = input_data.get("metadata")
@@ -83,7 +85,7 @@ def _schedule_firing(
         if key in _FIRING_FACTS
     }
     facts.setdefault("schedule_name", conversation_metadata.get("schedule_name"))
-    facts.setdefault("trigger_type", conversation_metadata.get("schedule_type"))
+    facts.setdefault("trigger_type", schedule_type)
     return ScheduleFiring.from_json(facts)
 
 
@@ -191,6 +193,8 @@ class AgentControlAdapter(AgentPort):
         # (which schedule, which kind) is kept as the conversation's own.
         metadata = dict(conversation_metadata or {})
         repo = parse_project_repo(metadata.pop("repo", None))
+        raw_type = metadata.pop("schedule_type", None)
+        schedule_type = raw_type.upper() if isinstance(raw_type, str) else None
         entity_values: dict[str, object] = {
             "user_id": user_id,
             "pod_id": pod_id,
@@ -211,6 +215,7 @@ class AgentControlAdapter(AgentPort):
                 else ConversationOrigin.WORKFLOW_STEP
             ),
             "workflow_run_id": workflow_run_id,
+            "schedule_type": schedule_type,
             "repo": repo,
             # What the trigger asked for, in the author's words. Lands in the
             # system prompt as `# Conversation Instructions`, after the agent's
@@ -251,7 +256,7 @@ class AgentControlAdapter(AgentPort):
                 trigger=RunTrigger.SCHEDULE_FIRE
                 if started_by_schedule
                 else RunTrigger.WORKFLOW_START,
-                schedule_firing=_schedule_firing(input_data, metadata)
+                schedule_firing=_schedule_firing(input_data, metadata, schedule_type)
                 if started_by_schedule
                 else None,
             ),

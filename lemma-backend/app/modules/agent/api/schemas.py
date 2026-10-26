@@ -10,6 +10,7 @@ from pydantic import (
     ConfigDict,
     Field,
     ModelWrapValidatorHandler,
+    ValidationInfo,
     PrivateAttr,
     computed_field,
     field_validator,
@@ -199,12 +200,17 @@ class ConversationResponse(BaseModel):
     @model_validator(mode="wrap")
     @classmethod
     def _from_conversation(
-        cls, data: object, handler: ModelWrapValidatorHandler[ConversationResponse]
+        cls,
+        data: object,
+        handler: ModelWrapValidatorHandler[ConversationResponse],
+        info: ValidationInfo,
     ) -> ConversationResponse:
-        """A conversation as a client reads it: its typed state said in
-        ``metadata`` too (``domain/wire_metadata``), and its directory."""
+        """A conversation as a client reads it: its typed state, and the place
+        a surface heard it (``context={"surface": ...}``), said in ``metadata``
+        too (``domain/wire_metadata``), and its directory."""
         if not isinstance(data, Conversation):
             return handler(data)
+        surface = (info.context or {}).get("surface")
         response = handler(
             {
                 **{
@@ -212,7 +218,7 @@ class ConversationResponse(BaseModel):
                     for name in cls.model_fields
                     if name != "metadata" and hasattr(data, name)
                 },
-                "metadata": conversation_wire_metadata(data),
+                "metadata": conversation_wire_metadata(data, surface),
             }
         )
         response._workspace_cwd = resolve_workspace_location(data).cwd

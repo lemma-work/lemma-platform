@@ -6,8 +6,8 @@ loop is cut, so this is an ordinary contract
 and can say what it takes and returns. Every signature on the shim was `object`
 or `list[object]` -- not because the types were unknown, but because naming them
 in the composition root would have put a third module's paths into `agent`'s
-build. `agent/contracts` publishes `Conversation` and `DisplayResourceRequest`,
-so they are named here.
+build. `agent/contracts` publishes `DisplayResourceRequest`, so it is named
+here.
 
 The direction is one-way: `agent` decides what to send and this delivers it.
 What a platform *is* -- the capability lookups and the prompt text derived from
@@ -29,7 +29,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import Conversation, DisplayResourceRequest
+from app.modules.agent.contracts import DisplayResourceRequest
 from app.modules.agent.contracts.tools import ToolSpec
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SurfaceEventMetadata,
@@ -66,15 +66,18 @@ def parse_surface_event_metadata(
 
 async def build_surface_tools(
     uow_factory: UnitOfWorkFactory,
-    conversation: Conversation,
+    *,
+    platform: str,
+    surface_id: UUID | None,
+    conversation_kind: str | None,
 ) -> list[ToolSpec]:
-    """The tools this conversation's platform adds to the run, as specs."""
+    """The tools the platform a run talks over adds to it, as specs."""
     from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
         SurfacePlatformToolFactory,
     )
 
     return await SurfacePlatformToolFactory(uow_factory).build_tools(
-        conversation=conversation
+        platform=platform, surface_id=surface_id, conversation_kind=conversation_kind
     )
 
 

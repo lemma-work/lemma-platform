@@ -27,12 +27,13 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface_repository import (
+    ConversationSurfaces,
+)
 from app.modules.agent_surfaces.services.held_replies import (
-    HELD_REPLIES_KEY,
     HeldReplies,
     hold_reply,
     stage_held_replies,
@@ -154,9 +155,7 @@ async def _held_messages(
     uow_factory: UnitOfWorkFactory, conversation_id: UUID
 ) -> list[str]:
     async with uow_factory() as uow:
-        record = await Conversations(uow).get_conversation_metadata_key(
-            conversation_id, HELD_REPLIES_KEY
-        )
+        record = await ConversationSurfaces(uow).held_replies(conversation_id)
     if record is None:
         return []
     return [reply.message for reply in HeldReplies.model_validate(record).replies]

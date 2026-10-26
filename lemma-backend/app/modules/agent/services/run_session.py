@@ -29,7 +29,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Protocol, TypedDict
+from typing import TYPE_CHECKING, Protocol, TypedDict
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -87,7 +87,10 @@ from app.modules.agent.services.runtime_resolution import (
     RuntimeRequest,
     resolve_runtime,
 )
-from app.modules.agent.services.surface_context import surface_context_for_run
+from app.modules.agent.services.surface_context import (
+    conversation_surface,
+    surface_context_for_run,
+)
 from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.callables import grant_summary_of
@@ -95,6 +98,11 @@ from app.modules.agent.domain.toolsets import (
     AgentGrantSummary,
     resolve_toolset_names,
 )
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.contracts.conversations import (
+        ConversationSurface,
+    )
 
 #: The connector accounts an agent's tools may use, read for the person.
 ConfiguredAccounts = Callable[..., Awaitable[dict[str, UUID]]]
@@ -150,6 +158,8 @@ class RunSession:
     #: The runtime as the tools see it (``RuntimeSnapshot.as_payload``).
     runtime_profile: JsonObject | None = None
     grants: AgentGrantSummary | None = None
+    #: Where agent_surfaces last heard the conversation, if anywhere.
+    surface: ConversationSurface | None = None
 
     # -- Loading ------------------------------------------------------------
 
@@ -160,6 +170,7 @@ class RunSession:
         agent: Agent | None,
         run: AgentRun | None,
         history: list[Message] | None = None,
+        surface: ConversationSurface | None = None,
     ) -> RunSession:
         """A session over rows already read, its workspace resolved from them."""
         return cls(
@@ -168,6 +179,7 @@ class RunSession:
             run=run,
             workspace=resolve_workspace_location(conversation),
             history=list(history or []),
+            surface=surface,
         )
 
     @classmethod
@@ -218,8 +230,9 @@ class RunSession:
                     messages = without_private_runs(
                         messages, runs, current_run_id=agent_run.id
                     )
+                surface = await conversation_surface(uow, conversation.id)
                 record_history_size(span, runs=runs, sent=messages)
-        return cls.of(conversation, agent, agent_run, messages)
+        return cls.of(conversation, agent, agent_run, messages, surface)
 
     @classmethod
     async def for_resume(
@@ -341,7 +354,7 @@ class RunSession:
         # builds tools from. The grants are kept so it need not read them again.
         grant_rows = await self._load_grants(uow_factory)
         run_toolsets, _ = resolve_toolset_names(agent, conversation, grants=self.grants)
-        surface_context = surface_context_for_run(conversation, agent_run.state)
+        surface_context = surface_context_for_run(self.surface, agent_run.state)
         audience = Audience.of(conversation)
         for_outsider = audience.answers_outsiders
         memory_enabled = memory_is_active(run_toolsets)
@@ -523,7 +536,7 @@ class RunSession:
                 delegate_model_configured=vision_delegate_available(),
             ),
             **surface_context_for_run(
-                self.conversation, run.state if run is not None else None
+                self.surface, run.state if run is not None else None
             ),
         )
 

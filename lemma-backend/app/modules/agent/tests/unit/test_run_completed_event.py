@@ -64,18 +64,32 @@ def _ask() -> PodAsk:
     ],
 )
 def test_a_scheduled_conversation_names_what_fired_it(schedule_type, kind) -> None:
-    metadata = {"schedule_type": schedule_type} if schedule_type is not None else {}
-    conversation = _conversation(origin=ConversationOrigin.SCHEDULE, metadata=metadata)
+    conversation = _conversation(
+        origin=ConversationOrigin.SCHEDULE, schedule_type=schedule_type
+    )
     assert conversation_origin(conversation) == Origin(kind)
 
 
-def test_a_surface_conversation_names_its_platform() -> None:
+def test_a_schedule_type_left_in_metadata_says_nothing() -> None:
+    """The column is what is read; the key is a tag."""
     conversation = _conversation(
-        origin=ConversationOrigin.SURFACE,
-        metadata={"surface_platform": "SLACK", "surface_id": "s"},
+        origin=ConversationOrigin.SCHEDULE, metadata={"schedule_type": "WEBHOOK"}
     )
-    assert conversation_origin(conversation) == Origin(
+    assert conversation_origin(conversation) == Origin(OriginKind.SCHEDULE)
+
+
+def test_a_surface_conversation_names_the_platform_its_surface_records() -> None:
+    conversation = _conversation(origin=ConversationOrigin.SURFACE)
+    assert conversation_origin(conversation, platform="SLACK") == Origin(
         OriginKind.SURFACE, platform="slack"
+    )
+
+
+def test_a_channel_conversation_heard_on_a_platform_is_that_platforms() -> None:
+    conversation = _conversation(origin=ConversationOrigin.CHANNEL)
+    assert conversation_origin(conversation) is None
+    assert conversation_origin(conversation, platform="WHATSAPP") == Origin(
+        OriginKind.SURFACE, platform="whatsapp"
     )
 
 
@@ -172,7 +186,7 @@ def test_a_turn_run_by_a_worker_takes_the_origin_its_conversation_records() -> N
     conversation = _conversation(
         organization_id=uuid4(),
         origin=ConversationOrigin.SCHEDULE,
-        metadata={"schedule_type": "DATASTORE"},
+        schedule_type="DATASTORE",
     )
     agent_run = SimpleNamespace(started_at=None)
 
@@ -190,10 +204,7 @@ def test_a_turn_run_by_a_worker_takes_the_origin_its_conversation_records() -> N
 
 
 def test_a_turn_run_inside_a_request_keeps_the_requests_origin() -> None:
-    conversation = _conversation(
-        origin=ConversationOrigin.SURFACE,
-        metadata={"surface_platform": "SLACK", "surface_id": "s"},
-    )
+    conversation = _conversation(origin=ConversationOrigin.SURFACE)
     agent_run = SimpleNamespace(started_at=None)
 
     with origin_scope(Origin(OriginKind.WEB)):

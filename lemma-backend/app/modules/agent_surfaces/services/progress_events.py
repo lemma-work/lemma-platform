@@ -10,7 +10,6 @@ from __future__ import annotations
 from app.modules.agent.contracts import (
     AgentEvent,
     AgentEventType,
-    Conversation,
     MessageDraft,
     MessageKind,
     MessageRole,
@@ -29,9 +28,9 @@ from app.modules.agent_surfaces.platforms.rendering import (
 _MAX_PROGRESS_TEXT_LENGTH = 120
 
 
-def _surface_platform(conversation: Conversation) -> str | None:
-    metadata = conversation.metadata or {}
-    platform = metadata.get("surface_platform") if isinstance(metadata, dict) else None
+def surface_platform_of(ctx: object) -> str | None:
+    """The platform a run talks over, as its context names it; None for none."""
+    platform = getattr(ctx, "surface_platform", None)
     return str(platform).upper() if platform else None
 
 

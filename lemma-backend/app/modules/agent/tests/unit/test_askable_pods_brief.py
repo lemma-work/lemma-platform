@@ -82,13 +82,19 @@ def _conversation(
     )
 
 
-async def _lines(conversation: Conversation, factory: _UowFactory | None = None):
+async def _lines(
+    conversation: Conversation,
+    factory: _UowFactory | None = None,
+    *,
+    surface_kind: str | None = None,
+):
     return await askable_pod_lines(
         factory or _UowFactory(),
         _Repository,
         conversation=conversation,
         pod_id=HERE,
         user_id=PERSON,
+        surface_kind=surface_kind,
     )
 
 
@@ -122,7 +128,7 @@ async def test_a_scheduled_chat_is_a_task_for_this_purpose():
 async def test_a_thread_others_read_lists_nothing_and_reads_nothing(kind):
     factory = _UowFactory()
 
-    lines = await _lines(_conversation(metadata={"conversation_kind": kind}), factory)
+    lines = await _lines(_conversation(), factory, surface_kind=kind)
 
     assert lines == []
     assert factory.opened == 0

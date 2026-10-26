@@ -8,7 +8,13 @@ model's deterministic next response.
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from uuid import UUID
+
+from sqlalchemy import text
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 ScriptTurn = dict[str, Any]
 
@@ -228,3 +234,19 @@ __all__ = [
     "script_thinking",
     "script_tool_call",
 ]
+
+
+async def tag_conversation(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, key: str, value: object
+) -> None:
+    """Set one client tag on a conversation's metadata, its siblings kept --
+    how a test hands a conversation its ``mock_llm_script``."""
+    await uow.session.execute(
+        text(
+            "UPDATE agent_conversations SET conversation_metadata = "
+            "coalesce(conversation_metadata, '{}'::jsonb) "
+            "|| jsonb_build_object(CAST(:key AS text), CAST(:value AS jsonb)) "
+            "WHERE id = :id"
+        ),
+        {"key": key, "value": json.dumps(value), "id": conversation_id},
+    )

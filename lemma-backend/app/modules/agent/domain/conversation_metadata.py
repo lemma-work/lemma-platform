@@ -1,8 +1,9 @@
 """Where a conversation started, in the product-metrics vocabulary.
 
-A view of its ``origin`` column, which says what the conversation is for --
-and of the platform its surface binding names, the one thing about it still
-kept in metadata until agent_surfaces' keys move to a table of their own.
+A view of its ``origin`` column, which says what the conversation is for, and
+of what its opener says it started on: a platform or ``web_widget``. A surface
+keeps that place in its own table, written after the row exists, so the
+opener names it rather than this reading it back.
 """
 
 from __future__ import annotations
@@ -19,21 +20,19 @@ _SURFACE_LABELS: dict[ConversationOrigin, str] = {
     ConversationOrigin.CHANNEL: "lemma_channel",
 }
 
+_STARTED_ON_A_SURFACE = frozenset(
+    {ConversationOrigin.SURFACE, ConversationOrigin.CONTACT}
+)
 
-def surface_of(conversation: Conversation) -> str:
+
+def surface_of(conversation: Conversation, started_on: str | None = None) -> str:
     """Where ``conversation`` started, as ``product_metrics`` counts it.
 
     A person in the app (or through the API, which writes the same rows and is
-    not told apart here) is ``app``. An external surface names its platform in
-    ``surface_platform``; the label is folded onto a fixed set by
-    ``product_metrics.surface_label``.
+    not told apart here) is ``app``. A surface's conversation is counted under
+    ``started_on``, which ``product_metrics.surface_label`` folds onto a fixed
+    set.
     """
-    stored = conversation.metadata or {}
-    platform = stored.get("surface_platform")
-    if conversation.origin is ConversationOrigin.SURFACE:
-        return platform if isinstance(platform, str) and platform else "other"
-    if conversation.origin is ConversationOrigin.CONTACT:
-        if stored.get("web_widget_id"):
-            return "web_widget"
-        return platform if isinstance(platform, str) and platform else "other"
+    if conversation.origin in _STARTED_ON_A_SURFACE:
+        return started_on or "other"
     return _SURFACE_LABELS.get(conversation.origin, "app")

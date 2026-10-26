@@ -28,6 +28,9 @@ from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
+from app.modules.agent.api.schemas import ConversationResponse
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.services.surface_context import conversation_surfaces
 from app.modules.agent.domain.value_objects import (
     ConversationAgentSelection,
     JsonObject,
@@ -226,3 +229,26 @@ def parse_conversation_agent_selection(
     if agent_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
         return ConversationAgentSelection.pod_default()
     return ConversationAgentSelection.named(agent_name)
+
+
+async def conversation_responses(
+    uow: SqlAlchemyUnitOfWork, conversations: list[Conversation]
+) -> list[ConversationResponse]:
+    """The conversations as a client reads them, each with the place a
+    surface heard it -- read for all of them at once."""
+    if not conversations:
+        return []
+    surfaces = await conversation_surfaces(uow, [item.id for item in conversations])
+    return [
+        ConversationResponse.model_validate(
+            item, context={"surface": surfaces.get(item.id)}
+        )
+        for item in conversations
+    ]
+
+
+async def conversation_response(
+    uow: SqlAlchemyUnitOfWork, conversation: Conversation
+) -> ConversationResponse:
+    (response,) = await conversation_responses(uow, [conversation])
+    return response

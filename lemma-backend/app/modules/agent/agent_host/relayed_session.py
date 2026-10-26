@@ -190,6 +190,7 @@ async def load_relayed_session(
     # Imported here: the run session's graph (history, briefs) has no place
     # in the startup imports of the API process that serves the host link.
     from app.modules.agent.services.run_session import RunSession
+    from app.modules.agent.services.surface_context import conversation_surface
 
     async with uow_factory() as uow:
         conversations = Conversations(uow)
@@ -227,6 +228,7 @@ async def load_relayed_session(
             if run is not None
             else None
         )
+        surface = await conversation_surface(uow, conversation.id)
     # Outside the unit of work: these open their own, or reach Redis, and
     # holding this one across them would pin a pooled connection for nothing.
     inputs = await _kept_inputs(
@@ -244,6 +246,7 @@ async def load_relayed_session(
         workspace=workspace,
         runtime_profile=inputs.runtime_profile if inputs else None,
         grants=inputs.grants.summary() if inputs else None,
+        surface=surface,
     )
 
 

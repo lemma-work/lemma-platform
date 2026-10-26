@@ -29,6 +29,9 @@ from app.modules.agent.contracts.contact_conversations import (
     VisibleMessage,
     visible_messages,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface_repository import (
+    ConversationSurfaces,
+)
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebWidget,
     WidgetAnswer,
@@ -373,13 +376,13 @@ class WebChat:
                 agent_name=agent_name,
                 user_id=owner,
                 title=f"{widget.name}: {name or 'visitor'}"[:255],
-                metadata={
-                    "web_widget_id": str(widget.id),
-                    "web_session_id": str(session.id),
-                },
                 contact_id=contact_id,
                 channel_id=place.channel_id,
                 require_execute_grant=False,
+                started_on="web_widget",
+            )
+            await ConversationSurfaces(uow).record_web_visitor(
+                conversation.id, widget_id=widget.id, session_id=session.id
             )
             return conversation.id
         finally:

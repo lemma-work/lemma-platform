@@ -96,6 +96,7 @@ class StartConversation:
         reports_to_parent: bool = False,
         ask: PodAsk | None = None,
         call: CallMark | None = None,
+        started_on: str | None = None,
     ) -> Conversation:
         """A new conversation in the pod.
 
@@ -104,7 +105,8 @@ class StartConversation:
         no request a client sends reaches it. Neither does the typed state
         after it: ``origin`` (a person's chat, or a project, when no opener
         says otherwise), a sub-agent's link to its parent, the ask another pod
-        opened it with, the call it belongs to.
+        opened it with, the call it belongs to. ``started_on`` is the platform
+        (or ``web_widget``) a surface opened it on, for the started count.
         """
         organization_id = await pod_organization_id(self.uow, pod_id)
         # A parent is the caller's own conversation in this pod, or it does not
@@ -171,7 +173,9 @@ class StartConversation:
             call=call,
         )
         await self._apply_inherited_cwd(conversation, parent=parent)
-        return await self.conversations.create_conversation(conversation)
+        return await self.conversations.create_conversation(
+            conversation, started_on=started_on
+        )
 
     async def _apply_inherited_cwd(
         self,

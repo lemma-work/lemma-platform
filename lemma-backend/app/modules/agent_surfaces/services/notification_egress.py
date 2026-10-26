@@ -25,6 +25,12 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
+from app.modules.agent_surfaces.domain.conversation_surface import (
+    ConversationSurface,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface_repository import (
+    ConversationSurfaces,
+)
 from app.modules.agent_surfaces.domain.ports import (
     ColdEmailThread,
     SurfaceNotificationEgressPort,
@@ -292,17 +298,19 @@ class NotificationEgress:
             user_id=outbound.recipient_user_id,
             channel_id=channel_id,
             title=outbound.title,
-            metadata={
-                "channel_message_id": str(outbound.id),
-                "surface_id": str(surface.id),
-                "surface_platform": surface.surface_type.value,
-                "external_user_id": channel.external_user_id,
-                "conversation_kind": (
-                    "EMAIL" if surface.surface_type.is_email else "DM"
-                ),
-            },
+            metadata={"channel_message_id": str(outbound.id)},
             require_execute_grant=False,
             for_notification=True,
+            started_on=surface.surface_type.value,
+        )
+        await ConversationSurfaces(self.uow).record_place(
+            conversation.id,
+            ConversationSurface(
+                surface_id=surface.id,
+                surface_platform=surface.surface_type.value,
+                external_user_id=channel.external_user_id,
+                conversation_kind="EMAIL" if surface.surface_type.is_email else "DM",
+            ),
         )
         return conversation.id
 

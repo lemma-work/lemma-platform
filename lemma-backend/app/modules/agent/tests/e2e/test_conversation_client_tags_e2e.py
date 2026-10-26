@@ -5,9 +5,8 @@ sub-agent (and so which tools its runs get), a workflow's step (and so who
 waits on it), the directory its agent works in -- were metadata keys a client
 could PATCH. They are columns now, which no request reaches. A client sending
 them keeps them as tags, and they change nothing about how the conversation
-behaves; the keys the server
-still reads out of metadata (a chat surface's binding) are the server's to
-keep, whatever a client sends or leaves out.
+behaves; nor do the keys a chat surface's binding was stored under, which is
+agent_surfaces' own record now.
 """
 
 from __future__ import annotations
@@ -24,6 +23,8 @@ from app.modules.agent.domain.value_objects import ConversationOrigin
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
 from app.modules.agent.domain.toolsets import is_sub_agent_run
+from app.modules.agent_surfaces.contracts.conversations import conversation_surface
+from app.modules.test_support.conversation_surfaces_double import record_place
 
 pytestmark = [pytest.mark.e2e]
 
@@ -91,11 +92,12 @@ async def test_a_client_cannot_open_a_conversation_as_one_either(
 
 
 @pytest.mark.asyncio
-async def test_a_surface_binding_is_the_servers_to_keep(
+async def test_a_surface_binding_is_not_a_clients_to_write(
     authenticated_client, fixed_test_org
 ):
-    """Where a run's answer is posted is read off these keys: a client that
-    could rewrite or drop them could aim the agent's answer elsewhere."""
+    """Where a run's answer is posted is agent_surfaces' own record: a client
+    sending the keys it was once stored under only tags the conversation, and
+    is shown the record over its tag."""
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
     created = await authenticated_client.post(
         f"/pods/{pod_id}/conversations",
@@ -103,21 +105,19 @@ async def test_a_surface_binding_is_the_servers_to_keep(
     )
     assert created.status_code == 201, created.text
     conversation_id = created.json()["id"]
-    assert "surface_platform" not in (await _stored(conversation_id)).metadata
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await Conversations(uow).set_conversation_metadata_key(
-            UUID(conversation_id), "surface_platform", "TELEGRAM"
-        )
+        assert await conversation_surface(uow, UUID(conversation_id)) is None
+        await record_place(uow, UUID(conversation_id), {"surface_platform": "TELEGRAM"})
         await uow.commit()
 
     patched = await authenticated_client.patch(
         f"/pods/{pod_id}/conversations/{conversation_id}",
         json={"metadata": {"surface_platform": "SLACK", "pinned": True}},
     )
-    assert patched.status_code == 200, patched.text
-    dropped = await authenticated_client.patch(
-        f"/pods/{pod_id}/conversations/{conversation_id}", json={"metadata": {}}
-    )
-    assert dropped.status_code == 200, dropped.text
 
-    assert (await _stored(conversation_id)).metadata == {"surface_platform": "TELEGRAM"}
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["metadata"]["surface_platform"] == "TELEGRAM"
+    assert patched.json()["metadata"]["pinned"] is True
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        place = await conversation_surface(uow, UUID(conversation_id))
+    assert place is not None and place.surface_platform == "TELEGRAM"

@@ -11,7 +11,6 @@ from uuid import UUID
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.conversation_titles import normalize_conversation_title
-from app.modules.agent.domain.conversations import with_client_tags
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.domain.ports import AgentRepository
@@ -86,7 +85,7 @@ class UpdateConversation:
         if not isinstance(agent_runtime, UnsetType):
             conversation.agent_runtime = agent_runtime
         if not isinstance(metadata, UnsetType):
-            conversation.metadata = with_client_tags(conversation.metadata, metadata)
+            conversation.metadata = dict(metadata or {})
         if not isinstance(is_archived, UnsetType):
             conversation.is_archived = is_archived
 

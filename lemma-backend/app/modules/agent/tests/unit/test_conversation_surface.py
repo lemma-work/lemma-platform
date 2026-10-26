@@ -14,25 +14,26 @@ _O = ConversationOrigin
 
 
 @pytest.mark.parametrize(
-    "origin, metadata, surface",
+    "origin, started_on, metadata, surface",
     [
-        (_O.CHAT, None, "app"),
-        (_O.CHAT, {}, "app"),
-        (_O.SUBAGENT, {}, "app"),
-        (_O.CONTACT, {"web_widget_id": str(uuid4())}, "web_widget"),
-        (_O.SURFACE, {"surface_platform": "SLACK"}, "SLACK"),
-        (_O.SURFACE, {}, "other"),
-        (_O.CONTACT, {"surface_platform": "WHATSAPP"}, "WHATSAPP"),
-        (_O.NOTIFICATION, {"surface_platform": "SLACK"}, "notification"),
-        (_O.WORKFLOW_STEP, {}, "workflow"),
-        (_O.SCHEDULE, {}, "SCHEDULE"),
-        (_O.CHANNEL, {}, "lemma_channel"),
+        (_O.CHAT, None, None, "app"),
+        (_O.CHAT, None, {}, "app"),
+        (_O.SUBAGENT, None, {}, "app"),
+        (_O.CONTACT, "web_widget", {}, "web_widget"),
+        (_O.SURFACE, "SLACK", {}, "SLACK"),
+        (_O.SURFACE, None, {}, "other"),
+        (_O.CONTACT, "WHATSAPP", {}, "WHATSAPP"),
+        (_O.NOTIFICATION, "SLACK", {}, "notification"),
+        (_O.WORKFLOW_STEP, None, {}, "workflow"),
+        (_O.SCHEDULE, None, {}, "SCHEDULE"),
+        (_O.CHANNEL, None, {}, "lemma_channel"),
         # A tag a client wrote counts for nothing.
-        (_O.CHAT, {"source": "notification", "workflow_run_id": "x"}, "app"),
+        (_O.CHAT, None, {"source": "notification", "surface_platform": "x"}, "app"),
+        (_O.SURFACE, None, {"surface_platform": "SLACK"}, "other"),
     ],
 )
-def test_surface_of(origin, metadata, surface) -> None:
+def test_surface_of(origin, started_on, metadata, surface) -> None:
     conversation = Conversation(
         user_id=uuid4(), pod_id=uuid4(), origin=origin, metadata=metadata
     )
-    assert surface_of(conversation) == surface
+    assert surface_of(conversation, started_on) == surface

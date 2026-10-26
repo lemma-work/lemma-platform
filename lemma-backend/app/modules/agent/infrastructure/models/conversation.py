@@ -209,6 +209,7 @@ class ConversationModel(UUIDAuditBase):
         ConversationOrigin, length=32, default=ConversationOrigin.CHAT
     )
     workflow_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    schedule_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     parent_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
     spawn_key: Mapped[str | None] = text_column()
     reports_to_parent: Mapped[bool] = flag_column()

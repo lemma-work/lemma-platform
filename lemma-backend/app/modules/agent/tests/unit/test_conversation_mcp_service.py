@@ -44,11 +44,6 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
         user_id=user_id,
         pod_id=pod_id,
         title="Telegram chat",
-        metadata={
-            "surface_platform": "TELEGRAM",
-            "external_channel_id": "12345",
-            "external_thread_id": "12345",
-        },
     )
     ctx = ToolContext(
         user_id=user_id,
@@ -64,8 +59,8 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
         del self, conversation_id, agent_run_id
         return agent, conversation, ctx, AgentGrantSummary()
 
-    async def fake_build_tools(self, *, conversation):
-        del self, conversation
+    async def fake_build_tools(self, **place):
+        del self, place
         return [tool(telegram_send_file, ToolGroup.SURFACE)]
 
     async def fake_callable_toolsets(self, *, agent, allow_subagents=True, grants=None):

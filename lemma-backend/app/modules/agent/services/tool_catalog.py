@@ -138,7 +138,7 @@ async def _assemble(
                 grants=grants,
             )
         )
-    specs.extend(_outsider_specs(conversation, audience, uow_factory))
+    specs.extend(_outsider_specs(ctx, audience, uow_factory))
     specs.extend(_marked_specs(agent, conversation, surface, uow_factory))
     specs = _seen_and_placed(specs, ctx, surface, audience)
     return [spec for spec in specs if _offered(spec, audience)]
@@ -171,7 +171,14 @@ async def _members_specs(
         # whichever platform its conversation was last heard on.
         from app.modules.agent_surfaces.contracts.egress import build_surface_tools
 
-        specs.extend(await build_surface_tools(uow_factory, conversation))
+        specs.extend(
+            await build_surface_tools(
+                uow_factory,
+                platform=ctx.surface_platform,
+                surface_id=ctx.surface_id,
+                conversation_kind=ctx.surface_conversation_kind,
+            )
+        )
     return specs
 
 
@@ -234,7 +241,7 @@ def _offered(spec: ToolSpec, audience: Audience) -> bool:
 
 
 def _outsider_specs(
-    conversation: Conversation,
+    ctx: ToolContext,
     audience: Audience,
     uow_factory: UnitOfWorkFactory | None,
 ) -> list[ToolSpec]:
@@ -243,11 +250,10 @@ def _outsider_specs(
     on a web visitor's page."""
     if uow_factory is None:
         return []
-    metadata = conversation.metadata or {}
     specs: list[ToolSpec] = []
-    if audience.is_contact and metadata.get("conversation_kind") != "CHANNEL":
+    if audience.is_contact and ctx.place_kind != "CHANNEL":
         specs.extend(contact_specs(uow_factory=uow_factory))
-    if audience.answers_outsiders and metadata.get("web_widget_id"):
+    if audience.answers_outsiders and ctx.on_web_widget:
         specs.extend(form_specs(uow_factory=uow_factory))
     return specs
 

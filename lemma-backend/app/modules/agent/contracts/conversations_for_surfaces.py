@@ -37,7 +37,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.authorization.current import reset_current_context, set_current_context
@@ -214,6 +213,7 @@ async def open_surface_conversation(
     contact_id: UUID | None = None,
     channel_id: UUID | None = None,
     for_notification: bool = False,
+    started_on: str | None = None,
 ) -> SurfaceConversation:
     """Start the conversation behind a surface thread.
 
@@ -240,6 +240,7 @@ async def open_surface_conversation(
         contact_id=contact_id,
         channel_id=channel_id,
         origin=surface_origin(contact_id=contact_id, for_notification=for_notification),
+        started_on=started_on,
     )
     return _conversation(conversation)
 
@@ -507,49 +508,6 @@ async def surface_agent_identity(
     )
 
 
-async def conversation_metadata_value(
-    uow: SqlAlchemyUnitOfWork, conversation_id: UUID, key: str
-) -> str | None:
-    """One string this conversation's metadata is carrying, if any.
-
-    The read half of the pair `agent/contracts/conversations.py` publishes the
-    other side of. Generic rather than named for what a surface stores there,
-    because the row is agent's and the meaning of the key is the caller's:
-    `agent_surfaces` remembers which paused call somebody tapped "Other" on,
-    the agent host keeps its session memory, and the todo tool its list.
-
-    ``None`` for anything that is not a string, so a caller comparing an id
-    cannot be fooled by a value of another shape written under the same key.
-    """
-    stored = await Conversations(uow).get_conversation_metadata_key(
-        conversation_id, key
-    )
-    return stored if isinstance(stored, str) else None
-
-
-async def set_conversation_metadata_value(
-    uow: SqlAlchemyUnitOfWork,
-    conversation_id: UUID,
-    key: str,
-    value: str | BaseModel | None,
-) -> None:
-    """Write one metadata key, leaving every sibling key alone.
-
-    Not `merge_conversation_metadata`: that one reads the column, edits it and
-    writes it back, so a concurrent writer touching another key loses. This
-    goes through `jsonb_set`, which is what a flag written from an inbound
-    webhook while a run is stamping its own metadata needs.
-
-    A model is stored as its JSON object, so its fields can be queried
-    (`conversation_metadata_records`).
-    """
-    await Conversations(uow).set_conversation_metadata_key(
-        conversation_id,
-        key,
-        value.model_dump(mode="json") if isinstance(value, BaseModel) else value,
-    )
-
-
 __all__ = [
     # The tool an approval card for an answer to someone outside the pod
     # approves; the surface renders that card in its own words.
@@ -570,7 +528,6 @@ __all__ = [
     "append_delivery_notice",
     "append_notification_message",
     "authorize_surface_conversation",
-    "conversation_metadata_value",
     "lemma_message_run_started_at",
     "open_surface_conversation",
     "pending_approval",
@@ -579,7 +536,6 @@ __all__ = [
     "pending_question",
     "resolve_pending_interaction",
     "retry_failed_run",
-    "set_conversation_metadata_value",
     "start_surface_turn",
     "surface_agent_identity",
     "surface_conversation",

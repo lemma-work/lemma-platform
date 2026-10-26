@@ -34,11 +34,7 @@ def _ask() -> PodAsk:
 
 def test_a_plain_chat() -> None:
     origin = run_origin(_conversation())
-    assert (origin.origin, origin.parent_kind, origin.has_reply_target) == (
-        "chat",
-        None,
-        False,
-    )
+    assert (origin.origin, origin.parent_kind) == ("chat", None)
 
 
 def test_a_workflow_step_is_waited_on_by_its_conversation() -> None:
@@ -97,15 +93,17 @@ def test_a_pod_ask_on_the_answering_side() -> None:
     )
 
 
-def test_a_surface_conversation_has_somewhere_to_reply() -> None:
-    origin = run_origin(
-        _conversation(
-            origin=ConversationOrigin.SURFACE,
-            metadata={"surface_platform": "SLACK", "surface_id": str(uuid4())},
-        )
-    )
+@pytest.mark.parametrize(
+    "opened_by",
+    [
+        ConversationOrigin.SURFACE,
+        ConversationOrigin.CONTACT,
+        ConversationOrigin.NOTIFICATION,
+    ],
+)
+def test_what_a_surface_opened_is_a_surface_conversation(opened_by) -> None:
+    origin = run_origin(_conversation(origin=opened_by))
     assert origin.origin == "surface"
-    assert origin.has_reply_target
     assert turn_class_for(origin.origin) is WorkClass.INTERACTIVE
 
 

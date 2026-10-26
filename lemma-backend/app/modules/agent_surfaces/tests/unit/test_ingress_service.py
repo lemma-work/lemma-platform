@@ -359,7 +359,9 @@ async def test_resolved_dm_with_no_route_gets_setup_reply():
     assert "set up or select a surface" in context.reply_message
 
 
-async def test_prepare_webhook_places_the_message_and_opens_a_conversation_there():
+async def test_prepare_webhook_places_the_message_and_opens_a_conversation_there(
+    surface_rows,
+):
     surface = _teams_surface()
     user_id = uuid4()
     conversation = _conversation(surface, user_id)
@@ -407,9 +409,11 @@ async def test_prepare_webhook_places_the_message_and_opens_a_conversation_there
     create_kwargs = agent_conversations.open_surface_conversation.await_args.kwargs
     assert create_kwargs["pod_id"] == surface.pod_id
     assert create_kwargs["agent_name"] == "Surface Agent"
-    assert create_kwargs["metadata"]["surface_id"] == str(surface.id)
-    assert create_kwargs["metadata"]["surface_platform"] == "TEAMS"
-    assert create_kwargs["metadata"]["external_thread_id"] == "17001"
+    assert create_kwargs["started_on"] == "TEAMS"
+    place = surface_rows.surfaces[conversation.id]
+    assert place.surface_id == surface.id
+    assert place.surface_platform == "TEAMS"
+    assert place.external_thread_id == "17001"
     # A channel the bot was mentioned in is a shared place, and the
     # conversation is opened in that place's channel.
     [source] = service.seats.sources.values()
@@ -518,7 +522,7 @@ async def test_prepare_webhook_does_not_continue_another_agents_conversation():
     agent_conversations.open_surface_conversation.assert_awaited_once()
 
 
-async def test_an_allowed_channel_is_answered_by_the_surfaces_own_agent():
+async def test_an_allowed_channel_is_answered_by_the_surfaces_own_agent(surface_rows):
     """A channel says *where*, not *who*.
 
     The stored route below still carries `agent_name` -- a config written when
@@ -557,12 +561,10 @@ async def test_an_allowed_channel_is_answered_by_the_surfaces_own_agent():
 
     assert isinstance(context, SurfaceChatContext)
     assert context.conversation_id == conversation.id
-    metadata = agent_conversations.open_surface_conversation.await_args.kwargs[
-        "metadata"
-    ]
-    assert metadata["routed_agent_id"] == str(surface.agent_id)
-    assert metadata["route_key"] == "channel:C999"
-    assert metadata["conversation_kind"] == "CHANNEL"
+    place = surface_rows.surfaces[conversation.id]
+    assert place.routed_agent_id == surface.agent_id
+    assert place.route_key == "channel:C999"
+    assert place.conversation_kind == "CHANNEL"
 
 
 async def test_prepare_webhook_applies_identity_allow_domain_policy():

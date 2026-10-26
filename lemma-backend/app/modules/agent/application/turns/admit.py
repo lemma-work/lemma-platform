@@ -25,7 +25,10 @@ from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Mes
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.pauses import PERSON_KINDS
 from app.modules.agent.domain.ports import AgentRepository
-from app.modules.agent.domain.private_notes import run_state_for
+from app.modules.agent.domain.private_notes import (
+    requested_private_note,
+    run_state_for,
+)
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.turn_admission import (
     HeldTurn,
@@ -54,6 +57,10 @@ from app.modules.agent.services.runtime_availability import (
     turn_runtime,
 )
 from app.modules.agent.domain.live_events import message_to_payload
+from app.modules.agent.services.surface_context import (
+    SurfaceKindReader,
+    surface_kind,
+)
 from app.modules.agent.services.usage_preflight import assert_turn_allowed
 from app.modules.usage.contracts.execution import UsageService, build_usage_service
 
@@ -108,8 +115,10 @@ class AdmitMessage:
         supersede: SupersedeStalePauses,
         usage_service: UsageService | None,
         runtime_check: TurnRuntimeCheck = ensure_turn_runtime_available,
+        surface_kind: SurfaceKindReader = surface_kind,
     ) -> None:
         self.uow = uow
+        self.surface_kind = surface_kind
         self.conversations = Conversations(uow)
         self.runs = Runs(uow)
         self.messages = Messages(uow)
@@ -155,6 +164,10 @@ class AdmitMessage:
         message_state = admitted_state(
             message_metadata,
             conversation,
+            # Only a message typed in Lemma, or a note, is marked by where it is.
+            surface_kind=await self.surface_kind(self.uow, conversation.id)
+            if typed_in_lemma or requested_private_note(message_metadata)
+            else None,
             typed_in_lemma=typed_in_lemma,
             client_message_id=client_message_id,
         )

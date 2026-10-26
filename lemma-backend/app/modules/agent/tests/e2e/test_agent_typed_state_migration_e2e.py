@@ -6,8 +6,10 @@ values nothing can read (an unknown ``source``, an id that is not one, a
 second copy of a send id) -- then checked after each step against a real
 Postgres: the backfill is SQL over JSON, which only the database answers for.
 
-Down again, the columns are gone and the JSON is as it was; up again, the
-same typed values.
+agent_surfaces' keys land in its own ``surface_conversation_state``. Down
+again, the columns and that table are gone and the JSON is as it was -- with
+what the table learned after the upgrade written back into its keys; up again,
+the same typed values.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ REVISION = "0065_agent_typed_state"
 _CONVERSATION_COLUMNS = (
     "origin",
     "workflow_run_id",
+    "schedule_type",
     "parent_run_id",
     "spawn_key",
     "reports_to_parent",
@@ -96,6 +99,91 @@ class _Ids(dict[str, UUID]):
         return self[name]
 
 
+def _place(ids: _Ids) -> dict[str, object]:
+    """Every key a surface binding and agent_surfaces' records were kept under."""
+    return {
+        "surface_id": str(ids["surface_row"]),
+        "surface_platform": "TELEGRAM",
+        "conversation_kind": "CHANNEL",
+        "external_channel_id": "-100123",
+        "external_thread_id": "-100123",
+        "external_user_id": "42",
+        "external_message_id": "9001",
+        "channel_name": "Support",
+        "route_key": "channel:-100123",
+        "routed_agent_id": str(ids["routed_agent"]),
+        "agent_display_name": "Lem",
+        "surface_event_metadata": {"platform": "TELEGRAM", "chat_id": "-100123"},
+        "surface_held_replies": {
+            "asked_at": "2026-10-20T09:30:00+00:00",
+            "replies": [],
+            "version": "v1",
+        },
+        "surface_free_text_answer_for": "call-7",
+    }
+
+
+_SURFACE_COLUMNS = (
+    "conversation_id",
+    "surface_id",
+    "surface_platform",
+    "conversation_kind",
+    "external_channel_id",
+    "external_thread_id",
+    "external_user_id",
+    "external_message_id",
+    "channel_name",
+    "route_key",
+    "routed_agent_id",
+    "agent_display_name",
+    "surface_event_metadata",
+    "web_widget_id",
+    "web_session_id",
+    "held_replies",
+    "free_text_answer_for",
+)
+
+
+def _surfaces(plain_url: str) -> dict[UUID, dict[str, object]]:
+    with psycopg.connect(plain_url) as connection:
+        rows = connection.execute(
+            f"SELECT {', '.join(_SURFACE_COLUMNS)} FROM surface_conversation_state"
+        ).fetchall()
+    return {
+        row[0]: {
+            name: value
+            for name, value in zip(_SURFACE_COLUMNS[1:], row[1:], strict=True)
+            if value is not None
+        }
+        for row in rows
+    }
+
+
+def _assert_surfaces(rows: dict[UUID, dict[str, object]], ids: _Ids) -> None:
+    place = _place(ids)
+    assert rows == {
+        ids["surface"]: {
+            **{
+                key: value
+                for key, value in place.items()
+                if not key.startswith("surface_") or key == "surface_platform"
+            },
+            "surface_id": ids["surface_row"],
+            "routed_agent_id": ids["routed_agent"],
+            "surface_event_metadata": place["surface_event_metadata"],
+            "held_replies": place["surface_held_replies"],
+            "free_text_answer_for": "call-7",
+        },
+        ids["widget"]: {
+            "web_widget_id": ids["widget_row"],
+            "web_session_id": ids["widget_session"],
+        },
+        ids["notification"]: {"surface_platform": "SLACK"},
+        # What could be read of it; the rest is counted.
+        ids["surface_junk"]: {"surface_platform": "TELEGRAM"},
+    }
+
+
 def _seed(plain_url: str) -> _Ids:
     ids = _Ids()
     ask = {
@@ -149,7 +237,15 @@ def _seed(plain_url: str) -> _Ids:
             },
             {"parent": "coordinator", "later": True},
         ),
-        ("schedule", {"source": "SCHEDULE", "started_by": "SCHEDULE"}, {}),
+        (
+            "schedule",
+            {
+                "source": "SCHEDULE",
+                "started_by": "SCHEDULE",
+                "schedule_type": "DATASTORE",
+            },
+            {},
+        ),
         (
             "notification",
             {"source": "notification", "surface_platform": "SLACK"},
@@ -157,19 +253,32 @@ def _seed(plain_url: str) -> _Ids:
         ),
         (
             "widget",
-            {"source": "web_widget", "web_widget_id": str(ids["widget_row"])},
+            {
+                "source": "web_widget",
+                "web_widget_id": str(ids["widget_row"]),
+                "web_session_id": str(ids["widget_session"]),
+            },
             {},
         ),
+        ("surface", {"source": "agent_surfaces", **_place(ids)}, {}),
         (
-            "surface",
-            {"source": "agent_surfaces", "surface_platform": "TELEGRAM"},
+            "surface_junk",
+            {
+                "surface_id": "not-a-uuid",
+                "surface_platform": "TELEGRAM",
+                "route_key": 7,
+            },
             {},
         ),
         ("channel", {"source": "lemma_channel"}, {}),
         ("project", None, {"type": "PROJECT"}),
         ("chat", {"lemma_attached_file": "/notes.md"}, {}),
         ("mystery", {"source": "mystery"}, {}),
-        ("bad_workflow", {"workflow_run_id": "not-a-uuid"}, {}),
+        (
+            "bad_workflow",
+            {"workflow_run_id": "not-a-uuid", "schedule_type": "MONTHLY"},
+            {},
+        ),
     ]
     with psycopg.connect(plain_url) as connection:
         run = connection.execute
@@ -466,6 +575,8 @@ def _assert_conversations(rows: dict[UUID, dict], ids: _Ids) -> None:
         # An id that is not one says nothing about a workflow.
         "bad_workflow": "CHAT",
     }
+    assert rows[ids["schedule"]]["schedule_type"] == "DATASTORE"
+    assert rows[ids["bad_workflow"]]["schedule_type"] is None
     workflow = rows[ids["workflow"]]
     assert workflow["workflow_run_id"] == ids["workflow_run"]
     assert workflow["cwd"] == "/workspace/repos/acme/web"
@@ -607,6 +718,12 @@ def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
         _assert_conversations(conversations, ids)
         _assert_runs(runs, ids)
         _assert_messages(messages, ids)
+        surfaces = _surfaces(plain_url)
+        _assert_surfaces(surfaces, ids)
+        assert "backfilled 4 surface_conversation_state rows" in log
+        assert "1 agent_conversations rows hold a 'surface_id'" in log
+        assert "1 agent_conversations rows hold a 'route_key'" in log
+        assert "1 agent_conversations rows hold a 'schedule_type'" in log
         # What could not be read is counted, per table and key.
         assert "1 agent_conversations rows hold a 'source'" in log
         assert "1 agent_conversations rows hold a 'workflow_run_id'" in log
@@ -616,13 +733,32 @@ def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
         # Expand only: the JSON is untouched.
         assert _metadata(plain_url) == metadata_before
 
+        # Learned after the upgrade: only agent_surfaces' table hears of it.
+        with psycopg.connect(plain_url) as connection:
+            connection.execute(
+                "UPDATE surface_conversation_state SET external_thread_id = '777', "
+                "free_text_answer_for = NULL WHERE conversation_id = %s",
+                (ids["surface"],),
+            )
         _migrate(database_url, "downgrade", BEFORE)
         assert not set(_CONVERSATION_COLUMNS) & _columns(
             plain_url, "agent_conversations"
         )
         assert not set(_RUN_COLUMNS) & _columns(plain_url, "agent_runs")
         assert not set(_MESSAGE_COLUMNS) & _columns(plain_url, "agent_messages")
-        assert _metadata(plain_url) == metadata_before
+        assert not _columns(plain_url, "surface_conversation_state")
+        restored = _metadata(plain_url)
+        surfaced = restored["agent_conversations"][ids["surface"]]
+        assert surfaced["external_thread_id"] == "777"
+        # A record cleared after the upgrade is not brought back by the
+        # downgrade; the key the old code reads still holds what it wrote.
+        assert surfaced["surface_free_text_answer_for"] == "call-7"
+        surfaced["external_thread_id"] = "-100123"
+        assert restored == metadata_before
 
         _migrate(database_url, "upgrade", REVISION)
         assert _typed(plain_url) == (conversations, runs, messages)
+        again = _surfaces(plain_url)
+        assert again[ids["surface"]]["external_thread_id"] == "777"
+        again[ids["surface"]]["external_thread_id"] = "-100123"
+        assert again == surfaces

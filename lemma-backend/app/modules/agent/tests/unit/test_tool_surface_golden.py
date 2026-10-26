@@ -168,14 +168,8 @@ def _scenarios() -> dict[str, dict[str, Any]]:
     named = _named(toolsets=_NAMED_TOOLSETS)
     chat = _conversation()
     task = _conversation(type=ConversationType.TASK)
-    slack_task = _conversation(
-        type=ConversationType.TASK,
-        metadata={"surface_platform": "SLACK", "conversation_kind": "CHANNEL"},
-    )
-    contact = _conversation(
-        contact_id=CONTACT,
-        metadata={"conversation_kind": "DM", "web_widget_id": "widget"},
-    )
+    slack_task = _conversation(type=ConversationType.TASK)
+    contact = _conversation(contact_id=CONTACT)
     call = _conversation(call=CallMark(call_id=CONVERSATION, role=CallRole.COORDINATOR))
     child = _conversation(origin=ConversationOrigin.SUBAGENT)
     host = HostWorkspace(sandbox_id=SANDBOX, root="/Users/someone/project")
@@ -228,7 +222,7 @@ def _scenarios() -> dict[str, dict[str, Any]]:
         "contact_on_a_web_page": {
             "agent": pod_default,
             "conversation": contact,
-            "ctx": _ctx(pod_default, contact),
+            "ctx": _ctx(pod_default, contact, place_kind="DM", on_web_widget=True),
         },
         "call_coordinator": {
             "agent": pod_default,

@@ -178,9 +178,10 @@ async def test_a_contact_is_offered_their_own_rows_only_where_they_alone_read_it
     """In a group, everybody in it would read what the agent quoted back."""
     deps = _stranger_deps()
 
+    deps.place_kind = conversation_kind
     specs = await specs_for(
         agent=None,
-        conversation=_strangers_conversation(deps, conversation_kind=conversation_kind),
+        conversation=_strangers_conversation(deps),
         ctx=deps,
         surface=ToolSurface.IN_PROCESS,
         uow_factory=lambda: SimpleNamespace(),

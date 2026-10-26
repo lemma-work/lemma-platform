@@ -24,6 +24,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.test_support.conversation_surfaces_double import SurfaceRows
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     ResumeOutcome,
     maybe_resume_pending_interaction,
@@ -74,17 +75,25 @@ def _pending_interaction(spec: dict):
     )
 
 
-def _service(monkeypatch, pending: dict, *, free_text_wanted_for: str | None = None):
+def _service(
+    monkeypatch,
+    pending: dict,
+    *,
+    free_text_wanted_for: str | None = None,
+    rows: SurfaceRows | None = None,
+):
     """A conversation waiting on `pending`, on a surface that renders buttons."""
     conversation_id = uuid4()
     operations = SimpleNamespace(
         pending_interaction=AsyncMock(return_value=_pending_interaction(pending)),
-        conversation_metadata_value=AsyncMock(return_value=free_text_wanted_for),
-        set_conversation_metadata_value=AsyncMock(),
         resolve_pending_interaction=AsyncMock(return_value=True),
     )
     for name, double in vars(operations).items():
         monkeypatch.setattr(f"{_OPERATIONS}.{name}", double)
+    if free_text_wanted_for is not None:
+        assert rows is not None
+        # The "Other" somebody tapped, on the surface's row for the conversation.
+        rows.free_text[conversation_id] = free_text_wanted_for
     return operations, conversation_id
 
 
@@ -135,13 +144,18 @@ async def test_typing_past_an_approval_is_a_new_message(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_answer_typed_after_tapping_other_still_answers(monkeypatch) -> None:
+async def test_an_answer_typed_after_tapping_other_still_answers(
+    monkeypatch, surface_rows
+) -> None:
     """The affordance this must not break.
 
     "Other" means "I will type it", so the next message *is* the answer.
     """
     service, conversation_id = _service(
-        monkeypatch, A_QUESTION, free_text_wanted_for="call-the-question"
+        monkeypatch,
+        A_QUESTION,
+        free_text_wanted_for="call-the-question",
+        rows=surface_rows,
     )
 
     consumed = await maybe_resume_pending_interaction(
@@ -155,7 +169,7 @@ async def test_an_answer_typed_after_tapping_other_still_answers(monkeypatch) ->
 
 @pytest.mark.asyncio
 async def test_other_tapped_on_a_different_question_is_not_spent_here(
-    monkeypatch,
+    monkeypatch, surface_rows
 ) -> None:
     """The intent belongs to one call, not to the conversation.
 
@@ -163,7 +177,10 @@ async def test_other_tapped_on_a_different_question_is_not_spent_here(
     message an answer — the same bug with more steps.
     """
     service, conversation_id = _service(
-        monkeypatch, A_QUESTION, free_text_wanted_for="call-some-other-question"
+        monkeypatch,
+        A_QUESTION,
+        free_text_wanted_for="call-some-other-question",
+        rows=surface_rows,
     )
 
     consumed = await maybe_resume_pending_interaction(
@@ -208,7 +225,9 @@ async def test_typing_a_decision_still_answers_an_approval(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_card_that_arrived_as_text_is_answered_by_typing(monkeypatch) -> None:
+async def test_a_card_that_arrived_as_text_is_answered_by_typing(
+    monkeypatch, surface_rows
+) -> None:
     """Nothing to tap, so a typed reply has to be read as the answer.
 
     This is the text fallback, and it is the reason the resume path exists.
@@ -220,7 +239,10 @@ async def test_a_card_that_arrived_as_text_is_answered_by_typing(monkeypatch) ->
     rule instead, and prove nothing about this one.
     """
     service, conversation_id = _service(
-        monkeypatch, A_QUESTION, free_text_wanted_for="call-the-question"
+        monkeypatch,
+        A_QUESTION,
+        free_text_wanted_for="call-the-question",
+        rows=surface_rows,
     )
 
     consumed = await maybe_resume_pending_interaction(

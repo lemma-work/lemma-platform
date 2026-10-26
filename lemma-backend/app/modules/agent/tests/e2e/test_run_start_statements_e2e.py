@@ -30,8 +30,10 @@ pytestmark = [pytest.mark.e2e]
 
 #: Statements one run start issues on a fresh pod with the POD toolset. It was
 #: 16 when four places assembled a run's context; the session reads the agent's
-#: grants once, for its toolsets and its brief, where they were read twice.
-RUN_START_STATEMENTS = 15
+#: grants once, for its toolsets and its brief, where they were read twice; and
+#: one more reads where agent_surfaces heard the conversation, which was keys of
+#: the conversation's row before it was agent_surfaces' own table.
+RUN_START_STATEMENTS = 16
 
 
 @pytest.fixture

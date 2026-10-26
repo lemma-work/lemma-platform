@@ -1,14 +1,17 @@
 """The ``metadata`` a client is shown: the stored JSON, plus the typed state
 under the keys it used to be read from.
 
-The web app, the SDKs and the CLI read a conversation's origin and a message's
-queue state, answer flags and send id off ``metadata`` -- they were keys there
-until they became columns (``domain/conversations``). The response keeps
-saying them in those words, built from the columns, until the clients read
-typed fields; the server itself never reads them back from here.
+The web app, the SDKs and the CLI read a conversation's origin, the place a
+chat surface heard it, and a message's queue state, answer flags and send id
+off ``metadata`` -- they were keys there until they became columns
+(``domain/conversations``) or agent_surfaces' own record. The response keeps
+saying them in those words, built from the columns and that record, until the
+clients read typed fields; the server itself never reads them back from here.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.value_objects import (
@@ -17,6 +20,11 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     QueueState,
 )
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.contracts.conversations import (
+        ConversationSurface,
+    )
 
 #: The ``source`` a conversation of each origin was opened with.
 _LEGACY_SOURCES: dict[ConversationOrigin, str] = {
@@ -29,22 +37,29 @@ _LEGACY_SOURCES: dict[ConversationOrigin, str] = {
 }
 
 
-def _legacy_source(conversation: Conversation) -> str | None:
+def _legacy_source(
+    conversation: Conversation, surface: ConversationSurface | None
+) -> str | None:
     if conversation.origin is ConversationOrigin.CONTACT:
-        stored = conversation.metadata or {}
-        if stored.get("web_widget_id"):
+        if surface is not None and surface.is_web_widget:
             return "web_widget"
-        if stored.get("surface_platform"):
+        if surface is not None and surface.surface_platform:
             return "agent_surfaces"
         return "lemma_channel" if conversation.channel_id else None
     return _LEGACY_SOURCES.get(conversation.origin)
 
 
-def conversation_wire_metadata(conversation: Conversation) -> JsonObject | None:
-    """``conversation``'s metadata as a client reads it."""
-    wire: JsonObject = dict(conversation.metadata or {})
+def conversation_wire_metadata(
+    conversation: Conversation, surface: ConversationSurface | None = None
+) -> JsonObject | None:
+    """``conversation``'s metadata as a client reads it; ``surface`` is where
+    agent_surfaces heard it."""
+    wire: JsonObject = {
+        **(conversation.metadata or {}),
+        **(surface.wire() if surface is not None else {}),
+    }
     typed: JsonObject = {
-        "source": _legacy_source(conversation),
+        "source": _legacy_source(conversation, surface),
         "workflow_run_id": (
             str(conversation.workflow_run_id) if conversation.workflow_run_id else None
         ),

@@ -62,11 +62,13 @@ class RunIdentity:
         agent_run_id: UUID,
         user_id: UUID,
         usage_source: str,
+        platform: str | None = None,
     ) -> "RunIdentity":
         """The identity of ``agent_run``, a turn of ``conversation``, as it starts.
 
         Its origin is the request's when the turn runs inside one; otherwise --
-        the usual case, a work item -- what the conversation records.
+        the usual case, a work item -- what the conversation records, and the
+        ``platform`` its surface records.
         """
         return cls(
             conversation_id=conversation.id,
@@ -77,7 +79,8 @@ class RunIdentity:
             agent_id=conversation.agent_id,
             started_at=agent_run.started_at,
             usage_source=usage_source,
-            origin=current_origin() or conversation_origin(conversation),
+            origin=current_origin()
+            or conversation_origin(conversation, platform=platform),
         )
 
     @property

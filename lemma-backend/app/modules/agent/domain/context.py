@@ -171,6 +171,12 @@ class ToolContext(BaseModel):
     external_message_id: str | None = None
     agent_display_name: str | None = None
     surface_conversation_kind: str | None = None
+    #: The kind of place its surface records the conversation in, and whether a
+    #: web widget's visitor is in it -- whoever asked this run, where the
+    #: fields above are null for a run asked in Lemma. What a stranger's run is
+    #: offered depends on them (``services/tool_catalog``).
+    place_kind: str | None = None
+    on_web_widget: bool = False
     runtime_profile: dict[str, object] | None = None
     # No provider credentials here: this object reaches every tool, and no tool
     # needs the model provider's key. The harness gets it through its options.

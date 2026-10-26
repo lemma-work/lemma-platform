@@ -239,6 +239,7 @@ class AgentContextBriefBuilder:
         toolsets: Collection[AgentToolset] = (),
         run_trigger: RunTrigger | None = None,
         platform: str | None = None,
+        surface_kind: str | None = None,
         grant_rows: list[tuple[str, UUID, str]] | None = None,
     ) -> ContextBrief:
         # The pod default assistant runs with the user's permissions and sees the
@@ -273,6 +274,7 @@ class AgentContextBriefBuilder:
                     conversation=conversation,
                     pod_id=pod_id,
                     user_id=user_id,
+                    surface_kind=surface_kind,
                 )
             per_run = (
                 run_framing(conversation, run_trigger=run_trigger, platform=platform),

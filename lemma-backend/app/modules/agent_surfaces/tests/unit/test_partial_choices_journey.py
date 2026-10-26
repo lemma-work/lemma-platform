@@ -85,19 +85,9 @@ def callback_tokens():
 
 
 @pytest.fixture
-def conversation_metadata():
-    """Conversation metadata that remembers what was written, as the real one does."""
-    stored: dict[str, object] = {}
-
-    async def write(_uow, _conversation_id, key, value):
-        stored[key] = value
-
-    async def read(_uow, _conversation_id, key):
-        return stored.get(key)
-
-    agent_conversations.set_conversation_metadata_value.side_effect = write
-    agent_conversations.conversation_metadata_value.side_effect = read
-    return stored
+def conversation_metadata(surface_rows):
+    """The surface's row for the conversation, remembering what was written."""
+    return surface_rows
 
 
 def _adapter_over(service, platform: str):

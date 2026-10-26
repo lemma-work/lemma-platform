@@ -143,6 +143,7 @@ async def _brief(
             # only the run can say whether a person is here on this turn.
             run_trigger=run_trigger_of(agent_run),
             platform=platform,
+            surface_kind=ctx.place_kind,
             # Read once by the run's session, for its toolsets and this brief.
             grant_rows=grant_rows,
         )

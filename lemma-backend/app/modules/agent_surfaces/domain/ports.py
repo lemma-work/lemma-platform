@@ -133,10 +133,6 @@ class SurfaceInstallationRepositoryPort(Protocol):
 
     async def get(self, id: UUID) -> AgentSurfaceEntity | None: ...
 
-    async def merge_conversation_metadata(
-        self, conversation_id: UUID, updates: dict
-    ) -> None: ...
-
     async def get_by_pod_and_name(
         self,
         *,
