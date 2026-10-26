@@ -1294,7 +1294,15 @@ async def worker(e2e_settings, sandbox_reachable_backend):
             '"event": "service.started"',
         )
         startup_ok = False
-        for _ in range(200):
+        # The worker reports started only after it has loaded the local
+        # embedding model, and on a cold cache that includes downloading it
+        # from the Hugging Face Hub. The old 20-second budget lost that race on
+        # CI whenever the fetch was slow, and every test in the run failed at
+        # setup. The worker's own preload allows 900s; a few minutes here is
+        # enough for a cold download, and a hung start still fails.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 180
+        while loop.time() < deadline:
             if proc.poll() is not None:
                 log_file.flush()
                 log_file.seek(0)

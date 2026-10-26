@@ -617,10 +617,19 @@ test("turning sandbox use off draws the account as saved, and the server's notic
     /* The source's own PATCH is pinned above, against the recorded API; here
        the page is handed its answer (the SDK sends by XHR under a window). */
     const sent: unknown[] = [];
+    let saved: (typeof ACCOUNTS)[number] | undefined;
     t.mock.method(liveSource, "changePodAccount", async (_podId: string, podAccountId: string, patch: { sandboxes?: boolean }) => {
         sent.push([podAccountId, patch]);
-        return readPodAccounts({ items: [{ ...ACCOUNTS_RAW_MINE, visibility: "POD", allow_sandbox_use: patch.sandboxes, notice }] })[0];
+        saved = readPodAccounts({ items: [{ ...ACCOUNTS_RAW_MINE, visibility: "POD", allow_sandbox_use: patch.sandboxes, notice }] })[0];
+        return saved;
     });
+    /* A save invalidates both lists, and the refetch went out over the real
+       source: it settled after this test had ended, against a window the next
+       test had replaced, and failed the run as an unhandled rejection. Read
+       back here, so no request leaves the test. */
+    t.mock.method(liveSource, "listPodAccounts", async () =>
+        ACCOUNTS.map((one) => (one.id === "pa-mine" ? (saved ?? { ...one, visibility: "POD" as const, sandboxes: true }) : one)));
+    t.mock.method(liveSource, "listPodConnectors", async () => CONNECTORS);
     const cache = seeded(["pod.read", "connector.use"]);
     cache.setQueryData(["pod-accounts", "p1"], ACCOUNTS.map((one) => (one.id === "pa-mine" ? { ...one, visibility: "POD" as const, sandboxes: true } : one)));
     const holder = window.document.createElement("div");
