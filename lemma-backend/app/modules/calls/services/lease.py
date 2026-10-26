@@ -29,7 +29,14 @@ logger = get_logger(__name__)
 
 LEASE_TTL_SECONDS = 90
 #: How long a new connection waits for the one it took over to finish.
-HANDOVER_SECONDS = 5.0
+#: Covers everything a replaced session does before it lets go: its guard
+#: noticing (``session._GUARD_SECONDS``), a turn still being routed
+#: (``session._ROUTE_DRAIN_SECONDS``) and its final transcript write
+#: (``hold.FINAL_FLUSH_SECONDS``), with room to spare. A live session therefore
+#: always lets go first. Past it, the holder is taken to be gone -- a process
+#: that died keeps its running key until the lease lapses -- and the call goes
+#: on with the transcript that was written.
+HANDOVER_SECONDS = 25.0
 _POLL_SECONDS = 0.1
 
 

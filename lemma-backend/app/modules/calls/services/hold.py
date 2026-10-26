@@ -229,7 +229,7 @@ async def _wind_down(
     """Every step runs whatever the one before it did: an engine that fails to
     close must not leak the call's watchers or lose its transcript."""
     steps: tuple[tuple[Callable[[], Awaitable[None]], str], ...] = (
-        (lambda: call.flush(final=True), "transcript"),
+        (lambda: _bounded(call.flush(final=True)), "transcript"),
         (engine.close, "engine"),
         (agents.close, "agents"),
     )
@@ -245,8 +245,19 @@ async def _wind_down(
             OSError,
             RuntimeError,
             WebSocketException,
+            TimeoutError,
         ):
             logger.warning("calls.socket.wind_down.failed", step=name, exc_info=True)
+
+
+#: The final transcript write gets this long; a connection taking this call
+#: over waits for it (``lease.HANDOVER_SECONDS``).
+FINAL_FLUSH_SECONDS = 8.0
+
+
+async def _bounded(write: Awaitable[None]) -> None:
+    async with asyncio.timeout(FINAL_FLUSH_SECONDS):
+        await write
 
 
 def _budget(

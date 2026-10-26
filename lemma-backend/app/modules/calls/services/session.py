@@ -63,6 +63,7 @@ from app.modules.calls.services.agents import (
     Working,
 )
 from app.modules.calls.services.gate import Route
+from app.modules.calls.services.transcript import Transcript
 
 logger = get_logger(__name__)
 
@@ -84,12 +85,7 @@ _DISPATCH_SECONDS = 30.0
 #: How much of what was said goes with a turn the agents get, as context.
 _EARLIER_LINES = 12
 _RECENT_LINES = 10
-#: Lines kept back before they are written into the conversation, so a call
-#: that ends abruptly loses at most this many.
-_FLUSH_LINES = 8
 _MAX_CONTROL_CHARS = 8000
-
-TRANSCRIPT_HEADING = "Said on the call -- by the person and the voice, not by you"
 
 type Gate = Callable[[str, Sequence[str]], Awaitable[Route]]
 type Frame = dict[str, JsonValue]
@@ -156,8 +152,8 @@ class CallSession:
         self._floor = Floor(quiet_window_ms=limits.quiet_window_ms)
         self._muted = muted
         self._working: bool | None = None
-        self._lines: list[str] = []
-        self._flushed = 0
+        self._transcript = Transcript(agents.record)
+        self._lines = self._transcript.lines
         #: What was said since the agents last got a turn, numbered in order,
         #: so a turn takes only what came before it.
         self._unsent: list[tuple[int, str]] = []
@@ -266,32 +262,11 @@ class CallSession:
             await self.send({"type": "ended", "reason": self.end_reason})
 
     def transcript(self) -> str:
-        return "\n".join(self._lines)
+        return self._transcript.text()
 
     async def flush(self, *, final: bool = False) -> None:
-        """Write what was said since the last flush into the conversation.
-
-        As the call goes rather than only at its end: a call the process dies
-        under keeps all but the last few lines, and the conversation shows the
-        call while it happens."""
-        chunk = self._take_unflushed(final=final)
-        if chunk:
-            await self._write(chunk)
-
-    def _take_unflushed(self, *, final: bool) -> list[str]:
-        """The lines not yet written, cut now: what a write takes is fixed
-        when it is asked for, not when it gets to run."""
-        pending = self._lines[self._flushed :]
-        if not pending or (not final and len(pending) < _FLUSH_LINES):
-            return []
-        self._flushed = len(self._lines)
-        return pending
-
-    async def _write(self, chunk: list[str]) -> None:
-        try:
-            await self._agents.record(TRANSCRIPT_HEADING + "\n\n" + "\n".join(chunk))
-        except DomainError, SQLAlchemyError, OSError:
-            logger.warning("calls.session.transcript.failed", exc_info=True)
+        """Write what was said since the last flush into the conversation."""
+        await self._transcript.flush(final=final)
 
     # -- the caller ----------------------------------------------------------
 
@@ -405,9 +380,9 @@ class CallSession:
         self._said_count += 1
         self._unsent.append((self._said_count, line))
         del self._unsent[:-_EARLIER_LINES]
-        chunk = self._take_unflushed(final=False)
+        chunk = self._transcript.take(final=False)
         if chunk:
-            self._spawn(self._write(chunk), name="calls.session.flush")
+            self._spawn(self._transcript.write(chunk), name="calls.session.flush")
         return self._said_count
 
     def _finished_turn(self, text: str) -> None:

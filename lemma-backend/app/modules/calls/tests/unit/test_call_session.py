@@ -593,3 +593,30 @@ async def test_the_transcript_is_written_as_the_call_goes_and_the_rest_at_its_en
     assert first.startswith("Said on the call -- by the person and the voice")
     assert "Voice: line 0" in first and "Voice: line 7" in first
     assert "Voice: line 8" in rest and "line 0" not in rest
+
+
+async def test_a_transcript_chunk_that_failed_to_write_is_written_at_the_end() -> None:
+    class FlakyStore(Agents):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed = False
+
+        async def record(self, transcript: str) -> None:
+            if not self.failed:
+                self.failed = True
+                raise ConnectionError("database unavailable")
+            await super().record(transcript)
+
+    caller, voice, agents = Caller(), Voice(), FlakyStore()
+    session = _session(caller, voice, agents, _gate({}))
+    running = asyncio.create_task(session.run())
+    for index in range(9):
+        await voice.out.put(Said(f"line {index}", final=True))
+    await _until(lambda: agents.failed and session.stats.voice_lines == 9)
+    caller.inbox.put_nowait(None)
+    await running
+    await session.flush(final=True)
+    # The failed first chunk, then the rest: nothing said is lost.
+    first, rest = agents.recorded
+    assert "Voice: line 0" in first and "Voice: line 7" in first
+    assert "Voice: line 8" in rest
