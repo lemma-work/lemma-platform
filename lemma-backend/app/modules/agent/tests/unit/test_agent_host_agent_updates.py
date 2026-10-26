@@ -14,14 +14,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import ValidationError
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostEvent,
     AgentHostHarnessSnapshot,
     AgentHostToolRef,
 )
-from app.modules.agent.domain.agent_host_link import HarnessesBody
-from app.modules.agent.domain.agent_host_permissions import permission_request
-from app.modules.agent.domain.agent_host_selections import (
+from app.modules.agent.agent_host.domain.link import HarnessesBody
+from app.modules.agent.agent_host.domain.permissions import permission_request
+from app.modules.agent.agent_host.domain.selections import (
     carry_agent_host_selections,
     validate_agent_host_model,
     validate_agent_host_selections,

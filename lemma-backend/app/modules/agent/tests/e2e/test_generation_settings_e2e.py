@@ -30,7 +30,7 @@ from app.modules.agent.contracts.workflow_control import (
     build_agent_control_adapter,
 )
 from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
+from app.modules.agent.infrastructure.harness.registry import HarnessRegistry
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.application.background.title import (

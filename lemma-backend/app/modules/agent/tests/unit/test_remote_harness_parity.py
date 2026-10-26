@@ -16,11 +16,11 @@ import pytest
 
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
-from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
+from app.modules.agent.agent_host.harness.tool_payload import (
     _MAX_TOOL_STRING_CHARACTERS,
     bounded_tool_value,
 )
-from app.modules.agent.infrastructure.harnesses.remote_payload import _message_text
+from app.modules.agent.agent_host.harness.remote_payload import _message_text
 
 pytestmark = pytest.mark.unit
 

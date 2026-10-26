@@ -29,7 +29,7 @@ from app.modules.agent.events.turn_work import TurnFences, TurnRunner
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.infrastructure.harnesses.registry import build_harness_registry
+from app.modules.agent.infrastructure.harness.registry import build_harness_registry
 from app.modules.agent.tests.e2e.turn_work_support import (
     rows,
     runtime_profile,

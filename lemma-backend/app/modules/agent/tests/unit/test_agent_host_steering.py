@@ -15,7 +15,7 @@ from uuid import uuid7
 
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import QueueState
-from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
+from app.modules.agent.agent_host.harness.steering import (
     SteerSchedule,
     supports_steering,
 )

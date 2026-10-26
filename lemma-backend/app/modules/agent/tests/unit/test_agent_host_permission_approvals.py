@@ -15,7 +15,8 @@ from uuid import uuid4, uuid7
 
 import pytest
 
-from app.modules.agent.domain.agent_host_permissions import (
+from app.modules.agent.agent_host import api as agent_host_api
+from app.modules.agent.agent_host.domain.permissions import (
     AGENT_HOST_PERMISSION_KEY,
     permission_approval_tool_args,
     permission_approval_tool_call_id,
@@ -396,12 +397,9 @@ def _patch_agent_host(
     error: Exception | None = None,
 ) -> None:
     """Stub the Agent Host infrastructure the dispatch imports lazily."""
-    channels = types.ModuleType("app.modules.agent.infrastructure.agent_host.channels")
 
     async def poke_host(host_id) -> None:
         poked.append(host_id)
-
-    channels.poke_host = poke_host
 
     class _Repository:
         def __init__(self, uow) -> None:
@@ -415,11 +413,6 @@ def _patch_agent_host(
             enqueued.setdefault("uow", self.uow)
             return command
 
-    dispatch = types.ModuleType(
-        "app.modules.agent.infrastructure.agent_host.dispatch_repository"
-    )
-    dispatch.AgentHostDispatchRepository = _Repository
-
     class _Runs:
         """A run Lemma never ended for a parked window: it has no mark."""
 
@@ -431,8 +424,10 @@ def _patch_agent_host(
 
     repositories = types.ModuleType("app.modules.agent.infrastructure.db.runs")
     repositories.Runs = _Runs
-    monkeypatch.setitem(sys.modules, channels.__name__, channels)
-    monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
+    monkeypatch.setattr(agent_host_api, "poke_host", poke_host, raising=False)
+    monkeypatch.setattr(
+        agent_host_api, "AgentHostDispatchRepository", _Repository, raising=False
+    )
     monkeypatch.setitem(sys.modules, repositories.__name__, repositories)
 
 

@@ -15,12 +15,12 @@ import pytest
 from sqlalchemy.exc import DBAPIError
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.domain.agent_host import AgentHostRunSpec
-from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+from app.modules.agent.agent_host.domain.host import AgentHostRunSpec
+from app.modules.agent.agent_host.harness.dispatch import (
     _AdmittedRun,
     _commit_admission,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+from app.modules.agent.agent_host.harness.run_config import (
     AgentHostRunConfig,
 )
 

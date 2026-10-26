@@ -183,7 +183,7 @@ async def test_the_choice_is_written_on_the_run_and_read_back(db_session, scenar
     """The record a reclaimed run and an approved tool both read (§2)."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent.infrastructure.models import AgentRunModel
-    from app.modules.agent.infrastructure.run_execution_record import (
+    from app.modules.agent.agent_host.control.run_records import (
         read_run_execution,
         record_run_execution,
     )
@@ -224,7 +224,7 @@ async def test_a_host_sandbox_follows_the_conversations_latest_host_run(
     """
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent.infrastructure.models import AgentRunModel
-    from app.modules.agent.infrastructure.run_execution_record import (
+    from app.modules.agent.agent_host.control.run_records import (
         latest_host_execution,
         record_run_execution,
     )

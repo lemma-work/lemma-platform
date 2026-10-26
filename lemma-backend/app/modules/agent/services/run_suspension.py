@@ -29,7 +29,7 @@ from app.modules.agent.domain.pauses import Pause
 from app.modules.agent.domain.run_state import ParkedSuspension
 from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.api import (
     AgentHostDispatchRepository,
 )
 from app.modules.agent.infrastructure.db.pauses import Pauses

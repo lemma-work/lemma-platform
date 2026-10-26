@@ -33,14 +33,14 @@ from app.core.infrastructure.db.uow_factory import (
     UnitOfWorkFactory,
     create_uow_from_session_maker,
 )
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostEvent,
     AgentHostEventBatch,
     AgentHostEventType,
     AgentHostRunState,
 )
-from app.modules.agent.domain.agent_host_permissions import (
+from app.modules.agent.agent_host.domain.permissions import (
     permission_approval_tool_call_id,
 )
 from app.modules.agent.domain.entities import Agent, Message
@@ -52,14 +52,14 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+from app.modules.agent.agent_host.harness.harness import (
     AgentHostRunConfig,
     RemoteHarness,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness.run_window import (
     DispatchedRun,
 )
 from app.modules.agent.infrastructure.models import ConversationModel

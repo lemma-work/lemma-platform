@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from app.modules.agent.api.controllers.agent_host_legacy_controller import (
+from app.modules.agent.agent_host.controllers.legacy import (
     legacy_poll_answer,
     legacy_refusal,
 )

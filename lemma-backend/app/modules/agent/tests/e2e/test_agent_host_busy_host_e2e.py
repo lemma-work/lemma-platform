@@ -21,7 +21,7 @@ from sqlalchemy import select, update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostCommandState,
     AgentHostRunSpec,
@@ -29,14 +29,14 @@ from app.modules.agent.domain.agent_host import (
     HostHello,
 )
 from app.modules.agent.domain.value_objects import AgentEventType
-from app.modules.agent.infrastructure.agent_host import recovery
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control import recovery
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host.repository import (
+from app.modules.agent.agent_host.control.repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.slot_wait import SlotWait
+from app.modules.agent.agent_host.harness.slot_wait import SlotWait
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,

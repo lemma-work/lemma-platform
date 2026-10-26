@@ -14,7 +14,7 @@ import pytest
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.entities import AgentRun, Conversation
-from app.modules.agent.services.host_native_commands import (
+from app.modules.agent.agent_host.control.native_commands import (
     NativeCommandFacts,
     recorded_native_commands,
     settle_native_commands,

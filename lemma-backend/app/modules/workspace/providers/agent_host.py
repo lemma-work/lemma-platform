@@ -11,7 +11,7 @@ tools above it do not know which fabric they are on.
 operation from what already exists: the host the conversation's most recent
 host run recorded choosing (a run never moves, so an offline host is "This Mac
 is not connected", never another Mac or the VM). See
-``agent.infrastructure.agent_host.host_execution``.
+``agent.agent_host.control.host_execution``.
 
 Lifecycle is small because there is nothing to provision. Selection opens the
 workspace (``open_workspace``, with the host it chose) -- the host picks and

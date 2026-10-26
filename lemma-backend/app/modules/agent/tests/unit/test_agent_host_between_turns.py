@@ -34,7 +34,7 @@ from app.modules.agent.domain.folded_turns import (
     FOLDED_CHAT_OPENS,
 )
 from app.modules.agent.domain.value_objects import ConversationStatus, ConversationType
-from app.modules.agent.infrastructure.harnesses.remote_payload import run_start_payload
+from app.modules.agent.agent_host.harness.remote_payload import run_start_payload
 from app.modules.agent.domain.runtime_history import (
     MAX_FOLDED_MESSAGES,
     MAX_UNATTACHED_MESSAGES,

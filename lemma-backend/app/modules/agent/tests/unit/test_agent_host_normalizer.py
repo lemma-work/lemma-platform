@@ -20,9 +20,12 @@ from uuid import uuid7
 
 import pytest
 
-from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
+from app.modules.agent.agent_host.domain.host import (
+    AgentHostEventType,
+    AgentHostRunState,
+)
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
-from app.modules.agent.infrastructure.harnesses.agent_host.events import (
+from app.modules.agent.agent_host.harness.events import (
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
     is_terminal_event,

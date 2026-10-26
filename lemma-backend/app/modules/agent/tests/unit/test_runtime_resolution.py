@@ -33,7 +33,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileScope,
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig, HarnessKind
-from app.modules.agent.infrastructure.harnesses.remote_payload import mcp_payload
+from app.modules.agent.agent_host.harness.remote_payload import mcp_payload
 from app.modules.agent.services.runtime_resolution import (
     RuntimeRequest,
     in_process_runtime,

@@ -23,12 +23,12 @@ from uuid import UUID, uuid7
 from pydantic import HttpUrl, SecretStr
 
 from app.core.infrastructure.db.transaction_locks import connection_released
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.api import (
     AgentHostHarnessHealth,
     AgentHostStatus,
     effective_agent_host_status,
 )
-from app.modules.agent.domain.agent_host_selections import (
+from app.modules.agent.agent_host.api import (
     validate_agent_host_model,
     validate_agent_host_selections,
 )
@@ -50,7 +50,7 @@ from app.modules.agent.domain.runtime_profiles import (
     refuse_redacted_values,
 )
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
+from app.modules.agent.agent_host.api import AgentHostRepository
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostHarnessModel,
 )

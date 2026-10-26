@@ -18,11 +18,11 @@ from uuid import uuid7
 import pytest
 
 from app.modules.agent.events.turn_work import TURN_MAX_RUNTIME
-from app.modules.agent.infrastructure.agent_host.repository_common import (
+from app.modules.agent.agent_host.control.repository_common import (
     DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
     DEFAULT_RUN_LEASE_SECONDS,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness.run_window import (
     CREDENTIAL_DEADLINE_MESSAGE,
     CREDENTIAL_REFRESH_MARGIN_SECONDS,
     CREDENTIAL_SAFETY_MARGIN_SECONDS,
@@ -34,13 +34,13 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     credential_refresh_due,
     failure_events,
 )
-from app.modules.agent.domain.agent_host import AgentHostEventType
+from app.modules.agent.agent_host.domain.host import AgentHostEventType
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
-from app.modules.agent.infrastructure.harnesses.agent_host.events import (
+from app.modules.agent.agent_host.harness.events import (
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
 )
-from app.modules.agent.infrastructure.harnesses.remote_payload import token_expires_at
+from app.modules.agent.agent_host.harness.remote_payload import token_expires_at
 
 
 # The window the host holds an ACP permission request open for, in Rust
@@ -234,7 +234,7 @@ def _jwt(claims: dict) -> str:
 class TestTokenExpiryIsPublished:
     def test_the_expiry_round_trips_through_the_mcp_payload(self) -> None:
         expires = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             _token_expiry_iso,
         )
 
@@ -243,14 +243,14 @@ class TestTokenExpiryIsPublished:
         assert token_expires_at({"token_expires_at": published}) == expires
 
     def test_a_token_with_no_exp_publishes_nothing(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             _token_expiry_iso,
         )
 
         assert _token_expiry_iso(_jwt({"sub": "someone"})) is None
 
     def test_an_opaque_token_publishes_nothing(self) -> None:
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             _token_expiry_iso,
         )
 

@@ -22,7 +22,7 @@ from sqlalchemy import update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.domain.agent_host_permissions import AGENT_HOST_PERMISSION_KEY
+from app.modules.agent.agent_host.domain.permissions import AGENT_HOST_PERMISSION_KEY
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     ConversationStatus,

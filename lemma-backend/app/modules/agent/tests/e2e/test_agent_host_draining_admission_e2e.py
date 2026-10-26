@@ -16,11 +16,11 @@ import pytest
 from sqlalchemy import update
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import AgentHostRunSpec, AgentHostStatus
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.domain.host import AgentHostRunSpec, AgentHostStatus
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.agent_host.repository_common import (
+from app.modules.agent.agent_host.control.repository_common import (
     AgentHostRunConflict,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel

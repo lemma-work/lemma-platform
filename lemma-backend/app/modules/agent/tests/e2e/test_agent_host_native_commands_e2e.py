@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
+from app.modules.agent.agent_host.mcp import ConversationMCPService
 
 pytestmark = [pytest.mark.e2e]
 

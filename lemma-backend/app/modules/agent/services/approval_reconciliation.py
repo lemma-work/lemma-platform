@@ -126,7 +126,7 @@ async def stage_agent_host_permission(
     """
     # Lazy: the dispatch repository pulls in the Agent Host infrastructure,
     # which imports back through the harnesses.
-    from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+    from app.modules.agent.agent_host.api import (
         AgentHostDispatchRepository,
     )
 
@@ -282,7 +282,7 @@ async def agent_host_permission_tool_return(
 
 async def _wake_host(host_id: UUID) -> None:
     # Lazy for the same reason as the repository above.
-    from app.modules.agent.infrastructure.agent_host.channels import poke_host
+    from app.modules.agent.agent_host.api import poke_host
 
     await poke_host(host_id)
 
@@ -303,7 +303,7 @@ async def _resume_carries_the_approval(
 ) -> bool:
     """Whether the run resuming this decision will carry it to its host."""
     # Lazy for the same reason as the dispatch repository above.
-    from app.modules.agent.infrastructure.harnesses.agent_host.pre_approvals import (
+    from app.modules.agent.agent_host.api import (
         host_pre_approves,
     )
 

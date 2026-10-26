@@ -7,25 +7,25 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AGENT_HOST_SESSION_METADATA_KEY,
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.agent_host.control_updates import (
+from app.modules.agent.agent_host.control.control_updates import (
     apply_control_updates,
 )
-from app.modules.agent.infrastructure.agent_host.event_stream import StreamedEvent
-from app.modules.agent.infrastructure.agent_host.session_memory import (
+from app.modules.agent.agent_host.control.event_stream import StreamedEvent
+from app.modules.agent.agent_host.control.session_memory import (
     remember_provider_session,
     record_pending_instructions,
     resume_session_id,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.events import (
+from app.modules.agent.agent_host.harness.events import (
     AgentHostEventNormalizer,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness_events import (
+from app.modules.agent.agent_host.harness.harness_events import (
     RunEventApplier,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel

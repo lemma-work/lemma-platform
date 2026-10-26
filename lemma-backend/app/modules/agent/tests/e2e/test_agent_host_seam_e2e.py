@@ -25,7 +25,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostCommandRejection,
     AgentHostEvent,
@@ -43,17 +43,17 @@ from app.modules.agent.domain.value_objects import (
     ConversationType,
     MessageKind,
 )
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+from app.modules.agent.agent_host.harness.harness import (
     RemoteHarness,
     AgentHostRunConfig,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+from app.modules.agent.agent_host.harness.dispatch import (
     _resumed_tool_call_id,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness.run_window import (
     DispatchedRun,
 )
 from app.modules.agent.domain.value_objects import AgentRunStatus
@@ -65,7 +65,7 @@ from app.modules.agent.infrastructure.runtime_models import (
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.db.pauses import Pauses
-from app.modules.agent.services.mcp_pausing_calls import (
+from app.modules.agent.agent_host.mcp_pausing_calls import (
     close_pausing_tool_call,
     record_pausing_tool_call,
 )
@@ -380,7 +380,7 @@ class _RecordingArtifactWriter:
         self.mime_types: list[str] = []
 
     async def materialize_event(self, *, payload, **_kwargs):
-        from app.modules.agent.infrastructure.harnesses.agent_host.artifacts import (
+        from app.modules.agent.agent_host.harness.artifacts import (
             AgentHostArtifactMaterialization,
             _inline_images,
         )

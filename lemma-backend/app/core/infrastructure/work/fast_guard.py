@@ -78,7 +78,8 @@ NETWORK_MODULES: tuple[str, ...] = (
     "app.core.infrastructure.cache",
     "app.modules.connectors",
     "app.modules.datastore.infrastructure.session",
-    "app.modules.agent.infrastructure.harnesses",
+    "app.modules.agent.agent_host.harness",
+    "app.modules.agent.infrastructure.harness.registry",
     "app.modules.workspace",
 )
 

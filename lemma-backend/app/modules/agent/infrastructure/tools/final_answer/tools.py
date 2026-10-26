@@ -253,7 +253,7 @@ async def _persist(
     if uow_factory is None or not isinstance(agent_run_id, UUID):
         return
     try:
-        from app.modules.agent.infrastructure.agent_host.final_answer import (
+        from app.modules.agent.agent_host.api import (
             store_final_answer,
         )
 

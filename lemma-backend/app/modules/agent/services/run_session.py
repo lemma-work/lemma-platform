@@ -446,10 +446,10 @@ class RunSession:
         Imported here to keep host selection (and the workspace module's host
         provider) out of every process's startup import graph.
         """
-        from app.modules.agent.services.host_execution_selection import (
+        from app.modules.agent.agent_host.api import (
             choose_host_workspace,
         )
-        from app.modules.agent.services.host_native_commands import (
+        from app.modules.agent.agent_host.api import (
             settle_native_commands,
         )
 
@@ -480,7 +480,7 @@ class RunSession:
         it, or an approved `view_image` would tell the user a model that reads
         images cannot.
         """
-        from app.modules.agent.services.host_execution_selection import (
+        from app.modules.agent.agent_host.api import (
             recorded_host_workspace,
         )
 

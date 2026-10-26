@@ -53,7 +53,7 @@ def pause_for_call(call, *, kind=None, **fields):
     """The pause a stored call opened, as the writer would have opened it."""
     from uuid import uuid4
 
-    from app.modules.agent.domain.agent_host_permissions import (
+    from app.modules.agent.agent_host.domain.permissions import (
         AGENT_HOST_PERMISSION_KEY,
     )
     from app.modules.agent.domain.pause_opening import AgentHostPermissionRequest

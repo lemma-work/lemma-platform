@@ -34,7 +34,7 @@ from app.modules.agent.domain.wait import (
     AgentWaitType,
     WaitSpec,
 )
-from app.modules.agent.infrastructure.agent_host.channels import poke_host
+from app.modules.agent.agent_host.api import poke_host
 from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.run_suspension import suspend_remote_run
 from app.modules.agent.services.wait_timers import arm_wait

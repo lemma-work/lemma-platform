@@ -22,7 +22,7 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     create_uow_from_session_maker,
 )
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostRunState,
 )
@@ -33,8 +33,8 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
     QueueState,
 )
-from app.modules.agent.infrastructure.agent_host import recovery
-from app.modules.agent.infrastructure.harnesses.agent_host.steering import (
+from app.modules.agent.agent_host.control import recovery
+from app.modules.agent.agent_host.harness.steering import (
     forward_queued_messages,
     record_steer_result,
 )

@@ -365,15 +365,15 @@ AGENT_HARNESS_TYPED_PATHS := \
 	app/modules/agent/domain/prompt/deferred_tools.py \
 	app/modules/agent/domain/tools.py \
 	app/modules/agent/domain/value_objects.py \
-	app/modules/agent/infrastructure/harnesses/agent_host/dispatch.py \
-	app/modules/agent/infrastructure/harnesses/agent_host/harness.py \
-	app/modules/agent/infrastructure/harnesses/agent_host/run_config.py \
+	app/modules/agent/agent_host/harness/dispatch.py \
+	app/modules/agent/agent_host/harness/harness.py \
+	app/modules/agent/agent_host/harness/run_config.py \
 	app/modules/agent/infrastructure/harness/lemma/capabilities.py \
 	app/modules/agent/infrastructure/harness/lemma/history.py \
 	app/modules/agent/infrastructure/harness/lemma/harness.py \
 	app/modules/agent/infrastructure/harness/lemma/node_loop.py \
 	app/modules/agent/infrastructure/harness/lemma/toolset_adapter.py \
-	app/modules/agent/infrastructure/harnesses/remote_payload.py \
+	app/modules/agent/agent_host/harness/remote_payload.py \
 	app/modules/agent/services/agent_runner_service.py \
 	app/modules/agent/application/background/title.py \
 	app/modules/agent/application/background/memory_pass.py \

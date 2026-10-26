@@ -16,7 +16,7 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
+from app.modules.agent.infrastructure.harness.registry import HarnessRegistry
 from app.modules.agent.services import run_finalizer as finalizer_module
 from app.modules.agent.services.run_finalizer import (
     finalize_safely,

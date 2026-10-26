@@ -20,7 +20,7 @@ from uuid import UUID, uuid7
 from fakeredis import aioredis as fake_aioredis
 from mcp.types import CallToolResult, TextContent, Tool
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AGENT_HOST_PROTOCOL_VERSION,
     AgentHostCapacity,
     AgentHostCommand,
@@ -32,25 +32,25 @@ from app.modules.agent.domain.agent_host import (
     AgentHostStatus,
     HostHello,
 )
-from app.modules.agent.domain.agent_host_link import (
+from app.modules.agent.agent_host.domain.link import (
     AgentHostHarnessRecord,
     HostExecutionCapability,
 )
-from app.modules.agent.infrastructure.agent_host.repository_common import (
+from app.modules.agent.agent_host.control.repository_common import (
     AgentHostPairingRejected,
     AgentHostRepositoryError,
 )
-from app.modules.agent.infrastructure.agent_host.transfers import (
+from app.modules.agent.agent_host.control.transfers import (
     AgentHostTransferStore,
 )
-from app.modules.agent.services.agent_host_link_mcp import AgentHostLinkMcp
-from app.modules.agent.services.agent_host_link_registry import (
+from app.modules.agent.agent_host.link.mcp_relay import AgentHostLinkMcp
+from app.modules.agent.agent_host.link.registry import (
     AgentHostLinkRegistry,
 )
-from app.modules.agent.services.agent_host_link_session import AgentHostLinkSession
-from app.modules.agent.services.agent_host_link_tool_calls import ToolCallLedger
-from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
-from app.modules.agent.services.agent_host_link_store import (
+from app.modules.agent.agent_host.link.session import AgentHostLinkSession
+from app.modules.agent.agent_host.link.tool_calls import ToolCallLedger
+from app.modules.agent.agent_host.mcp_authorization import RelayingHost
+from app.modules.agent.agent_host.link.store import (
     ControlUpdates,
     LinkedHost,
 )

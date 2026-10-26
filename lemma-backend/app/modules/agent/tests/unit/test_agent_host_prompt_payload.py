@@ -33,14 +33,14 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
 from app.modules.agent.domain.prompt.run_context import render_run_context
-from app.modules.agent.infrastructure.agent_host.session_memory import (
+from app.modules.agent.agent_host.control.session_memory import (
     instructions_digest,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+from app.modules.agent.agent_host.harness.run_config import (
     json_object,
 )
 from app.modules.agent.domain.tools import ToolSpec
-from app.modules.agent.infrastructure.harnesses.remote_payload import (
+from app.modules.agent.agent_host.harness.remote_payload import (
     run_start_payload,
 )
 from app.modules.agent.infrastructure.tools.skills import tools as skills
@@ -330,10 +330,10 @@ class TestCredentials:
         them one level down."""
         from datetime import datetime, timezone
 
-        from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+        from app.modules.agent.agent_host.harness.dispatch import (
             run_spec_from,
         )
-        from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+        from app.modules.agent.agent_host.harness.run_config import (
             AgentHostRunConfig,
         )
 
@@ -404,7 +404,7 @@ class TestCredentials:
         sandbox agent already receives, and without it every `lemma` command
         the skills instruct a host agent to run has no credential at all.
         """
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             host_agent_environment,
         )
 
@@ -432,7 +432,7 @@ class TestCredentials:
 
     async def test_a_new_sandbox_variable_does_not_leave_the_sandbox(self):
         """The allowlist is why this is a decision rather than an accident."""
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             host_agent_environment,
         )
 
@@ -457,7 +457,7 @@ class TestCredentials:
         that keeps that file equal to the manifest.
         """
         from app.core.config import settings
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             host_agent_environment,
         )
         from app.modules.workspace.config import workspace_settings
@@ -682,7 +682,7 @@ class TestReplayedHistory:
         instructions addressed to the reader, arriving inside a user turn on
         every non-resuming turn, reads as something the user typed.
         """
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             _history_tool_result,
         )
         from app.modules.agent.infrastructure.tools.skills.tools import (
@@ -715,7 +715,7 @@ class TestReplayedHistory:
         """
         import json as _json
 
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             _history_tool_result,
         )
         from app.modules.agent.infrastructure.tools.skills.tools import (
@@ -740,7 +740,7 @@ class TestReplayedHistory:
         assert "Body." in replayed
 
     def test_an_ordinary_tool_result_is_untouched(self):
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             _history_tool_result,
         )
 
@@ -763,7 +763,7 @@ class TestTheAgentsOwnCli:
         assert payload["tool_names"] == ["lemma_list_skills", "lemma_load_skill"]
 
     async def _payload(self, cli: str | None, tools: list[ToolSpec] | None = None):
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             mcp_payload,
         )
         from app.modules.workspace.contracts.tooling import WorkspaceSandboxService

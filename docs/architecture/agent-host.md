@@ -647,7 +647,7 @@ Every frame is a JSON text message:
 `id` names a request that expects an answer. `re` on the answer points back at
 it. Pushes carry neither. The frames are defined once in
 `desktop/agent-host/src/link/protocol.rs` and once in
-`lemma-backend/app/modules/agent/domain/agent_host_link.py`, and both are held
+`lemma-backend/app/modules/agent/agent_host/domain/link.py`, and both are held
 to `desktop/agent-host/tests/fixtures/wire_contract.json`.
 
 | Direction | `type` | Body | Answered by |

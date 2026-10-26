@@ -19,15 +19,18 @@ import pytest
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 from app.core.server_limits import WS_MAX_BYTES
-from app.modules.agent.domain.agent_host import AgentHostCommand, AgentHostCommandKind
-from app.modules.agent.domain.agent_host_link import ServerFrameType
-from app.modules.agent.domain.agent_host_transfer import STAGED_FIELD
-from app.modules.agent.services.agent_host_link_outbound import (
+from app.modules.agent.agent_host.domain.host import (
+    AgentHostCommand,
+    AgentHostCommandKind,
+)
+from app.modules.agent.agent_host.domain.link import ServerFrameType
+from app.modules.agent.agent_host.domain.transfer import STAGED_FIELD
+from app.modules.agent.agent_host.link.outbound import (
     IMAGES_LEFT_OUT,
     encoded_size,
     pack_commands,
 )
-from app.modules.agent.services.agent_host_link_wire import (
+from app.modules.agent.agent_host.link.wire import (
     EmptyBody,
     LinkWriter,
     OutboundFrameTooLarge,

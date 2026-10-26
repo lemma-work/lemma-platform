@@ -11,13 +11,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.modules.agent.domain.agent_host_permissions import (
+from app.modules.agent.agent_host.domain.permissions import (
     AgentHostPermissionOption,
     AgentHostPermissionRequest,
 )
 from app.modules.agent.domain.run_state import ParkedSuspension
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
-from app.modules.agent.infrastructure.harnesses.agent_host.parked_window import (
+from app.modules.agent.agent_host.harness.parked_window import (
     ParkedPause,
     ParkedWindow,
     parked_too_long,

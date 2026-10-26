@@ -15,25 +15,25 @@ from uuid import uuid7
 
 import pytest
 
-from app.modules.agent.domain.agent_host import AgentHostCommandKind
-from app.modules.agent.domain.agent_host_link import (
+from app.modules.agent.agent_host.domain.host import AgentHostCommandKind
+from app.modules.agent.agent_host.domain.link import (
     REVOKED_OR_MISSING_REASON,
     LinkCloseCode,
 )
-from app.modules.agent.infrastructure.agent_host.channels import (
+from app.modules.agent.agent_host.control.channels import (
     host_poke_channel,
 )
-from app.modules.agent.infrastructure.agent_host.repository_common import (
+from app.modules.agent.agent_host.control.repository_common import (
     AgentHostNotFound,
     AgentHostProtocolViolation,
     AgentHostSequenceGap,
     AgentHostStaleLease,
     AgentHostTerminalRun,
 )
-from app.modules.agent.services.agent_host_link_registry import (
+from app.modules.agent.agent_host.link.registry import (
     AgentHostLinkRegistry,
 )
-from app.modules.agent.services.conversation_mcp_authorization import RelayingHost
+from app.modules.agent.agent_host.mcp_authorization import RelayingHost
 from app.modules.agent.infrastructure.live import conversation_channel
 from app.modules.agent.tests.unit.agent_host_link_fakes import (
     PAIRING_CODE,

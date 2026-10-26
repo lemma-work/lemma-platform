@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, JsonValue, SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.api.agent_host_schemas import (
+from app.modules.agent.agent_host.controllers.schemas import (
     AgentHostHarnessListResponse,
     AgentHostHarnessResponse,
     AgentHostListResponse,
@@ -33,7 +33,7 @@ from app.modules.agent.api.agent_host_schemas import (
 from app.modules.agent.contracts.conversations_for_surfaces import (
     append_notification_message,
 )
-from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
+from app.modules.agent.agent_host.domain.host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.test_support.e2e.builders import E2EScenario
@@ -574,7 +574,7 @@ async def test_an_image_larger_than_a_link_frame_reaches_the_agent_whole(
     from starlette.websockets import WebSocket
 
     from app.core.server_limits import WS_MAX_BYTES
-    from app.modules.agent.services.conversation_mcp_service import (
+    from app.modules.agent.agent_host.mcp import (
         conversation_mcp_service,
     )
 
@@ -863,7 +863,7 @@ async def test_browser_chat_replays_json_acp_and_retains_results_after_reload(
     if action == "stream":
         # Exercise a valid URL-safe token that CLI parsers can mistake for a flag.
         monkeypatch.setattr(
-            "app.modules.agent.api.controllers.agent_host_controller.generate_pairing_code",
+            "app.modules.agent.agent_host.controllers.hosts.generate_pairing_code",
             lambda: "-" + uuid4().hex,
         )
     minted = await scenario.owner_client.post(

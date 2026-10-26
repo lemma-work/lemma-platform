@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+from app.modules.agent.agent_host.harness.dispatch import (
     CarriedChanged,
     claim_exactly,
 )

@@ -16,7 +16,7 @@ from pydantic_ai import ModelRetry
 
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
+from app.modules.agent.agent_host.mcp import ConversationMCPService
 from app.modules.agent.services import pod_mcp_service as pod_mcp_module
 from app.modules.agent.services.pod_mcp_service import PodMCPService
 from app.modules.agent.services.approval_executor import ApprovalExecutor

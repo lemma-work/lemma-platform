@@ -16,11 +16,11 @@ from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.services import run_session_relay as mcp_module
-from app.modules.agent.services.conversation_mcp_service import (
+from app.modules.agent.agent_host import relayed_session as mcp_module
+from app.modules.agent.agent_host.mcp import (
     ConversationMCPService,
 )
-from app.modules.agent.services.run_session_relay import (
+from app.modules.agent.agent_host.relayed_session import (
     MCP_INPUTS_TTL_SECONDS,
     RunInputsCache,
 )

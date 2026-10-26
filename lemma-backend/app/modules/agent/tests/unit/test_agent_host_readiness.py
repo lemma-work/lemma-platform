@@ -11,12 +11,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AGENT_HOST_OFFLINE_AFTER_SECONDS,
     AgentHostHarnessHealth,
     AgentHostStatus,
 )
-from app.modules.agent.domain.agent_host_readiness import (
+from app.modules.agent.agent_host.domain.readiness import (
     harness_refusal,
     host_refusal,
 )

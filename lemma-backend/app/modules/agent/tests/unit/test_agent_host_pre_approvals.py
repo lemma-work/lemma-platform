@@ -12,8 +12,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.modules.agent.domain.agent_host import AgentHostRunSpec
-from app.modules.agent.domain.agent_host_permissions import (
+from app.modules.agent.agent_host.domain.host import AgentHostRunSpec
+from app.modules.agent.agent_host.domain.permissions import (
     permission_approval_tool_args,
     pre_approved_by,
     pre_approved_events,
@@ -27,7 +27,7 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.tests.unit.repository_fakes import pause_for_call
-from app.modules.agent.infrastructure.harnesses.agent_host.pre_approvals import (
+from app.modules.agent.agent_host.harness.pre_approvals import (
     pre_approvals_for,
     supports_pre_approval,
 )

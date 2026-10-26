@@ -15,7 +15,7 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.core.log.log import get_logger
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.api import (
     AgentHostHarnessHealth,
     AgentHostStatus,
     effective_agent_host_status,
@@ -31,7 +31,7 @@ from app.modules.agent.domain.runtime_profiles import (
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
 )
-from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
+from app.modules.agent.agent_host.api import AgentHostRepository
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostHarnessModel,
     AgentHostModel,

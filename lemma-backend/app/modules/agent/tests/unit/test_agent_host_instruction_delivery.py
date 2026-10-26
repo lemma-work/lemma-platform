@@ -22,13 +22,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     NEW_SESSION_ONLY,
     AgentHostRunCheckpoint,
     AgentHostRunSpec,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host import session_memory as memory
+from app.modules.agent.agent_host.control import session_memory as memory
 
 
 def test_the_digest_moves_when_the_instructions_do() -> None:

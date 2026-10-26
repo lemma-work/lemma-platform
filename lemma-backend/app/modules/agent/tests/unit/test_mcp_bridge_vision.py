@@ -49,7 +49,7 @@ def test_the_stored_run_config_alone_can_never_report_vision():
 @pytest.mark.asyncio
 async def test_the_bridge_resolves_the_runtime_so_capabilities_are_present(monkeypatch):
     """A resolved runtime carries capabilities; the bridge must use that."""
-    from app.modules.agent.services import run_session_relay as bridge
+    from app.modules.agent.agent_host import relayed_session as bridge
 
     resolved = SimpleNamespace(
         runtime_snapshot=lambda: RuntimeSnapshot(
@@ -105,7 +105,7 @@ async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(
     delegate if a VISION_MODEL exists, otherwise refuse images -- which is a
     worse answer but a working one.
     """
-    from app.modules.agent.services import run_session_relay as bridge
+    from app.modules.agent.agent_host import relayed_session as bridge
 
     class _Service:
         def __init__(self, *a, **k):
@@ -138,7 +138,7 @@ async def test_a_failed_resolve_falls_back_instead_of_failing_the_tool_call(
 
 @pytest.mark.asyncio
 async def test_a_run_less_conversation_has_no_runtime_to_resolve(monkeypatch):
-    from app.modules.agent.services import run_session_relay as bridge
+    from app.modules.agent.agent_host import relayed_session as bridge
 
     assert (
         await bridge.resolved_runtime_profile(

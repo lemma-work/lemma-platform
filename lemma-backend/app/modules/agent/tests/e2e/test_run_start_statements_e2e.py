@@ -20,7 +20,7 @@ import pytest
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.infrastructure.harnesses.registry import build_harness_registry
+from app.modules.agent.infrastructure.harness.registry import build_harness_registry
 from app.modules.agent.services.run_session import RunSession
 from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
 from app.modules.agent.tests.e2e.turn_work_support import TurnPod, scalar, turn_pod

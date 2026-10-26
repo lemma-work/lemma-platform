@@ -35,12 +35,12 @@ from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.api.agent_host_schemas import AgentHostListResponse
+from app.modules.agent.agent_host.controllers.schemas import AgentHostListResponse
 from app.modules.agent.domain.entities import AgentRun, Conversation
-from app.modules.agent.infrastructure.agent_host.host_execution import (
+from app.modules.agent.agent_host.control.host_execution import (
     host_execution_host_id,
 )
-from app.modules.agent.services.host_execution_selection import (
+from app.modules.agent.agent_host.control.host_execution_selection import (
     HostExecutionFacts,
     choose_host_workspace,
 )

@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
+from app.modules.agent.agent_host.mcp import ConversationMCPService
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.tools import ToolGroup, tool
 from app.modules.agent.domain.toolsets import AgentGrantSummary
@@ -207,7 +207,7 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
         ConversationMCPService, "_load_agent_context", fake_load_agent_context
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.conversation_mcp_service.record_pausing_tool_call",
+        "app.modules.agent.agent_host.mcp.record_pausing_tool_call",
         fake_record,
     )
     monkeypatch.setattr(
@@ -284,7 +284,7 @@ async def test_an_ordinary_tool_is_not_put_on_the_record_first(monkeypatch):
         ConversationMCPService, "_load_agent_context", fake_load_agent_context
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.conversation_mcp_service.record_pausing_tool_call",
+        "app.modules.agent.agent_host.mcp.record_pausing_tool_call",
         fake_record,
     )
     monkeypatch.setattr(

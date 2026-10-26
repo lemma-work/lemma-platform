@@ -29,7 +29,7 @@ There is no installation owner and no privileged account. A run is routed by
 the **Agent Host pairing**: a host is paired to exactly one user, and only that
 user's runs are ever routed to it. A run executes on the host only when **all**
 of these hold; otherwise it gets the VM sandbox, exactly as before
-(`app/modules/agent/services/host_execution_selection.py`).
+(`app/modules/agent/agent_host/control/host_execution_selection.py`).
 
 1. The deployment is a Desktop local install (`DEPLOYMENT_KIND=desktop`): the
    backend runs beside the hosts it routes to. A hosted deployment never routes

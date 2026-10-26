@@ -23,7 +23,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
 )
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
+from app.modules.agent.infrastructure.harness.registry import HarnessRegistry
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.run_metrics import (
     AgentRunMetrics,

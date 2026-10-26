@@ -47,7 +47,7 @@ from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.final_answer.tools import (
     final_answer_spec,
 )
-from app.modules.agent.infrastructure.agent_host.final_answer import (
+from app.modules.agent.agent_host.control.final_answer import (
     read_final_answer,
 )
 from app.modules.agent.domain.tools import AgentInputRequired

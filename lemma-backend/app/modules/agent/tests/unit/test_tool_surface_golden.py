@@ -51,7 +51,7 @@ from app.modules.agent.infrastructure.harness.lemma.run_options import (
 from app.modules.agent.infrastructure.harness.lemma.toolset_adapter import (
     function_toolset,
 )
-from app.modules.agent.services.conversation_mcp_service import (
+from app.modules.agent.agent_host.mcp import (
     ConversationMCPService,
 )
 from app.modules.agent.services.pod_mcp_service import (

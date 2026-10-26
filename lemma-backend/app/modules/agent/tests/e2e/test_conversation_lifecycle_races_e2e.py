@@ -34,7 +34,7 @@ from app.modules.agent.services.approval_reconciliation import (
     stage_approval_execution,
 )
 from app.modules.test_support.e2e.agent_work import run_approval_work
-from app.modules.agent.services.mcp_pausing_calls import record_pausing_tool_call
+from app.modules.agent.agent_host.mcp_pausing_calls import record_pausing_tool_call
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     record_decision,
     RECORD_DELETE_REFUSALS,

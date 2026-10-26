@@ -16,11 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostRunState,
 )
-from app.modules.agent.domain.agent_host_permissions import (
+from app.modules.agent.agent_host.domain.permissions import (
     permission_approval_events,
     permission_approval_tool_call_id,
 )
@@ -117,7 +117,7 @@ async def test_a_decision_the_host_cannot_be_given_is_not_written_either(
     # The database half of the decision fails, the way a connection dropping
     # mid-transaction does; everything the request runs through stays real.
     monkeypatch.setattr(
-        "app.modules.agent.infrastructure.agent_host.dispatch_repository."
+        "app.modules.agent.agent_host.control.dispatch_repository."
         "AgentHostDispatchRepository.enqueue_permission_decision",
         _unavailable,
     )

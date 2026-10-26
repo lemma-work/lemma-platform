@@ -52,6 +52,7 @@ DEFAULT_BASELINE = ROOT / "controller-types-baseline.json"
 #: from three places at once.
 TYPED_GLOBS = (
     "app/modules/*/api/controllers",
+    "app/modules/agent/agent_host/controllers",
     "app/modules/agent_surfaces/services",
 )
 

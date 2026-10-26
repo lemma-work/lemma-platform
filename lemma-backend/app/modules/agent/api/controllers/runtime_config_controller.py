@@ -25,8 +25,8 @@ from app.modules.agent.api.schemas import (
     UpdateAgentRuntimeProfileRequest,
     UpdateOpenAICompatibleRuntimeProfileRequest,
 )
-from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
-from app.modules.agent.domain.agent_host import effective_agent_host_status
+from app.modules.agent.agent_host.api import AgentHostHarnessResponse
+from app.modules.agent.agent_host.api import effective_agent_host_status
 from app.modules.agent.domain.organization_default import organization_default_of
 from app.modules.agent.domain.runtime_profiles import (
     DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,

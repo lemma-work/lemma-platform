@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from redis.exceptions import RedisError
 
-from app.modules.agent.services.run_session_relay import (
+from app.modules.agent.agent_host.relayed_session import (
     CachedGrantSummary,
     RunInputs,
     RunInputsCache,

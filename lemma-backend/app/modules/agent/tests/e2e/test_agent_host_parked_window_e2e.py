@@ -29,7 +29,7 @@ from sqlalchemy import select, update
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostEvent,
     AgentHostEventBatch,
@@ -47,21 +47,21 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
 )
 from app.modules.agent.events.run_followup_work import start_queued_followup_for
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.harness import (
+from app.modules.agent.agent_host.harness.harness import (
     AgentHostRunConfig,
     RemoteHarness,
 )
-from app.modules.agent.infrastructure.agent_host.repository import (
+from app.modules.agent.agent_host.control.repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.pre_approvals import (
+from app.modules.agent.agent_host.harness.pre_approvals import (
     pre_approvals_for,
     supports_pre_approval,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
+from app.modules.agent.agent_host.harness.run_window import (
     DispatchedRun,
 )
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
@@ -69,7 +69,7 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostRunLeaseModel,
 )
-from app.modules.agent.services.mcp_pausing_calls import record_pausing_tool_call
+from app.modules.agent.agent_host.mcp_pausing_calls import record_pausing_tool_call
 from app.modules.agent.services.run_event_pump import RunEventPump, RunOutcome
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_message_writer import RunMessageWriter

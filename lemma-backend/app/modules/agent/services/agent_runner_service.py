@@ -33,7 +33,7 @@ from app.modules.agent.domain.value_objects import (
     HarnessKind,
     JsonObject,
 )
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
+from app.modules.agent.infrastructure.harness.registry import HarnessRegistry
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     runtime_profile_service_for,
