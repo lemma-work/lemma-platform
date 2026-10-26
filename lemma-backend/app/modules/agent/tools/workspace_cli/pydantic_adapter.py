@@ -5,7 +5,7 @@ from typing import Any
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli import workspace_cli
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
@@ -21,7 +21,7 @@ from app.modules.agent.tools.workspace_cli.models import (
 
 
 async def exec_command(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: ExecCommandRequest,
 ) -> ExecCommandResult:
     """
@@ -61,7 +61,7 @@ async def exec_command(
 
 
 async def manage_process(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: ManageProcessRequest,
 ) -> Any:
     """
@@ -113,7 +113,7 @@ async def manage_process(
 
 
 async def execute_python(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: ExecutePythonRequest,
 ) -> Any:
     """
@@ -127,7 +127,7 @@ async def execute_python(
 
 
 async def view_image(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: ViewImageRequest,
 ) -> Any:
     """
@@ -155,14 +155,14 @@ _WORKSPACE_CLI_BASE_TOOLS = [
     execute_python,
 ]
 
-workspace_cli_toolset = FunctionToolset[BaseAgentContext](
+workspace_cli_toolset = FunctionToolset[ToolContext](
     tools=list(_WORKSPACE_CLI_BASE_TOOLS)
 )
 
 # `view_image` lives in its own always-on-when-supported toolset (see
 # `registry.py`'s VIEW_IMAGE toolset) rather than workspace_cli, so it reaches
 # any agent with a vision-capable model regardless of configured toolsets.
-view_image_toolset = FunctionToolset[BaseAgentContext](tools=[view_image])
+view_image_toolset = FunctionToolset[ToolContext](tools=[view_image])
 
 
 def is_workspace_cli_toolset(toolset: object) -> bool:

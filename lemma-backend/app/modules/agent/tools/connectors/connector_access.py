@@ -24,7 +24,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.tools.authority import tool_authorization_context
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 
 @dataclass(slots=True)
@@ -85,7 +85,7 @@ async def connector_execution_only() -> AsyncIterator[object]:
 
 @asynccontextmanager
 async def connector_services(
-    deps: BaseAgentContext,
+    deps: ToolContext,
 ) -> AsyncIterator[ConnectorServices]:
     """Yield connector services bound to the agent's authorization context."""
     dependencies = _connector_dependencies()

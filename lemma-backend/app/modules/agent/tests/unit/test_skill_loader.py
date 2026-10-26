@@ -20,7 +20,7 @@ from app.modules.agent.tools.skills.models import (
     SkillResourceSummary,
     SkillSummary,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.datastore.domain.errors import DatastoreFileNotFoundError
 
 
@@ -260,7 +260,7 @@ async def test_load_skill_appends_local_workspace_override(
         fake_read_workspace_skill,
     )
     ctx = SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),
@@ -298,7 +298,7 @@ def test_the_skill_override_names_the_tools_this_run_has(
 ) -> None:
     from app.modules.workspace.contracts.host_execution import HostWorkspace
 
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),

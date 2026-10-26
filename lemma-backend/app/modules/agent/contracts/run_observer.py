@@ -13,7 +13,7 @@ from typing import Protocol
 
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.value_objects import AgentEvent
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 
 class RunObserver(Protocol):
@@ -22,20 +22,20 @@ class RunObserver(Protocol):
     async def on_run_started(
         self,
         conversation: Conversation,
-        ctx: ConversationContext,
+        ctx: ToolContext,
     ) -> None: ...
 
     async def on_event(
         self,
         event: AgentEvent,
         conversation: Conversation,
-        ctx: ConversationContext,
+        ctx: ToolContext,
     ) -> None: ...
 
     async def on_run_finished(
         self,
         conversation: Conversation,
-        ctx: ConversationContext,
+        ctx: ToolContext,
     ) -> None: ...
 
     async def on_run_failed(

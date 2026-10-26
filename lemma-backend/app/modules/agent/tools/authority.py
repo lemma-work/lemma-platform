@@ -50,11 +50,11 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.authorization.pod_principal import build_pod_context
 from app.core.authorization.session_approvals import approve_for_this_context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 
 
 async def tool_authorization_context(
-    uow: SqlAlchemyUnitOfWork, deps: AgentContext
+    uow: SqlAlchemyUnitOfWork, deps: ToolContext
 ) -> Context:
     """The authorization context one agent tool call runs under."""
     audience = deps.audience
@@ -96,7 +96,7 @@ async def tool_authorization_context(
     return ctx
 
 
-async def approver_context(uow: SqlAlchemyUnitOfWork, deps: AgentContext) -> Context:
+async def approver_context(uow: SqlAlchemyUnitOfWork, deps: ToolContext) -> Context:
     """The approving person's own context, for conferring what a card offered.
 
     Never the authority a tool runs with -- that is one of the three above.
@@ -109,7 +109,7 @@ async def approver_context(uow: SqlAlchemyUnitOfWork, deps: AgentContext) -> Con
     )
 
 
-def workload_principal_type(deps: AgentContext) -> str:
+def workload_principal_type(deps: ToolContext) -> str:
     """``FUNCTION`` for a function's own delegated token, else ``AGENT``.
 
     Only the pod MCP mount builds a function's tool context: a function calling
@@ -121,7 +121,7 @@ def workload_principal_type(deps: AgentContext) -> str:
     return "AGENT"
 
 
-def workload_actor_id(deps: AgentContext) -> str:
+def workload_actor_id(deps: ToolContext) -> str:
     """The actor id the agent's delegated context carries.
 
     Session approvals are recorded and looked up under this key, so both sides
@@ -150,7 +150,7 @@ class WorkspacePrincipal:
     workload_name: str | None
 
 
-def workspace_principal(deps: AgentContext) -> WorkspacePrincipal:
+def workspace_principal(deps: ToolContext) -> WorkspacePrincipal:
     """The sandbox half of :func:`tool_authorization_context`.
 
     A sandbox tool (``exec_command``, ``execute_python``) runs the ``lemma`` CLI

@@ -58,7 +58,7 @@ from app.modules.agent.infrastructure.mcp import (
     normalize_local_mcp_tool_name,
 )
 from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher, ToolInfo
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.tool_errors import (
@@ -75,7 +75,7 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class _Caller:
-    ctx: BaseAgentContext
+    ctx: ToolContext
     scopes: frozenset[Scope] | None
     """What an outside client was granted; ``None`` for a Lemma session, which
     is not scoped."""
@@ -148,7 +148,7 @@ class PodMCPService:
         caller = await self._caller_from_token(pod_id=pod_id, token=token)
         return caller is not None
 
-    async def context_for(self, *, pod_id: UUID, token: str) -> BaseAgentContext | None:
+    async def context_for(self, *, pod_id: UUID, token: str) -> ToolContext | None:
         """The tool context a Lemma session token gets on this pod, if any."""
         caller = await self._caller_from_token(pod_id=pod_id, token=token)
         return caller.ctx if caller is not None else None
@@ -271,7 +271,7 @@ class PodMCPService:
         *,
         pod_id: UUID,
         token: str,
-    ) -> BaseAgentContext | None:
+    ) -> ToolContext | None:
         session = await self._verify_session(token)
         if session is None:
             return None
@@ -353,7 +353,7 @@ def _audit(
 
 def _pod_context_for(
     user_id: UUID, *, pod_id: UUID, claims: DelegationClaims | None
-) -> BaseAgentContext:
+) -> ToolContext:
     """Every delegated token is held to its own workload's authority.
 
     Only the pod's own assistant acts with the person's roles. A named agent
@@ -382,7 +382,7 @@ def _pod_context_for(
     )
 
 
-def _pod_context(**fields: Any) -> BaseAgentContext:
+def _pod_context(**fields: Any) -> ToolContext:
     """The run session's pod-scoped variant; imported on first use, so the run
     session's graph stays out of the API's startup imports."""
     from app.modules.agent.services.run_session import pod_tool_context

@@ -26,7 +26,7 @@ from app.modules.agent.services.vision_service import (
     VisionUnavailableError,
     describe_images,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle: workspace_cli imports this
     from app.modules.agent.tools.workspace_cli.models import ViewImageResponse
@@ -40,7 +40,7 @@ _NO_VISION_SUFFIX = (
 
 
 async def describe_single_image(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     *,
     data: bytes,
     media_type: str,
@@ -99,7 +99,7 @@ async def describe_single_image(
 
 
 async def describe_document_pages(
-    deps: BaseAgentContext,
+    deps: ToolContext,
     *,
     path: str,
     pages: list[Any],

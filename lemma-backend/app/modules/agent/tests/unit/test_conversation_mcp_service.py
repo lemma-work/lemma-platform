@@ -12,7 +12,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.agent.domain.value_objects import ConversationOrigin
 
@@ -29,7 +29,7 @@ async def _no_grant_summary(self, *, pod_id, agent_id):
 @pytest.mark.asyncio
 async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
     async def telegram_send_file(
-        ctx: RunContext[BaseAgentContext],
+        ctx: RunContext[ToolContext],
         request: _SurfaceToolRequest,
     ) -> dict[str, str]:
         """Send a file to the current Telegram chat."""
@@ -58,7 +58,7 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
             "external_thread_id": "12345",
         },
     )
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -74,7 +74,7 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
 
     async def fake_build_toolsets(self, *, conversation):
         del self, conversation
-        return [FunctionToolset[BaseAgentContext](tools=[telegram_send_file])]
+        return [FunctionToolset[ToolContext](tools=[telegram_send_file])]
 
     async def fake_callable_toolsets(self, *, agent, allow_subagents=True, grants=None):
         # Unit test: must not touch the real database. The production
@@ -139,7 +139,7 @@ async def test_conversation_mcp_exposes_todo_tools_when_agent_has_todo(monkeypat
     conversation = Conversation(
         id=conversation_id, user_id=user_id, pod_id=pod_id, title="Planning"
     )
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -208,7 +208,7 @@ async def test_a_pausing_tool_reaches_a_person_over_mcp(monkeypatch):
     )
     # supports_pause_signal is False, as it is for every Agent Host run: this is
     # the branch that cannot raise its way out of a turn.
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -297,9 +297,7 @@ async def test_an_ordinary_tool_is_not_put_on_the_record_first(monkeypatch):
     conversation = Conversation(
         id=conversation_id, user_id=user_id, pod_id=pod_id, title="t"
     )
-    ctx = BaseAgentContext(
-        user_id=user_id, pod_id=pod_id, conversation_id=conversation_id
-    )
+    ctx = ToolContext(user_id=user_id, pod_id=pod_id, conversation_id=conversation_id)
 
     async def fake_load_agent_context(self, *, conversation_id, agent_run_id):
         del self, conversation_id, agent_run_id
@@ -351,7 +349,7 @@ class _ConversationAlreadyLoaded(ConversationMCPService):
     the real path an Agent Host run's `tools/list` takes.
     """
 
-    def __init__(self, conversation: Conversation, ctx: BaseAgentContext) -> None:
+    def __init__(self, conversation: Conversation, ctx: ToolContext) -> None:
         super().__init__()
         self._conversation = conversation
         self._ctx = ctx
@@ -380,7 +378,7 @@ async def _agent_host_tool_names(
         title="Delegation",
         origin=origin,
     )
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=conversation_id,

@@ -61,7 +61,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
     paired_machine,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = pytest.mark.e2e
@@ -127,7 +127,7 @@ class _Worker:
             ),
             conversation=self.conversation,
             messages=[],
-            ctx=BaseAgentContext(
+            ctx=ToolContext(
                 user_id=self.conversation.user_id,
                 pod_id=self.conversation.pod_id,
                 conversation_id=self.conversation.id,

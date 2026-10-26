@@ -8,20 +8,20 @@ import pytest
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher, UnknownToolError
 
 
-async def echo_tool(ctx: RunContext[BaseAgentContext], value: int) -> dict:
+async def echo_tool(ctx: RunContext[ToolContext], value: int) -> dict:
     """Echo a value back along with the pod id from context."""
     return {"value": value, "pod_id": str(ctx.deps.pod_id)}
 
 
-_TOOLSET = FunctionToolset[BaseAgentContext](tools=[echo_tool])
+_TOOLSET = FunctionToolset[ToolContext](tools=[echo_tool])
 
 
-def _ctx() -> BaseAgentContext:
-    return BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+def _ctx() -> ToolContext:
+    return ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
 
 
 @pytest.mark.asyncio
@@ -63,7 +63,7 @@ async def test_unknown_tool_raises():
         )
 
 
-class _RecordingToolset(FunctionToolset[BaseAgentContext]):
+class _RecordingToolset(FunctionToolset[ToolContext]):
     """Records being opened, which is the cost a call should not pay twice."""
 
     def __init__(self, *args, opened: list[str], label: str, **kwargs):
@@ -76,7 +76,7 @@ class _RecordingToolset(FunctionToolset[BaseAgentContext]):
         return await super().__aenter__()
 
 
-async def other_tool(ctx: RunContext[BaseAgentContext]) -> str:
+async def other_tool(ctx: RunContext[ToolContext]) -> str:
     """A tool nobody calls here."""
     return "unused"
 

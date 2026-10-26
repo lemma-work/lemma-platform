@@ -24,7 +24,7 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host_transfer import BLOB_FIELD, is_sha256_hex
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host.transfers import (
     AgentHostTransferStore,
@@ -62,7 +62,7 @@ class AgentHostArtifactWriter(Protocol):
         *,
         payload: JsonObject,
         pod_id: UUID,
-        user_context: AgentContext,
+        user_context: ToolContext,
         directory_path: str,
         agent_run_id: UUID,
         event_sequence: int,
@@ -102,7 +102,7 @@ class PodFileAgentHostArtifactWriter:
         *,
         payload: JsonObject,
         pod_id: UUID,
-        user_context: AgentContext,
+        user_context: ToolContext,
         directory_path: str,
         agent_run_id: UUID,
         event_sequence: int,

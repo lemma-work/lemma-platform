@@ -18,7 +18,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.outsiders import run_audience
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.messaging.models import (
     AnswerQuestionRequest,
     AnswerQuestionResponse,
@@ -31,7 +31,7 @@ ANSWER_TOOL_NAME = "answer_question"
 
 
 async def answer_question(
-    ctx: RunContext[BaseAgentContext], request: AnswerQuestionRequest
+    ctx: RunContext[ToolContext], request: AnswerQuestionRequest
 ) -> AnswerQuestionResponse:
     """Record their answer to a question waiting on them.
 
@@ -64,4 +64,4 @@ async def answer_question(
     )
 
 
-answer_toolset = FunctionToolset[BaseAgentContext](tools=[answer_question])
+answer_toolset = FunctionToolset[ToolContext](tools=[answer_question])

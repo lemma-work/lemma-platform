@@ -55,7 +55,7 @@ from urllib.parse import urlparse
 from app.core.log.log import get_logger
 from app.core.net.impersonating_client import web_page_policy
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.tool_payload_limits import bounded_tool_text
 from app.modules.agent.tools.web.browser_capture import (
     MAX_BROWSER_RENDERS,
@@ -138,7 +138,7 @@ class _Workspace:
     already held.
     """
 
-    def __init__(self, ctx: BaseAgentContext, stack: AsyncExitStack) -> None:
+    def __init__(self, ctx: ToolContext, stack: AsyncExitStack) -> None:
         self._ctx = ctx
         self._stack = stack
         self._session = None
@@ -173,7 +173,7 @@ class _Batch:
 
 
 async def web_fetch_internal(
-    ctx: BaseAgentContext, request: WebFetchRequest
+    ctx: ToolContext, request: WebFetchRequest
 ) -> WebFetchResponse:
     urls = list(dict.fromkeys(request.urls))
     loop = asyncio.get_running_loop()

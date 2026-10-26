@@ -8,11 +8,11 @@ from app.modules.agent.tools.browser.models import (
     BrowserSignInRequest,
     BrowserSignInResponse,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 
 async def browser_sign_in(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: BrowserSignInRequest,
 ) -> BrowserSignInResponse:
     """
@@ -63,4 +63,4 @@ BROWSER_TOOLS = [browser_sign_in]
 # Its own toolset rather than more entries in WORKSPACE_CLI, because the
 # dependency only runs one way. It ships in `POD_DEFAULT_AGENT_TOOLSETS` so the
 # default assistant can ask for a login.
-browser_toolset = FunctionToolset[BaseAgentContext](tools=list(BROWSER_TOOLS))
+browser_toolset = FunctionToolset[ToolContext](tools=list(BROWSER_TOOLS))

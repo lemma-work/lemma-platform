@@ -22,7 +22,7 @@ from app.modules.agent.contracts import (
     AgentEvent,
     AgentEventType,
 )
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )
@@ -175,7 +175,7 @@ class SurfaceAgentRunProgressObserver(
     async def on_run_started(
         self,
         conversation: Conversation,
-        ctx: ConversationContext,
+        ctx: ToolContext,
     ) -> None:
         self._run_files = RunFiles(ctx.agent_run_id)
         self._run_started_at = time.monotonic()
@@ -214,7 +214,7 @@ class SurfaceAgentRunProgressObserver(
         self,
         event: AgentEvent,
         conversation: Conversation,
-        ctx: ConversationContext,
+        ctx: ToolContext,
     ) -> None:
         self._run_files = RunFiles(ctx.agent_run_id)
         if self._stays_in_lemma:
@@ -304,7 +304,7 @@ class SurfaceAgentRunProgressObserver(
     async def on_run_finished(
         self,
         conversation: Conversation,
-        ctx: ConversationContext,
+        ctx: ToolContext,
     ) -> None:
         """Finish the run's display; the answer is not the observer's to send.
 

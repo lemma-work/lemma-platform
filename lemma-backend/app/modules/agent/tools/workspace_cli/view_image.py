@@ -14,7 +14,7 @@ from pydantic_ai import BinaryContent, ToolReturn
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.tools.approval_denials import remember_denial
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.image_payload import downscale_for_vision
 from app.modules.agent.tools.vision_delegation import describe_single_image
 from app.modules.agent.tools.file_access import (
@@ -38,7 +38,7 @@ MAX_VIEW_IMAGE_BYTES = 5 * 1024 * 1024
 
 
 async def view_image_internal(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     request: ViewImageRequest,
 ):
     # Require exactly one store path, returning a structured error (never raising)

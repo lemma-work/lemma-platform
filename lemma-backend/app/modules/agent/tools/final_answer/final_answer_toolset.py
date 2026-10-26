@@ -43,7 +43,7 @@ from app.modules.agent.tools.callable_tool_factory import (
     inline_schema,
     normalize_json_schema,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
 from app.modules.agent.tools.final_answer.rejections import (
     LocalRejectionCounter,
@@ -92,7 +92,7 @@ def build_final_answer_toolset(
     agent: Agent | None,
     uow_factory: UnitOfWorkFactory | None = None,
     rejections: RejectionCounter | None = None,
-) -> FunctionToolset[BaseAgentContext]:
+) -> FunctionToolset[ToolContext]:
     """Build the one-tool toolset exposing ``final_answer`` over MCP.
 
     ``rejections`` counts schema rejections per run; see `rejections`.
@@ -108,7 +108,7 @@ def build_final_answer_toolset(
     fallback = LocalRejectionCounter()
 
     async def _final_answer(
-        ctx: RunContext[BaseAgentContext],
+        ctx: RunContext[ToolContext],
         **request: Any,
     ) -> JsonObject:
         status = str(request.get("status") or "").upper()
@@ -155,7 +155,7 @@ def build_final_answer_toolset(
         await _persist(ctx, uow_factory=uow_factory, record=record)
         return {"success": True, **record}
 
-    toolset = FunctionToolset[BaseAgentContext]()
+    toolset = FunctionToolset[ToolContext]()
     toolset.add_tool(
         Tool(
             _final_answer,
@@ -244,7 +244,7 @@ def _schema_violation(
 
 
 async def _persist(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     *,
     uow_factory: UnitOfWorkFactory | None,
     record: JsonObject,

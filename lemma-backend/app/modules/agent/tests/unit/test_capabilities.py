@@ -343,10 +343,10 @@ async def test_affinity_is_keyed_on_the_pod_and_agent_a_real_run_carries():
     an agent name, and every conversation with that agent in that pod shares
     the long start of its prompt."""
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.tools.context import ConversationContext
+    from app.modules.agent.domain.context import ToolContext
 
     pod_id, conversation_id = uuid4(), uuid4()
-    ctx = ConversationContext(
+    ctx = ToolContext(
         user_id=uuid4(),
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -392,7 +392,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import _visible_capability
     from app.modules.agent.capabilities.todo import build_todo_toolset
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
     store: dict = {"cwd": "/w"}  # a sibling column
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
@@ -402,7 +402,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
-        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
+        deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -530,7 +530,7 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import _visible_capability
     from app.modules.agent.capabilities.todo import build_todo_toolset
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
     store: dict = {}
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
@@ -539,7 +539,7 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
-        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
+        deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -589,7 +589,7 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import _visible_capability
     from app.modules.agent.capabilities.todo import build_todo_toolset
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
     store: dict = {}
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
@@ -598,7 +598,7 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
-        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
+        deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -680,7 +680,7 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import _visible_capability
     from app.modules.agent.capabilities.todo import build_todo_toolset
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
     store: dict = {}
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
@@ -689,7 +689,7 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
     )
     toolset = capability.get_toolset()
     run_ctx = RunContext(
-        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
+        deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -888,12 +888,12 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     """
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),
@@ -970,12 +970,12 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
     from app.modules.agent.capabilities.instructed_toolset import (
         InstructedToolsetCapability,
     )
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),
@@ -1013,13 +1013,13 @@ async def test_pod_default_gains_view_image_toolset_when_vision_supported():
     from app.modules.agent.capabilities.instructed_toolset import (
         InstructedToolsetCapability,
     )
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
     from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
         view_image_toolset,
     )
 
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),
@@ -1088,12 +1088,12 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     from app.modules.agent.capabilities.instructed_toolset import (
         InstructedToolsetCapability,
     )
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),
@@ -1172,12 +1172,12 @@ async def test_pod_is_visible_and_names_itself_the_default_for_pod_data(monkeypa
     from app.modules.agent.capabilities.instructed_toolset import (
         InstructedToolsetCapability,
     )
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
     from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),
@@ -1284,12 +1284,12 @@ async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
     from app.modules.agent.domain.value_objects import AgentToolset
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
     from app.modules.agent.tools.registry import resolve_agent_toolsets
 
     monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo({}))
 
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),

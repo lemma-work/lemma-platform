@@ -9,7 +9,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent_surfaces.platforms.outbound_http import outbound_http
 from app.modules.agent_surfaces.tests.fakes import platform_http
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
@@ -183,7 +183,7 @@ async def test_teams_get_recent_channel_messages_resolves_graph_team_id(
     )
 
     ctx = SimpleNamespace(
-        deps=ConversationContext(
+        deps=ToolContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),
@@ -345,7 +345,7 @@ async def test_teams_get_recent_thread_messages_include_files(
     )
 
     ctx = SimpleNamespace(
-        deps=ConversationContext(
+        deps=ToolContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),

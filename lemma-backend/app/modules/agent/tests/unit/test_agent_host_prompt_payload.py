@@ -45,7 +45,7 @@ from app.modules.agent.infrastructure.harnesses.remote_payload import (
     _exported_tool_names,
     run_start_payload,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import QueueState
 
@@ -111,8 +111,8 @@ def _transcript() -> list[Message]:
 CONVERSATION_CWD = f"{WORKSPACE_ROOT}/c/2026-09-19/{CONVERSATION_ID.hex[:8]}"
 
 
-def _ctx() -> BaseAgentContext:
-    return BaseAgentContext(
+def _ctx() -> ToolContext:
+    return ToolContext(
         user_id=uuid7(),
         pod_id=POD_ID,
         conversation_id=CONVERSATION_ID,
@@ -670,7 +670,7 @@ class TestNativeAndSandboxDirectories:
         assert "working files belong in the workspace" in prompt
 
 
-async def ping_tool(ctx: RunContext[BaseAgentContext]) -> str:
+async def ping_tool(ctx: RunContext[ToolContext]) -> str:
     """Ping."""
     del ctx
     return "pong"
@@ -700,7 +700,7 @@ class TestExportedToolNames:
     async def test_a_real_toolsets_tools_are_exported_with_the_lemma_prefix(
         self,
     ) -> None:
-        toolset = FunctionToolset[BaseAgentContext](tools=[ping_tool])
+        toolset = FunctionToolset[ToolContext](tools=[ping_tool])
 
         names = await _exported_tool_names(
             agent_run_id=uuid7(),
@@ -712,7 +712,7 @@ class TestExportedToolNames:
         assert names == ["lemma_ping_tool"]
 
     async def test_an_entry_that_is_not_a_toolset_is_skipped_not_raised(self) -> None:
-        toolset = FunctionToolset[BaseAgentContext](tools=[ping_tool])
+        toolset = FunctionToolset[ToolContext](tools=[ping_tool])
 
         names = await _exported_tool_names(
             agent_run_id=uuid7(),
@@ -728,7 +728,7 @@ class TestExportedToolNames:
     async def test_extra_names_are_appended_without_duplicating_a_toolsets_tool(
         self,
     ) -> None:
-        toolset = FunctionToolset[BaseAgentContext](tools=[ping_tool])
+        toolset = FunctionToolset[ToolContext](tools=[ping_tool])
 
         names = await _exported_tool_names(
             agent_run_id=uuid7(),
@@ -874,7 +874,7 @@ class TestTheAgentsOwnCli:
         assert "lemma_cli" not in payload
 
 
-def _with_run_context(*sections: str) -> BaseAgentContext:
+def _with_run_context(*sections: str) -> ToolContext:
     ctx = _ctx()
     ctx.run_context = render_run_context(sections=sections)
     return ctx

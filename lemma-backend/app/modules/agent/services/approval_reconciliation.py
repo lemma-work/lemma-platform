@@ -30,7 +30,7 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     to_json_value,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
 
@@ -376,7 +376,7 @@ def _permission_decision_message(
 async def execute_approved_tool_as_user(
     *,
     uow: SqlAlchemyUnitOfWork,
-    deps: BaseAgentContext,
+    deps: ToolContext,
     tool_name: str,
     args: dict[str, object],
     approval_id: str | None = None,

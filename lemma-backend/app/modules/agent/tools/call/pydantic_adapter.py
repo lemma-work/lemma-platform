@@ -20,11 +20,11 @@ from app.modules.agent.tools.call.models import (
     RelayToVoiceRequest,
     RelayToVoiceResponse,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 
 async def relay_to_voice(
-    ctx: RunContext[BaseAgentContext], request: RelayToVoiceRequest
+    ctx: RunContext[ToolContext], request: RelayToVoiceRequest
 ) -> RelayToVoiceResponse:
     """Give the call's voice something to know or to say.
 
@@ -39,4 +39,4 @@ async def relay_to_voice(
     return RelayToVoiceResponse(success=True, message=f"Relayed {spoken}.")
 
 
-coordinator_toolset = FunctionToolset[BaseAgentContext](tools=[relay_to_voice])
+coordinator_toolset = FunctionToolset[ToolContext](tools=[relay_to_voice])

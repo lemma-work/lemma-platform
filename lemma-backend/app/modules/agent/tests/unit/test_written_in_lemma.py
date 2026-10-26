@@ -51,7 +51,7 @@ from app.modules.agent.domain.prompt.user_turn_text import (
 )
 from app.modules.agent.application.turns import admit as turns
 from app.modules.agent.services.context_brief.outsider import render_outsider_brief
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.messaging.models import AskAPersonRequest
 from app.modules.agent.tools.messaging.pydantic_adapter import ask_a_person
 
@@ -340,8 +340,8 @@ def test_the_keepers_line_reads_as_theirs_beside_a_strangers():
 # ------------------------------------------------------------- ask_a_person
 
 
-def _deps(*, keeper_asking: bool) -> BaseAgentContext:
-    return BaseAgentContext(
+def _deps(*, keeper_asking: bool) -> ToolContext:
+    return ToolContext(
         user_id=uuid4(),
         org_id=uuid4(),
         pod_id=uuid4(),

@@ -22,7 +22,7 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.agent.services.subagent_service import SubAgentError, SubAgentService
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.subagents.models import (
     InteractSubagentRequest,
     QuerySubagentsRequest,
@@ -44,7 +44,7 @@ def _handle_payload(handle) -> JsonObject:
 
 
 async def spawn_subagent(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: SpawnSubagentRequest,
 ) -> JsonObject:
     """Start a pod agent as a linked child conversation; returns a handle.
@@ -70,7 +70,7 @@ async def spawn_subagent(
 
 
 async def interact_subagent(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: InteractSubagentRequest,
 ) -> JsonObject:
     """Drive a running sub-agent you spawned.
@@ -123,7 +123,7 @@ async def interact_subagent(
 
 
 async def query_subagents(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: QuerySubagentsRequest,
 ) -> JsonObject:
     """Inspect the sub-agents you spawned.
@@ -164,7 +164,7 @@ async def query_subagents(
         return {"success": False, "error": safe_error_text(exc)}
 
 
-subagents_toolset = FunctionToolset[BaseAgentContext](
+subagents_toolset = FunctionToolset[ToolContext](
     tools=[
         spawn_subagent,
         interact_subagent,

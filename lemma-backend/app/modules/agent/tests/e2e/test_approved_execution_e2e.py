@@ -46,7 +46,7 @@ from app.modules.agent.tools.authority import (
     tool_authorization_context,
     workload_actor_id,
 )
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.test_support.e2e.function_helpers import create_table
 from app.modules.workspace.services.workspace_sandbox_service import (
@@ -91,9 +91,9 @@ class _Pod:
 
     def context(
         self, *, conversation_id: UUID | None = None, user_id: str | None = None
-    ) -> ConversationContext:
+    ) -> ToolContext:
         """The agent's run context, as a real run builds it."""
-        return ConversationContext(
+        return ToolContext(
             user_id=UUID(user_id or self.scenario.owner_user["id"]),
             org_id=UUID(self.scenario.org_id),
             pod_id=UUID(self.pod_id),
@@ -137,7 +137,7 @@ def _delete(row_id: str) -> dict[str, object]:
     return {"action": "delete", "table_name": _TABLE, "record_id": row_id}
 
 
-async def _as_the_agent(ctx: ConversationContext, args: dict[str, object]) -> dict:
+async def _as_the_agent(ctx: ToolContext, args: dict[str, object]) -> dict:
     """Call ``pod_write_record`` the way a run does: with the agent's own authority."""
     async with _uow_factory()() as uow:
         conversation = await Conversations(uow).get_conversation(
@@ -156,9 +156,7 @@ async def _as_the_agent(ctx: ConversationContext, args: dict[str, object]) -> di
     return result
 
 
-async def _card(
-    ctx: ConversationContext, tool_name: str, args: dict[str, object]
-) -> str:
+async def _card(ctx: ToolContext, tool_name: str, args: dict[str, object]) -> str:
     """The run pausing for a card: what is pending now is what it lends."""
     approval_id = f"call-{uuid4().hex[:12]}"
     await show_card(
@@ -172,7 +170,7 @@ async def _card(
     return approval_id
 
 
-async def _approved(ctx: ConversationContext, args: dict[str, object]) -> dict:
+async def _approved(ctx: ToolContext, args: dict[str, object]) -> dict:
     result = await ApprovalExecutor(_uow_factory()).execute_as_user(
         deps=ctx,
         tool_name="pod_write_record",

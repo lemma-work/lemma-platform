@@ -74,7 +74,7 @@ from app.modules.identity.contracts.profiles import UserProfileRef, user_profile
 from app.modules.pod.contracts.members import pod_name
 
 if TYPE_CHECKING:
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
 logger = get_logger(__name__)
 
@@ -152,7 +152,7 @@ class AskPlan:
 
 
 def _asking_run(
-    deps: BaseAgentContext, asking: Conversation, *, latest_turn_source: str | None
+    deps: ToolContext, asking: Conversation, *, latest_turn_source: str | None
 ) -> AskingRun:
     return AskingRun(
         user_id=deps.user_id,
@@ -166,7 +166,7 @@ def _asking_run(
 
 
 def _plan(
-    deps: BaseAgentContext,
+    deps: ToolContext,
     asking: Conversation | None,
     teammate: Teammate,
     *,
@@ -205,7 +205,7 @@ class PodAskService:
                 uow, user_id=user_id, organization_id=organization_id, pod_id=pod_id
             )
 
-    async def reachable(self, deps: BaseAgentContext) -> list[Teammate]:
+    async def reachable(self, deps: ToolContext) -> list[Teammate]:
         """The pods this run can ask, each only by the ways it could ask it.
 
         ``teammates`` narrowed by the same rules ``plan_ask`` applies, so the
@@ -227,7 +227,7 @@ class PodAskService:
         modes = open_modes(_asking_run(deps, asking, latest_turn_source=source))
         return [one for one in (narrowed(t, modes) for t in teammates) if one]
 
-    async def unreachable_reason(self, deps: BaseAgentContext) -> str | None:
+    async def unreachable_reason(self, deps: ToolContext) -> str | None:
         """Why this run can ask no pod at all, or ``None`` when it could."""
         async with self.uow_factory() as uow:
             asking = await Conversations(uow).get_conversation(deps.conversation_id)
@@ -238,9 +238,7 @@ class PodAskService:
             return None
         return closed_reason(_asking_run(deps, asking, latest_turn_source=source))
 
-    async def ensure_may_ask(
-        self, deps: BaseAgentContext, *, teammate: Teammate
-    ) -> AskMode:
+    async def ensure_may_ask(self, deps: ToolContext, *, teammate: Teammate) -> AskMode:
         """How the ask would be made, refused now if it can't be.
 
         Before anyone is asked to approve it: an ask that can't be made should
@@ -255,7 +253,7 @@ class PodAskService:
 
     async def ask(
         self,
-        deps: BaseAgentContext,
+        deps: ToolContext,
         *,
         teammate: Teammate,
         request: str,
@@ -351,7 +349,7 @@ class PodAskService:
     async def _side(
         self,
         uow: SqlAlchemyUnitOfWork,
-        deps: BaseAgentContext,
+        deps: ToolContext,
         *,
         ask: PodAsk,
         teammate: Teammate,

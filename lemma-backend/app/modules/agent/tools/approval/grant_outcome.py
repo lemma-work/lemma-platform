@@ -31,7 +31,7 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.tools.authority import approver_context
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.connectors.contracts.pod_connectors import get_pod_connector
 
 logger = get_logger(__name__)
@@ -48,7 +48,7 @@ def _refused(message: str) -> DomainError:
 async def confer_offered_grant(
     uow_factory: UnitOfWorkFactory,
     *,
-    deps: BaseAgentContext,
+    deps: ToolContext,
     offer: Mapping,
 ) -> None:
     """Give the agent the grant its card offered, as the person who approved.

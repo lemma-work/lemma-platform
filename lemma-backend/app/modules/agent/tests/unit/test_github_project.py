@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.workspace_location import ProjectRepo
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli import github_project, workspace_cli
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
@@ -44,8 +44,8 @@ class _FakeSession:
         }
 
 
-def _context(repo: ProjectRepo | None) -> BaseAgentContext:
-    return BaseAgentContext(
+def _context(repo: ProjectRepo | None) -> ToolContext:
+    return ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),

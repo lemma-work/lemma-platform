@@ -17,7 +17,7 @@ import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import AgentEventType
@@ -111,7 +111,7 @@ async def _run_harness(model, *, monkeypatch, should_stop=None, toolsets=None):
             ),
             conversation=conversation,
             messages=[],
-            ctx=AgentContext(
+            ctx=ToolContext(
                 user_id=conversation.user_id,
                 pod_id=pod_id,
                 conversation_id=conversation.id,
@@ -160,7 +160,7 @@ def _execute_events(model, monkeypatch, toolsets):
         ),
         conversation=conversation,
         messages=[],
-        ctx=AgentContext(
+        ctx=ToolContext(
             user_id=conversation.user_id,
             pod_id=pod_id,
             conversation_id=conversation.id,
@@ -353,7 +353,7 @@ async def test_a_retry_never_re_executes_a_completed_tool(monkeypatch) -> None:
             ),
             conversation=conversation,
             messages=[],
-            ctx=AgentContext(
+            ctx=ToolContext(
                 user_id=conversation.user_id,
                 pod_id=pod_id,
                 conversation_id=conversation.id,
@@ -400,7 +400,7 @@ async def test_a_non_retryable_provider_error_fails_fast(monkeypatch) -> None:
             ),
             conversation=conversation,
             messages=[],
-            ctx=AgentContext(
+            ctx=ToolContext(
                 user_id=conversation.user_id,
                 pod_id=pod_id,
                 conversation_id=conversation.id,

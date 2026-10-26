@@ -43,7 +43,7 @@ from app.modules.agent.services.conversation_resume_return import (
 from app.modules.agent.services.run_event_pump import RunOutcome
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.tools.approval.executor import ApprovalExecutor
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_TOOL_NAME,
     build_final_answer_toolset,
@@ -3212,7 +3212,7 @@ class TestFinalAnswerToolset:
             output_schema=output_schema,
         )
         ctx = SimpleNamespace(
-            deps=BaseAgentContext(
+            deps=ToolContext(
                 user_id=user_id,
                 pod_id=UUID(pod_id),
                 conversation_id=conversation_id,

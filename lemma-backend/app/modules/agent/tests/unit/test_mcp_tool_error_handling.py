@@ -21,12 +21,12 @@ from app.modules.agent.services.conversation_mcp_service import ConversationMCPS
 from app.modules.agent.services import pod_mcp_service as pod_mcp_module
 from app.modules.agent.services.pod_mcp_service import PodMCPService
 from app.modules.agent.tools.approval.executor import ApprovalExecutor
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher, UnknownToolError
 
 
-def _ctx(conversation_id, pod_id, user_id) -> BaseAgentContext:
-    return BaseAgentContext(
+def _ctx(conversation_id, pod_id, user_id) -> ToolContext:
+    return ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=conversation_id,

@@ -6,7 +6,7 @@ import pytest
 from pydantic_ai.tools import RunContext
 from pydantic_ai.usage import RunUsage
 
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli import pydantic_adapter
 from app.modules.agent.tools.workspace_cli.models import ExecCommandResult
 
@@ -27,7 +27,7 @@ async def test_workspace_cli_pydantic_wrapper_uses_docstring_description(
         fake_exec_command,
     )
     run_ctx = RunContext(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),

@@ -1,4 +1,4 @@
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 from app.core.web_search.web_search import (
     WebSearchRequest,
@@ -8,7 +8,7 @@ from app.core.web_search.web_search import (
 
 
 async def web_search_internal(
-    deps: BaseAgentContext, request: WebSearchRequest
+    deps: ToolContext, request: WebSearchRequest
 ) -> WebSearchResponse:
     """The search itself; `search_web` reports its own failures as results."""
     del deps

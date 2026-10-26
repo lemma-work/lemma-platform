@@ -25,7 +25,7 @@ from app.modules.agent.domain.workspace_location import (
 )
 
 if TYPE_CHECKING:
-    from app.modules.agent.domain.context import AgentContext
+    from app.modules.agent.domain.context import ToolContext
     from app.modules.agent.domain.entities import Conversation
 
 
@@ -35,7 +35,7 @@ _PLAIN_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._@+-]{1,64}")
 _PLAIN_PATH = re.compile(r"(?:/[A-Za-z0-9._@+-]{1,64})+/?")
 
 
-def _workspace_cwd(ctx: AgentContext, conversation: Conversation) -> str:
+def _workspace_cwd(ctx: ToolContext, conversation: Conversation) -> str:
     """Resolve the agent's workspace working directory for the prompt.
 
     Prefers the resolved ``workspace_cwd`` carried on the run context, then
@@ -67,7 +67,7 @@ def _workspace_cwd(ctx: AgentContext, conversation: Conversation) -> str:
     return resolve_workspace_location(conversation).cwd
 
 
-def _workspace_repo(ctx: AgentContext):
+def _workspace_repo(ctx: ToolContext):
     """The repository this conversation works in, if it was started on one."""
     return getattr(ctx, "workspace_repo", None)
 
@@ -90,7 +90,7 @@ def _project_paragraph(repo) -> str:
 
 def _directory_sections(
     *,
-    ctx: AgentContext,
+    ctx: ToolContext,
     conversation: Conversation,
     enabled: set[AgentToolset],
     runs_as_remote_process: bool,
@@ -165,7 +165,7 @@ def _host_directory_section(root: str) -> str:
     )
 
 
-def _pod_cwd(ctx: AgentContext, conversation: Conversation) -> str:
+def _pod_cwd(ctx: ToolContext, conversation: Conversation) -> str:
     """Where relative pod-file paths resolve, for the prompt.
 
     Same resolution order as ``_workspace_cwd`` and the same reason: the tools
@@ -186,7 +186,7 @@ def _pod_cwd(ctx: AgentContext, conversation: Conversation) -> str:
     return resolve_pod_cwd(conversation)
 
 
-def _pod_directory_section(*, ctx: AgentContext, conversation: Conversation) -> str:
+def _pod_directory_section(*, ctx: ToolContext, conversation: Conversation) -> str:
     """Where the person's files are, which is not where the sandbox is.
 
     Left unsaid, an agent asked to read something a person just attached looks
@@ -284,7 +284,7 @@ def _sandbox_root(cwd: str) -> str:
 
 def _workspace_directory_section(
     *,
-    ctx: AgentContext,
+    ctx: ToolContext,
     conversation: Conversation,
     has_workspace_tools: bool = True,
     runs_as_remote_process: bool = False,

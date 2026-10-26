@@ -9,7 +9,7 @@ from pydantic_ai.output import StructuredDict
 
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.value_objects import JsonValue, to_json_value
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 
 class FinalAgentResult(BaseModel):
@@ -34,7 +34,7 @@ def get_final_answer_tool(
     output_type = StructuredDict(agent.output_schema) if agent.output_schema else str
 
     async def final_answer(
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
         status: Literal["COMPLETED", "FAILED", "WAITING"],
         output: output_type,
         error: str | None = None,

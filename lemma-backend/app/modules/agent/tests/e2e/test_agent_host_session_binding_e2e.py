@@ -12,7 +12,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.agent_host.control_updates import (
     apply_control_updates,
 )
@@ -131,7 +131,7 @@ async def test_session_start_is_saved_before_answer_and_late_poll_cannot_replace
                 "host_cwd": host_cwd,
             },
         ),
-        ctx=AgentContext(
+        ctx=ToolContext(
             user_id=UUID(scenario.owner_user["id"]),
             pod_id=scenario.pod_id,
             conversation_id=conversation_id,

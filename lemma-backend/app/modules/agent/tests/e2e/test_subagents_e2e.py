@@ -44,7 +44,7 @@ from app.modules.agent.tests.e2e.test_agent_e2e import (
     _create_test_pod,
     _post_sse,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.subagents.models import (
     InteractSubagentRequest,
     QuerySubagentsRequest,
@@ -386,7 +386,7 @@ async def test_query_and_interact_subagent_reject_conversations_this_agent_did_n
     )
 
     ctx = SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=UUID(fixed_test_user["id"]),
             pod_id=UUID(pod_id),
             conversation_id=UUID(owner_conversation_id),
@@ -455,7 +455,7 @@ async def test_interact_subagent_stop_requests_a_real_running_child(
     assert before.json()["status"] == "RUNNING"
 
     ctx = SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=UUID(fixed_test_user["id"]),
             pod_id=UUID(pod_id),
             conversation_id=UUID(parent_conversation_id),
@@ -526,7 +526,7 @@ async def test_query_subagents_list_mode_and_interact_send_on_a_real_owned_child
     runless_child_id = runless_child.json()["id"]
 
     ctx = SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=UUID(fixed_test_user["id"]),
             pod_id=UUID(pod_id),
             conversation_id=UUID(parent_conversation_id),

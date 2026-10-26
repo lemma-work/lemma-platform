@@ -40,7 +40,7 @@ from app.modules.agent.services.host_execution_selection import (
     recorded_host_workspace,
     triggered_by_run_user,
 )
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.browser.vm_browser import vm_browser_toolset
 from app.modules.agent.tools.tool_assembler import (
     RunToolAssembler,
@@ -468,8 +468,8 @@ def test_no_browser_tool_for_an_agent_that_never_had_a_shell():
 # ------------------------------------------------------------------- prompts
 
 
-def _ctx(**fields) -> ConversationContext:
-    return ConversationContext(
+def _ctx(**fields) -> ToolContext:
+    return ToolContext(
         user_id=PAIRED,
         pod_id=uuid4(),
         conversation_id=uuid4(),

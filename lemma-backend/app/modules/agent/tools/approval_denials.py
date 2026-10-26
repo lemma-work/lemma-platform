@@ -40,10 +40,10 @@ from app.core.authorization.session_approvals import (
     session_refusals,
     shown_card,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 
-async def remember_denial(deps: BaseAgentContext, result: object) -> None:
+async def remember_denial(deps: ToolContext, result: object) -> None:
     """Record the refusal a ``needs_approval`` result carries, if it carries one.
 
     Takes the result rather than the error so every producer -- the pod tools,

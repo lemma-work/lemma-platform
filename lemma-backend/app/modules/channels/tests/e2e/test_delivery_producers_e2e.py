@@ -30,7 +30,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     running_run,
     seeded_conversation,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.messaging.models import ChannelPostRequest
 from app.modules.agent.tools.messaging.people import call_a_person_in
 from app.modules.agent.tools.messaging.pydantic_adapter import channel_post
@@ -97,10 +97,10 @@ async def _colleague(scenario: E2EScenario, name: str) -> tuple[dict, UUID]:
     return person, UUID(found.json()["pod_member_id"])
 
 
-def _ctx(seeded: Seeded, *, call: str) -> RunContext[BaseAgentContext]:
+def _ctx(seeded: Seeded, *, call: str) -> RunContext[ToolContext]:
     """The run's context a messaging tool is called with."""
     return RunContext(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=seeded.user_id,
             pod_id=seeded.pod_id,
             conversation_id=seeded.conversation_id,

@@ -22,7 +22,7 @@ from app.modules.agent.tools.connectors.models import (
     RunConnectorOperationRequest,
     SearchConnectorOperationsRequest,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 
 _DEFAULT = object()
@@ -32,7 +32,7 @@ def _run_ctx(*, org_id=_DEFAULT) -> SimpleNamespace:
     # Sentinel, not None: org_id=None is the case under test, so it must be
     # distinguishable from "caller did not specify".
     return SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),

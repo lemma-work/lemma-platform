@@ -147,7 +147,7 @@ class Audience(BaseModel):
 def run_audience(deps: object) -> Audience:
     """The audience a run's context carries, or a member's when it carries none.
 
-    For readers handed something shaped like an ``AgentContext`` that may not
+    For readers handed something shaped like an ``ToolContext`` that may not
     be one -- a bare ``RunContext.deps`` in a capability, say.
     """
     audience = getattr(deps, "audience", None)

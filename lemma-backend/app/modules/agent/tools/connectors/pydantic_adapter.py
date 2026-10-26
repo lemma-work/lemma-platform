@@ -43,7 +43,7 @@ from app.modules.agent.tools.connectors.models import (
     RunConnectorOperationRequest,
     SearchConnectorOperationsRequest,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 _MAX_VIOLATIONS = 10
 
@@ -132,7 +132,7 @@ def _offer_line(offer: Any) -> str:
     return f"- `{offer.name}` ({offer.connector_id}, {_OFFERED})"
 
 
-async def _usable(deps: BaseAgentContext) -> tuple[list[Any], list[Any]]:
+async def _usable(deps: ToolContext) -> tuple[list[Any], list[Any]]:
     """The pod's connectors this agent may use, and the person's own
     installations the pod declares no connector of their own account for."""
     async with connector_services(deps) as services:
@@ -145,7 +145,7 @@ async def _usable(deps: BaseAgentContext) -> tuple[list[Any], list[Any]]:
 
 async def _search_one(
     services: Any,
-    deps: BaseAgentContext,
+    deps: ToolContext,
     connector: str,
     *,
     query: str | None,
@@ -169,7 +169,7 @@ async def _search_one(
 
 
 async def _describe_one(
-    services: Any, deps: BaseAgentContext, connector: str, operation: str
+    services: Any, deps: ToolContext, connector: str, operation: str
 ) -> Any:
     offer = await services.reach.installation(services.ctx, deps.pod_id, connector)
     if offer is not None:
@@ -185,7 +185,7 @@ async def _describe_one(
 
 
 async def _describe_usable_connectors(
-    ctx: RunContext[BaseAgentContext], tool_def: ToolDefinition
+    ctx: RunContext[ToolContext], tool_def: ToolDefinition
 ) -> ToolDefinition:
     """Name the connectors this agent may use in the tool's own description.
 
@@ -214,7 +214,7 @@ async def _describe_usable_connectors(
 
 
 @connectors_toolset.tool
-async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
+async def list_connectors(ctx: RunContext[ToolContext]) -> dict[str, Any]:
     """List the pod's connectors you may run operations through.
 
     Each is named by its `connector` slug, which is how every other connector
@@ -257,7 +257,7 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
 
 @connectors_toolset.tool
 async def search_connector_operations(
-    ctx: RunContext[BaseAgentContext], request: SearchConnectorOperationsRequest
+    ctx: RunContext[ToolContext], request: SearchConnectorOperationsRequest
 ) -> dict[str, Any]:
     """Find operations by what they do, ranked by relevance.
 
@@ -303,7 +303,7 @@ async def search_connector_operations(
 
 @connectors_toolset.tool
 async def describe_connector_operation(
-    ctx: RunContext[BaseAgentContext], request: DescribeConnectorOperationRequest
+    ctx: RunContext[ToolContext], request: DescribeConnectorOperationRequest
 ) -> dict[str, Any]:
     """Get one operation's description and input/output schemas.
 
@@ -368,7 +368,7 @@ def _validate_arguments(
 
 @connectors_toolset.tool(prepare=_describe_usable_connectors)
 async def run_connector_operation(
-    ctx: RunContext[BaseAgentContext], request: RunConnectorOperationRequest
+    ctx: RunContext[ToolContext], request: RunConnectorOperationRequest
 ) -> dict[str, Any]:
     """Run an operation through one of the pod's connectors.
 

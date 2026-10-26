@@ -176,11 +176,11 @@ def agent_deps(installed_connector, connector_test_pod):
     flag every builder of this context sets. The named-agent cases below build
     their own context with a real agent id instead.
     """
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
     _install, org_id, user_id = installed_connector
     pod_id = UUID(str(connector_test_pod["id"]))
-    return BaseAgentContext(
+    return ToolContext(
         user_id=user_id,
         org_id=org_id,
         pod_id=pod_id,
@@ -356,12 +356,12 @@ class TestTheAgentCanUseATenantConnector:
         # arrives as data rather than an exception: the other three tools
         # already behave that way, and raising would end the agent's run over
         # something it can simply report.
-        from app.modules.agent.tools.context import BaseAgentContext
+        from app.modules.agent.domain.context import ToolContext
         from app.modules.agent.tools.connectors.pydantic_adapter import list_connectors
 
         install, _org, user_id = installed_connector
         elsewhere = uuid4()
-        stranger = BaseAgentContext(
+        stranger = ToolContext(
             user_id=user_id,
             org_id=agent_deps.org_id,
             pod_id=elsewhere,
@@ -395,10 +395,10 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
 
     @staticmethod
     def _named_agent_context(installed_connector, pod_id, *, agent_id, agent_name):
-        from app.modules.agent.tools.context import BaseAgentContext
+        from app.modules.agent.domain.context import ToolContext
 
         _install, org_id, user_id = installed_connector
-        return BaseAgentContext(
+        return ToolContext(
             user_id=user_id,
             org_id=org_id,
             pod_id=pod_id,

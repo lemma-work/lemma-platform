@@ -37,7 +37,7 @@ from app.modules.agent.tools.connectors.models import RunConnectorOperationReque
 from app.modules.agent.tools.connectors.pydantic_adapter import (
     run_connector_operation,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.connectors.api.dependencies import get_connector_service
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.connector import Connector
@@ -52,7 +52,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 _SLUG = "mail"
 
 
-def _run_context(deps: BaseAgentContext):
+def _run_context(deps: ToolContext):
     from pydantic_ai.tools import RunContext
     from pydantic_ai.usage import RunUsage
 
@@ -125,8 +125,8 @@ async def asked(scenario: E2EScenario) -> Seeded:
 
 def _deps(
     scenario: E2EScenario, seeded: Seeded, *, user_id: UUID | None = None
-) -> BaseAgentContext:
-    return BaseAgentContext(
+) -> ToolContext:
+    return ToolContext(
         user_id=user_id or seeded.user_id,
         org_id=UUID(scenario.org_id),
         pod_id=seeded.pod_id,

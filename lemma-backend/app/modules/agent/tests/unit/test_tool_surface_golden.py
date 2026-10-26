@@ -55,7 +55,7 @@ from app.modules.agent.services.pod_mcp_service import (
     PodMCPService,
     VerifiedSession,
 )
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
@@ -130,10 +130,8 @@ def _conversation(**fields: Any) -> Conversation:
     )
 
 
-def _ctx(
-    agent: Agent, conversation: Conversation, **fields: Any
-) -> ConversationContext:
-    return ConversationContext(
+def _ctx(agent: Agent, conversation: Conversation, **fields: Any) -> ToolContext:
+    return ToolContext(
         user_id=USER,
         org_id=ORG,
         pod_id=POD,
@@ -336,7 +334,7 @@ async def _in_process_listing(
     *,
     agent: Agent,
     conversation: Conversation,
-    ctx: ConversationContext,
+    ctx: ToolContext,
     grants: AgentGrantSummary | None,
 ) -> dict[str, Any]:
     """What the model's first request carries, through the real assembly."""
@@ -403,7 +401,7 @@ async def _agent_host_listing(
     *,
     agent: Agent,
     conversation: Conversation,
-    ctx: ConversationContext,
+    ctx: ToolContext,
     grants: AgentGrantSummary | None,
 ) -> list[dict[str, Any]]:
     service = ConversationMCPService()

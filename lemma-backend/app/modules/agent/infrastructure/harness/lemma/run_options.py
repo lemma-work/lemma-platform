@@ -21,11 +21,11 @@ from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.value_objects import ConversationType, HarnessKind
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.final_answer import get_final_answer_tool
 
-type Toolsets = list[AbstractToolset[ConversationContext]]
-type Capabilities = list[AgentCapability[ConversationContext]]
+type Toolsets = list[AbstractToolset[ToolContext]]
+type Capabilities = list[AgentCapability[ToolContext]]
 
 
 def harness_usage_limits() -> UsageLimits:
@@ -63,8 +63,8 @@ def final_answer_output(
 
 async def harness_tooling(
     *,
-    ctx: ConversationContext,
-    full_toolsets: Sequence[AbstractToolset[ConversationContext]],
+    ctx: ToolContext,
+    full_toolsets: Sequence[AbstractToolset[ToolContext]],
     resolved: ResolvedAgentRuntime,
 ) -> tuple[Toolsets, Capabilities]:
     """The toolsets and capabilities a run's harness reads.

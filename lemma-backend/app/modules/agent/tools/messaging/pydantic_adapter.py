@@ -39,7 +39,7 @@ from app.modules.agent.domain.asked_questions import (
 )
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.private_notes import defuse_lemma_labels
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.messaging.models import (
     ChannelListRequest,
     ChannelListResponse,
@@ -85,7 +85,7 @@ def _uow() -> SqlAlchemyUnitOfWork:
     return SessionUnitOfWorkFactory(async_session_maker)()
 
 
-def _refused_to_outsiders(deps: BaseAgentContext) -> str | None:
+def _refused_to_outsiders(deps: ToolContext) -> str | None:
     if run_audience(deps).answers_outsiders:
         return (
             "You are answering somebody outside the pod. When they need a "
@@ -141,7 +141,7 @@ def _summary(
     )
 
 
-def _sender(deps: BaseAgentContext) -> Sender:
+def _sender(deps: ToolContext) -> Sender:
     """The run's agent, speaking for the run's member."""
     return Sender.agent(
         effective_agent_id(deps.workload_id, pod_id=deps.pod_id),
@@ -150,19 +150,19 @@ def _sender(deps: BaseAgentContext) -> Sender:
     )
 
 
-def _call_key(deps: BaseAgentContext, ctx: RunContext[BaseAgentContext]) -> str | None:
+def _call_key(deps: ToolContext, ctx: RunContext[ToolContext]) -> str | None:
     """This call, named: a retried worker job replays it with the same name."""
     if deps.agent_run_id and ctx.tool_call_id:
         return line_client_id(f"{deps.agent_run_id}:{ctx.tool_call_id}")
     return None
 
 
-async def _viewer(uow: SqlAlchemyUnitOfWork, deps: BaseAgentContext) -> Viewer:
+async def _viewer(uow: SqlAlchemyUnitOfWork, deps: ToolContext) -> Viewer:
     return await channel_reads.viewer_of(uow, pod_id=deps.pod_id, user_id=deps.user_id)
 
 
 async def channel_post(
-    ctx: RunContext[BaseAgentContext], request: ChannelPostRequest
+    ctx: RunContext[ToolContext], request: ChannelPostRequest
 ) -> ChannelPostResponse:
     """Write to a member of the pod who is not in this conversation, or in a
     channel.
@@ -201,7 +201,7 @@ async def channel_post(
 
 
 async def _post_to_member(
-    ctx: RunContext[BaseAgentContext], request: ChannelPostRequest
+    ctx: RunContext[ToolContext], request: ChannelPostRequest
 ) -> ChannelPostResponse:
     deps = ctx.deps
     recipient = await direct_messages.resolve_recipient(
@@ -286,7 +286,7 @@ def _group_refused(answers_shared: bool) -> str:
 
 
 async def _post_in_channel(
-    ctx: RunContext[BaseAgentContext], channel_id: UUID, text: str
+    ctx: RunContext[ToolContext], channel_id: UUID, text: str
 ) -> ChannelPostResponse:
     deps = ctx.deps
     async with _uow() as uow:
@@ -332,7 +332,7 @@ async def _post_in_channel(
 
 
 async def channel_read(
-    ctx: RunContext[BaseAgentContext], request: ChannelReadRequest
+    ctx: RunContext[ToolContext], request: ChannelReadRequest
 ) -> ChannelReadResponse:
     """Read a channel's latest lines -- or, with `asked_by_me`, the questions
     this conversation put to people and their answers, newest first.
@@ -372,7 +372,7 @@ async def channel_read(
     )
 
 
-async def _asked_by_me(deps: BaseAgentContext, *, limit: int) -> ChannelReadResponse:
+async def _asked_by_me(deps: ToolContext, *, limit: int) -> ChannelReadResponse:
     """This conversation's questions to people, newest first -- the latest are
     the ones a turn opening on "they have answered" is about."""
     if deps.conversation_id is None:
@@ -406,7 +406,7 @@ async def _asked_by_me(deps: BaseAgentContext, *, limit: int) -> ChannelReadResp
 
 
 async def channel_search(
-    ctx: RunContext[BaseAgentContext], request: ChannelSearchRequest
+    ctx: RunContext[ToolContext], request: ChannelSearchRequest
 ) -> ChannelSearchResponse:
     """Find lines in the channels you can read that contain every word."""
     deps = ctx.deps
@@ -438,7 +438,7 @@ async def channel_search(
 
 
 async def channel_list(
-    ctx: RunContext[BaseAgentContext], request: ChannelListRequest
+    ctx: RunContext[ToolContext], request: ChannelListRequest
 ) -> ChannelListResponse:
     """The pod's channels you can read, most recently active first, with the
     outside places each is fed from."""
@@ -476,7 +476,7 @@ async def channel_list(
     )
 
 
-messaging_toolset = FunctionToolset[BaseAgentContext](
+messaging_toolset = FunctionToolset[ToolContext](
     tools=[
         channel_post,
         channel_read,

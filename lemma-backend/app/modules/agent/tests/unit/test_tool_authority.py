@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.context import AgentContext, ApprovedExecution
+from app.modules.agent.domain.context import ToolContext, ApprovedExecution
 from app.modules.agent.tools.authority import workload_actor_id, workspace_principal
 from app.modules.test_support import source_tree
 
@@ -24,7 +24,7 @@ _AGENT_MODULE = Path(__file__).resolve().parents[2]
 _THE_ONE_PLACE = _AGENT_MODULE / "tools" / "authority.py"
 
 
-def _context(**overrides) -> AgentContext:
+def _context(**overrides) -> ToolContext:
     fields = {
         "user_id": uuid4(),
         "pod_id": uuid4(),
@@ -32,10 +32,10 @@ def _context(**overrides) -> AgentContext:
         "agent_name": "chore-agent",
     }
     fields.update(overrides)
-    return AgentContext(**fields)
+    return ToolContext(**fields)
 
 
-def _approved(ctx: AgentContext) -> AgentContext:
+def _approved(ctx: ToolContext) -> ToolContext:
     return ctx.model_copy(
         update={
             "approved_execution": ApprovedExecution(

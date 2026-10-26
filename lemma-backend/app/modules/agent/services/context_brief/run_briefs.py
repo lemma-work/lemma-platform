@@ -30,7 +30,7 @@ from app.modules.agent.services.context_brief.attached_document import (
 from app.modules.agent.services.context_brief.lines import run_trigger_of
 from app.modules.agent.services.context_brief.link import link_brief
 from app.modules.agent.services.context_brief.outsider import outsider_brief
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 from uuid import UUID
 
@@ -45,7 +45,7 @@ _CONTEXT_BRIEF_UNAVAILABLE = (
 
 
 async def run_briefs(
-    ctx: ConversationContext,
+    ctx: ToolContext,
     uow_factory: UnitOfWorkFactory,
     *,
     conversation: Conversation,
@@ -102,7 +102,7 @@ async def run_briefs(
 
 
 async def _brief(
-    ctx: ConversationContext,
+    ctx: ToolContext,
     uow_factory: UnitOfWorkFactory,
     *,
     conversation: Conversation,

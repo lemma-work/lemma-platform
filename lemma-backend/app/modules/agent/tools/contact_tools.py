@@ -23,7 +23,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
 from app.modules.datastore.contracts.contact_rows import (
     MAX_CONTACT_ROWS,
@@ -54,7 +54,7 @@ _STILL_RUNNING = (
 _JSON_SCALARS = (str, int, float, bool, list, dict)
 
 
-def _call_key(ctx: RunContext[BaseAgentContext]) -> str | None:
+def _call_key(ctx: RunContext[ToolContext]) -> str | None:
     """One key per tool call, so a replayed turn does not run it twice.
 
     Scoped to the conversation: a tool call id is only unique within the
@@ -119,12 +119,12 @@ def build_contact_toolset(
     uow_factory: UnitOfWorkFactory,
     read_rows: ReadContactRows | None = None,
     run_function: RunContactFunction | None = None,
-) -> FunctionToolset[BaseAgentContext]:
+) -> FunctionToolset[ToolContext]:
     read_rows = read_rows or partial(rows_for_contact, uow_factory)
     run_function = run_function or partial(run_function_for_contact, uow_factory)
 
     async def contact_records(
-        ctx: RunContext[BaseAgentContext], request: ContactRecordsRequest
+        ctx: RunContext[ToolContext], request: ContactRecordsRequest
     ) -> dict[str, object]:
         """Read the rows a contact-owned table holds about the person you are
         talking to. Only their rows are ever returned."""
@@ -149,7 +149,7 @@ def build_contact_toolset(
         }
 
     async def contact_function(
-        ctx: RunContext[BaseAgentContext], request: ContactFunctionRequest
+        ctx: RunContext[ToolContext], request: ContactFunctionRequest
     ) -> dict[str, object]:
         """Run a function the pod opened to contacts, for the person you are
         talking to. Use it for what they ask you to do, not to explore."""
@@ -188,6 +188,6 @@ def build_contact_toolset(
             ),
         }
 
-    return FunctionToolset[BaseAgentContext](
+    return FunctionToolset[ToolContext](
         tools=[contact_records, contact_function], id=CONTACT_TOOLSET_ID
     )

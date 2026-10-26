@@ -17,7 +17,7 @@ from app.modules.agent.domain.workspace_location import (
     resolve_pod_cwd,
     resolve_workspace_location,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli.workspace_cli import (
     workspace_runtime_context,
 )
@@ -110,9 +110,9 @@ def test_a_context_without_a_conversation_falls_back_to_the_project_root():
     bridge, carries a *nil* conversation id, so the directory it named was all
     zeroes. The root is the honest answer to "no conversation".
     """
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
-    ctx = BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+    ctx = ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
 
     assert ctx.get_workspace_cwd() == WORKSPACE_ROOT
     assert "/conversations/" not in ctx.get_workspace_cwd()
@@ -136,13 +136,13 @@ def test_python_runtime_identity_tracks_conversation_working_directory():
         "agent_name": "builder",
     }
     first = workspace_runtime_context(
-        BaseAgentContext(
+        ToolContext(
             **common,
             workspace_cwd=f"{WORKSPACE_ROOT}/conversations/first",
         )
     )
     second = workspace_runtime_context(
-        BaseAgentContext(
+        ToolContext(
             **common,
             workspace_cwd=f"{WORKSPACE_ROOT}/conversations/second",
         )
@@ -212,7 +212,7 @@ async def test_subagent_shell_and_python_runtimes_use_the_inherited_directory():
 
     contexts = [
         workspace_runtime_context(
-            BaseAgentContext(
+            ToolContext(
                 user_id=conversation.user_id,
                 pod_id=conversation.pod_id,
                 conversation_id=conversation.id,

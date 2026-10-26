@@ -26,7 +26,7 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.file_access import is_datastore_path
 from app.modules.agent.tools.pod.pod_data_access import pod_services
 
@@ -51,7 +51,7 @@ def is_pod_datastore_path(path: str) -> bool:
 
 @asynccontextmanager
 async def pod_datastore_access(
-    deps: BaseAgentContext,
+    deps: ToolContext,
 ) -> AsyncIterator[PodDatastoreAccess]:
     """The run's delegated-workload authorization, for the length of the block.
 

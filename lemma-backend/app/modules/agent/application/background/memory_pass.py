@@ -74,7 +74,7 @@ from app.modules.agent.services.runtime_resolution import (
     RuntimeRequest,
     resolve_runtime,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.pod.memory_pass_tools import (
     MemoryScope,
     memory_pass_toolset,
@@ -279,7 +279,7 @@ class MemoryPass:
             reply_before=turn.reply_before,
             today=datetime.now(UTC).date(),
         )
-        deps = BaseAgentContext(
+        deps = ToolContext(
             user_id=user_id,
             org_id=conversation.organization_id,
             pod_id=conversation.pod_id,
@@ -307,7 +307,7 @@ class MemoryPass:
             ),
             toolsets=[memory_pass_toolset(MemoryScope(agent_memory_paths(agent)))],
             deps=deps,
-            deps_type=BaseAgentContext,
+            deps_type=ToolContext,
         )
         answer = await self._background.ask(
             RuntimePurpose.MEMORY,

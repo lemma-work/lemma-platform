@@ -52,7 +52,7 @@ from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
 from app.modules.agent.tools.approval_denials import show_card
 from app.modules.agent.tools.authority import workload_actor_id
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.scripted_model import script_text, script_tool_call
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_authz import (
@@ -87,7 +87,7 @@ async def _chat(client, pod_id: str) -> UUID:
 
 
 def _deps(*, user_id: UUID, org_id: UUID, pod_id: str, conversation_id: UUID):
-    return BaseAgentContext(
+    return ToolContext(
         user_id=user_id,
         org_id=org_id,
         pod_id=UUID(pod_id),
@@ -100,7 +100,7 @@ async def _two_pods(client, org) -> tuple[str, str]:
     return await _create_test_pod(client, org), await _create_test_pod(client, org)
 
 
-async def _teammate(deps: BaseAgentContext, pod_id: str):
+async def _teammate(deps: ToolContext, pod_id: str):
     teammates = await _service().teammates(
         user_id=deps.user_id, organization_id=deps.org_id, pod_id=deps.pod_id
     )

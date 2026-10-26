@@ -22,7 +22,7 @@ from app.modules.agent.domain.prompt.directories import _directory_sections
 from app.modules.agent.domain.value_objects import AgentToolset
 
 if TYPE_CHECKING:
-    from app.modules.agent.domain.context import AgentContext
+    from app.modules.agent.domain.context import ToolContext
     from app.modules.agent.domain.entities import Agent, Conversation
 
 _PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts"
@@ -298,7 +298,7 @@ def build_agent_instructions(
     *,
     agent: Agent,
     conversation: Conversation,
-    ctx: AgentContext,
+    ctx: ToolContext,
     include_toolset_prompts: bool = True,
     runs_as_remote_process: bool = False,
 ) -> str:
@@ -320,7 +320,7 @@ def build_agent_instruction_parts(
     *,
     agent: Agent,
     conversation: Conversation,
-    ctx: AgentContext,
+    ctx: ToolContext,
     include_toolset_prompts: bool = True,
     runs_as_remote_process: bool = False,
 ) -> tuple[str, str]:
@@ -403,7 +403,7 @@ def build_agent_instruction_parts(
     )
 
 
-def _remote_fragments(enabled: set[AgentToolset], *, ctx: AgentContext) -> list[str]:
+def _remote_fragments(enabled: set[AgentToolset], *, ctx: ToolContext) -> list[str]:
     """The per-toolset guidance a harness with no capability layer is given.
 
     The in-process LEMMA harness gets the same text from its capabilities, and
@@ -443,7 +443,7 @@ def _fragment_toolsets(
     *,
     agent: Agent,
     conversation: Conversation,
-    ctx: AgentContext,
+    ctx: ToolContext,
 ) -> set[AgentToolset]:
     """Toolsets whose guidance this run gets: the ones it actually has.
 

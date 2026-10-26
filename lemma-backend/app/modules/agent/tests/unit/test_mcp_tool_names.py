@@ -29,7 +29,7 @@ from app.modules.agent.tools.callable_tool_factory import (
     AgentCallableToolFactory,
     distinct_tool_names,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 
 # What Claude and OpenAI accept as a tool name.
@@ -147,11 +147,11 @@ async def test_a_long_agent_name_is_listed_and_called_by_the_same_tool_name() ->
     tool = AgentCallableToolFactory(uow_factory)._build_agent_tool(
         child, parent_agent=parent
     )
-    toolset = FunctionToolset[BaseAgentContext](tools=[tool])
+    toolset = FunctionToolset[ToolContext](tools=[tool])
     # The child itself calling its own tool is refused before anything is
     # spawned, which is all the dispatch half needs: an unknown name would
     # be refused as unknown instead.
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=user_id, pod_id=pod_id, conversation_id=uuid4(), agent_name=child.name
     )
     dispatcher = AgentToolDispatcher(uow_factory)

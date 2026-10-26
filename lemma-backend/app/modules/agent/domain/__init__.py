@@ -1,6 +1,6 @@
 """Agent domain contracts."""
 
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
@@ -33,7 +33,7 @@ __all__ = [
     "AGENT_EVENTS_STREAM",
     "ACTIVE_AGENT_RUN_STATUSES",
     "Agent",
-    "AgentContext",
+    "ToolContext",
     "AgentEvent",
     "AgentEventType",
     "AgentRuntimeConfig",

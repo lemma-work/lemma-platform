@@ -54,7 +54,7 @@ from app.modules.agent.services.subagent_result_delivery import mark_collected
 
 if TYPE_CHECKING:
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
 
 class SubAgentError(RuntimeError):
@@ -92,7 +92,7 @@ class ParentRuntimeLookup(Protocol):
     async def __call__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        deps: BaseAgentContext,
+        deps: ToolContext,
         *,
         is_self: bool,
         target_name: str | None,
@@ -104,7 +104,7 @@ async def inherited_runtime(
     runs: _RunReader,
     conversations: _ConversationReader,
     agents: _AgentReader,
-    deps: BaseAgentContext,
+    deps: ToolContext,
     is_self: bool,
     target_name: str | None,
 ) -> AgentRuntimeConfig | None:
@@ -132,7 +132,7 @@ async def inherited_runtime(
 
 async def _parent_runtime_from(
     uow: SqlAlchemyUnitOfWork,
-    deps: BaseAgentContext,
+    deps: ToolContext,
     *,
     is_self: bool,
     target_name: str | None,
@@ -256,7 +256,7 @@ class SubAgentService:
     async def _already_spawned(
         self,
         uow: SqlAlchemyUnitOfWork,
-        deps: BaseAgentContext,
+        deps: ToolContext,
         key: str,
         *,
         spawn_call: str | None = None,

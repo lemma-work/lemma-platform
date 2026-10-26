@@ -45,7 +45,7 @@ from app.modules.agent.infrastructure.harness.lemma.retry import (
 from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
     ModelRequestStreamer,
 )
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompt.templates import build_agent_instruction_parts
@@ -108,7 +108,7 @@ def _instructions(
     *,
     agent: Agent,
     conversation: Conversation,
-    ctx: AgentContext,
+    ctx: ToolContext,
 ) -> list[str | Callable[[], str]]:
     """The run's system instructions, timed as its own phase.
 
@@ -158,7 +158,7 @@ class PydanticAIHarness:
         # inside this module.
         self._model = model
 
-    async def run[DepsT: AgentContext](
+    async def run[DepsT: ToolContext](
         self,
         *,
         agent: Agent,
@@ -277,7 +277,7 @@ class PydanticAIHarness:
         # the events that close it.
         yield terminal
 
-    async def _execute[DepsT: AgentContext](
+    async def _execute[DepsT: ToolContext](
         self,
         *,
         agent: Agent,

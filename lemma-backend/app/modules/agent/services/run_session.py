@@ -89,7 +89,7 @@ from app.modules.agent.services.runtime_resolution import (
 )
 from app.modules.agent.services.surface_context import surface_context_for_run
 from app.modules.agent.services.vision_service import vision_delegate_available
-from app.modules.agent.tools.context import BaseAgentContext, ConversationContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.callable_tool_factory import grant_summary_of
 from app.modules.agent.tools.toolset_selection import (
     AgentGrantSummary,
@@ -322,7 +322,7 @@ class RunSession:
         *,
         user_id: UUID,
         configured_accounts: ConfiguredAccounts,
-    ) -> ConversationContext:
+    ) -> ToolContext:
         """The context this run's tools execute against, briefs included.
 
         Built once, before the model is called, because several of these settle
@@ -345,7 +345,7 @@ class RunSession:
         audience = Audience.of(conversation)
         for_outsider = audience.answers_outsiders
         memory_enabled = memory_is_active(run_toolsets)
-        ctx = ConversationContext(
+        ctx = ToolContext(
             **self._identity(user_id=user_id, agent_run_id=agent_run.id),
             # The owner's connector accounts are theirs; a stranger's run has
             # no connector tools to use them with, and must not be handed them.
@@ -440,7 +440,7 @@ class RunSession:
             await uow.commit()
         self.conversation.cwd = self.workspace.cwd
 
-    async def _settle_host(self, ctx: ConversationContext, *, user_id: UUID) -> None:
+    async def _settle_host(self, ctx: ToolContext, *, user_id: UUID) -> None:
         """Where this run's commands execute, decided once, here, for the run.
 
         Imported here to keep host selection (and the workspace module's host
@@ -472,7 +472,7 @@ class RunSession:
         user_id: UUID,
         agent_run_id: UUID,
         configured_accounts: ConfiguredAccounts,
-    ) -> ConversationContext:
+    ) -> ToolContext:
         """The paused run's context, for an approved tool run as the user.
 
         Surface delivery is omitted -- approval-gated tools don't deliver to
@@ -485,7 +485,7 @@ class RunSession:
         )
 
         assert self.agent is not None
-        return ConversationContext(
+        return ToolContext(
             vision_mode=self.vision_mode(),
             **self._identity(user_id=user_id, agent_run_id=agent_run_id),
             configured_accounts=await configured_accounts(
@@ -496,7 +496,7 @@ class RunSession:
             host_workspace=await recorded_host_workspace(agent_run_id),
         )
 
-    def relayed_context(self, *, agent_run_id: UUID | None) -> BaseAgentContext:
+    def relayed_context(self, *, agent_run_id: UUID | None) -> ToolContext:
         """The context one relayed (Agent Host MCP) tool call runs against.
 
         It is the tool path for *every* remote harness, so anything left at its
@@ -509,7 +509,7 @@ class RunSession:
         from app.modules.agent.domain.vision import vision_mode_from_runtime_profile
 
         run = self.run
-        return BaseAgentContext(
+        return ToolContext(
             **self._identity(
                 user_id=self.conversation.user_id,
                 agent_run_id=agent_run_id or (run.id if run is not None else None),
@@ -537,7 +537,7 @@ def pod_tool_context(
     agent_name: str | None = None,
     is_pod_default_agent: bool = True,
     delegation_scope: frozenset[str] = frozenset(),
-) -> BaseAgentContext:
+) -> ToolContext:
     """The pod-scoped variant: a pod token's tools, with no run behind them.
 
     There is no run here, and so no runtime profile to ask -- this serves an
@@ -546,7 +546,7 @@ def pod_tool_context(
     to do with an image, and one that cannot read it still gets the same JSON
     answer beside it.
     """
-    return BaseAgentContext(
+    return ToolContext(
         user_id=user_id,
         pod_id=pod_id,
         conversation_id=NIL_CONVERSATION_ID,

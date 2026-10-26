@@ -12,7 +12,7 @@ import posixpath
 from uuid import uuid7
 
 from app.core.log.log import get_logger
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.file_access import read_agent_file_bytes
 from app.modules.agent.tools.pod.pod_data_access import pod_services
 from app.modules.agent.tools.speech.models import (
@@ -29,7 +29,7 @@ _MAX_AUDIO_BYTES = 50 * 1024 * 1024
 _SUPPORTED_TTS_FORMATS = {"mp3", "wav", "ogg", "opus"}
 
 
-def _both_spellings_of(deps: BaseAgentContext, path: str) -> tuple[str, ...]:
+def _both_spellings_of(deps: ToolContext, path: str) -> tuple[str, ...]:
     """The datastore path as stored and as a person would write it.
 
     ``/me/whatsapp/audio.ogg`` and ``/{user_id}/whatsapp/audio.ogg`` are the same
@@ -44,7 +44,7 @@ def _both_spellings_of(deps: BaseAgentContext, path: str) -> tuple[str, ...]:
     return (path,)
 
 
-async def _already_transcribed(deps: BaseAgentContext, path: str) -> str | None:
+async def _already_transcribed(deps: ToolContext, path: str) -> str | None:
     """What ingress already made of this file, if it made anything.
 
     Best effort by construction: a lookup that fails must fall through to a real
@@ -84,9 +84,7 @@ async def _already_transcribed(deps: BaseAgentContext, path: str) -> str | None:
         return None
 
 
-async def listen_internal(
-    deps: BaseAgentContext, request: ListenRequest
-) -> ListenResponse:
+async def listen_internal(deps: ToolContext, request: ListenRequest) -> ListenResponse:
     path = (request.file_path or "").strip()
     if not path:
         return ListenResponse(success=False, error="file_path is required.")
@@ -176,7 +174,7 @@ def _voice_note_format_for(platform: str | None) -> str:
     return voice_note_format(platform)
 
 
-async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool | None:
+async def _deliver_voice_note(deps: ToolContext, path: str) -> bool | None:
     """Get the audio to the person, however this surface delivers.
 
     Branching by the platform's delivery cardinality rather than by whether it
@@ -229,7 +227,7 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool | None:
     return await deliver_voice_note(conversation_id=conversation_id, file_path=path)
 
 
-async def say_internal(deps: BaseAgentContext, request: SayRequest) -> SayResponse:
+async def say_internal(deps: ToolContext, request: SayRequest) -> SayResponse:
     text = (request.text or "").strip()
     if not text:
         return SayResponse(success=False, error="text is required.")

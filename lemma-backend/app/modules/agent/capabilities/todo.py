@@ -32,7 +32,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.capabilities.todo_storage import ConversationTodoStore
 from app.modules.agent.domain.prompt.templates import load_todo_prompt
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 
 class WriteTodosRequest(BaseModel):
@@ -294,7 +294,7 @@ def build_todo_toolset(
     *,
     uow_factory: UnitOfWorkFactory,
     conversation_id: UUID,
-) -> FunctionToolset[BaseAgentContext]:
+) -> FunctionToolset[ToolContext]:
     """Build the todo FunctionToolset persisting to conversation metadata.
 
     Shared by both harness families: RunToolAssembler includes it directly (so it
@@ -306,7 +306,7 @@ def build_todo_toolset(
     )
 
     async def write_todos(
-        ctx: RunContext[BaseAgentContext], request: WriteTodosRequest
+        ctx: RunContext[ToolContext], request: WriteTodosRequest
     ) -> JsonObject:
         """Add or update task-list items from markdown checklist lines.
 
@@ -346,4 +346,4 @@ def build_todo_toolset(
         await store.write(todos)
         return _todo_result(todos)
 
-    return FunctionToolset[BaseAgentContext](tools=[write_todos], id=TODO_TOOLSET_ID)
+    return FunctionToolset[ToolContext](tools=[write_todos], id=TODO_TOOLSET_ID)

@@ -54,7 +54,7 @@ from app.modules.agent.domain.prompt.run_context import run_context_for
 from app.modules.agent.capabilities.surface_platform import SurfacePlatformCapability
 from app.modules.agent.domain.prompt.surface import is_group_conversation
 from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
@@ -130,13 +130,13 @@ def _agent_has_toolset(agent: Agent, toolset: AgentToolset) -> bool:
 
 
 def _partition_core_extra(
-    toolsets: list[AbstractToolset[ConversationContext]],
+    toolsets: list[AbstractToolset[ToolContext]],
     *,
     is_pod_default: bool,
     answers_outsider: bool = False,
 ) -> tuple[
-    list[AbstractToolset[ConversationContext]],
-    list[AbstractToolset[ConversationContext]],
+    list[AbstractToolset[ToolContext]],
+    list[AbstractToolset[ToolContext]],
 ]:
     """Split toolsets into core (prompt-visible) vs extra (deferred via ToolSearch).
 
@@ -153,8 +153,8 @@ def _partition_core_extra(
     """
     if not is_pod_default:
         return list(toolsets), []
-    core: list[AbstractToolset[ConversationContext]] = []
-    extra: list[AbstractToolset[ConversationContext]] = []
+    core: list[AbstractToolset[ToolContext]] = []
+    extra: list[AbstractToolset[ToolContext]] = []
     for toolset in toolsets:
         deferred = id(toolset) in _EXTRA_TOOLSET_IDS and not (
             answers_outsider and toolset is messaging_toolset
@@ -164,8 +164,8 @@ def _partition_core_extra(
 
 
 def _graceful(
-    toolset: AbstractToolset[ConversationContext],
-) -> AbstractToolset[ConversationContext]:
+    toolset: AbstractToolset[ToolContext],
+) -> AbstractToolset[ToolContext]:
     """Wrap a toolset so a raising tool body returns an error instead of aborting.
 
     Identity checks in the assembler run on the RAW toolset before this wraps it,
@@ -202,10 +202,10 @@ def _instructions_for(
 
 
 def _visible_capability(
-    toolset: AbstractToolset[ConversationContext],
+    toolset: AbstractToolset[ToolContext],
     *,
     host_execution: bool = False,
-) -> AgentCapability[ConversationContext]:
+) -> AgentCapability[ToolContext]:
     """Wrap one visible toolset as a capability.
 
     Toolsets that carry usage guidance get an instructions-bearing capability
@@ -226,10 +226,10 @@ def _visible_capability(
 
 
 def _deferred_capability(
-    toolset: AbstractToolset[ConversationContext],
+    toolset: AbstractToolset[ToolContext],
     *,
     host_execution: bool = False,
-) -> AgentCapability[ConversationContext]:
+) -> AgentCapability[ToolContext]:
     """Wrap one extra toolset as a deferred-loading capability.
 
     Graceful wrapping is applied INNER and deferral OUTER, so ``ToolSearch`` still
@@ -250,11 +250,11 @@ def _deferred_capability(
 
 async def build_lemma_harness_tooling(
     *,
-    ctx: ConversationContext,
-    full_toolsets: list[AbstractToolset[ConversationContext]],
+    ctx: ToolContext,
+    full_toolsets: list[AbstractToolset[ToolContext]],
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
-) -> list[AgentCapability[ConversationContext]]:
+) -> list[AgentCapability[ToolContext]]:
     """Return the full capability list for the in-process LEMMA harness.
 
     It used to take an agent, a unit of work and a run id as well, and discard
@@ -276,11 +276,11 @@ async def build_lemma_harness_tooling(
 
 async def _build_lemma_harness_tooling(
     *,
-    ctx: ConversationContext,
-    full_toolsets: list[AbstractToolset[ConversationContext]],
+    ctx: ToolContext,
+    full_toolsets: list[AbstractToolset[ToolContext]],
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol,
-) -> list[AgentCapability[ConversationContext]]:
+) -> list[AgentCapability[ToolContext]]:
     core, extra = _partition_core_extra(
         full_toolsets,
         is_pod_default=ctx.is_pod_default_agent,
@@ -290,7 +290,7 @@ async def _build_lemma_harness_tooling(
     # The todo toolset (if the agent has TODO) already arrives in `full_toolsets`
     # from RunToolAssembler and is wrapped by `_visible_capability` above.
     host_execution = getattr(ctx, "host_workspace", None) is not None
-    capabilities: list[AgentCapability[ConversationContext]] = [
+    capabilities: list[AgentCapability[ToolContext]] = [
         _visible_capability(obj, host_execution=host_execution) for obj in core
     ]
     # A provider that repeats a tool call under one id must not run it twice.

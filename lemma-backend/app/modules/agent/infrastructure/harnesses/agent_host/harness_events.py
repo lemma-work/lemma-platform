@@ -17,7 +17,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pausing_tools import (
     USER_PAUSING_TOOL_NAMES,
@@ -83,7 +83,7 @@ class RunEventApplier:
         normalizer: AgentHostEventNormalizer,
         entry: StreamedEvent,
         *,
-        ctx: AgentContext,
+        ctx: ToolContext,
         conversation: Conversation,
         agent_run_id: UUID,
     ) -> list[AgentEvent]:
@@ -135,7 +135,7 @@ class RunEventApplier:
         normalizer: AgentHostEventNormalizer,
         entry: StreamedEvent,
         *,
-        ctx: AgentContext,
+        ctx: ToolContext,
         conversation: Conversation,
         agent_run_id: UUID,
         warnings: list[AgentEvent],

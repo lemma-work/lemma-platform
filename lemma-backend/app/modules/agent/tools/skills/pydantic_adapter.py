@@ -6,7 +6,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.modules.agent.tools.tool_payload_limits import bounded_tool_text
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.skills.models import (
     ListSkillsRequest,
     SkillContentResult,
@@ -90,7 +90,7 @@ SKILL_RUNTIME_OVERRIDES = (
 LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER = "## Local Lemma Workspace Override"
 
 
-def skill_runtime_override(deps: BaseAgentContext) -> str:
+def skill_runtime_override(deps: ToolContext) -> str:
     """The block appended to a loaded skill, for the tools this run has.
 
     ``supports_pause_signal`` is set only for the in-process harness, so its
@@ -113,7 +113,7 @@ logger = get_logger(__name__)
 
 
 async def list_skills(
-    ctx: RunContext[BaseAgentContext], request: ListSkillsRequest
+    ctx: RunContext[ToolContext], request: ListSkillsRequest
 ) -> SkillListResult:
     """List the available skills. Pass `{}`; call before `load_skill`."""
     del request
@@ -137,7 +137,7 @@ async def list_skills(
 
 
 async def load_skill(
-    ctx: RunContext[BaseAgentContext], request: SkillLookupRequest
+    ctx: RunContext[ToolContext], request: SkillLookupRequest
 ) -> SkillContentResult:
     """
     Load a skill's `SKILL.md`, or one resource file from inside it.
@@ -218,4 +218,4 @@ async def load_skill(
     )
 
 
-skills_toolset = FunctionToolset[BaseAgentContext](tools=[list_skills, load_skill])
+skills_toolset = FunctionToolset[ToolContext](tools=[list_skills, load_skill])

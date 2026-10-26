@@ -26,7 +26,7 @@ from app.modules.agent.capabilities.open_questions import (
     shown_to_the_agent,
 )
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.messaging.answer import answer_question
 from app.modules.agent.tools.messaging.models import AnswerQuestionRequest
 from app.modules.channels.contracts import (
@@ -230,7 +230,7 @@ def test_only_what_an_agent_may_answer_is_put_in_front_of_it(kind, ref, shown):
 
 def _ctx(*, audience: Audience | None = None):
     return SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=MEMBER,
             pod_id=uuid4(),
             conversation_id=uuid4(),

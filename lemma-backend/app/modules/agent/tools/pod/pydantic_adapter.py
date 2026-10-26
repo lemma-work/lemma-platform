@@ -16,7 +16,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.tool_payload_limits import bounded_rows
 from app.modules.agent.tools.pod.models import (
     PodGetRecordsRequest,
@@ -86,7 +86,7 @@ async def _table_context(services: PodServices, table_name: str) -> TableContext
 
 
 async def pod_tables(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: PodTablesRequest,
 ) -> JsonObject:
     """List the pod's tables with their column schemas, or describe one table.
@@ -112,7 +112,7 @@ async def pod_tables(
 
 
 async def pod_get_records(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: PodGetRecordsRequest,
 ) -> JsonObject:
     """Read records from a pod table.
@@ -153,7 +153,7 @@ async def pod_get_records(
 
 
 async def pod_write_record(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: PodWriteRecordRequest,
 ) -> JsonObject:
     """Create, update, or delete a record in a pod table.
@@ -224,7 +224,7 @@ async def pod_write_record(
 
 
 async def pod_query(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: QueryRequest,
 ) -> JsonObject:
     """Run a read-only SQL query against the pod.
@@ -286,7 +286,7 @@ def _too_large_note(left_out: int, *, shown: int) -> str:
     )
 
 
-pod_toolset = FunctionToolset[BaseAgentContext](
+pod_toolset = FunctionToolset[ToolContext](
     tools=[
         pod_tables,
         pod_get_records,

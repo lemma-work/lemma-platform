@@ -19,7 +19,7 @@ from typing import Any
 from redis.exceptions import RedisError
 from pydantic_ai.tools import RunContext
 
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
@@ -513,7 +513,7 @@ class TelegramPlatformService:
 
     def _telegram_metadata(
         self,
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
     ) -> TelegramSurfaceEventMetadata | None:
         metadata = ctx.deps.surface_metadata
         if isinstance(metadata, TelegramSurfaceEventMetadata):
@@ -522,7 +522,7 @@ class TelegramPlatformService:
 
     def _current_message_attachments(
         self,
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
     ) -> list[TelegramFileAttachment]:
         metadata = self._telegram_metadata(ctx)
         if metadata is None:

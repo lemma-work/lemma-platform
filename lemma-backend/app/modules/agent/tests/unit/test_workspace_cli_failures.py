@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli import helper as workspace_helper
 from app.modules.agent.tools.workspace_cli import process_visibility, workspace_cli
 from app.modules.agent.tools.workspace_cli.models import (
@@ -86,7 +86,7 @@ class _FakeRuntime:
         self.process_sessions.pop(process_id, None)
 
 
-def _context(cwd: str | None = None) -> BaseAgentContext:
+def _context(cwd: str | None = None) -> ToolContext:
     """A context with a directory, because every real caller resolves one.
 
     Left unset these tests leaned on `get_workspace_cwd`'s fallback, which used
@@ -95,7 +95,7 @@ def _context(cwd: str | None = None) -> BaseAgentContext:
     because of that invention.
     """
     conversation_id = uuid4()
-    return BaseAgentContext(
+    return ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=conversation_id,

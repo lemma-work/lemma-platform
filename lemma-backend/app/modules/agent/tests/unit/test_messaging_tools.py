@@ -21,7 +21,7 @@ import pytest
 from pydantic_ai.tools import RunContext
 from pydantic_ai.usage import RunUsage
 
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.messaging.models import (
     ChannelListRequest,
     ChannelPostRequest,
@@ -56,9 +56,9 @@ NOW = datetime(2026, 10, 18, tzinfo=timezone.utc)
 
 def _ctx(
     pod_id=None, user_id=None, *, run_id=None, tool_call_id=None
-) -> RunContext[BaseAgentContext]:
+) -> RunContext[ToolContext]:
     return RunContext(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=user_id or ME,
             pod_id=pod_id or uuid4(),
             conversation_id=uuid4(),
@@ -71,16 +71,14 @@ def _ctx(
     )
 
 
-def _podless_ctx() -> RunContext[BaseAgentContext]:
+def _podless_ctx() -> RunContext[ToolContext]:
     """``pod_id`` is a required UUID, so this state cannot be built normally.
 
     ``model_construct`` skips validation to reach the defensive branch anyway --
     the same guard every tool here carries, kept for consistency rather than
     because the model can get here.
     """
-    deps = BaseAgentContext.model_construct(
-        user_id=ME, pod_id=None, conversation_id=uuid4()
-    )
+    deps = ToolContext.model_construct(user_id=ME, pod_id=None, conversation_id=uuid4())
     return RunContext(
         deps=deps,
         model=None,  # type: ignore[arg-type]

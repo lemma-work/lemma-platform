@@ -14,7 +14,7 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     GROUP_SUBJECT_MAX_CHARS,
@@ -51,11 +51,11 @@ class OpenWhatsAppGroupResult(BaseModel):
 
 def build_whatsapp_group_toolset(
     *, uow_factory: UnitOfWorkFactory, surface_id: UUID
-) -> FunctionToolset[ConversationContext]:
+) -> FunctionToolset[ToolContext]:
     opener = WhatsAppGroupOpener(uow_factory)
 
     async def whatsapp_open_group(
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
         request: OpenWhatsAppGroupParams,
     ) -> OpenWhatsAppGroupResult:
         """Open a WhatsApp group with this bot in it, for the person you are talking to.
@@ -80,13 +80,13 @@ def build_whatsapp_group_toolset(
             ),
         )
 
-    return FunctionToolset[ConversationContext](tools=[whatsapp_open_group])
+    return FunctionToolset[ToolContext](tools=[whatsapp_open_group])
 
 
 async def _open(
     opener: WhatsAppGroupOpener,
     *,
-    ctx: RunContext[ConversationContext],
+    ctx: RunContext[ToolContext],
     surface_id: UUID,
     title: str,
 ) -> OpenWhatsAppGroupResult:

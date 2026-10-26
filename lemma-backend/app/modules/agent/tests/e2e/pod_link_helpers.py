@@ -30,7 +30,7 @@ from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.pod_ask_delivery import PodAskDelivery
 from app.modules.agent.services.pod_ask_service import PodAskService
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 READ_TABLE = ["datastore.table.read", "datastore.record.read"]
 READ_FOLDER = ["folder.read"]
@@ -100,8 +100,8 @@ async def task_conversation(client: AsyncClient, pod_id: str) -> UUID:
 
 def asking_deps(
     *, user_id: UUID, org_id: UUID, pod_id: str, conversation_id: UUID, **extra
-) -> BaseAgentContext:
-    return BaseAgentContext(
+) -> ToolContext:
+    return ToolContext(
         user_id=user_id,
         org_id=org_id,
         pod_id=UUID(pod_id),
@@ -111,7 +111,7 @@ def asking_deps(
     )
 
 
-async def teammate(deps: BaseAgentContext, pod_id: str) -> Teammate:
+async def teammate(deps: ToolContext, pod_id: str) -> Teammate:
     teammates = await ask_service().teammates(
         user_id=deps.user_id, organization_id=deps.org_id, pod_id=deps.pod_id
     )

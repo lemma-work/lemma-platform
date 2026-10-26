@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic_ai.tools import RunContext
 from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     SurfaceChannelInfo,
@@ -270,7 +270,7 @@ class SlackChannelReadsMixin:
     async def get_recent_channel_messages(
         self,
         *,
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
         request: SlackRecentChannelMessagesParams,
     ) -> SlackRecentChannelMessagesResult:
         token = slack_access_token(self.credentials)
@@ -379,7 +379,7 @@ class SlackChannelReadsMixin:
     async def search_current_channel(
         self,
         *,
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
         request: SlackSearchChannelMessagesParams,
     ) -> SlackSearchChannelMessagesResult:
         token = slack_access_token(self.credentials)
@@ -477,7 +477,7 @@ class SlackChannelReadsMixin:
 
     def _current_message_attachments(
         self,
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
     ) -> list[SlackFileAttachment]:
         metadata = ctx.deps.surface_metadata
         if not isinstance(metadata, SlackSurfaceEventMetadata):

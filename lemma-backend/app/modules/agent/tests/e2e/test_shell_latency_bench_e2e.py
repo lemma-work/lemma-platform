@@ -40,7 +40,7 @@ from app.modules.agent.tests.e2e.system_lemma_helpers import (
     system_lemma_available,
 )
 from app.modules.test_support.e2e.worker_process import production_worker_process
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
@@ -188,7 +188,7 @@ async def test_shell_tool_call_cost_without_model(
     assert pod_response.status_code == status.HTTP_201_CREATED, pod_response.text
     pod = pod_response.json()
 
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),

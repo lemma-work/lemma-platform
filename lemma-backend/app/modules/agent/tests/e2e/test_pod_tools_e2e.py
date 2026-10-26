@@ -16,7 +16,7 @@ import pytest
 from fastapi import status
 
 from app.core.authorization.delegation import is_pod_default_agent
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.pod.models import (
     PodGetRecordsRequest,
     PodListFilesRequest,
@@ -133,7 +133,7 @@ def _run_ctx(*, user_id, pod_id, workload_id, agent_name):
     """
     resolved_workload_id = UUID(workload_id) if workload_id is not None else None
     return SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=UUID(user_id),
             pod_id=UUID(pod_id),
             conversation_id=uuid4(),
@@ -195,7 +195,7 @@ async def test_view_image_reads_a_pod_image_intact_without_leaking_bytes(
 
     # DIRECT is the desktop configuration: the model IS the harness (Claude) and
     # reads images natively, so `view_image` returns the image inline.
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         pod_id=UUID(pod_id),
         conversation_id=uuid4(),

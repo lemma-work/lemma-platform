@@ -11,7 +11,7 @@ from typing import Any
 from pydantic_ai.tools import RunContext
 
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 import httpx
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -323,7 +323,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
 
     def _whatsapp_metadata(
         self,
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
     ) -> WhatsAppSurfaceEventMetadata | None:
         metadata = ctx.deps.surface_metadata
         if isinstance(metadata, WhatsAppSurfaceEventMetadata):
@@ -332,16 +332,14 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
 
     def _current_message_attachments(
         self,
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
     ) -> list[WhatsAppFileAttachment]:
         metadata = self._whatsapp_metadata(ctx)
         if metadata is None:
             return []
         return common.coerce_attachments(metadata.attachments, WhatsAppFileAttachment)
 
-    def _resolve_phone_number_id(
-        self, ctx: RunContext[ConversationContext]
-    ) -> str | None:
+    def _resolve_phone_number_id(self, ctx: RunContext[ToolContext]) -> str | None:
         metadata = self._whatsapp_metadata(ctx)
         return (
             (metadata.phone_number_id if metadata is not None else None)
@@ -350,9 +348,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
             or None
         )
 
-    def _resolve_recipient_wa_id(
-        self, ctx: RunContext[ConversationContext]
-    ) -> str | None:
+    def _resolve_recipient_wa_id(self, ctx: RunContext[ToolContext]) -> str | None:
         metadata = self._whatsapp_metadata(ctx)
         if metadata is not None:
             for contact in metadata.contacts:

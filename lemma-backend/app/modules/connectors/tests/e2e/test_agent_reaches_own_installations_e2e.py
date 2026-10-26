@@ -90,10 +90,10 @@ async def own_installation(
 
 
 def _deps(own_installation, *, agent_id=None, agent_name=None):
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
     _install, org_id, user_id, pod_id = own_installation
-    return BaseAgentContext(
+    return ToolContext(
         user_id=user_id,
         org_id=org_id,
         pod_id=pod_id,

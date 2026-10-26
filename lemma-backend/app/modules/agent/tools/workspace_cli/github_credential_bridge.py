@@ -44,7 +44,7 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.redis.client import get_redis
 from app.core.config import settings
 from app.core.log.log import get_logger
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.authority import tool_authorization_context
 from app.modules.connectors.contracts.pod_connectors import (
     acting_person,
@@ -213,12 +213,12 @@ class _GithubCredential:
 
 
 async def ensure_github_credentials(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     workspace_session,
     *,
     redis: "Redis | None" = None,
     resolve_credential: Callable[
-        [BaseAgentContext],
+        [ToolContext],
         Awaitable["_GithubCredential | GithubRefusal | None"],
     ]
     | None = None,
@@ -368,9 +368,7 @@ _SANDBOX_USE_WITHDRAWN = GithubRefusal(
 )
 
 
-def _loan_of(
-    credential: _GithubCredential, ctx: BaseAgentContext
-) -> "BorrowedLoan | None":
+def _loan_of(credential: _GithubCredential, ctx: ToolContext) -> "BorrowedLoan | None":
     if credential.borrowed_pod_account_id is None:
         return None
     from app.modules.agent.tools.workspace_cli.github_loan import BorrowedLoan
@@ -495,7 +493,7 @@ def _noreply_email(credential: "_GithubCredential") -> str | None:
 
 
 async def _resolve_github_credential(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     *,
     uow_factory: Callable[[], AbstractAsyncContextManager[SqlAlchemyUnitOfWork]]
     | None = None,
@@ -503,9 +501,7 @@ async def _resolve_github_credential(
     # import, so a test that replaces `tool_authorization_context` on its own
     # module never reaches this -- and the test passes anyway, because the real
     # collaborator failing looks like the fake one failing.
-    delegated_context: Callable[
-        [SqlAlchemyUnitOfWork, BaseAgentContext], Awaitable[Context]
-    ]
+    delegated_context: Callable[[SqlAlchemyUnitOfWork, ToolContext], Awaitable[Context]]
     | None = None,
     resolve_connector: _ResolveConnector | None = None,
     refresh_credentials: Callable[

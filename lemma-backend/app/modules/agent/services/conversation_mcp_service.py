@@ -47,7 +47,7 @@ from app.modules.agent.services.mcp_pausing_calls import (
     record_pausing_tool_call,
 )
 from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.agent.services.run_session_relay import (
@@ -279,7 +279,7 @@ class ConversationMCPService:
         *,
         conversation_id: UUID,
         agent_run_id: UUID | None,
-    ) -> tuple[Agent | None, Conversation, BaseAgentContext, AgentGrantSummary | None]:
+    ) -> tuple[Agent | None, Conversation, ToolContext, AgentGrantSummary | None]:
         """The run's session for this call, and the context its tools see."""
         session = await load_relayed_session(
             self.uow_factory,

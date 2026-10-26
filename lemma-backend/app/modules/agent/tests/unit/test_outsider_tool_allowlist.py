@@ -37,7 +37,7 @@ from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.tools import registry
 from app.modules.agent.tools.contact_tools import build_contact_toolset
 from app.modules.agent.tools.form_tools import build_form_toolset
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher, UnknownToolError
 from app.modules.agent.tools.outsider_tools import (
     OUTSIDER_TOOL_NAMES,
@@ -109,8 +109,8 @@ class _FakeUoW:
         pass
 
 
-def _stranger_deps(**overrides) -> BaseAgentContext:
-    return BaseAgentContext(
+def _stranger_deps(**overrides) -> ToolContext:
+    return ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         org_id=uuid4(),

@@ -21,7 +21,7 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.contracts import channel_conversations
 from app.modules.agent.domain.asked_questions import line_client_id
 from app.modules.agent.domain.outsiders import run_audience
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.messaging.models import (
     MAX_OUTSIDER_MESSAGE_CHARS,
     AskAPersonRequest,
@@ -55,7 +55,7 @@ CALLED_IN_GROUP = (
 
 
 async def ask_a_person(
-    ctx: RunContext[BaseAgentContext], request: AskAPersonRequest
+    ctx: RunContext[ToolContext], request: AskAPersonRequest
 ) -> AskAPersonResponse:
     """Call a person from the pod into this conversation.
 
@@ -141,7 +141,7 @@ async def call_a_person_in(
 
 
 async def list_pod_members(
-    ctx: RunContext[BaseAgentContext], request: ListPodMembersRequest
+    ctx: RunContext[ToolContext], request: ListPodMembersRequest
 ) -> ListPodMembersResponse:
     """Look up who is in this pod, to find who to write to.
 
@@ -219,7 +219,7 @@ async def _reachable_on(
     members: tuple[pod_directory.PodDirectoryMember, ...],
     *,
     pod_id: UUID,
-    deps: BaseAgentContext,
+    deps: ToolContext,
 ) -> dict[UUID, list[str]]:
     """Which chat apps reach each listed person, right now -- `pod` says who is
     in the pod, `agent_surfaces` who has a surface. Only for the page returned:

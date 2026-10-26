@@ -40,7 +40,7 @@ from app.modules.agent.domain.runtime_history import (
     MAX_UNATTACHED_MESSAGES,
 )
 from app.modules.agent.tests.unit.runtime_history_fakes import StoredConversation
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = pytest.mark.unit
 
@@ -70,7 +70,7 @@ async def _prompt(
             status=ConversationStatus.RUNNING,
         ),
         messages=await chat.history_for(run),
-        ctx=BaseAgentContext(user_id=uuid7(), pod_id=POD_ID, conversation_id=chat.id),
+        ctx=ToolContext(user_id=uuid7(), pod_id=POD_ID, conversation_id=chat.id),
         agent_run_id=run.id,
         runtime_instructions="",
         carries_history=carries_history,

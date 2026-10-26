@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 from app.modules.agent_surfaces.services.private_message import PrivateSend
 from app.modules.agent_surfaces.services.surface_display_delivery import (
@@ -29,9 +29,9 @@ class SurfaceSendMessageResult(BaseModel):
 
 def build_surface_send_toolset(
     deliver=deliver_surface_message_to_surface,
-) -> FunctionToolset[ConversationContext]:
+) -> FunctionToolset[ToolContext]:
     async def surface_send_message(
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
         message: str,
     ) -> SurfaceSendMessageResult:
         """Send a private message to the current user on this surface right now.
@@ -78,4 +78,4 @@ def build_surface_send_toolset(
             success=False, message="Could not deliver the message."
         )
 
-    return FunctionToolset[ConversationContext](tools=[surface_send_message])
+    return FunctionToolset[ToolContext](tools=[surface_send_message])

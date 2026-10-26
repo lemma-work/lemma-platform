@@ -24,7 +24,7 @@ import posixpath
 
 from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from app.core.file_types import is_untyped_mime, sniff_media_mime
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.pod.pod_data_access import pod_services
 
 
@@ -84,9 +84,7 @@ def is_datastore_path(path: str) -> bool:
     )
 
 
-async def read_pod_file_bytes(
-    deps: BaseAgentContext, path: str
-) -> tuple[bytes, str | None]:
+async def read_pod_file_bytes(deps: ToolContext, path: str) -> tuple[bytes, str | None]:
     """Read a file's bytes + best-effort mime from the pod datastore.
 
     Runs under the agent's delegated-workload authorization; raises ``DomainError``
@@ -101,7 +99,7 @@ async def read_pod_file_bytes(
 
 
 async def read_workspace_file_bytes(
-    deps: BaseAgentContext, path: str
+    deps: ToolContext, path: str
 ) -> tuple[bytes, str | None]:
     """Read a file's bytes + best-effort mime from the workspace sandbox.
 
@@ -117,7 +115,7 @@ async def read_workspace_file_bytes(
     return content, mime
 
 
-def _on_the_host(deps: BaseAgentContext, path: str) -> bool:
+def _on_the_host(deps: ToolContext, path: str) -> bool:
     """On a host-execution run, whether ``path`` names a file on the Mac.
 
     Such a run has two filesystems: its own folder on the user's Mac, and the
@@ -134,7 +132,7 @@ def _on_the_host(deps: BaseAgentContext, path: str) -> bool:
     )
 
 
-async def _read_host_file(deps: BaseAgentContext, path: str) -> bytes:
+async def _read_host_file(deps: ToolContext, path: str) -> bytes:
     from app.modules.agent.tools.workspace_cli.workspace_cli import (
         get_workspace_session,
     )
@@ -150,7 +148,7 @@ async def _read_host_file(deps: BaseAgentContext, path: str) -> bytes:
 
 
 async def read_agent_file_bytes(
-    deps: BaseAgentContext, path: str
+    deps: ToolContext, path: str
 ) -> tuple[bytes, str | None]:
     """Read a file's bytes + best-effort mime, inferring the store from ``path``.
 

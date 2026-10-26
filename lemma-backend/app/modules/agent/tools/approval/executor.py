@@ -44,7 +44,7 @@ from app.modules.agent.tools.approval_denials import (
     lent_to_the_sandbox,
 )
 from app.modules.agent.tools.authority import workload_actor_id
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.dispatcher import AgentToolDispatcher
 from app.modules.agent.tools.tool_errors import (
     format_tool_error,
@@ -69,7 +69,7 @@ class ApprovalExecutor:
     async def execute_as_user(
         self,
         *,
-        deps: BaseAgentContext,
+        deps: ToolContext,
         tool_name: str,
         args: dict | None,
         approval_id: str | None = None,

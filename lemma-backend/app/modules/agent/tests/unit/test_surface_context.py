@@ -2,7 +2,7 @@
 
 `surface_context_for_run` narrows six metadata values to `str`. That
 narrowing is deliberate: a stored value of another type used to travel into
-`ConversationContext` and fail pydantic there, taking the whole run down, and a
+`ToolContext` and fail pydantic there, taking the whole run down, and a
 run that cannot start is a worse answer than a reply missing one field.
 
 Dropping a field quietly is still a loss, though -- a reply with no

@@ -21,7 +21,7 @@ from app.modules.agent.tools import vision_delegation
 from app.modules.agent.tools.pod import pod_common
 from app.modules.agent.tools.pod import pod_file_tools as pod_files
 from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = pytest.mark.unit
 
@@ -61,7 +61,7 @@ class TestModeResolution:
 
     def test_unavailable_is_the_default_on_a_bare_context(self) -> None:
         """A tool that cannot determine the mode must assume the unsafe case."""
-        ctx = BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+        ctx = ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
         assert ctx.vision_mode is AgentVisionMode.UNAVAILABLE
 
 
@@ -123,7 +123,7 @@ def _pdf_services(monkeypatch):
 
 def _ctx(mode: AgentVisionMode) -> SimpleNamespace:
     return SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),

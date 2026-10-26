@@ -31,7 +31,8 @@ from app.modules.agent.services.pod_ask_service import (
 )
 from app.modules.agent.tools.approval_denials import remember_denial
 from app.modules.agent.tools.authority import workload_actor_id
-from app.modules.agent.tools.context import BaseAgentContext, BaseToolResponse
+from app.modules.agent.tools.context import BaseToolResponse
+from app.modules.agent.domain.context import ToolContext
 
 ASK_TEAMMATE_TOOL_NAME = "ask_teammate"
 ASK_NEEDS_APPROVAL = "POD_ASK_NEEDS_APPROVAL"
@@ -120,11 +121,11 @@ def _service() -> PodAskService:
     return PodAskService(SessionUnitOfWorkFactory(async_session_maker))
 
 
-async def _teammates(deps: BaseAgentContext) -> list[Teammate]:
+async def _teammates(deps: ToolContext) -> list[Teammate]:
     return await _service().reachable(deps)
 
 
-async def list_teammates(ctx: RunContext[BaseAgentContext]) -> ListTeammatesResponse:
+async def list_teammates(ctx: RunContext[ToolContext]) -> ListTeammatesResponse:
     """List the other pods this one can ask: ones the person is also in, and
     ones connected to this pod.
 
@@ -157,7 +158,7 @@ async def list_teammates(ctx: RunContext[BaseAgentContext]) -> ListTeammatesResp
 
 
 async def ask_teammate(
-    ctx: RunContext[BaseAgentContext], request: AskTeammateRequest
+    ctx: RunContext[ToolContext], request: AskTeammateRequest
 ) -> AskTeammateResponse:
     """Ask another pod to find something out or look something up.
 
@@ -203,7 +204,7 @@ async def ask_teammate(
     )
 
 
-async def _approved(deps: BaseAgentContext, target: Teammate) -> bool:
+async def _approved(deps: ToolContext, target: Teammate) -> bool:
     approved = deps.approved_execution
     if approved is not None and approved.tool_name == ASK_TEAMMATE_TOOL_NAME:
         return True

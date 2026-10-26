@@ -34,7 +34,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
 from app.modules.agent.services.poll_backoff import poll_delay
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
 from app.modules.function.contracts import (
     FunctionEntity,
@@ -166,7 +166,7 @@ class AgentCallableToolFactory:
         agent: Agent,
         allow_subagents: bool = True,
         grants: AgentGrantSummary | None = None,
-    ) -> list[FunctionToolset[BaseAgentContext]]:
+    ) -> list[FunctionToolset[ToolContext]]:
         """``function_<name>`` / ``agent_<name>`` tools for this agent's grants.
 
         ``grants`` is the summary the caller already loaded for toolset
@@ -218,7 +218,7 @@ class AgentCallableToolFactory:
         # AgentToolset.SUBAGENTS enum and resolved by RunToolAssembler — not
         # appended here — so it is opt-in for user agents and gated to top-level
         # conversations.
-        return [FunctionToolset[BaseAgentContext](tools=distinct_tool_names(tools))]
+        return [FunctionToolset[ToolContext](tools=distinct_tool_names(tools))]
 
     async def load_grant_summary(
         self, *, pod_id: UUID, agent_id: UUID
@@ -275,7 +275,7 @@ class AgentCallableToolFactory:
         # `request`. Collect them via **request so arbitrary input fields bind here
         # instead of raising "unexpected keyword argument".
         async def _run_function(
-            ctx: RunContext[BaseAgentContext],
+            ctx: RunContext[ToolContext],
             **request: Any,
         ) -> dict[str, Any]:
             # The use case authorizes the call as the agent (which holds the
@@ -341,7 +341,7 @@ class AgentCallableToolFactory:
         # See _build_function_tool: model arguments arrive as flat kwargs, so
         # collect them via **request rather than a single `request` parameter.
         async def _run_agent(
-            ctx: RunContext[BaseAgentContext],
+            ctx: RunContext[ToolContext],
             **request: Any,
         ) -> dict[str, Any] | str:
             if ctx.deps.agent_name == agent.name:

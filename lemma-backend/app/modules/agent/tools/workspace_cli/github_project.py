@@ -34,7 +34,7 @@ from app.core.config import settings
 from app.core.infrastructure.redis.client import get_redis
 from app.core.log.log import get_logger
 from app.modules.agent.services.run_phase_spans import run_phase
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli.github_credential_bridge import (
     ensure_github_credentials,
 )
@@ -63,9 +63,7 @@ def _clone_command(*, url: str, path: str, ref: str | None) -> str:
     )
 
 
-async def ensure_project_checkout(
-    ctx: BaseAgentContext, workspace_session
-) -> str | None:
+async def ensure_project_checkout(ctx: ToolContext, workspace_session) -> str | None:
     """Clone the conversation's repo if its directory is still empty.
 
     Returns a notice to show the agent once, or None when there is nothing to
@@ -114,7 +112,7 @@ async def ensure_project_checkout(
 
 
 async def prepare_project_directory(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     workspace_session,
     *,
     wanted: bool,

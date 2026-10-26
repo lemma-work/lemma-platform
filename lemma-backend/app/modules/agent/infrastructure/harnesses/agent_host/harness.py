@@ -24,7 +24,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.agent_host import AgentHostRunState
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
@@ -173,7 +173,7 @@ class RemoteHarness:
         # outliving its original token without waiting out the real hour.
         self._now = clock or (lambda: datetime.now(timezone.utc))
 
-    async def run[DepsT: AgentContext](
+    async def run[DepsT: ToolContext](
         self,
         *,
         agent: Agent,
@@ -230,7 +230,7 @@ class RemoteHarness:
             if finished:
                 await self.events.delete(run_id=agent_run_id)
 
-    async def _consume[DepsT: AgentContext](
+    async def _consume[DepsT: ToolContext](
         self,
         *,
         agent_run_id: UUID,
@@ -342,7 +342,7 @@ class RemoteHarness:
         *,
         normalizer: AgentHostEventNormalizer,
         cursor: ConsumedCursor,
-        ctx: AgentContext,
+        ctx: ToolContext,
         conversation: Conversation,
         agent_run_id: UUID,
     ) -> AsyncGenerator[AgentEvent, None]:
@@ -369,7 +369,7 @@ class RemoteHarness:
             ):
                 await cursor.save()
 
-    async def _between_batches[DepsT: AgentContext](
+    async def _between_batches[DepsT: ToolContext](
         self,
         state: _ConsumeState,
         *,
@@ -450,7 +450,7 @@ class RemoteHarness:
             return [error_event(agent_run_id, expiry_message(outcome.expired_state))]
         return None
 
-    async def _credential_spent[DepsT: AgentContext](
+    async def _credential_spent[DepsT: ToolContext](
         self,
         state: _ConsumeState,
         *,

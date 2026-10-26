@@ -47,7 +47,7 @@ class SurfaceContext(TypedDict):
     """The nine surface fields, named and typed.
 
     A `TypedDict` rather than a plain dict because both callers splat this into
-    a `ConversationContext(...)`, and splatting a `dict[str, object]` types
+    a `ToolContext(...)`, and splatting a `dict[str, object]` types
     *every* field of that constructor as `object` -- including the dozen this
     function never supplies. Declaring the keys is what makes the splat as
     checkable as writing them out by hand.

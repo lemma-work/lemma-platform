@@ -7,7 +7,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision, JsonObject
 from app.modules.agent.services.widget_token import widget_serve_path
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.tool_errors import (
     AgentInputRequired,
     safe_described_error,
@@ -26,9 +26,7 @@ from app.core.widget_html_validation import validate_widget_html
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 
 
-async def _widget_file_error(
-    ctx: RunContext[BaseAgentContext], path: str
-) -> str | None:
+async def _widget_file_error(ctx: RunContext[ToolContext], path: str) -> str | None:
     """Why this pod file cannot be the widget, or None when it can.
 
     The whole point of a file-backed widget is that it can be fixed by editing
@@ -64,7 +62,7 @@ async def _widget_file_error(
 
 
 async def display_resource(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: DisplayResourceRequest,
 ) -> DisplayResourceResponse:
     """
@@ -189,7 +187,7 @@ async def display_resource(
 
 
 async def _maybe_deliver_to_surface(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: DisplayResourceRequest,
     response: DisplayResourceResponse,
 ) -> None:
@@ -256,7 +254,7 @@ async def _maybe_deliver_to_surface(
 
 
 async def _hold_for_the_one_reply(
-    deps: BaseAgentContext,
+    deps: ToolContext,
     request: DisplayResourceRequest,
     response: DisplayResourceResponse,
 ) -> None:
@@ -294,7 +292,7 @@ async def _hold_for_the_one_reply(
 
 
 async def request_approval(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     tool_name: str,
     args: JsonObject,
     title: str,
@@ -384,7 +382,7 @@ async def request_approval(
 
 
 async def _show_card(
-    deps: BaseAgentContext, approval_id: str, *, tool_name: str, args: JsonObject
+    deps: ToolContext, approval_id: str, *, tool_name: str, args: JsonObject
 ) -> None:
     """Write on the approval what is pending as its card goes up: all an answer
     to it may lend (``approval_denials.show_card``). A run with no person
@@ -407,7 +405,7 @@ async def _show_card(
 
 async def _run_if_exact_match_already_approved(
     *,
-    deps: BaseAgentContext,
+    deps: ToolContext,
     tool_name: str,
     args: JsonObject,
 ) -> RequestApprovalResponse | None:
@@ -521,7 +519,7 @@ async def _run_if_exact_match_already_approved(
 
 
 async def ask_user(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: AskUserRequest,
 ) -> AskUserResponse:
     """
@@ -591,6 +589,6 @@ async def ask_user(
     raise AgentInputRequired(ctx.tool_call_id, "ask_user")
 
 
-user_interaction_toolset = FunctionToolset[BaseAgentContext](
+user_interaction_toolset = FunctionToolset[ToolContext](
     tools=[display_resource, request_approval, ask_user]
 )

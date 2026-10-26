@@ -33,7 +33,7 @@ from app.modules.agent.tests.e2e.test_agent_e2e import (
     _assert_completed_without_error,
     _post_sse,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecutePythonRequest,
@@ -448,7 +448,7 @@ async def test_a_real_agent_finds_with_the_shell_what_it_wrote_with_python(
     # worked because both tools were there -- not because they happened to
     # share the image's default.
     probe = await exec_command_internal(
-        BaseAgentContext(
+        ToolContext(
             user_id=UUID(fixed_test_user["id"]),
             org_id=UUID(fixed_test_org["id"]),
             pod_id=UUID(pod["id"]),
@@ -682,7 +682,7 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     conversation = create_conversation.json()
     conversation_cwd = conversation["metadata"]["cwd"]
 
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),

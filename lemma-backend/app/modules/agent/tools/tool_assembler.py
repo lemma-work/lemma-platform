@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Literal, cast
 
 from pydantic_ai.toolsets import AbstractToolset
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.entities import Agent, Conversation
@@ -53,7 +53,7 @@ async def load_agent_grant_summary(
 HostExecutionMode = Literal["native", "sandbox"]
 
 
-def question_toolset() -> AbstractToolset[ConversationContext]:
+def question_toolset() -> AbstractToolset[ToolContext]:
     """The tool that answers a question waiting on the person.
 
     Wrapped the way the capability wraps them: the transitions they call
@@ -64,13 +64,13 @@ def question_toolset() -> AbstractToolset[ConversationContext]:
     from app.modules.agent.tools.graceful_toolset import GracefulToolset
     from app.modules.agent.tools.messaging.answer import answer_toolset
 
-    return cast(AbstractToolset[ConversationContext], GracefulToolset(answer_toolset))
+    return cast(AbstractToolset[ToolContext], GracefulToolset(answer_toolset))
 
 
 def _for_host_execution(
-    toolsets: list[AbstractToolset[ConversationContext]],
+    toolsets: list[AbstractToolset[ToolContext]],
     mode: HostExecutionMode,
-) -> list[AbstractToolset[ConversationContext]]:
+) -> list[AbstractToolset[ToolContext]]:
     """The toolsets of a run whose commands execute on the user's Mac."""
     had_shell = any(is_workspace_cli_toolset(toolset) for toolset in toolsets)
     if mode == "native":
@@ -98,7 +98,7 @@ class RunToolAssembler:
         include_question_tools: bool = False,
         harness_kind: HarnessKind | None = None,
         surface_platform: str | None = None,
-    ) -> list[AbstractToolset[ConversationContext]]:
+    ) -> list[AbstractToolset[ToolContext]]:
         """Every tool this (agent, conversation) can reach.
 
         ``surface_platform`` is the platform the run talks over, from its
@@ -164,7 +164,7 @@ class RunToolAssembler:
         agent: Agent | None,
         conversation: Conversation | None,
         include_final_answer: bool,
-    ) -> list[AbstractToolset[ConversationContext]]:
+    ) -> list[AbstractToolset[ToolContext]]:
         """The `final_answer` tool, on the runs that reach it as a tool.
 
         Remote (Agent Host) runs only. The in-process LEMMA harness gets
@@ -198,13 +198,13 @@ class RunToolAssembler:
         vision_mode: AgentVisionMode | None = None,
         grants: AgentGrantSummary | None = None,
         surface_platform: str | None = None,
-    ) -> list[AbstractToolset[ConversationContext]]:
+    ) -> list[AbstractToolset[ToolContext]]:
         if grants is None and agent is not None and callable(self.uow_factory):
             grants = await load_agent_grant_summary(self.uow_factory, agent=agent)
         toolset_names, allow_subagents = resolve_toolset_names(
             agent, conversation, grants=grants
         )
-        toolsets: list[AbstractToolset[ConversationContext]] = list(
+        toolsets: list[AbstractToolset[ToolContext]] = list(
             resolve_agent_toolsets(toolset_names)
         )
         # TODO is conversation-scoped (its list lives in conversation metadata), so
@@ -260,7 +260,7 @@ class RunToolAssembler:
 
     def _outside_toolsets(
         self, conversation: Conversation | None, audience: Audience
-    ) -> list[AbstractToolset[ConversationContext]]:
+    ) -> list[AbstractToolset[ToolContext]]:
         """What a run answering somebody outside the pod adds: a contact's own
         rows and functions, and filling the form on a web visitor's page.
 
@@ -270,7 +270,7 @@ class RunToolAssembler:
         """
         if not callable(self.uow_factory):
             return []
-        toolsets: list[AbstractToolset[ConversationContext]] = []
+        toolsets: list[AbstractToolset[ToolContext]] = []
         if audience.is_contact and not _in_a_group(conversation):
             toolsets.append(build_contact_toolset(uow_factory=self.uow_factory))
         if audience.answers_outsiders and _on_a_web_page(conversation):
@@ -279,7 +279,7 @@ class RunToolAssembler:
 
     async def _surface_toolsets(
         self, conversation: Conversation | None, surface_platform: str | None
-    ) -> list[AbstractToolset[ConversationContext]]:
+    ) -> list[AbstractToolset[ToolContext]]:
         """The tools the run's chat platform adds, if it talks over one."""
         if conversation is None or not surface_platform:
             return []
@@ -291,7 +291,7 @@ class RunToolAssembler:
 
 
 def _add_view_image(
-    toolsets: list[AbstractToolset[ConversationContext]],
+    toolsets: list[AbstractToolset[ToolContext]],
     vision_mode: AgentVisionMode | None,
 ) -> None:
     """Offer `view_image` whenever the run can interpret an image at all.
@@ -319,7 +319,7 @@ def _add_view_image(
 
 def _call_toolsets(
     conversation: Conversation | None,
-) -> list[AbstractToolset[ConversationContext]]:
+) -> list[AbstractToolset[ToolContext]]:
     """The voice, for a live call's coordinator.
 
     By the conversation's call mark rather than a declared toolset: an agent
@@ -333,7 +333,7 @@ def _call_toolsets(
         return []
     from app.modules.agent.tools.call.pydantic_adapter import coordinator_toolset
 
-    return [cast(AbstractToolset[ConversationContext], coordinator_toolset)]
+    return [cast(AbstractToolset[ToolContext], coordinator_toolset)]
 
 
 def _in_a_group(conversation: Conversation | None) -> bool:

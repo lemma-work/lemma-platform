@@ -27,7 +27,7 @@ from aiohttp import web
 from fastapi import status
 
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
     WriteStdinRequest,
@@ -114,7 +114,7 @@ async def _agent_context(authenticated_client, fixed_test_org, fixed_test_user):
     # its `agents` row id, which is its pod's. These tests are about the
     # workspace and research tools, and the assistant is the agent a person
     # actually reaches them through.
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),

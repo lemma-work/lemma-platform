@@ -24,7 +24,7 @@ from app.modules.datastore.contracts.agent_tools import (
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.context_brief.memory import invalidate_memory_brief
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
 from app.modules.agent.tools.pod.memory_write_feedback import memory_write_warning
 from app.modules.agent.tools.pod.models import (
@@ -114,7 +114,7 @@ async def _overwrite(
 
 
 async def pod_write_file(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: PodWriteFileRequest,
 ) -> JsonObject:
     """Write text content to a pod file, creating or overwriting it.
@@ -208,7 +208,7 @@ def _apply_edits(text: str, edits: list[FileEdit]) -> tuple[str, int] | str:
 
 
 async def pod_edit_file(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: PodEditFileRequest,
 ) -> JsonObject:
     """Change part of an existing pod text file by exact-text replacement.
@@ -281,7 +281,7 @@ async def pod_edit_file(
 
 
 async def pod_list_files(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: PodListFilesRequest,
 ) -> JsonObject:
     """List pod files under a path.
@@ -326,7 +326,7 @@ async def pod_list_files(
 
 
 async def pod_read_file(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: PodReadFileRequest,
 ) -> JsonObject:
     """Read a pod file's text.
@@ -350,7 +350,7 @@ async def pod_read_file(
 
 
 async def pod_view_document_pages(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: ViewDocumentPagesRequest,
 ) -> "JsonObject | ToolReturn":
     """Render PDF pages as images so you can *see* them (layout, tables, figures).
@@ -436,7 +436,7 @@ async def pod_view_document_pages(
 
 
 async def pod_get_file_url(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: GetFileUrlRequest,
 ) -> JsonObject:
     """Get a URL for a pod file, to share a link or embed an image.
@@ -492,7 +492,7 @@ async def pod_get_file_url(
 
 
 async def pod_search_files(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: SearchFilesRequest,
 ) -> JsonObject:
     """Semantic/keyword search across indexed pod files."""

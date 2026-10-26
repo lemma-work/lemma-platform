@@ -32,7 +32,7 @@ from app.modules.agent.domain.prompt.channel_context import (
     channel_context_block as _channel_context_block,
 )
 from app.modules.agent.tools.authority import tool_authorization_context
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.capabilities.assembler import _partition_core_extra
 from app.modules.agent.tools.messaging.models import (
     AskAPersonRequest,
@@ -113,10 +113,10 @@ def test_the_same_assistant_keeps_everything_for_a_member():
     assert AgentToolset.USER_INTERACTION in resolved.names
 
 
-def _deps(*, answers_outsider: bool, approved: bool = False) -> BaseAgentContext:
+def _deps(*, answers_outsider: bool, approved: bool = False) -> ToolContext:
     owner = uuid4()
     conversation_id = uuid4()
-    return BaseAgentContext(
+    return ToolContext(
         user_id=owner,
         org_id=uuid4(),
         pod_id=uuid4(),

@@ -43,7 +43,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     seeded_conversation,
     uow_factory,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = [pytest.mark.e2e]
 
@@ -52,8 +52,8 @@ def _service() -> SubAgentService:
     return SubAgentService(SessionUnitOfWorkFactory(async_session_maker))
 
 
-def _as_parent(parent: Seeded, *, run_id: UUID | None = None) -> BaseAgentContext:
-    return BaseAgentContext(
+def _as_parent(parent: Seeded, *, run_id: UUID | None = None) -> ToolContext:
+    return ToolContext(
         user_id=parent.user_id,
         pod_id=parent.pod_id,
         conversation_id=parent.conversation_id,

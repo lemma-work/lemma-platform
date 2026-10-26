@@ -19,7 +19,7 @@ import pytest
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.domain.vision import AgentVisionMode
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.pod import pod_common
 from app.modules.agent.tools.pod import pod_file_tools as pod_files
 from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
@@ -46,7 +46,7 @@ def _run_ctx(
     # DIRECT by default: most pod tools are unaffected by vision, and the ones
     # that are were written against a model that reads images itself.
     return SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),

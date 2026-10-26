@@ -6,7 +6,7 @@ from app.modules.agent_surfaces.domain.credentials import SurfaceCredentials
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 from app.modules.agent_surfaces.platforms.slack.models import (
     SlackRecentChannelMessagesParams,
     SlackRecentChannelMessagesResult,
@@ -20,11 +20,11 @@ from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 def build_slack_surface_toolset(
     *,
     credentials: SurfaceCredentials,
-) -> FunctionToolset[ConversationContext]:
+) -> FunctionToolset[ToolContext]:
     service = SlackPlatformService(credentials=credentials)
 
     async def slack_get_recent_channel_messages(
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
         request: SlackRecentChannelMessagesParams,
     ) -> SlackRecentChannelMessagesResult:
         """Get recent messages from the current Slack channel, including any shared files."""
@@ -38,7 +38,7 @@ def build_slack_surface_toolset(
         )
 
     async def slack_search_current_channel(
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
         request: SlackSearchChannelMessagesParams,
     ) -> SlackSearchChannelMessagesResult:
         """Search recent messages in the current Slack channel without leaving the active agent conversation."""
@@ -51,7 +51,7 @@ def build_slack_surface_toolset(
             ),
         )
 
-    return FunctionToolset[ConversationContext](
+    return FunctionToolset[ToolContext](
         tools=[
             slack_get_recent_channel_messages,
             slack_search_current_channel,

@@ -19,13 +19,13 @@ from pydantic_ai import ToolReturn
 from app.core.domain.errors import DomainError
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.tools.approval_denials import remember_denial
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.pod.pod_data_access import PodServices, pod_services
 from app.modules.agent.tools.pod.pod_paths import to_me_path
 from app.modules.agent.tools.tool_errors import approval_error_result
 
 
-def resolve_pod_path(deps: BaseAgentContext, path: str) -> str:
+def resolve_pod_path(deps: ToolContext, path: str) -> str:
     """Resolve a possibly-relative pod path against the agent's pod cwd."""
     if path.startswith("/"):
         return path
@@ -62,7 +62,7 @@ def has_meaningful_data(data: JsonObject | None) -> bool:
 
 
 async def run_pod_tool(
-    deps: BaseAgentContext,
+    deps: ToolContext,
     *,
     tool_name: str,
     args: JsonObject,

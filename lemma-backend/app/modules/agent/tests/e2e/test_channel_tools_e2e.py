@@ -38,7 +38,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     running_run,
     seeded_conversation,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.messaging.answer import answer_question
 from app.modules.agent.tools.messaging.models import (
     AnswerQuestionRequest,
@@ -82,9 +82,9 @@ def _ctx(
     run_id: UUID | None = None,
     call: str | None = None,
     conversation_id: UUID | None = None,
-) -> RunContext[BaseAgentContext]:
+) -> RunContext[ToolContext]:
     return RunContext(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=user_id or seeded.user_id,
             pod_id=seeded.pod_id,
             conversation_id=conversation_id or seeded.conversation_id,

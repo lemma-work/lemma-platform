@@ -28,7 +28,8 @@ from pydantic import BaseModel, Field
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.context import TOOL_COMMENT_DESC, BaseAgentContext
+from app.modules.agent.tools.context import TOOL_COMMENT_DESC
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecCommandResult,
@@ -109,7 +110,7 @@ async def _no_project(*_args: object, **_kwargs: object) -> None:
 
 
 async def browser_command_internal(
-    ctx: BaseAgentContext, request: BrowserCommandRequest, *, runtime=None
+    ctx: ToolContext, request: BrowserCommandRequest, *, runtime=None
 ) -> ExecCommandResult:
     try:
         argv = browser_argv(request.args)
@@ -142,7 +143,7 @@ async def browser_command_internal(
 
 
 async def browser(
-    ctx: RunContext[BaseAgentContext],
+    ctx: RunContext[ToolContext],
     request: BrowserCommandRequest,
 ) -> ExecCommandResult:
     """
@@ -164,7 +165,7 @@ async def browser(
     return await browser_command_internal(ctx.deps, request)
 
 
-vm_browser_toolset = FunctionToolset[BaseAgentContext](tools=[browser])
+vm_browser_toolset = FunctionToolset[ToolContext](tools=[browser])
 
 
 def is_vm_browser_toolset(toolset: object) -> bool:

@@ -28,7 +28,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostPreApproval,
     AgentHostRunSpec,
 )
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
 from app.modules.agent.domain.harness_options import HarnessOptions
@@ -114,7 +114,7 @@ def run_spec_from(
     )
 
 
-async def refresh_credential[DepsT: AgentContext](
+async def refresh_credential[DepsT: ToolContext](
     *,
     uow_factory: UnitOfWorkFactory,
     agent_run_id: UUID,
@@ -191,7 +191,7 @@ def _resumed_tool_call_id(run: AgentRun | None) -> str | None:
     return run.state.resumed_tool_call_id if run is not None else None
 
 
-async def enqueue_run[DepsT: AgentContext](
+async def enqueue_run[DepsT: ToolContext](
     *,
     uow_factory: UnitOfWorkFactory,
     event_timeout_seconds: float,
@@ -481,7 +481,7 @@ async def _commit_admission(
             )
 
 
-async def _admit[DepsT: AgentContext](
+async def _admit[DepsT: ToolContext](
     *,
     uow_factory: UnitOfWorkFactory,
     event_timeout_seconds: float,

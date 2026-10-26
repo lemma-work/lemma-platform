@@ -18,7 +18,7 @@ import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
@@ -78,7 +78,7 @@ async def _run(
         ),
         conversation=conversation,
         messages=[],
-        ctx=AgentContext(
+        ctx=ToolContext(
             user_id=conversation.user_id,
             pod_id=pod_id,
             conversation_id=conversation.id,

@@ -27,7 +27,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.tools.approval_denials import remember_denial
 from app.modules.agent.tools.authority import workload_actor_id
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.connectors.contracts.pod_connectors import get_pod_connector
 
 _REFUSAL = "MISSING_WORKLOAD_RESOURCE_GRANT"
@@ -51,7 +51,7 @@ def grant_card_title(agent: str, connector: str, *, per_member: bool) -> str:
 
 
 async def connector_grant_offer(
-    deps: BaseAgentContext,
+    deps: ToolContext,
     exc: DomainError,
     *,
     connector: str | None,

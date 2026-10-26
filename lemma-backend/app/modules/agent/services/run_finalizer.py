@@ -54,7 +54,7 @@ from app.modules.agent.services.run_followups import stage_run_followups
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.usage.contracts.execution import usage_context_from_agent_context
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 logger = get_logger(__name__)
 
@@ -358,7 +358,7 @@ class RunFinalizer:
             await self.usage_recorder.release(run.usage_reservation)
             return
         context = usage_context_from_agent_context(
-            ConversationContext(
+            ToolContext(
                 user_id=run.user_id,
                 org_id=run.organization_id,
                 pod_id=run.pod_id,

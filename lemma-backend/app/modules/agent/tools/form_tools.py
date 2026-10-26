@@ -23,7 +23,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.datastore.contracts.public_rows import (
     OpenTable,
     PublicColumn,
@@ -110,12 +110,12 @@ def build_form_toolset(
     uow_factory: UnitOfWorkFactory,
     read_table: ReadOpenTable | None = None,
     list_tables: ListOpenTables | None = None,
-) -> FunctionToolset[BaseAgentContext]:
+) -> FunctionToolset[ToolContext]:
     read_table = read_table or partial(_read_table, uow_factory)
     list_tables = list_tables or partial(_list_tables, uow_factory)
 
     async def fill_form(
-        ctx: RunContext[BaseAgentContext], request: FillFormRequest
+        ctx: RunContext[ToolContext], request: FillFormRequest
     ) -> dict[str, object]:
         """Fill in fields of the form on the visitor's page with what they told
         you. It does not send the form: they check it and press Send. Call it
@@ -150,4 +150,4 @@ def build_form_toolset(
             "note": "Filled on their page. Ask them to check it and press Send.",
         }
 
-    return FunctionToolset[BaseAgentContext](tools=[fill_form], id=FORM_TOOLSET_ID)
+    return FunctionToolset[ToolContext](tools=[fill_form], id=FORM_TOOLSET_ID)

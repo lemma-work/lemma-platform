@@ -80,7 +80,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
     paired_machine,
     stale_after,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.agent.domain.value_objects import RunTrigger
 
@@ -234,7 +234,7 @@ async def test_a_whole_turn_survives_the_trip_from_host_to_conversation(
         run_id=run_id,
         agent=_agent(pod_id),
         conversation=_conversation(conversation_id, pod_id),
-        ctx=BaseAgentContext(
+        ctx=ToolContext(
             user_id=uuid7(), pod_id=pod_id, conversation_id=conversation_id
         ),
     )
@@ -332,7 +332,7 @@ async def test_the_stream_carries_a_permission_request_without_ending_the_run(
         run_id=run_id,
         agent=_agent(pod_id),
         conversation=_conversation(conversation_id, pod_id),
-        ctx=BaseAgentContext(
+        ctx=ToolContext(
             user_id=uuid7(), pod_id=pod_id, conversation_id=conversation_id
         ),
     )
@@ -446,7 +446,7 @@ async def test_an_image_the_agent_produced_reaches_the_conversation(
         run_id=run_id,
         agent=_agent(pod_id),
         conversation=_conversation(conversation_id, pod_id),
-        ctx=BaseAgentContext(
+        ctx=ToolContext(
             user_id=uuid7(), pod_id=pod_id, conversation_id=conversation_id
         ),
     )
@@ -536,7 +536,7 @@ async def test_a_run_outlives_the_credential_it_was_dispatched_with(
         async for event in harness._consume(
             agent_run_id=run_id,
             agent=_agent(pod_id),
-            ctx=BaseAgentContext(
+            ctx=ToolContext(
                 user_id=UUID(scenario.owner_user["id"]),
                 pod_id=pod_id,
                 conversation_id=conversation_id,
@@ -643,7 +643,7 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
     conversation_id, run_id, host_id = await _seed_run(db_session, scenario, pod_id)
     await db_session.commit()
 
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(scenario.owner_user["id"]),
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -787,7 +787,7 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
     await db_session.commit()
 
     uow_factory = lambda: SqlAlchemyUnitOfWork(db_session)  # noqa: E731
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(scenario.owner_user["id"]),
         pod_id=pod_id,
         conversation_id=conversation_id,
@@ -1030,7 +1030,7 @@ async def test_full_dispatch_admits_polls_and_completes_a_run(db_session, scenar
         run_id=run_id,
         agent=_agent(pod_id),
         conversation=_conversation(conversation_id, pod_id),
-        ctx=BaseAgentContext(
+        ctx=ToolContext(
             user_id=UUID(scenario.owner_user["id"]),
             pod_id=pod_id,
             conversation_id=conversation_id,

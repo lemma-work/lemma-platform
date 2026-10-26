@@ -6,7 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 from app.core.log.log import get_logger
 from app.modules.agent.domain.outsiders import refuse_owner_workspace
 from app.modules.agent.tools.authority import workspace_principal
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.tools.tool_errors import (
     safe_described_error,
@@ -58,7 +58,7 @@ class WorkspaceRuntimeContext:
     scope_key: str
 
 
-def workspace_runtime_context(ctx: BaseAgentContext) -> WorkspaceRuntimeContext:
+def workspace_runtime_context(ctx: ToolContext) -> WorkspaceRuntimeContext:
     conversation_key = ctx.conversation_id.hex
     initial_cwd = ctx.get_workspace_cwd()
     cwd_key = uuid5(NAMESPACE_URL, initial_cwd).hex[:12]
@@ -128,7 +128,7 @@ def _python_workspace_tool_failure(
 
 
 async def get_workspace_session(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     *,
     session_id: str | None,
     close_on_exit: bool,
@@ -205,7 +205,7 @@ def _with_notice(text: str | None, *, notice: str | None) -> str | None:
 
 
 async def _process_control_tool(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     *,
     process_id: str,
     operation: str,
@@ -255,7 +255,7 @@ async def _process_control_tool(
 
 
 async def resize_terminal_internal(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     request: ResizeTerminalRequest,
 ) -> ExecCommandResult:
     return await _process_control_tool(
@@ -292,7 +292,7 @@ def exec_clocks(request: ExecCommandRequest) -> tuple[int, int | None]:
 
 
 async def exec_command_internal(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     request: ExecCommandRequest,
     *,
     runtime=None,
@@ -378,7 +378,7 @@ async def exec_command_internal(
 
 
 async def write_stdin_internal(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     request: WriteStdinRequest,
 ) -> ExecCommandResult:
     try:
@@ -436,7 +436,7 @@ async def write_stdin_internal(
 
 
 async def terminate_process_internal(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     request: TerminateProcessRequest,
 ) -> ExecCommandResult:
     return await _process_control_tool(
@@ -449,7 +449,7 @@ async def terminate_process_internal(
 
 
 async def list_processes_internal(
-    ctx: BaseAgentContext,
+    ctx: ToolContext,
     request: ListProcessesRequest,
 ) -> ListProcessesResult:
     del request
@@ -489,7 +489,7 @@ async def list_processes_internal(
         )
 
 
-async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonRequest):
+async def execute_python_internal(ctx: ToolContext, request: ExecutePythonRequest):
     try:
         workspace_session = await get_workspace_session(
             ctx,

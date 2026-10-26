@@ -23,7 +23,7 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.outsiders import Audience, run_audience
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.outsider_tools import outsider_may_call
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
@@ -64,7 +64,7 @@ class AgentToolDispatcher:
     async def list_tools(
         self,
         *,
-        ctx: BaseAgentContext,
+        ctx: ToolContext,
         agent: Agent | None = None,
         conversation: Conversation | None = None,
         toolsets: list[object] | None = None,
@@ -97,7 +97,7 @@ class AgentToolDispatcher:
     async def call_tool(
         self,
         *,
-        ctx: BaseAgentContext,
+        ctx: ToolContext,
         name: str,
         arguments: dict[str, Any] | None,
         agent: Agent | None = None,
@@ -143,7 +143,7 @@ class AgentToolDispatcher:
         *,
         agent: Agent | None,
         conversation: Conversation | None,
-        ctx: BaseAgentContext,
+        ctx: ToolContext,
         agent_run_id: UUID | None,
         exit_stack: AsyncExitStack,
         toolsets: list[object] | None = None,
@@ -221,7 +221,7 @@ class AgentToolDispatcher:
 
     def _run_context(
         self,
-        ctx: BaseAgentContext,
+        ctx: ToolContext,
         agent_run_id: UUID | None,
     ) -> RunContext[Any]:
         return RunContext(

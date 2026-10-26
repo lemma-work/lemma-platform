@@ -84,7 +84,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     seeded_conversation,
     uow_factory,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.agent.domain.value_objects import AnswerKind
 
@@ -266,7 +266,7 @@ def _worker(
                 name=seeded.agent_name,
                 instruction="Help.",
             ),
-            ctx=BaseAgentContext(
+            ctx=ToolContext(
                 user_id=seeded.user_id,
                 pod_id=seeded.pod_id,
                 conversation_id=seeded.conversation_id,

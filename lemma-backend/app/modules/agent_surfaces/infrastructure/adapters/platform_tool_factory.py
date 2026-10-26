@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 from pydantic_ai.toolsets import AbstractToolset
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts import Conversation
@@ -54,7 +54,7 @@ class SurfacePlatformToolFactory:
         self,
         *,
         conversation: Conversation,
-    ) -> list[AbstractToolset[ConversationContext]]:
+    ) -> list[AbstractToolset[ToolContext]]:
         metadata = conversation.metadata or {}
         surface_type = str(metadata.get("surface_platform") or "")
         # Chat surfaces only: email's reply is sent by the observer, and an
@@ -92,7 +92,7 @@ class SurfacePlatformToolFactory:
                 return []
             allow_send = surface.config.send_policy.allow_send
 
-        toolsets: list[AbstractToolset[ConversationContext]] = []
+        toolsets: list[AbstractToolset[ToolContext]] = []
         if builder is not None:
             toolsets.append(builder(credentials=credentials))
         if caps.bot_creates_groups and metadata.get("conversation_kind") == "DM":

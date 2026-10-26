@@ -25,7 +25,7 @@ from app.modules.workspace.contracts.host_execution import (
 )
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 from app.modules.agent.domain.outsiders import OutsiderRunRefused, run_audience
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.providers.model_factory import (
     provider_model_settings,
 )
@@ -105,7 +105,7 @@ def run_start_payload(
     agent: Agent,
     conversation: Conversation,
     messages: Sequence[Message],
-    ctx: AgentContext,
+    ctx: ToolContext,
     agent_run_id: UUID,
     runtime_instructions: str,
     carries_history: bool,
@@ -154,7 +154,7 @@ def run_start_payload(
     }
 
 
-async def mcp_payload[DepsT: AgentContext](
+async def mcp_payload[DepsT: ToolContext](
     *,
     agent_run_id: UUID,
     conversation_id: UUID,
@@ -266,7 +266,7 @@ def _token_expiry_iso(token: str) -> str | None:
     return datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()
 
 
-async def _exported_tool_names[DepsT: AgentContext](
+async def _exported_tool_names[DepsT: ToolContext](
     *,
     agent_run_id: UUID,
     ctx: DepsT,
@@ -310,7 +310,7 @@ def _prompt_payload(
     agent: Agent,
     conversation: Conversation,
     messages: Sequence[Message],
-    ctx: AgentContext,
+    ctx: ToolContext,
     runtime_instructions: str,
 ) -> JsonObject:
     sections: list[str] = []
@@ -339,7 +339,7 @@ def _prompt_payload(
     }
 
 
-def _workspace_cwd(ctx: AgentContext) -> str:
+def _workspace_cwd(ctx: ToolContext) -> str:
     get_workspace_cwd = getattr(ctx, "get_workspace_cwd", None)
     if callable(get_workspace_cwd):
         value = get_workspace_cwd()

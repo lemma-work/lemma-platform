@@ -26,7 +26,7 @@ import pytest
 from fastapi import status
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_internal
 from app.modules.test_support.e2e.waiters import eventually
@@ -48,7 +48,7 @@ async def _context(authenticated_client, fixed_test_org, fixed_test_user):
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
     pod = response.json()
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),

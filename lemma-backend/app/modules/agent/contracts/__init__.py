@@ -17,7 +17,7 @@ from app.modules.agent.domain.value_objects import (
     AgentToolset,
 )
 from app.modules.agent.contracts.agent_response import AgentResponse
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.user_interaction.models import (
     AskUserRequest,
     DisplayResourceRequest,
@@ -43,7 +43,7 @@ __all__ = [
     "AgentToolset",
     "AskUserRequest",
     "Conversation",
-    "ConversationContext",
+    "ToolContext",
     "DisplayResourceRequest",
     "DisplayResourceType",
     "MessageDraft",

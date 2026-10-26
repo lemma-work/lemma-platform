@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Protocol, Sequence
 from uuid import UUID
 
 from app.core.authorization.context import Context
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import (
     Agent,
     Conversation,
@@ -32,7 +32,7 @@ class Harness(Protocol):
     # Not `async def`: that would declare a coroutine *returning* an iterator,
     # which is not what either harness is. Both are async generator functions and
     # every caller iterates the return value directly, un-awaited.
-    def run[DepsT: AgentContext](
+    def run[DepsT: ToolContext](
         self,
         *,
         agent: Agent,

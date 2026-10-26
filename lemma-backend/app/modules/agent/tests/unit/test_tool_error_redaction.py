@@ -128,7 +128,7 @@ class TestTheApprovalPathsRedactToo:
         from uuid import uuid4
 
         from app.modules.agent.tools.approval import executor as approval_executor
-        from app.modules.agent.tools.context import BaseAgentContext
+        from app.modules.agent.domain.context import ToolContext
         from app.modules.agent.tools.user_interaction import pydantic_adapter
 
         async def _granted(**_kwargs) -> bool:
@@ -148,9 +148,7 @@ class TestTheApprovalPathsRedactToo:
         )
 
         response = await pydantic_adapter._run_if_exact_match_already_approved(
-            deps=BaseAgentContext(
-                user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()
-            ),
+            deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
             tool_name="http_request",
             args={},
         )

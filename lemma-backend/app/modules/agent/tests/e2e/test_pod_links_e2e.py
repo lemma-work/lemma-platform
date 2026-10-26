@@ -54,7 +54,7 @@ from app.modules.agent.services.pod_ask_delivery import PodAskDelivery
 from app.modules.agent.services.pod_ask_service import PodAskService
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.pod.models import (
     PodGetRecordsRequest,
     PodTablesRequest,
@@ -107,7 +107,7 @@ async def _connect(client, *, billing: str, support: str, shares=None):
 def _as_support_in_billing(*, user_id: UUID, org_id: UUID, billing: str, support: str):
     """The deps a run in Billing answering Support over the link carries."""
     return SimpleNamespace(
-        deps=BaseAgentContext(
+        deps=ToolContext(
             user_id=user_id,
             org_id=org_id,
             pod_id=UUID(billing),
@@ -255,7 +255,7 @@ async def test_with_nobody_present_a_pod_asks_over_its_link_and_hears_back(
     )
     assert made.status_code == status.HTTP_201_CREATED, made.text
     asking = UUID(made.json()["id"])
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(support),
@@ -368,7 +368,7 @@ async def test_disconnecting_ends_the_asks_and_takes_back_what_was_shared(
     made = await authenticated_client.post(
         f"/pods/{support}/conversations", json={"title": "nightly", "type": "TASK"}
     )
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(support),

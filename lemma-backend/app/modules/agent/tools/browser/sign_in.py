@@ -31,7 +31,7 @@ from app.modules.agent.tools.browser.models import (
     BrowserSignInRequest,
     BrowserSignInResponse,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.modules.web_login.contracts import InvalidOrigin, normalize_origin
 
@@ -65,7 +65,7 @@ def _pod_app_slug(origin: str) -> str | None:
 
 
 async def sign_in_internal(
-    deps: BaseAgentContext,
+    deps: ToolContext,
     request: BrowserSignInRequest,
     *,
     tool_call_id: str | None = None,
@@ -170,7 +170,7 @@ async def sign_in_internal(
     raise AgentInputRequired(tool_call_id, SIGN_IN_TOOL_NAME)
 
 
-async def _delegated_context(deps: BaseAgentContext):
+async def _delegated_context(deps: ToolContext):
     """The authority this run carries, in its own session.
 
     A session of its own, and closed before the sign-in service opens one:

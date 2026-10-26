@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     )
 from uuid import UUID
 from pydantic_ai.toolsets import AbstractToolset
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
@@ -68,7 +68,7 @@ def parse_surface_event_metadata(
 async def build_surface_toolsets(
     uow_factory: UnitOfWorkFactory,
     conversation: Conversation,
-) -> list[AbstractToolset[ConversationContext]]:
+) -> list[AbstractToolset[ToolContext]]:
     """The tools this conversation's platform adds to the run."""
     from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
         SurfacePlatformToolFactory,

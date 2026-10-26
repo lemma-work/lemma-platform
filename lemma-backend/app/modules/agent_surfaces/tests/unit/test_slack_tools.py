@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from slack_sdk.web.async_client import AsyncWebClient
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent_surfaces.platforms.slack.tools import build_slack_surface_toolset
 
 
@@ -82,7 +82,7 @@ async def test_slack_recent_channel_messages_excludes_active_thread(monkeypatch)
     monkeypatch.setattr(AsyncWebClient, "conversations_history", fake_history)
 
     ctx = SimpleNamespace(
-        deps=ConversationContext(
+        deps=ToolContext(
             user_id=uuid4(),
             pod_id=uuid4(),
             conversation_id=uuid4(),

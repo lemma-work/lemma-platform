@@ -19,7 +19,7 @@ from uuid import uuid4
 import pytest
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
@@ -69,7 +69,7 @@ async def _drain(conversation: Conversation) -> None:
         ),
         conversation=conversation,
         messages=[],
-        ctx=AgentContext(
+        ctx=ToolContext(
             user_id=conversation.user_id,
             pod_id=conversation.pod_id,
             conversation_id=conversation.id,

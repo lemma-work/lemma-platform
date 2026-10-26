@@ -35,7 +35,7 @@ from app.modules.agent.domain.prompt.run_context import render_run_context
 from app.modules.agent.domain.value_objects import MessageKind, MessageRole
 from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
 from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = pytest.mark.unit
 
@@ -58,8 +58,8 @@ class _Recorder:
         yield self._script[len(self.requests) - 1]
 
 
-def _lookup_toolset() -> FunctionToolset[ConversationContext]:
-    toolset = FunctionToolset[ConversationContext]()
+def _lookup_toolset() -> FunctionToolset[ToolContext]:
+    toolset = FunctionToolset[ToolContext]()
 
     @toolset.tool_plain
     def lookup() -> str:
@@ -114,7 +114,7 @@ async def _run(
 ) -> None:
     model = FunctionModel(stream_function=recorder.stream)
     monkeypatch.setattr(harness_module, "_runtime_profile_model", lambda options: model)
-    ctx = ConversationContext(
+    ctx = ToolContext(
         user_id=conversation.user_id,
         pod_id=conversation.pod_id,
         conversation_id=conversation.id,

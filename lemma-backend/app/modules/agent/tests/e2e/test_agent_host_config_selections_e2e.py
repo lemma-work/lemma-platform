@@ -84,7 +84,7 @@ from app.modules.agent.tests.e2e.agent_host_helpers import (
     publish_harnesses,
     stale_after,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.test_support.e2e.builders import E2EScenario
 
 pytestmark = pytest.mark.e2e
@@ -571,7 +571,7 @@ async def test_a_host_notice_reaches_the_conversation_as_a_flat_status(
                 name="helper",
                 instruction="Help.",
             ),
-            ctx=BaseAgentContext(
+            ctx=ToolContext(
                 user_id=uuid7(), pod_id=pod_id, conversation_id=conversation_id
             ),
             conversation=conversation,

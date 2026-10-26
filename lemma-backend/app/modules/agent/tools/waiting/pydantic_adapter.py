@@ -44,7 +44,7 @@ from app.modules.agent.infrastructure.wait_repository import (
 )
 from app.modules.agent.services.run_suspension import suspend_remote_run
 from app.modules.agent.services.wait_timers import arm_wait
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.modules.agent.tools.waiting.models import (
     DEFAULT_TARGET_DEADLINE_SECONDS,
@@ -72,7 +72,7 @@ def _target_of(request: WaitForRequest) -> tuple[AgentWaitType, str | None] | No
 
 
 async def wait_for(
-    ctx: RunContext[BaseAgentContext], request: WaitForRequest
+    ctx: RunContext[ToolContext], request: WaitForRequest
 ) -> WaitForResponse:
     """Stop here and pick this turn up when there is a reason to.
 
@@ -259,7 +259,7 @@ async def wait_for(
 
 
 async def _already_settled(
-    deps: BaseAgentContext, wait_type: AgentWaitType, external_ref: str | None
+    deps: ToolContext, wait_type: AgentWaitType, external_ref: str | None
 ) -> WaitForResponse | None:
     """An immediate answer when the target has already reached a terminal state."""
     from app.modules.agent.services.wait_targets import read_target
@@ -291,4 +291,4 @@ async def _already_settled(
     )
 
 
-waiting_toolset = FunctionToolset[BaseAgentContext](tools=[wait_for])
+waiting_toolset = FunctionToolset[ToolContext](tools=[wait_for])

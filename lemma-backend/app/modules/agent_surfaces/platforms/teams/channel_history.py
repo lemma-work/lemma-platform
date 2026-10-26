@@ -18,7 +18,7 @@ from pydantic_ai.tools import RunContext
 
 from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts import ToolContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
@@ -189,7 +189,7 @@ class TeamsChannelHistoryMixin:
     async def get_recent_channel_messages(
         self,
         *,
-        ctx: RunContext[ConversationContext],
+        ctx: RunContext[ToolContext],
         request: TeamsGetRecentMessagesParams,
     ) -> TeamsGetRecentMessagesResult:
         try:
@@ -228,7 +228,7 @@ class TeamsChannelHistoryMixin:
         )
 
     async def _resolve_history_target(
-        self, ctx: RunContext[ConversationContext]
+        self, ctx: RunContext[ToolContext]
     ) -> _ChannelHistoryTarget:
         """Everything a channel-history read needs before it opens a session."""
         if ctx.deps.surface_platform != "TEAMS":

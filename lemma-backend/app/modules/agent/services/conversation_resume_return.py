@@ -43,7 +43,7 @@ from app.modules.agent.services.approval_reconciliation import (
 )
 
 if TYPE_CHECKING:
-    from app.modules.agent.tools.context import ConversationContext
+    from app.modules.agent.domain.context import ToolContext
 
 logger = get_logger(__name__)
 
@@ -362,7 +362,7 @@ class ResumeToolReturnBuilder:
         conversation: Conversation,
         user_id: UUID,
         agent_run_id: UUID,
-    ) -> ConversationContext:
+    ) -> ToolContext:
         """Rebuild the run's context so an approved tool runs like in-run.
 
         The paused run's session (``RunSession.for_resume``): its runtime,

@@ -5,7 +5,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.speech.models import (
     ListenRequest,
     ListenResponse,
@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 
 
 async def listen(
-    ctx: RunContext[BaseAgentContext], request: ListenRequest
+    ctx: RunContext[ToolContext], request: ListenRequest
 ) -> ListenResponse:
     """Transcribe an audio file that has NOT already been transcribed.
 
@@ -44,7 +44,7 @@ async def listen(
         return ListenResponse(success=False, error=safe_error_text(exc))
 
 
-async def say(ctx: RunContext[BaseAgentContext], request: SayRequest) -> SayResponse:
+async def say(ctx: RunContext[ToolContext], request: SayRequest) -> SayResponse:
     """Speak a reply: synthesize audio and deliver it as a voice note.
 
     Text is the default modality, so call this only when voice is genuinely
@@ -67,7 +67,7 @@ async def say(ctx: RunContext[BaseAgentContext], request: SayRequest) -> SayResp
 
 
 async def list_voices(
-    ctx: RunContext[BaseAgentContext], request: ListVoicesRequest
+    ctx: RunContext[ToolContext], request: ListVoicesRequest
 ) -> ListVoicesResponse:
     """What `say` can sound like: the voices this deployment can actually use.
 
@@ -117,4 +117,4 @@ async def list_voices(
     )
 
 
-speech_toolset = FunctionToolset[BaseAgentContext](tools=[listen, say, list_voices])
+speech_toolset = FunctionToolset[ToolContext](tools=[listen, say, list_voices])

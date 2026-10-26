@@ -1,7 +1,7 @@
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.tools.web.models import WebFetchRequest, WebFetchResponse
 from app.modules.agent.tools.web.web import (
     web_search_internal,
@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 
 
 async def web_search(
-    ctx: RunContext[BaseAgentContext], request: WebSearchRequest
+    ctx: RunContext[ToolContext], request: WebSearchRequest
 ) -> WebSearchResponse:
     """
     Search the web; returns titles, snippets, and URLs.
@@ -28,7 +28,7 @@ async def web_search(
 
 
 async def web_fetch(
-    ctx: RunContext[BaseAgentContext], request: WebFetchRequest
+    ctx: RunContext[ToolContext], request: WebFetchRequest
 ) -> WebFetchResponse:
     """
     Capture web pages into your workspace so you can read them properly.
@@ -54,7 +54,7 @@ async def web_fetch(
         return WebFetchResponse(success=False, error=f"Web fetch failed: {exc}")
 
 
-web_search_toolset = FunctionToolset[BaseAgentContext](
+web_search_toolset = FunctionToolset[ToolContext](
     tools=[
         web_search,
         web_fetch,

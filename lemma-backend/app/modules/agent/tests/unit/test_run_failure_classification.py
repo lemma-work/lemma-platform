@@ -32,7 +32,7 @@ from pydantic_ai.models.function import (
 )
 
 from app.core.domain.errors import DomainError
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import AgentEventType
@@ -186,7 +186,7 @@ async def test_a_model_that_only_thought_until_the_cap_says_it_ran_out_of_room()
             ),
             conversation=conversation,
             messages=[],
-            ctx=AgentContext(
+            ctx=ToolContext(
                 user_id=conversation.user_id,
                 pod_id=pod_id,
                 conversation_id=conversation.id,
@@ -283,7 +283,7 @@ async def test_a_run_the_provider_refused_ends_on_an_error_carrying_the_code() -
             ),
             conversation=conversation,
             messages=[],
-            ctx=AgentContext(
+            ctx=ToolContext(
                 user_id=conversation.user_id,
                 pod_id=pod_id,
                 conversation_id=conversation.id,
