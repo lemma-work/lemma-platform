@@ -159,7 +159,7 @@ class ConnectorApps:
     def skill(self, app: str, *, kind: str | None = None) -> dict:
         """Get the skill guide markdown for a connector.
 
-        Pass kind='package' or kind='composio' for apps that ship as both.
+        Pass kind='http' or kind='composio' for apps that ship as both.
         Falls back to the generic doc when no kind-specific file exists.
         """
         transport = self._parent._transport
