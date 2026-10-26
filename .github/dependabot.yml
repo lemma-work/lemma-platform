@@ -1,8 +1,14 @@
 version: 2
 
 # Version updates are intentionally low-frequency and grouped into one PR per
-# ecosystem, including major updates. Security updates remain immediate, but are
-# grouped per ecosystem instead of opening one PR per vulnerable dependency.
+# ecosystem. Security updates remain immediate, but are grouped per ecosystem
+# instead of opening one PR per vulnerable dependency.
+#
+# Routine updates leave major versions out for npm, uv and cargo. With them in,
+# no routine group PR got through CI: the npm group in October went TypeScript
+# 5→7, @types/node 24→26 and jsdom 24→30 in one PR, and three unrelated
+# migrations cannot be reviewed as a lockfile bump. A major is a deliberate
+# change someone makes on purpose, the way CONTRIBUTING describes bumping Rust.
 #
 # The limit is 2, not 1, and that is the whole point of it. Every ecosystem
 # declares two groups -- routine and security -- and the limit counts open PRs
@@ -10,29 +16,33 @@ version: 2
 # and the security group had nowhere to go, which is how 28 alerts accumulated
 # under a config that reads as correct.
 updates:
-  # Every directory with a `uv.lock`, which is the list `lint-lockfiles`
-  # gates on -- and it has to be, for two separate reasons.
+  # Every directory with a `uv.lock` is listed across the two uv entries below,
+  # which together are the list `lint-lockfiles` gates on. A directory
+  # Dependabot does not read is a directory a security advisory has no way to
+  # reach, which is the failure the note above about the open-PR limit
+  # describes.
   #
-  # The sandbox image templates depend on `lemma-cli`, `lemma-pod-bundle` and
-  # `lemma-python` by path, and uv records a path dependency's own dependency
-  # specifiers inside the dependant's lock. So bumping a *dev* pin in
-  # `lemma-python` -- ruff, say, which no image installs -- leaves both
-  # templates' locks stale. Their Dockerfiles run `uv sync --locked`, so that
-  # is not a warning, it fails the image build; the monthly group PR died there
-  # while the lock it needed was in a directory Dependabot did not own.
+  # The split is about path dependencies. `lemma-python`, `lemma-pod-bundle` and
+  # `lemma-cli` are installed by path into `lemma-backend`, both sandbox image
+  # templates and each other, and uv records a path dependency's own
+  # pyproject.toml specifiers inside every dependant's lock. Dependabot updates
+  # each directory on its own, against the others as they are on main -- so
+  # when one group PR edits `lemma-python/pyproject.toml` (the `ruff<0.18` cap
+  # in September, a dev pin no image installs), every lock it wrote for the
+  # dependants is stale before it is pushed. `lint-lockfiles` fails, and so
+  # does every `uv sync --locked`, including the template Dockerfiles. Listing
+  # the dependants here does not help: Dependabot owns their locks but resolves
+  # them against the wrong sibling.
   #
-  # `tests/scenarios` has no path dependency and cannot go stale that way. It
-  # is here for the other reason: a directory Dependabot does not read is a
-  # directory a security advisory has no way to reach, which is the failure the
-  # note above about the open-PR limit describes.
+  # So the three providers are lockfile-only: their own locks move, their
+  # pyproject.toml never does, and no dependant's recorded metadata can change
+  # under it. Raising a provider's floor or cap is a hand edit followed by
+  # `uv lock` in every directory `lint-lockfiles` names.
   - package-ecosystem: uv
     directories:
       - /lemma-backend
       - /lemma-backend/sandbox-images/templates/function-python
       - /lemma-backend/sandbox-images/templates/workspace-python
-      - /lemma-cli
-      - /lemma-pod-bundle
-      - /lemma-python
       - /lemma-stack
       - /tests/scenarios
     schedule:
@@ -47,6 +57,31 @@ updates:
       python-security-updates:
         applies-to: security-updates
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: uv
+    directories:
+      - /lemma-cli
+      - /lemma-pod-bundle
+      - /lemma-python
+    schedule:
+      interval: monthly
+      time: "04:05"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 2
+    versioning-strategy: lockfile-only
+    groups:
+      python-provider-routine-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      python-provider-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directories:
@@ -61,12 +96,24 @@ updates:
       timezone: Asia/Kolkata
     open-pull-requests-limit: 2
     groups:
+      # React refuses to render unless `react` and `react-dom` are the exact
+      # same version, and Dependabot bumps each on its own: the October routine
+      # PR moved react to 19.3.1 and left react-dom at 19.3.0, and every
+      # frontend test died on "Incompatible React versions". A group of their
+      # own is listed first, so the pair is matched before the catch-all and
+      # moves in one update.
+      react:
+        applies-to: version-updates
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
       javascript-routine-updates:
         applies-to: version-updates
         patterns: ["*"]
       javascript-security-updates:
         applies-to: security-updates
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
@@ -132,3 +179,6 @@ updates:
       rust-security-updates:
         applies-to: security-updates
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
