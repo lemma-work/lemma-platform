@@ -259,7 +259,12 @@ class CallAgents:
         """Whether a run is going, read from the store: a stream can lose the
         frame that ended one."""
         async with as_caller(self._party) as scope:
-            return await call_working(scope.uow, self.call_id)
+            running = await call_working(scope.uow, self.call_id)
+        if not running:
+            # The frames that ended those runs were lost; forgetting them lets
+            # the next run start report itself as working again.
+            self._running.clear()
+        return running
 
     async def signals(self) -> AsyncIterator[AgentSignal]:
         while True:

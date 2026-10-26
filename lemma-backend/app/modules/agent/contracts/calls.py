@@ -138,12 +138,16 @@ async def open_call(
     existing = call_mark(conversation.metadata)
     if existing is not None and existing.role is not CallRole.COORDINATOR:
         raise ConversationStateError("A sub-agent's conversation cannot hold a call.")
-    mark = existing or CallMark(
-        call_id=conversation.id, role=CallRole.COORDINATOR, since=datetime.now(UTC)
-    )
-    await repository.set_conversation_metadata_key(
-        conversation.id, CALL_METADATA_KEY, mark.as_metadata()
-    )
+    if existing is None:
+        # Only a new mark is written. One already there was read before the
+        # awaits above, and a hang-up in between may have updated it since:
+        # writing it back would mark the call live again and lose its time.
+        mark = CallMark(
+            call_id=conversation.id, role=CallRole.COORDINATOR, since=datetime.now(UTC)
+        )
+        await repository.set_conversation_metadata_key(
+            conversation.id, CALL_METADATA_KEY, mark.as_metadata()
+        )
     return OpenedCall(conversation_id=conversation.id, title=conversation.title)
 
 

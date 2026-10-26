@@ -7,6 +7,9 @@ import { callSocketUrl, openCallSocket, type CallConnection, type CallFrame, typ
 
 /** Times a dropped call is joined again before it is given up as ended. */
 const MAX_REJOINS = 2;
+/** The wait before the first rejoin, doubled for the next: a server
+ *  restarting or a network coming back is not there the instant it went. */
+const REJOIN_DELAY_MS = 1_000;
 /** How long a notice stays up: it says something once, it is not a state. */
 const NOTICE_MS = 12_000;
 
@@ -175,7 +178,13 @@ export function useCall() {
                         if (dropped && rejoinsRef.current < MAX_REJOINS) {
                             rejoinsRef.current += 1;
                             dropSocket();
-                            void startRef.current?.(podId, callId, details, true);
+                            setStatus("connecting");
+                            const again = attemptRef.current;
+                            window.setTimeout(() => {
+                                // Not if the person ended the call meanwhile.
+                                if (again !== attemptRef.current) return;
+                                void startRef.current?.(podId, callId, details, true);
+                            }, REJOIN_DELAY_MS * 2 ** (rejoinsRef.current - 1));
                             return;
                         }
                         teardown();

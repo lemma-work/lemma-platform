@@ -74,6 +74,11 @@ _WORKING_RECHECK_SECONDS = 15.0
 _BUDGET_SECONDS = 300.0
 #: How long the call's own tasks get to finish once it is over.
 _DRAIN_SECONDS = 2.0
+#: Longer while a turn is still being routed: the gate's decision alone may
+#: take its full interactive budget, and a request said just before hanging
+#: up must still reach the team.
+_ROUTE_DRAIN_SECONDS = 12.0
+_ROUTE_TASK = "calls.session.route"
 #: A turn that takes longer than this to reach the agents is called lost.
 _DISPATCH_SECONDS = 30.0
 #: How much of what was said goes with a turn the agents get, as context.
@@ -137,6 +142,7 @@ class CallSession:
         check_budget: Callable[[], Awaitable[None]] | None = None,
         muted: bool = False,
         clock: Callable[[], float] = time.monotonic,
+        guard_seconds: float = _GUARD_SECONDS,
     ) -> None:
         self._socket = socket
         self._engine = engine
@@ -146,6 +152,7 @@ class CallSession:
         self._holding = holding
         self._check_budget = check_budget
         self._clock = clock
+        self._guard_seconds = guard_seconds
         self._floor = Floor(quiet_window_ms=limits.quiet_window_ms)
         self._muted = muted
         self._working: bool | None = None
@@ -245,7 +252,11 @@ class CallSession:
         get a moment to finish, then are cancelled: none outlives the call."""
         if not self._tasks:
             return
-        _, pending = await asyncio.wait(set(self._tasks), timeout=_DRAIN_SECONDS)
+        routing = any(task.get_name() == _ROUTE_TASK for task in self._tasks)
+        _, pending = await asyncio.wait(
+            set(self._tasks),
+            timeout=_ROUTE_DRAIN_SECONDS if routing else _DRAIN_SECONDS,
+        )
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
@@ -403,7 +414,7 @@ class CallSession:
         self.stats.caller_turns += 1
         recent = self._lines[-_RECENT_LINES:]
         number = self._remember(f"Caller: {text}")
-        self._spawn(self._route(text, recent, number), name="calls.session.route")
+        self._spawn(self._route(text, recent, number), name=_ROUTE_TASK)
 
     async def _route(self, text: str, recent: Sequence[str], number: int) -> None:
         # In order: a correction must not overtake the request it corrects.
@@ -558,7 +569,7 @@ class CallSession:
         corrects a run the streams lost track of."""
         last_recheck = last_budget = self._clock()
         while True:
-            await asyncio.sleep(_GUARD_SECONDS)
+            await asyncio.sleep(self._guard_seconds)
             if self._holding is not None and not await self._holding.still_held():
                 self.end_reason = "This call continued somewhere else."
                 return

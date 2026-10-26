@@ -558,11 +558,7 @@ async def test_a_loop_that_fails_ends_the_call_with_a_reason() -> None:
     ]
 
 
-async def test_a_call_held_elsewhere_ends_here(monkeypatch: pytest.MonkeyPatch) -> None:
-    from app.modules.calls.services import session as session_module
-
-    monkeypatch.setattr(session_module, "_GUARD_SECONDS", 0.01)
-
+async def test_a_call_held_elsewhere_ends_here() -> None:
     class Lost:
         async def still_held(self) -> bool:
             return False
@@ -575,6 +571,7 @@ async def test_a_call_held_elsewhere_ends_here(monkeypatch: pytest.MonkeyPatch) 
         gate=_gate({}),
         limits=CallLimits(max_seconds=30, quiet_window_ms=0),
         holding=Lost(),
+        guard_seconds=0.01,
     )
     await session.run()
     assert session.end_reason == "This call continued somewhere else."

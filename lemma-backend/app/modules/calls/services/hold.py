@@ -11,6 +11,7 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect, status
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
+from websockets.exceptions import WebSocketException
 
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
@@ -227,14 +228,24 @@ async def _wind_down(
 ) -> None:
     """Every step runs whatever the one before it did: an engine that fails to
     close must not leak the call's watchers or lose its transcript."""
-    for step, name in (
-        (call.flush(final=True), "transcript"),
-        (engine.close(), "engine"),
-        (agents.close(), "agents"),
-    ):
+    steps: tuple[tuple[Callable[[], Awaitable[None]], str], ...] = (
+        (lambda: call.flush(final=True), "transcript"),
+        (engine.close, "engine"),
+        (agents.close, "agents"),
+    )
+    for step, name in steps:
         try:
-            await step
-        except DomainError, SQLAlchemyError, RedisError, OSError, RuntimeError:
+            # Created here, one at a time: a step not reached is never left
+            # as an unawaited coroutine.
+            await step()
+        except (
+            DomainError,
+            SQLAlchemyError,
+            RedisError,
+            OSError,
+            RuntimeError,
+            WebSocketException,
+        ):
             logger.warning("calls.socket.wind_down.failed", step=name, exc_info=True)
 
 

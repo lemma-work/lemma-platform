@@ -99,7 +99,10 @@ export function openCallSocket(url: string, start: CallStart, handlers: CallSock
         else handlers.onFrame(typed);
     };
     socket.onclose = (event) => {
-        if (!opened) { end("The call could not connect."); return; }
+        /* Never opened: the server or the network is not there yet -- often
+           a rejoin started right after a drop. Worth another try, which the
+           caller bounds. */
+        if (!opened) { end("The call could not connect.", true); return; }
         const outcome = closeOutcome(event.code, event.reason);
         end(outcome.reason, outcome.dropped);
     };
