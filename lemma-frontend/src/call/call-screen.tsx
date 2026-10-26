@@ -1,13 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { MicIcon, MicOffIcon, EndCallIcon, MinimizeIcon, ChevronLeftIcon, ChevronRightIcon } from "@/ui/icons";
 import { ResourceCard } from "@/thread/resource-card";
 import { CallMark } from "./call-mark";
 import type { CallStatus } from "./use-call";
 import type { CanvasItem } from "./canvas";
 import type { CallLine } from "./call-transcript";
-import type { PlanStepState } from "@/thread/turns";
 import { statusLine } from "./call-status";
 
 /** The call, given the whole pane.
@@ -26,16 +25,17 @@ export function CallScreen({
     podId,
     status,
     error,
+    notice,
     muted,
     thinking,
     level,
     canvas,
+    showing,
     transcript,
-    plan,
     onMute,
     onEnd,
     onCollapse,
-    onLooking,
+    onShow,
     onRenderFailed,
     onOpenFile,
     onOpenApp,
@@ -45,20 +45,23 @@ export function CallScreen({
     podId: string;
     status: CallStatus;
     error: string | null;
+    /** Something to know, said once (a request the team cannot take). */
+    notice?: string | null;
     muted: boolean;
     thinking?: boolean;
     level: number;
     /** The call's canvas, in the order it was drawn. */
     canvas: CanvasItem[];
+    /** The item on screen, by id; null for the newest. Held by the call, not
+     *  here: this screen unmounts when the call is collapsed. */
+    showing: string | null;
     /** What has been said so far, both ways. */
     transcript: CallLine[];
-    /** The teammate's own plan, for the line under its name. */
-    plan?: PlanStepState[];
     onMute: () => void;
     onEnd: () => void;
     onCollapse: () => void;
-    /** The person is looking at this item, so the voice can refer to it. */
-    onLooking?: (item: CanvasItem) => void;
+    /** The person paged to this item: show it, and tell the voice. */
+    onShow: (item: CanvasItem) => void;
     /** An item could not draw here; whoever drew it is told. */
     onRenderFailed?: (item: CanvasItem, problem: string) => void;
     /** Put the thing on screen onto the stage as a tab. The call does not end
@@ -76,29 +79,19 @@ export function CallScreen({
        slide changes when the presenter changes it. Paging back is for looking
        something up, not for holding the screen. */
     const resources = canvas;
-    const [showing, setShowing] = useState(0);
     const newest = Math.max(0, resources.length - 1);
-    useEffect(() => { setShowing(newest); }, [newest]);
-    const active = Math.min(showing, newest);
+    const picked = showing === null ? -1 : resources.findIndex((one) => one.id === showing);
+    const active = picked >= 0 ? picked : newest;
     const onScreen = resources[active];
 
     /* Every page the person turns is them pointing at something, back to the
-       newest included: the voice must know which slide is up, or it talks
-       about one while another is on screen. The newest item arriving is not a
-       turn of theirs -- the voice was told about that when it was drawn. */
-    const pagedRef = useRef(false);
+       newest included: the voice is told which slide is up, or it talks about
+       one while another is on screen. The newest item arriving is not a turn
+       of theirs -- the voice was told about that when it was drawn. */
     const page = useCallback((to: number) => {
-        if (to < 0 || to > newest) return;
-        pagedRef.current = true;
-        setShowing(to);
-    }, [newest]);
-    const shownRef = useRef<string | null>(null);
-    useEffect(() => {
-        if (!onScreen || shownRef.current === onScreen.id) return;
-        shownRef.current = onScreen.id;
-        if (pagedRef.current) onLooking?.(onScreen);
-        pagedRef.current = false;
-    }, [onScreen, onLooking]);
+        const item = resources[to];
+        if (item) onShow(item);
+    }, [resources, onShow]);
 
     /* The arrow keys page, as in any slide viewer -- unless the person is
        typing, or a widget inside the slide has the focus and the keys. */
@@ -145,7 +138,7 @@ export function CallScreen({
        there — which is now either a widget or the first thing anybody said. */
     const bare = resources.length === 0;
 
-    const hint = statusLine({ error, muted, plan, thinking, teammate });
+    const hint = statusLine({ error: error ?? notice, muted, thinking, teammate });
 
     return (
         <section className="call-view" aria-label={"Call with " + teammate}>

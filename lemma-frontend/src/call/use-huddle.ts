@@ -8,27 +8,38 @@ import { lemma } from "@/session/client";
 import { buildTurns } from "@/thread/turns";
 import { historyBrief } from "./history-brief";
 import { podBrief } from "./pod-brief";
-import { isCallConversation } from "./call-conversation";
 import { useCall } from "./use-call";
 
-/** A call with the pod's teammate.
- *
- *  Opening one makes a conversation on the server that *is* the call: the
- *  teammate coordinates it there, hands work to its sub-agents, and puts what
- *  is worth seeing on the call's canvas. What was on screen when the call
- *  started goes with it as context, so the call continues that conversation
- *  rather than starting cold. */
-export function useHuddle({ pod, teammate, conversationId }: {
+/** Who a call is with, fixed when it is placed. */
+export interface CallTarget {
     pod: { id: string; name: string };
     teammate: string;
-    /** The conversation open when the call starts. */
+}
+
+/** Where a call is placed: the chat it continues, or a new conversation. */
+export interface CallPlace extends CallTarget {
+    /** The chat the call is held in; null (or a new pane) starts a new one. */
     conversationId: string | null;
-}) {
-    const call = useCall({ podId: pod.id });
+}
+
+/** A call with a pod's teammate.
+ *
+ *  A call is held in a conversation on the server: the chat it was started
+ *  from, or a new one when it was started from nowhere -- so the call, the
+ *  teammate's work and the transcript are one chat, the one the person was
+ *  in. Its teammate coordinates the call there, hands work to sub-agents, and
+ *  puts what is worth seeing on the call's canvas.
+ *
+ *  Where it is placed is passed to `start`, not read from the hook's
+ *  arguments: the call must not follow the person to another pod, and a call
+ *  ended by the server must not leave the next one aimed at the last pod. */
+export function useHuddle() {
+    const call = useCall();
     /** Expanded is the screen; collapsed is the bar. A call is never gone
      *  just because you are looking at something else. */
     const [expanded, setExpanded] = useState(false);
     const [callId, setCallId] = useState<string | null>(null);
+    const [target, setTarget] = useState<CallTarget | null>(null);
     /** A call is being set up or is on: a second press opens it rather than
      *  placing another, which would have no connection of its own. */
     const busy = useRef(false);
@@ -37,107 +48,100 @@ export function useHuddle({ pod, teammate, conversationId }: {
     const setupAttempt = useRef(0);
     const queryClient = useQueryClient();
 
-    /* The pod and the conversation the call grew out of, for the voice. A pod
-       that cannot be read is a call without the background -- worse, not
-       broken -- so neither failure stops the call. */
-    const context = useCallback(async () => {
+    /* The pod and the chat the call continues, for the voice -- the teammate
+       has the chat itself. A pod or chat that cannot be read is a call without
+       the background, worse but not broken, so neither failure stops it. */
+    const context = useCallback(async (place: CallPlace) => {
         const parts: string[] = [];
         const profile = await queryClient.ensureQueryData({
-            queryKey: ["profile", pod.id],
-            queryFn: () => source.getProfile(pod.id),
+            queryKey: ["profile", place.pod.id],
+            queryFn: () => source.getProfile(place.pod.id),
             staleTime: 5 * 60_000,
         }).catch(() => null);
-        if (profile) parts.push(podBrief(profile, teammate));
-        if (conversationId && conversationId !== NEW_CONVERSATION) {
-            const client = lemma(pod.id);
-            /* Not when the open conversation is an earlier call's own: right
-               after a call that is where the shell is left, and briefing the
-               next call with it made the new voice talk about things "on the
-               screen" that were on the last call's canvas, not this one's. */
-            const open = await client.conversations.get(conversationId, { pod_id: pod.id }).catch(() => null);
-            // Unread is not "not a call": a conversation that cannot be told
-            // apart is left out rather than risk briefing from the last call.
-            if (open && !isCallConversation(open)) {
-                const page = await client.conversations.messages.list(conversationId, { pod_id: pod.id, limit: 80 }).catch(() => null);
-                const history = page ? historyBrief(buildTurns(page.items), teammate) : "";
-                if (history) parts.push(history);
-            }
+        if (profile) parts.push(podBrief(profile, place.teammate));
+        if (place.conversationId && place.conversationId !== NEW_CONVERSATION) {
+            const page = await lemma(place.pod.id).conversations.messages
+                .list(place.conversationId, { pod_id: place.pod.id, limit: 80 })
+                .catch(() => null);
+            const history = page ? historyBrief(buildTurns(page.items), place.teammate) : "";
+            if (history) parts.push(history);
         }
         return parts.join("\n\n");
-    }, [queryClient, pod.id, teammate, conversationId]);
+    }, [queryClient]);
 
     const { start: startCall, end: endCall } = call;
 
-    /* Calling from a call's own conversation picks that call up again: the
-       same conversation, its agents still holding what they did, and its
-       canvas replayed as it was left. Anywhere else, a new call. */
-    const callToJoin = useCallback(async (): Promise<string> => {
-        const client = lemma(pod.id);
-        if (conversationId && conversationId !== NEW_CONVERSATION) {
-            const open = await client.conversations.get(conversationId, { pod_id: pod.id }).catch(() => null);
-            if (open && isCallConversation(open)) return conversationId;
-        }
-        const opened = await client.calls.open({
-            display_name: teammate || "your teammate",
-            title: `Call with ${teammate || "your teammate"}`,
-        });
-        return opened.call_id;
-    }, [pod.id, conversationId, teammate]);
-
-    const start = useCallback(async () => {
-        if (busy.current || call.active) { setExpanded(true); return; }
+    /** Place a call, or open the one already on. Resolves to the call's
+     *  conversation once it is placed, for the shell to show; null when a
+     *  call was already on or placing it failed. */
+    const start = useCallback(async (place: CallPlace): Promise<string | null> => {
+        if (busy.current || call.active) { setExpanded(true); return null; }
         busy.current = true;
         setStarting(true);
         const attempt = ++setupAttempt.current;
         setSetupError(null);
         setExpanded(true);
+        setTarget({ pod: place.pod, teammate: place.teammate });
+        const existing = place.conversationId && place.conversationId !== NEW_CONVERSATION
+            ? place.conversationId : null;
         try {
-            const callId = await callToJoin();
-            if (attempt !== setupAttempt.current) return;
-            setCallId(callId);
-            const brief = await context();
-            if (attempt !== setupAttempt.current) return;
-            await startCall(callId, { teammate, pod: pod.name, context: brief });
+            const opened = await lemma(place.pod.id).calls.open({
+                ...(existing ? { conversation_id: existing } : {}),
+                display_name: place.teammate || "your teammate",
+                title: `Call with ${place.teammate || "your teammate"}`,
+            });
+            if (attempt !== setupAttempt.current) return null;
+            setCallId(opened.call_id);
+            const brief = await context(place);
+            if (attempt !== setupAttempt.current) return null;
+            void startCall(place.pod.id, opened.call_id, { teammate: place.teammate, pod: place.pod.name, context: brief });
+            return opened.call_id;
         } catch (problem) {
-            if (attempt !== setupAttempt.current) return;
+            if (attempt !== setupAttempt.current) return null;
             setCallId(null);
+            setTarget(null);
             setSetupError(problem instanceof Error ? problem.message : "Could not start the call.");
             setExpanded(false);
+            return null;
         } finally {
             if (attempt === setupAttempt.current) { busy.current = false; setStarting(false); }
         }
-    }, [pod.name, teammate, context, startCall, call.active, callToJoin]);
+    }, [context, startCall, call.active]);
 
-    /* The call's id goes with it: the shell adopts the call's conversation
-       while one is set, and an ended call must not pull the person back to it
-       when they open something else. */
     const end = useCallback(() => {
         setupAttempt.current++;
         busy.current = false;
         setStarting(false);
         setSetupError(null);
         setCallId(null);
+        setTarget(null);
         endCall();
         setExpanded(false);
     }, [endCall]);
 
-    // Ended from the other side -- the server, the network -- as well as here.
+    // Ended from the other side -- the server, the network -- as well as here:
+    // the next call is placed from wherever the person is then.
     useEffect(() => {
-        if (call.status === "ended" || call.status === "error") setCallId(null);
+        if (call.status === "ended" || call.status === "error") {
+            setCallId(null);
+            setTarget(null);
+        }
     }, [call.status]);
-
 
     return {
         status: call.status,
         error: setupError ?? call.error,
+        notice: call.notice,
         muted: call.muted,
         transcript: call.transcript,
-        /* The coordinator's own run is the signal: "still working on it"
-           should mean the work is still running. */
+        /** Someone in the call is working: "still on it" means work is running. */
         thinking: call.working,
+        liveEpoch: call.liveEpoch,
         level: call.level,
         active: call.active,
         canvas: call.canvas,
+        showing: call.showing,
+        target,
         callConversationId: callId,
         settled: call.settled,
         /** A call is on or being set up: pressing call again should open it. */
@@ -148,7 +152,7 @@ export function useHuddle({ pod, teammate, conversationId }: {
         start,
         end,
         toggleMute: call.toggleMute,
-        looking: call.looking,
+        show: call.show,
         renderFailed: call.renderFailed,
     };
 }
