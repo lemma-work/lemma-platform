@@ -5,7 +5,7 @@ same agent in their channel. One keeps the seat, and what the person saw of
 the other is copied into it, in no run, each copy marked with the conversation
 it came from (``contracts/folded_history``). A run reads its history by run,
 so the copies reach the agent answering the kept conversation only because
-they are carried on purpose (``services/runtime_history``), as notifications
+they are carried on purpose (``domain/runtime_history``), as notifications
 and held messages are. Three things set them apart from those.
 
 They are where the merge put them: after what the kept conversation held when

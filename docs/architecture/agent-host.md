@@ -936,7 +936,7 @@ guarantee:
   run since the start of the session's last landed prompt: a reminder or a
   report delivered to the chat, another chat a contact merge folded in. No turn
   holds those, so nothing else would send them. They are taken from the history
-  the in-process harness reads (`services/runtime_history.py`), so they keep
+  the in-process harness reads (`domain/runtime_history.py`), so they keep
   its bounds (`MAX_UNATTACHED_MESSAGES`, `MAX_FOLDED_MESSAGES`), the notices
   that frame a folded chat, and nothing a stranger's run may not read. A
   session with no landed prompt on record, or one older than the history, is

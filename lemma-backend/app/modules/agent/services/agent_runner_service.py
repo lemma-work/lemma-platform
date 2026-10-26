@@ -56,6 +56,7 @@ from app.modules.agent.services.run_metrics import (
     agent_run_metrics,
     ended_as,
     ended_by,
+    run_is_not_over,
 )
 from app.modules.agent.services.run_phase_spans import (
     run_phase,
@@ -66,7 +67,6 @@ from app.modules.agent.services.run_event_pump import (
     drive_harness,
 )
 from app.modules.agent.services.turn_resume import TurnResume
-from app.modules.agent.services.run_metrics import run_is_not_over
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_finalizer import (
     is_usage_limit_error,

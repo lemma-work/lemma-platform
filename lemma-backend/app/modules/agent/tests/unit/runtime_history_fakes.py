@@ -1,6 +1,6 @@
 """One conversation's messages, read the way the runtime history queries read them.
 
-The history assembly (``services/runtime_history``) is handed the source it
+The history assembly (``domain/runtime_history``) is handed the source it
 reads, so this stands in for the repository at that seam. Its reads keep the
 queries' contracts -- which messages in no run are carried, and within which
 bounds -- and nothing else: the queries are held to the same contracts against
