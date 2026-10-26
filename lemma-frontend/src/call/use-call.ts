@@ -82,6 +82,10 @@ export function useCall({ podId }: { podId: string }) {
             case "work":
                 setWorking(frame.running);
                 break;
+            case "notice":
+                // Shown where the call's status goes; the call itself carries on.
+                setError(frame.text);
+                break;
             case "canvas.item": {
                 const item = canvasItemFrom(frame.item);
                 if (item) setCanvas((items) => (items.some((one) => one.id === item.id) ? items : [...items, item]));

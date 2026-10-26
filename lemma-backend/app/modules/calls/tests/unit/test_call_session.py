@@ -87,6 +87,7 @@ class Agents:
 
     def __init__(self, canvas: list[CanvasItem] | None = None) -> None:
         self.turns: list[str] = []
+        self.notes: list[str] = []
         self.signals_in: asyncio.Queue[AgentSignal] = asyncio.Queue()
         self._canvas = canvas or []
 
@@ -95,6 +96,9 @@ class Agents:
 
     async def canvas(self) -> list[CanvasItem]:
         return self._canvas
+
+    async def note(self, text: str) -> None:
+        self.notes.append(text)
 
     async def signals(self) -> AsyncIterator[AgentSignal]:
         while True:
@@ -280,7 +284,8 @@ async def test_a_request_the_agents_never_got_is_not_promised() -> None:
     agents = Failing()
     running = asyncio.create_task(_session(caller, voice, agents, _gate({})).run())
     await voice.out.put(Heard("book the cheapest one", final=True))
-    await _until(lambda: voice.injected)
+    await _until(lambda: voice.injected and agents.notes)
+    assert "book the cheapest one" in agents.notes[0]
     assert (
         voice.injected and "did not receive the last request" in voice.injected[-1][0]
     )
@@ -450,3 +455,34 @@ def test_a_resumed_voice_is_told_what_was_said_most_recent_kept() -> None:
     assert "India won by 4 wickets" in brief
     assert "Caller: hello" not in brief  # the oldest is what is cut
     assert "being resumed" not in voice_brief(teammate="Ria", pod="Personal")
+
+
+async def test_a_request_the_team_cannot_take_says_why_instead_of_asking_again() -> (
+    None
+):
+    # On dev the coordinator ran on another member's own Claude Code: every
+    # turn was refused, and the voice -- told only that the request was lost --
+    # asked the person to repeat themselves for the whole call.
+    from app.core.domain.errors import DomainError
+
+    caller, voice = Caller(), Voice()
+    reason = "This teammate runs on Deepak's own Claude Code, which only they can use."
+
+    class Refusing(Agents):
+        async def send_turn(self, content: str) -> None:
+            raise DomainError(reason, code="runtime_profile_not_shareable")
+
+    agents = Refusing()
+    running = asyncio.create_task(_session(caller, voice, agents, _gate({})).run())
+    await voice.out.put(Heard("what has the factory done this week", final=True))
+    await _until(lambda: agents.notes)
+    await voice.out.put(Heard("are you there", final=True))
+    await _until(lambda: len(voice.injected) == 2)
+    caller.inbox.put_nowait(None)
+    await running
+    # Written into the conversation to read later -- once, not per turn.
+    assert len(agents.notes) == 1 and reason in agents.notes[0]
+    note = voice.injected[0][0]
+    assert reason in note
+    assert "say it again" not in note and "Do not ask them to repeat" in note
+    assert {"type": "notice", "text": reason} in caller.frames

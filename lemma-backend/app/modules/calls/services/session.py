@@ -123,6 +123,9 @@ class CallSession:
         self._routing = asyncio.Lock()
         self._titles: dict[str, str] = {}
         self._failures_reported: set[str] = set()
+        #: Refusals already written into the conversation, so a call refused
+        #: on every turn says so once rather than after each.
+        self._noted: set[str] = set()
         #: What the voice was told before the call (the pod, the chat it was
         #: started from), told to the agents with their first turn. Without it
         #: the two knew different things: the voice spoke of a chat the
@@ -330,15 +333,53 @@ class CallSession:
                 # Only once delivered: a turn the agents never got leaves the
                 # brief for the next one.
                 self._background = None
-            except DomainError, SQLAlchemyError, OSError:
-                # The agents did not get it. The voice is told, so it does not
-                # promise work nobody is doing.
+            except DomainError as exc:
+                # Refused for a reason that saying it again will not change --
+                # a model this person cannot use, a spending limit. The voice
+                # is told the reason to pass on; asked only to "say it again",
+                # it had a person repeat themselves for a whole call.
+                logger.warning("calls.session.dispatch.failed", exc_info=True)
+                await self._refused(exc.message)
+                await self._note(
+                    f"Your team could not take requests on this call: {exc.message}",
+                    once=exc.message,
+                )
+            except SQLAlchemyError, OSError:
+                # The agents did not get it, this once. The voice is told, so
+                # it does not promise work nobody is doing.
                 logger.warning("calls.session.dispatch.failed", exc_info=True)
                 await self._engine.inject(
                     f"{TEAM_NOTE} Your team did not receive the last request; "
                     "nothing is being done about it. Ask the person to say it again.",
                     Inject.CONTEXT,
                 )
+                await self._note(
+                    f'A request on this call did not reach your team: "{text}"'
+                )
+
+    async def _note(self, text: str, *, once: str | None = None) -> None:
+        """Write what went wrong into the call's conversation, to read later."""
+        if once is not None:
+            if once in self._noted:
+                return
+            self._noted.add(once)
+        try:
+            await self._agents.note(text)
+        except DomainError, SQLAlchemyError, OSError:
+            # The same store that just failed may fail again; the voice and
+            # the screen have already said it.
+            logger.warning("calls.session.note.failed", exc_info=True)
+
+    async def _refused(self, reason: str) -> None:
+        await self._engine.inject(
+            f"{TEAM_NOTE} Your team cannot take requests on this call: {reason} "
+            "Tell the person this plainly, once. Do not ask them to repeat "
+            "themselves, and do not say anything is being looked into.",
+            Inject.CONTEXT,
+        )
+        # On the screen too: a reason heard once in a call is easy to miss.
+        with contextlib.suppress(OSError, RuntimeError):
+            await self.send({"type": "notice", "text": reason})
 
     # -- the agents ----------------------------------------------------------
 

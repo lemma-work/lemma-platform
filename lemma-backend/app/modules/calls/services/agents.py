@@ -122,6 +122,11 @@ def _conversation_stream(conversation_id: UUID) -> ConversationFrames:
     return opener(str(conversation_id))
 
 
+#: Marks a note the call wrote into its conversation about something that
+#: went wrong, beside the transcript's ``call_transcript``.
+CALL_NOTICE_KEY = "call_notice"
+
+
 class CallAgents:
     def __init__(
         self,
@@ -165,6 +170,21 @@ class CallAgents:
                 conversation_id=self.call_id,
                 message=transcript,
                 metadata={CALL_TRANSCRIPT_KEY: str(uuid4())},
+            )
+
+    async def note(self, text: str) -> None:
+        """Something that went wrong on the call, kept in its conversation.
+
+        A call is heard, not read: a refusal the voice said once is gone with
+        the call. Written into the conversation, it is still there to read --
+        and a call with something in it is never archived as empty.
+        """
+        async with as_caller(self._party) as scope:
+            await append_delivery_notice(
+                scope.uow,
+                conversation_id=self.call_id,
+                message=text,
+                metadata={CALL_NOTICE_KEY: str(uuid4())},
             )
 
     async def signals(self) -> AsyncIterator[AgentSignal]:

@@ -32,6 +32,14 @@ from app.modules.agent.domain.calls import (
 from app.modules.agent.domain.value_objects import MessageKind
 from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.repositories.agent_repository import (
+    AgentRepository,
+)
+from app.modules.agent.services.conversation_access import resolve_agent
+from app.modules.agent.services.runtime_availability import (
+    ensure_turn_runtime_available,
+    turn_runtime,
+)
 from app.modules.agent.services.service_factories import build_conversation_service
 
 
@@ -72,6 +80,12 @@ async def open_call(
 
     ``runtime`` pins the coordinator to a model; its sub-agents inherit it.
     The caller sets the authorization context.
+
+    Refused, with the reason a turn would give, when the caller cannot run the
+    model the coordinator would run on -- another member's own Claude Code, a
+    retired model. Checked here because every turn of the call needs it: left
+    to the first turn, the voice took call after call while every request
+    behind it failed, and it could only ask the person to say it again.
     """
     service = build_conversation_service(uow)
     conversation = await service.create_conversation(
@@ -81,6 +95,15 @@ async def open_call(
         title=title,
         instructions=coordinator_brief(agent_display_name=agent_display_name),
         agent_runtime=runtime,
+    )
+    agent = await resolve_agent(
+        conversation, user_id=user_id, agent_repository=AgentRepository(uow)
+    )
+    await ensure_turn_runtime_available(
+        uow,
+        await turn_runtime(uow, conversation, agent),
+        organization_id=conversation.organization_id,
+        user_id=user_id,
     )
     mark = CallMark(call_id=conversation.id, role=CallRole.COORDINATOR)
     await ConversationRepository(uow).set_conversation_metadata_key(

@@ -18,6 +18,9 @@ export type CallFrame =
     | { type: "transcript"; speaker: "caller" | "voice"; text: string; final: boolean }
     | { type: "clear" }
     | { type: "work"; running: boolean }
+    /** Something the person should know that the voice is also saying: a
+     *  request the team cannot take, and why. The call stays up. */
+    | { type: "notice"; text: string }
     | { type: "canvas.item"; item: CanvasFrameItem; replay?: boolean }
     | { type: "ended"; reason: string | null };
 

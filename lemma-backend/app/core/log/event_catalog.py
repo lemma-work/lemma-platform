@@ -683,6 +683,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'calls.openai.connect.failed': EventSpec('warning', frozenset()),
     'calls.openai.provider_error.degraded': EventSpec('warning', frozenset({'code'})),
     'calls.session.dispatch.failed': EventSpec('warning', frozenset()),
+    'calls.session.note.failed': EventSpec('warning', frozenset()),
     'calls.session.render_failed.undelivered': EventSpec('warning', frozenset()),
     'calls.slots.claim_unavailable.degraded': EventSpec('warning', frozenset()),
     'calls.slots.refresh_unavailable.degraded': EventSpec('warning', frozenset()),
