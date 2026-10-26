@@ -14,6 +14,8 @@ offering it the grant.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.tools import NoArguments
+
 from uuid import UUID, uuid4
 
 import pytest
@@ -26,7 +28,6 @@ from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.pod_connector import PodConnector
 from app.modules.connectors.tests.e2e.test_agent_connector_toolset_e2e import (  # noqa: F401 -- fixtures
     _create_agent,
-    _run_context,
     agent_mcp_server,
     allow_private_targets,
 )
@@ -121,7 +122,7 @@ async def test_the_assistant_lists_and_runs_the_persons_own_installation(
     from app.modules.agent.infrastructure.tools.connectors.models import (
         RunConnectorOperationRequest,
     )
-    from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.connectors.tools import (
         list_connectors,
         run_connector_operation,
     )
@@ -129,13 +130,13 @@ async def test_the_assistant_lists_and_runs_the_persons_own_installation(
     install, _org, _user, pod_id = own_installation
     deps = _deps(own_installation)
 
-    listed = await list_connectors(_run_context(deps))
+    listed = await list_connectors(deps, NoArguments())
     offered = [i for i in listed["items"] if i["connector"] == install.name]
     assert offered and offered[0]["mode"] == "PER_MEMBER", listed
     assert await _declared(db_session, pod_id, install.id) == []
 
     result = await run_connector_operation(
-        _run_context(deps),
+        deps,
         RunConnectorOperationRequest(
             connector=install.name,
             operation="convert_currency",
@@ -148,7 +149,7 @@ async def test_the_assistant_lists_and_runs_the_persons_own_installation(
     assert [(c.mode, c.source) for c in declared] == [("PER_MEMBER", "AUTO")]
     # Declared once: the next run goes through it, and declares nothing more.
     again = await run_connector_operation(
-        _run_context(deps),
+        deps,
         RunConnectorOperationRequest(
             connector=install.name,
             operation="convert_currency",
@@ -168,7 +169,7 @@ async def test_a_named_agent_is_refused_with_what_a_grant_card_needs(
     from app.modules.agent.infrastructure.tools.connectors.models import (
         RunConnectorOperationRequest,
     )
-    from app.modules.agent.infrastructure.tools.connectors.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.connectors.tools import (
         run_connector_operation,
     )
     from app.modules.connectors.contracts.pod_connectors import (
@@ -185,7 +186,7 @@ async def test_a_named_agent_is_refused_with_what_a_grant_card_needs(
     deps = _deps(own_installation, agent_id=UUID(agent["id"]), agent_name=agent["name"])
 
     result = await run_connector_operation(
-        _run_context(deps),
+        deps,
         RunConnectorOperationRequest(
             connector=install.name,
             operation="convert_currency",

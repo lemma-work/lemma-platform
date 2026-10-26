@@ -13,7 +13,6 @@ import re
 from uuid import uuid4
 
 import pytest
-from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -30,7 +29,8 @@ from app.modules.agent.infrastructure.tools.callables import (
     distinct_tool_names,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.domain.tools import ToolGroup, ToolSpec
+from app.modules.agent.services.tool_runtime import ToolRuntime
 
 # What Claude and OpenAI accept as a tool name.
 _PROVIDER_TOOL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -144,44 +144,50 @@ async def test_a_long_agent_name_is_listed_and_called_by_the_same_tool_name() ->
         instruction="Reconcile.",
     )
     parent = Agent(pod_id=pod_id, user_id=user_id, name="lead", instruction="Lead.")
-    tool = AgentCallableToolFactory(uow_factory)._build_agent_tool(
+    spec = AgentCallableToolFactory(uow_factory)._build_agent_tool(
         child, parent_agent=parent
     )
-    toolset = FunctionToolset[ToolContext](tools=[tool])
     # The child itself calling its own tool is refused before anything is
     # spawned, which is all the dispatch half needs: an unknown name would
     # be refused as unknown instead.
     ctx = ToolContext(
         user_id=user_id, pod_id=pod_id, conversation_id=uuid4(), agent_name=child.name
     )
-    dispatcher = AgentToolDispatcher(uow_factory)
+    runtime = ToolRuntime([spec])
 
-    [listed] = await dispatcher.list_tools(ctx=ctx, toolsets=[toolset])
+    [listed] = runtime.specs
     assert _PROVIDER_TOOL_NAME.fullmatch(_as_claude_code_sees_it(listed.name))
-    with pytest.raises(RuntimeError, match="cannot call itself"):
-        await dispatcher.call_tool(
-            ctx=ctx,
-            name=normalize_local_mcp_tool_name(_as_claude_code_sees_it(listed.name)),
-            arguments={"input": "go"},
-            toolsets=[toolset],
-        )
+    result = await runtime.call(
+        normalize_local_mcp_tool_name(_as_claude_code_sees_it(listed.name)),
+        {"input": "go"},
+        ctx,
+    )
+    assert isinstance(result, dict) and "cannot call itself" in str(result["error"])
 
 
 def test_a_resource_named_like_anothers_sanitized_form_gets_its_own_tool():
     """`x.y` sanitizes to `agent_x_y_<digest>`; an agent literally named that
     keeps its name. One toolset refuses two tools of one name, which failed the
     whole run, so the later one takes a counter and both build."""
-    from pydantic_ai import Tool
-
     dotted = resource_tool_name("agent_", "x.y")
     literal = resource_tool_name("agent_", dotted.removeprefix("agent_"))
     assert dotted == literal
 
-    def answer() -> str:
+    async def answer(ctx: object, request: object) -> str:
         return "ok"
 
-    tools = distinct_tool_names([Tool(answer, name=dotted), Tool(answer, name=literal)])
+    def spec(name: str) -> ToolSpec:
+        return ToolSpec(
+            name=name,
+            description="",
+            parameters=None,
+            json_schema={"type": "object"},
+            toolset=ToolGroup.CALLABLES,
+            run=answer,
+        )
+
+    tools = distinct_tool_names([spec(dotted), spec(literal)])
     names = [tool.name for tool in tools]
     assert names == [dotted, dotted + "_2"]
     assert all(len(name) <= MAX_LOCAL_TOOL_NAME_LENGTH for name in names)
-    FunctionToolset(tools=tools)
+    ToolRuntime(tools)

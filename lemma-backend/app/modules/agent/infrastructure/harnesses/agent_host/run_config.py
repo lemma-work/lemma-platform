@@ -30,7 +30,7 @@ class AgentHostRunConfig:
     model_name: str | None
 
 
-def agent_host_run_config[DepsT](options: HarnessOptions[DepsT]) -> AgentHostRunConfig:
+def agent_host_run_config[DepsT](options: HarnessOptions) -> AgentHostRunConfig:
     snapshot = options.runtime_profile
     if snapshot is None:
         raise ValueError("runtime profile is missing from harness options")
@@ -100,11 +100,3 @@ def resolve_pod_cwd(conversation: Conversation) -> str:
 
 def json_object(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
-
-
-def joined_prompt(prompt: JsonObject) -> str:
-    parts = [
-        str(prompt.get(key) or "")
-        for key in ("system_prompt", "recovery_system_prompt", "user_prompt")
-    ]
-    return "\n\n".join(part for part in parts if part)

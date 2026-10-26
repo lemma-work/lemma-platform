@@ -53,7 +53,7 @@ from app.modules.agent.application.turns import admit as turns
 from app.modules.agent.services.context_brief.outsider import render_outsider_brief
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.messaging.models import AskAPersonRequest
-from app.modules.agent.infrastructure.tools.messaging.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.messaging.tools import (
     ask_a_person,
 )
 
@@ -369,7 +369,7 @@ async def test_the_keepers_own_question_is_never_passed_back_to_them(monkeypatch
     )
 
     result = await ask_a_person(
-        SimpleNamespace(deps=_deps(keeper_asking=True), tool_call_id="call-1"),
+        _deps(keeper_asking=True).model_copy(update={"tool_call_id": "call-1"}),
         AskAPersonRequest(reason="P C asks what's up with you"),
     )
 
@@ -390,7 +390,7 @@ async def test_a_strangers_run_still_calls_the_keeper_in(monkeypatch):
     )
 
     result = await ask_a_person(
-        SimpleNamespace(deps=_deps(keeper_asking=False), tool_call_id="call-1"),
+        _deps(keeper_asking=False).model_copy(update={"tool_call_id": "call-1"}),
         AskAPersonRequest(reason="Wants the price list."),
     )
 

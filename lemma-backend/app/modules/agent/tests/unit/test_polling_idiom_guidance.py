@@ -23,7 +23,7 @@ _PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 _MODEL_FACING = [
     _PROMPTS / "workspace_cli.md",
     _TOOLS / "workspace_cli" / "workspace_cli.py",
-    _TOOLS / "workspace_cli" / "pydantic_adapter.py",
+    _TOOLS / "workspace_cli" / "tools.py",
     _TOOLS / "workspace_cli" / "models.py",
 ]
 

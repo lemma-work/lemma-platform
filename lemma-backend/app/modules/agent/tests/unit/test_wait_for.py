@@ -12,7 +12,7 @@ from app.modules.agent.tests.unit.repository_fakes import wire_repositories
 
 import app.modules.agent.application.turns.stop as stops
 from app.modules.agent.domain.value_objects import ConversationStatus
-import app.modules.agent.infrastructure.tools.waiting.pydantic_adapter as adapter
+import app.modules.agent.infrastructure.tools.waiting.tools as adapter
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitStatus,
@@ -25,8 +25,8 @@ from app.modules.agent.infrastructure.tools.waiting.models import (
     MIN_WAIT_SECONDS,
     WaitForRequest,
 )
-from app.modules.agent.infrastructure.tools.waiting.pydantic_adapter import wait_for
-from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+from app.modules.agent.infrastructure.tools.waiting.tools import wait_for
+from app.modules.agent.domain.tools import AgentInputRequired
 
 
 def _wait(**overrides) -> AgentConversationWaitEntity:
@@ -41,13 +41,11 @@ def _wait(**overrides) -> AgentConversationWaitEntity:
 
 def _ctx(*, supports_pause_signal: bool = True, tool_call_id: str = "tc-1"):
     return SimpleNamespace(
-        deps=SimpleNamespace(
-            conversation_id=uuid4(),
-            agent_run_id=uuid4(),
-            pod_id=uuid4(),
-            user_id=uuid4(),
-            supports_pause_signal=supports_pause_signal,
-        ),
+        conversation_id=uuid4(),
+        agent_run_id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        supports_pause_signal=supports_pause_signal,
         tool_call_id=tool_call_id,
     )
 
@@ -148,7 +146,7 @@ def test_a_target_wait_gives_up_in_minutes_by_default_not_an_hour():
 @pytest.mark.asyncio
 async def test_wait_for_requires_an_active_run():
     ctx = _ctx()
-    ctx.deps.agent_run_id = None
+    ctx.agent_run_id = None
     response = await wait_for(ctx, WaitForRequest(reason="waiting", seconds=600))
     assert response.success is False
     assert "active agent run" in (response.error or "")
@@ -157,7 +155,7 @@ async def test_wait_for_requires_an_active_run():
 @pytest.mark.asyncio
 async def test_wait_for_requires_a_pod():
     ctx = _ctx()
-    ctx.deps.pod_id = None
+    ctx.pod_id = None
     response = await wait_for(ctx, WaitForRequest(reason="waiting", seconds=600))
     assert response.success is False
     assert "inside a pod" in (response.error or "")
@@ -256,7 +254,7 @@ async def test_wait_for_arms_one_active_wait_and_pauses_the_run(suspend_harness)
     assert raised.value.kind == "wait_for"
 
     (wait,) = suspend_harness.created
-    assert wait.conversation_id == ctx.deps.conversation_id
+    assert wait.conversation_id == ctx.conversation_id
     assert wait.status is AgentWaitStatus.ACTIVE
     assert wait.tool_call_id == "tc-1"
     assert wait.spec["note_to_self"] is None
@@ -312,7 +310,7 @@ async def test_a_remote_harness_sleeps_too_and_is_told_to_stop(suspend_harness):
     assert wait.tool_call_id == "tc-1"
 
     # The turn is ended by Lemma, not left to the model to end politely.
-    assert suspend_harness.suspended == [ctx.deps.agent_run_id]
+    assert suspend_harness.suspended == [ctx.agent_run_id]
     assert suspend_harness.poked == ["host-1"]
 
     assert response.success is True

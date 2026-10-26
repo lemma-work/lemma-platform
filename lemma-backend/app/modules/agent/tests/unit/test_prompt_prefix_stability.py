@@ -23,11 +23,11 @@ from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.prompt.templates import build_agent_instructions
 from app.modules.agent.domain.prompt.run_context import task_list_section
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
-from app.modules.agent.capabilities.prompt_caching import (
+from app.modules.agent.infrastructure.harness.lemma.capabilities import (
     _ANTHROPIC_CACHE_TTL,
-    PromptCachingCapability,
+    PromptCaching as PromptCachingCapability,
 )
-from app.modules.agent.infrastructure.tools.toolset_selection import (
+from app.modules.agent.domain.toolsets import (
     resolve_toolset_names,
 )
 from app.modules.agent.domain.todos import Todo

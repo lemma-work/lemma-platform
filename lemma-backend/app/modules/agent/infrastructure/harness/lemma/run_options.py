@@ -1,33 +1,23 @@
-"""The pydantic-ai parts of what a run hands its harness.
+"""What pydantic-ai is handed for a run beyond its tools.
 
-The runner (``services/agent_runner_service``) decides what a run gets in
-Lemma's terms; the framework objects it becomes are built here, so no service
-holds a pydantic-ai type: the usage limits pydantic-ai enforces, the
-final-answer output a task owes, and the tool surface each harness reads.
+The usage limits it enforces, the final-answer output a task owes, and whether
+the provider's prompt caching is asked for -- each decided from Lemma's own
+types, so no service holds a pydantic-ai one.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 from pydantic_ai import UsageLimits
-from pydantic_ai.capabilities import AgentCapability
 from pydantic_ai.output import OutputSpec, ToolOutput
-from pydantic_ai.toolsets import AbstractToolset
 
-from app.modules.agent.capabilities import build_lemma_harness_tooling
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
-from app.modules.agent.domain.value_objects import ConversationType, HarnessKind
-from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_tool import (
+from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
+from app.modules.agent.domain.value_objects import ConversationType
+from app.modules.agent.infrastructure.harness.lemma.final_answer_output import (
     get_final_answer_tool,
 )
-
-type Toolsets = list[AbstractToolset[ToolContext]]
-type Capabilities = list[AgentCapability[ToolContext]]
 
 
 def harness_usage_limits() -> UsageLimits:
@@ -63,37 +53,17 @@ def final_answer_output(
     return None
 
 
-async def harness_tooling(
-    *,
-    ctx: ToolContext,
-    full_toolsets: Sequence[AbstractToolset[ToolContext]],
-    resolved: ResolvedAgentRuntime,
-) -> tuple[Toolsets, Capabilities]:
-    """The toolsets and capabilities a run's harness reads.
-
-    Remote harnesses reach every tool through the MCP server and keep the full
-    list. The in-process harness realizes every tool surface as a capability --
-    core tools shown directly, the rest deferred, current time, caching and the
-    todo layered on -- so its toolset list is empty.
-    """
-    if resolved.harness_kind != HarnessKind.LEMMA:
-        return list(full_toolsets), []
-    capabilities = await build_lemma_harness_tooling(
-        ctx=ctx,
-        full_toolsets=list(full_toolsets),
-        # Both protocols cache, by different mechanisms -- see
-        # PromptCachingCapability.
-        enable_prompt_caching=(
-            resolved.profile.protocol
-            in (
-                RuntimeProfileProtocol.OPENAI_COMPATIBLE,
-                RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
-            )
-            and agent_settings.lemma_llm_caching_enabled
-        ),
-        protocol=resolved.profile.protocol,
+def prompt_caching_enabled(snapshot: RuntimeSnapshot | None) -> bool:
+    """Whether to ask for caching: both protocols cache, by different levers."""
+    return (
+        snapshot is not None
+        and snapshot.protocol
+        in (
+            RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+            RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+        )
+        and agent_settings.lemma_llm_caching_enabled
     )
-    return [], capabilities
 
 
-__all__ = ["final_answer_output", "harness_tooling", "harness_usage_limits"]
+__all__ = ["final_answer_output", "harness_usage_limits", "prompt_caching_enabled"]

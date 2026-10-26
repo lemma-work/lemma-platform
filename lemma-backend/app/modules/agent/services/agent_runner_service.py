@@ -39,11 +39,6 @@ from app.modules.agent.services.runtime_profile_service import (
     runtime_profile_service_for,
 )
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
-from app.modules.agent.infrastructure.harness.lemma.run_options import (
-    final_answer_output,
-    harness_tooling,
-    harness_usage_limits,
-)
 from app.modules.agent.services.run_limits import (
     budget_for_run,
     make_stop_checker,
@@ -91,7 +86,7 @@ from app.modules.usage.contracts.execution import (
 )
 from app.modules.usage.contracts.metering import metering_execution
 from app.modules.agent.infrastructure.tools.callables import AgentCallableToolFactory
-from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
+from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
 from app.modules.agent.services.run_input_settings import (
     run_input_text,
     with_reply_budget,
@@ -142,9 +137,8 @@ class AgentRunnerService:
         # bridge and the routes do -- harness included.
         self.profile_services = profile_services
         self.fallback_model_name = fallback_model_name
-        self.fixed_usage_limits = harness_usage_limits()
         self.lease_alive = lease_alive  # see `events/turn_work.TurnFences`
-        self.tool_assembler = RunToolAssembler(tool_units or uow_factory)
+        self.tool_units = tool_units or uow_factory
         self.usage_recorder = RunUsageRecorder(uow_factory)
         # `step_units`: where each step row commits (a turn's lease-fenced
         # transaction), so a worker that lost its turn cannot add to it.
@@ -236,18 +230,14 @@ class AgentRunnerService:
                 configured_accounts=self._resolve_configured_accounts,
             )
             run = run.with_memory_after_turn(ctx.memory_after_turn)
-            full_toolsets = await self.tool_assembler.assemble(
+            tools = await specs_for(
                 agent=agent,
                 conversation=conversation,
-                vision_mode=ctx.vision_mode,
+                ctx=ctx,
+                surface=ToolSurface.for_harness(resolved_runtime.harness_kind),
+                uow_factory=self.tool_units,
                 # Already read while building the context, not loaded twice.
                 grants=session.grants,
-                host_execution=ctx.host_execution_mode,
-                harness_kind=resolved_runtime.harness_kind,
-                surface_platform=ctx.surface_platform,
-            )
-            harness_toolsets, harness_capabilities = await harness_tooling(
-                ctx=ctx, full_toolsets=full_toolsets, resolved=resolved_runtime
             )
             harness_model_settings: JsonObject | None = None
             compaction_model_settings: JsonObject | None = None
@@ -285,7 +275,6 @@ class AgentRunnerService:
             run_with_usage = run.with_runtime_profile(
                 runtime_profile_snapshot
             ).with_reservation(usage_reservation)
-            enforced_usage_limits = self.fixed_usage_limits
             # Compaction thresholds belong to the model, not to a global
             # constant: a 70k trigger on a million-token model compacts a run
             # that had 900k to spare, and a 110k "ceiling" on a 128k model is
@@ -293,15 +282,12 @@ class AgentRunnerService:
             context_budget = context_budget_for(resolved_runtime.model)
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
-                toolsets=harness_toolsets,
-                capabilities=harness_capabilities,
+                tools=tools,
                 model_settings=with_reply_budget(
                     harness_model_settings, context_budget
                 ),
                 compaction_model_settings=compaction_model_settings,
                 lighter_reasoning_settings=lighter_reasoning_settings,
-                usage_limits=enforced_usage_limits,
-                output_type=final_answer_output(agent, conversation),
                 should_stop=make_stop_checker(
                     agent_run_id, uow_factory=self.uow_factory
                 ),

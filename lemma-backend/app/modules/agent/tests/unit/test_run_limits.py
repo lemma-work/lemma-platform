@@ -174,7 +174,7 @@ async def test_the_node_loop_pauses_a_run_repeating_one_call():
     from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
     )
-    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.domain.tools import AgentInputRequired
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = NodeLoop(
@@ -287,7 +287,7 @@ async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
     from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
     )
-    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.domain.tools import AgentInputRequired
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = NodeLoop(
@@ -456,7 +456,7 @@ async def test_a_paused_run_does_not_export_as_a_failed_run():
     from app.modules.agent.infrastructure.harness.lemma.node_loop import (
         NodeLoop,
     )
-    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.domain.tools import AgentInputRequired
 
     exported: list = []
 

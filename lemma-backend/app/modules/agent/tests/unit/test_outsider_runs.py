@@ -33,7 +33,6 @@ from app.modules.agent.domain.prompt.channel_context import (
 )
 from app.modules.agent.infrastructure.tools.authority import tool_authorization_context
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.capabilities.assembler import _partition_core_extra
 from app.modules.agent.infrastructure.tools.messaging.models import (
     AskAPersonRequest,
     ChannelListRequest,
@@ -42,16 +41,15 @@ from app.modules.agent.infrastructure.tools.messaging.models import (
     ChannelSearchRequest,
     ListPodMembersRequest,
 )
-from app.modules.agent.infrastructure.tools.messaging.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.messaging.tools import (
     ask_a_person,
     channel_list,
     channel_post,
     channel_read,
     channel_search,
     list_pod_members,
-    messaging_toolset,
 )
-from app.modules.agent.infrastructure.tools.toolset_selection import resolve_toolsets
+from app.modules.agent.domain.toolsets import resolve_toolsets
 
 pytestmark = pytest.mark.unit
 
@@ -257,7 +255,7 @@ async def test_calling_a_person_in_flags_the_member_who_looks_after_the_run(
     deps = _deps(answers_outsider=True)
 
     result = await ask_a_person(
-        SimpleNamespace(deps=deps, tool_call_id=None),
+        deps.model_copy(update={"tool_call_id": None}),
         AskAPersonRequest(reason="Wants a refund."),
     )
 
@@ -282,7 +280,7 @@ async def test_a_conversation_with_no_channel_says_nobody_can_be_called(monkeypa
     )
 
     result = await ask_a_person(
-        SimpleNamespace(deps=_deps(answers_outsider=True), tool_call_id=None),
+        _deps(answers_outsider=True).model_copy(update={"tool_call_id": None}),
         AskAPersonRequest(reason="Wants a refund."),
     )
 
@@ -301,7 +299,7 @@ async def test_a_members_run_has_nobody_to_call_in(monkeypatch):
     )
 
     result = await ask_a_person(
-        SimpleNamespace(deps=_deps(answers_outsider=False), tool_call_id=None),
+        _deps(answers_outsider=False).model_copy(update={"tool_call_id": None}),
         AskAPersonRequest(reason="x"),
     )
 
@@ -339,7 +337,7 @@ async def test_a_strangers_run_reads_and_writes_no_channel(tool, request_):
     a stranger could ask for anything in them. Refused before any lookup: the
     database is never opened, so nothing here needs doubling."""
     result = await tool(
-        SimpleNamespace(deps=_deps(answers_outsider=True), tool_call_id=None), request_
+        _deps(answers_outsider=True).model_copy(update={"tool_call_id": None}), request_
     )
 
     assert result.success is False
@@ -348,25 +346,36 @@ async def test_a_strangers_run_reads_and_writes_no_channel(tool, request_):
 
 def test_passing_a_question_on_is_in_view_rather_than_behind_a_search():
     """Its one way past what is Public should not first have to be found."""
-    strangers, _ = _partition_core_extra(
-        [messaging_toolset], is_pod_default=True, answers_outsider=True
-    )
-    members, deferred = _partition_core_extra(
-        [messaging_toolset], is_pod_default=True, answers_outsider=False
-    )
+    from pydantic_ai.capabilities import ToolSearch
 
-    assert messaging_toolset in strangers
-    assert messaging_toolset not in members
-    assert messaging_toolset in deferred
+    from app.modules.agent.domain.value_objects import AgentToolset
+    from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+        harness_capabilities,
+    )
+    from app.modules.agent.services.tool_catalog import STATIC_SPECS
+    from app.modules.agent.services.tool_runtime import ToolRuntime
+
+    specs = list(STATIC_SPECS[AgentToolset.MESSAGING])
+
+    def defers(deps) -> bool:
+        deps = deps.model_copy(update={"is_pod_default_agent": True})
+        capabilities = harness_capabilities(
+            ctx=deps,
+            specs=specs,
+            runtime=ToolRuntime(specs),
+            enable_prompt_caching=False,
+        )
+        return any(isinstance(c, ToolSearch) for c in capabilities)
+
+    assert not defers(_deps(answers_outsider=True))
+    assert defers(_deps(answers_outsider=False))
 
 
 async def test_a_stranger_cannot_have_the_pods_members_listed():
     """The directory is read as the owner, and the stranger could ask for it."""
     deps = _deps(answers_outsider=True)
 
-    listed = await list_pod_members(
-        SimpleNamespace(deps=deps), ListPodMembersRequest(search="")
-    )
+    listed = await list_pod_members(deps, ListPodMembersRequest(search=""))
 
     assert listed.success is False
     assert not listed.members

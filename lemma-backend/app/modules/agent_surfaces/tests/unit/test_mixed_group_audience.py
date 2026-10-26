@@ -264,6 +264,13 @@ async def test_an_email_among_colleagues_has_no_audience():
 # ------------------------------------------------------------ private notes
 
 
+def _send_tool(module, deliver):
+    [spec] = module.surface_send_tools(deliver=deliver)
+    return lambda ctx, message: spec.run(
+        ctx, module.SurfaceSendMessageArguments(message=message)
+    )
+
+
 @pytest.mark.anyio
 async def test_a_private_notes_run_cannot_post_to_the_chat():
     """A note's answer stays in Lemma -- `surface_send_message` included."""
@@ -275,22 +282,14 @@ async def test_a_private_notes_run_cannot_post_to_the_chat():
         sent.append(message)
         return PrivateSend.SENT
 
-    tool = (
-        surface_send_tools.build_surface_send_toolset(deliver=deliver)
-        .tools["surface_send_message"]
-        .function
-    )
+    tool = _send_tool(surface_send_tools, deliver)
 
     private = await tool(
-        SimpleNamespace(
-            deps=SimpleNamespace(conversation_id=uuid4(), delivers_to_surface=False)
-        ),
+        SimpleNamespace(conversation_id=uuid4(), delivers_to_surface=False),
         "the floor is 40k",
     )
     public = await tool(
-        SimpleNamespace(
-            deps=SimpleNamespace(conversation_id=uuid4(), delivers_to_surface=True)
-        ),
+        SimpleNamespace(conversation_id=uuid4(), delivers_to_surface=True),
         "on my way",
     )
 
@@ -312,19 +311,13 @@ async def test_a_group_send_that_reached_nobody_says_where_it_did_not_go():
     async def deliver(*, conversation_id, message):
         return PrivateSend.NO_PRIVATE_CHAT
 
-    tool = (
-        surface_send_tools.build_surface_send_toolset(deliver=deliver)
-        .tools["surface_send_message"]
-        .function
-    )
+    tool = _send_tool(surface_send_tools, deliver)
 
     result = await tool(
         SimpleNamespace(
-            deps=SimpleNamespace(
-                conversation_id=uuid4(),
-                delivers_to_surface=True,
-                surface_conversation_kind="CHANNEL",
-            )
+            conversation_id=uuid4(),
+            delivers_to_surface=True,
+            surface_conversation_kind="CHANNEL",
         ),
         "the floor is 40k",
     )
@@ -345,19 +338,13 @@ async def test_a_group_send_that_failed_does_not_claim_there_is_no_private_chat(
     async def deliver(*, conversation_id, message):
         return PrivateSend.NOT_DELIVERED
 
-    tool = (
-        surface_send_tools.build_surface_send_toolset(deliver=deliver)
-        .tools["surface_send_message"]
-        .function
-    )
+    tool = _send_tool(surface_send_tools, deliver)
 
     result = await tool(
         SimpleNamespace(
-            deps=SimpleNamespace(
-                conversation_id=uuid4(),
-                delivers_to_surface=True,
-                surface_conversation_kind="CHANNEL",
-            )
+            conversation_id=uuid4(),
+            delivers_to_surface=True,
+            surface_conversation_kind="CHANNEL",
         ),
         "the floor is 40k",
     )

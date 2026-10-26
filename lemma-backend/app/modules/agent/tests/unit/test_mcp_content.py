@@ -8,13 +8,13 @@ go out fit inside what the client on the far end will accept.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 
 import pytest
 from pydantic import BaseModel
-from pydantic_ai import BinaryContent, ToolReturn
+from app.modules.agent.domain.tools import ImagePart
+from app.modules.agent.domain.tools import WithImages
 
-from app.modules.agent.infrastructure.mcp_content import (
+from app.modules.agent.infrastructure.mcp.content import (
     tool_call_result,
     MAX_MCP_IMAGE_BYTES,
     MAX_MCP_IMAGE_BYTES_TOTAL,
@@ -23,32 +23,25 @@ from app.modules.agent.infrastructure.mcp_content import (
 )
 
 
-@dataclass
-class _Binary:
-    data: bytes
-    media_type: str
+def _with_images(images: list[ImagePart]) -> WithImages:
+    return WithImages(value={}, images=tuple(images))
 
 
-@dataclass
-class _Result:
-    content: list[_Binary]
-
-
-def _png(size: int) -> _Binary:
-    return _Binary(data=b"x" * size, media_type="image/png")
+def _png(size: int) -> ImagePart:
+    return ImagePart(data=b"x" * size, media_type="image/png")
 
 
 def test_images_are_returned_in_order() -> None:
-    result = _Result([_png(10), _png(20)])
+    result = _with_images([_png(10), _png(20)])
 
     contents = image_contents(result)
 
     assert [c.type for c in contents] == ["image", "image"]
-    assert [c.mimeType for c in contents] == ["image/png", "image/png"]
+    assert [c.mime_type for c in contents] == ["image/png", "image/png"]
 
 
 def test_one_oversized_image_is_dropped_without_taking_the_others() -> None:
-    result = _Result([_png(MAX_MCP_IMAGE_BYTES + 1), _png(32)])
+    result = _with_images([_png(MAX_MCP_IMAGE_BYTES + 1), _png(32)])
 
     assert len(image_contents(result)) == 1
 
@@ -64,7 +57,7 @@ def test_a_long_page_range_is_truncated_rather_than_refused() -> None:
     and they are the ones asked for first.
     """
     page = MAX_MCP_IMAGE_BYTES_TOTAL // 4
-    result = _Result([_png(page) for _ in range(30)])
+    result = _with_images([_png(page) for _ in range(30)])
 
     contents = image_contents(result)
 
@@ -75,23 +68,23 @@ def test_a_long_page_range_is_truncated_rather_than_refused() -> None:
 
 
 def test_a_result_with_no_images_produces_none() -> None:
-    assert image_contents(_Result([])) == []
+    assert image_contents(_with_images([])) == []
     assert image_contents(object()) == []
 
 
 def test_tool_return_payload_excludes_the_binary_content() -> None:
     """The text/structured channel must carry the describable result only.
 
-    ``view_image``/``pod_view_document_pages`` return a ``ToolReturn`` whose
-    picture rides ``.content``. Serializing the whole ``ToolReturn`` dumped the
+    ``view_image``/``pod_view_document_pages`` return ``WithImages`` whose
+    picture rides ``.images``. Serializing the whole result dumped the
     raw image bytes into the text payload too — the ~25k-token duplication (and,
     on a multi-page doc, the overflow that lost the pages). ``result_payload``
-    must serialize ``.return_value`` alone.
+    must serialize ``.value`` alone.
     """
     picture = b"\x89PNG\r\n" + b"x" * 4096
-    result = ToolReturn(
-        return_value={"success": True, "path": "/me/shot.png"},
-        content=[BinaryContent(data=picture, media_type="image/png")],
+    result = WithImages(
+        value={"success": True, "path": "/me/shot.png"},
+        images=(ImagePart(data=picture, media_type="image/png"),),
     )
 
     payload = result_payload(result)
@@ -109,19 +102,17 @@ def test_both_bridges_keep_image_bytes_out_of_the_text_channel() -> None:
     structured payload carries its bytes.
 
     Both bridges used to own a copy of this builder and the two could drift.
-    They call `tool_call_result` now, so testing it once tests both — the import
-    below is what proves they still route through it.
+    They share one MCP adapter, which calls `tool_call_result` -- the import
+    below is what proves it still routes through it.
     """
-    from app.modules.agent.services import conversation_mcp_service as conversation
-    from app.modules.agent.services import pod_mcp_service as pod
+    from app.modules.agent.infrastructure.mcp import toolspec_adapter
 
-    assert conversation.tool_call_result is tool_call_result
-    assert pod.tool_call_result is tool_call_result
+    assert toolspec_adapter.tool_call_result is tool_call_result
 
     picture = b"\x89PNG\r\n" + b"ABCDEFG" * 1024
-    tool_return = ToolReturn(
-        return_value={"success": True, "path": "/me/shot.png", "bytes": len(picture)},
-        content=[BinaryContent(data=picture, media_type="image/png")],
+    tool_return = WithImages(
+        value={"success": True, "path": "/me/shot.png", "bytes": len(picture)},
+        images=(ImagePart(data=picture, media_type="image/png"),),
     )
 
     result = tool_call_result(tool_return)
@@ -133,7 +124,7 @@ def test_both_bridges_keep_image_bytes_out_of_the_text_channel() -> None:
     text_blob = "".join(c.text for c in text_parts)
     assert "PNG" not in text_blob and "ABCDEFG" not in text_blob
     assert "\\x89" not in text_blob
-    assert result.structuredContent == {
+    assert result.structured_content == {
         "success": True,
         "path": "/me/shot.png",
         "bytes": len(picture),
@@ -184,7 +175,7 @@ def test_a_large_result_crosses_the_bridge_once_not_twice():
     """A dict went out as its JSON text and again as `structuredContent`, so a
     big query result reached the Agent Host bridge's 8 MiB cap on half the
     data. The text -- what every client hands its model -- is the copy kept."""
-    from app.modules.agent.infrastructure.mcp_content import STRUCTURED_COPY_LIMIT_CHARS
+    from app.modules.agent.infrastructure.mcp.content import STRUCTURED_COPY_LIMIT_CHARS
 
     rows = [{"id": index, "note": "x" * 100} for index in range(5_000)]
     payload = {"success": False, "rows": rows}

@@ -33,13 +33,19 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RunUsage
 
-from app.modules.agent.capabilities.run_context import RunContextCapability
-from app.modules.agent.capabilities.run_notices import RunNoticeCapability
+from app.modules.agent.infrastructure.harness.lemma.history_parts import (
+    RunContextCapability,
+)
+from app.modules.agent.infrastructure.harness.lemma.history_parts import (
+    RunNoticeCapability,
+)
 from app.modules.agent.domain.run_notices import RunNotices
 from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
     HistoryCompactor,
 )
-from app.modules.agent.infrastructure.pydantic_ai_compat import ModelRequestContext
+from app.modules.agent.infrastructure.providers.pydantic_ai_compat import (
+    ModelRequestContext,
+)
 
 pytestmark = pytest.mark.unit
 

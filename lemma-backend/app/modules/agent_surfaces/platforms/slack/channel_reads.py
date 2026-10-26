@@ -10,7 +10,6 @@ from collections.abc import Awaitable, Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from pydantic_ai.tools import RunContext
 from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
 from app.modules.agent.contracts import ToolContext
@@ -270,15 +269,15 @@ class SlackChannelReadsMixin:
     async def get_recent_channel_messages(
         self,
         *,
-        ctx: RunContext[ToolContext],
+        ctx: ToolContext,
         request: SlackRecentChannelMessagesParams,
     ) -> SlackRecentChannelMessagesResult:
         token = slack_access_token(self.credentials)
-        channel = ctx.deps.external_channel_id
+        channel = ctx.external_channel_id
         if not token or not channel:
             logger.debug(
                 "agent_surfaces.service.slack_get_recent_channel_messages.diagnostic",
-                conversation_id=ctx.deps.conversation_id,
+                conversation_id=ctx.conversation_id,
             )
             return SlackRecentChannelMessagesResult(
                 success=False,
@@ -291,13 +290,13 @@ class SlackChannelReadsMixin:
                 **_build_channel_history_kwargs(
                     channel=str(channel),
                     limit=request.limit,
-                    current_thread_id=ctx.deps.external_thread_id,
+                    current_thread_id=ctx.external_thread_id,
                     include_current_thread=request.include_current_thread,
                 )
             )
             messages = self._normalize_slack_messages(
                 response.get("messages") or [],
-                current_thread_id=ctx.deps.external_thread_id,
+                current_thread_id=ctx.external_thread_id,
                 include_current_thread=request.include_current_thread,
             )
             return SlackRecentChannelMessagesResult(
@@ -308,7 +307,7 @@ class SlackChannelReadsMixin:
         except Exception:
             logger.debug(
                 "agent_surfaces.service.slack_get_recent_channel_messages.propagated",
-                conversation_id=ctx.deps.conversation_id,
+                conversation_id=ctx.conversation_id,
                 exc_info=True,
             )
             raise
@@ -379,15 +378,15 @@ class SlackChannelReadsMixin:
     async def search_current_channel(
         self,
         *,
-        ctx: RunContext[ToolContext],
+        ctx: ToolContext,
         request: SlackSearchChannelMessagesParams,
     ) -> SlackSearchChannelMessagesResult:
         token = slack_access_token(self.credentials)
-        channel = ctx.deps.external_channel_id
+        channel = ctx.external_channel_id
         if not token or not channel:
             logger.debug(
                 "agent_surfaces.service.slack_search_current_channel_missing.diagnostic",
-                conversation_id=ctx.deps.conversation_id,
+                conversation_id=ctx.conversation_id,
             )
             return SlackSearchChannelMessagesResult(
                 success=False,
@@ -411,7 +410,7 @@ class SlackChannelReadsMixin:
                     **_build_channel_history_kwargs(
                         channel=str(channel),
                         limit=min(100, remaining),
-                        current_thread_id=ctx.deps.external_thread_id,
+                        current_thread_id=ctx.external_thread_id,
                         include_current_thread=request.include_current_thread,
                         cursor=cursor,
                     )
@@ -419,7 +418,7 @@ class SlackChannelReadsMixin:
                 found, scanned = _matches_in_page(
                     self._normalize_slack_messages(
                         response.get("messages") or [],
-                        current_thread_id=ctx.deps.external_thread_id,
+                        current_thread_id=ctx.external_thread_id,
                         include_current_thread=request.include_current_thread,
                     ),
                     query=query,
@@ -440,7 +439,7 @@ class SlackChannelReadsMixin:
         except Exception:
             logger.debug(
                 "agent_surfaces.service.slack_search_current_channel_channel.propagated",
-                conversation_id=ctx.deps.conversation_id,
+                conversation_id=ctx.conversation_id,
                 exc_info=True,
             )
             raise
@@ -477,9 +476,9 @@ class SlackChannelReadsMixin:
 
     def _current_message_attachments(
         self,
-        ctx: RunContext[ToolContext],
+        ctx: ToolContext,
     ) -> list[SlackFileAttachment]:
-        metadata = ctx.deps.surface_metadata
+        metadata = ctx.surface_metadata
         if not isinstance(metadata, SlackSurfaceEventMetadata):
             return []
         return list(metadata.attachments)

@@ -19,8 +19,6 @@ from typing import cast
 from uuid import UUID, uuid7
 
 import pytest
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Agent, Conversation, Message
@@ -41,10 +39,11 @@ from app.modules.agent.infrastructure.agent_host.session_memory import (
 from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     json_object,
 )
+from app.modules.agent.domain.tools import ToolSpec
 from app.modules.agent.infrastructure.harnesses.remote_payload import (
-    _exported_tool_names,
     run_start_payload,
 )
+from app.modules.agent.infrastructure.tools.skills import tools as skills
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import QueueState
@@ -670,79 +669,6 @@ class TestNativeAndSandboxDirectories:
         assert "working files belong in the workspace" in prompt
 
 
-async def ping_tool(ctx: RunContext[ToolContext]) -> str:
-    """Ping."""
-    del ctx
-    return "pong"
-
-
-class TestExportedToolNames:
-    """What an Agent Host run's MCP bridge advertises as callable.
-
-    ``mcp_payload`` reconciles this against ``extra_names`` because the MCP
-    route re-assembles its own tool list independently of ``options.toolsets``
-    -- a name missing here under-reports what the host can actually call, and
-    that under-report used to leave ``lemma_final_answer`` unreachable on every
-    Agent Host run despite the run spec still advertising it.
-    """
-
-    async def test_no_toolsets_returns_only_the_extra_names(self) -> None:
-        names = await _exported_tool_names(
-            agent_run_id=uuid7(),
-            ctx=_ctx(),
-            options=HarnessOptions(model_name="gpt-5.1", toolsets=[]),
-            prompt=None,
-            extra_names=["lemma_final_answer"],
-        )
-
-        assert names == ["lemma_final_answer"]
-
-    async def test_a_real_toolsets_tools_are_exported_with_the_lemma_prefix(
-        self,
-    ) -> None:
-        toolset = FunctionToolset[ToolContext](tools=[ping_tool])
-
-        names = await _exported_tool_names(
-            agent_run_id=uuid7(),
-            ctx=_ctx(),
-            options=HarnessOptions(model_name="gpt-5.1", toolsets=[toolset]),
-            prompt=None,
-        )
-
-        assert names == ["lemma_ping_tool"]
-
-    async def test_an_entry_that_is_not_a_toolset_is_skipped_not_raised(self) -> None:
-        toolset = FunctionToolset[ToolContext](tools=[ping_tool])
-
-        names = await _exported_tool_names(
-            agent_run_id=uuid7(),
-            ctx=_ctx(),
-            options=HarnessOptions(
-                model_name="gpt-5.1", toolsets=["not-a-toolset", toolset]
-            ),
-            prompt=None,
-        )
-
-        assert names == ["lemma_ping_tool"]
-
-    async def test_extra_names_are_appended_without_duplicating_a_toolsets_tool(
-        self,
-    ) -> None:
-        toolset = FunctionToolset[ToolContext](tools=[ping_tool])
-
-        names = await _exported_tool_names(
-            agent_run_id=uuid7(),
-            ctx=_ctx(),
-            options=HarnessOptions(model_name="gpt-5.1", toolsets=[toolset]),
-            prompt=None,
-            extra_names=["lemma_ping_tool", "lemma_final_answer"],
-        )
-
-        # "lemma_ping_tool" is not repeated: it is already in the list from the
-        # toolset itself.
-        assert names == ["lemma_ping_tool", "lemma_final_answer"]
-
-
 class TestReplayedHistory:
     """What a non-resuming turn re-sends, and what it must not."""
 
@@ -759,7 +685,7 @@ class TestReplayedHistory:
         from app.modules.agent.infrastructure.harnesses.remote_payload import (
             _history_tool_result,
         )
-        from app.modules.agent.infrastructure.tools.skills.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.skills.tools import (
             LOCAL_WORKSPACE_SKILL_OVERRIDE,
             LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
         )
@@ -792,7 +718,7 @@ class TestReplayedHistory:
         from app.modules.agent.infrastructure.harnesses.remote_payload import (
             _history_tool_result,
         )
-        from app.modules.agent.infrastructure.tools.skills.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.skills.tools import (
             LOCAL_WORKSPACE_SKILL_OVERRIDE,
             LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
         )
@@ -826,9 +752,17 @@ class TestReplayedHistory:
 
 
 class TestTheAgentsOwnCli:
-    """What a coding agent on the Mac is told about `lemma`."""
+    """What a coding agent on the Mac is told about `lemma`, and its tools."""
 
-    async def _payload(self, cli: str | None):
+    async def test_the_tool_names_are_the_runs_specs_with_the_lemma_prefix(
+        self,
+    ) -> None:
+        """The MCP relay serves the same specs, so the two lists cannot drift."""
+        _, payload = await self._payload(None, tools=list(skills.SPECS))
+
+        assert payload["tool_names"] == ["lemma_list_skills", "lemma_load_skill"]
+
+    async def _payload(self, cli: str | None, tools: list[ToolSpec] | None = None):
         from app.modules.agent.infrastructure.harnesses.remote_payload import (
             mcp_payload,
         )
@@ -851,7 +785,7 @@ class TestTheAgentsOwnCli:
             agent_run_id=uuid7(),
             conversation_id=conversation_id,
             ctx=_ctx(),
-            options=HarnessOptions(model_name="gpt-5.1", toolsets=[]),
+            options=HarnessOptions(model_name="gpt-5.1", tools=tools or []),
             workspace_service=cast(WorkspaceSandboxService, Workspace()),
             cli_root=lambda: cli,
         )

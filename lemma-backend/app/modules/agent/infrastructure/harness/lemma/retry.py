@@ -31,7 +31,7 @@ from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import JsonObject
-from app.modules.agent.infrastructure.transport_errors import (
+from app.modules.agent.infrastructure.providers.transport_errors import (
     is_retryable_stream_error,
     response_budget_expiry,
     retry_after_seconds,

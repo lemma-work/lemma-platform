@@ -223,7 +223,7 @@ class SubAgentService:
                         uow, deps, is_self=is_self, target_name=target_name
                     ),
                     require_execute_grant=not is_self,
-                    # The source of truth for depth=1 gating (RunToolAssembler):
+                    # The source of truth for depth=1 gating (`tool_catalog.specs_for`):
                     # this child IS a sub-agent, so its run gets no spawn tools.
                     origin=ConversationOrigin.SUBAGENT,
                     parent_run_id=deps.agent_run_id,

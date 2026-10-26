@@ -32,7 +32,7 @@ from app.modules.agent.infrastructure.tools.browser.models import (
     BrowserSignInResponse,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+from app.modules.agent.domain.tools import AgentInputRequired
 from app.modules.web_login.contracts import InvalidOrigin, normalize_origin
 
 SIGN_IN_TOOL_NAME = "browser_sign_in"

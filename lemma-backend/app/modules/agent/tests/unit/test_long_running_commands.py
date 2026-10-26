@@ -67,7 +67,7 @@ def test_process_id_explains_how_to_wait_for_it() -> None:
 
 def test_exec_command_docstring_teaches_waiting_not_looping() -> None:
     """This docstring is the model's primary instruction for long commands."""
-    from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.workspace_cli.tools import (
         exec_command,
     )
 

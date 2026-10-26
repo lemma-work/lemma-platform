@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -643,27 +642,27 @@ async def test_pdf_pages_render_to_real_images_for_a_vision_model(
     from app.modules.agent.infrastructure.tools.pod.models import (
         ViewDocumentPagesRequest,
     )
-    from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.pod.tools import (
         pod_view_document_pages,
     )
-    from pydantic_ai import BinaryContent, ToolReturn
+    from app.modules.agent.domain.tools import WithImages
 
     ctx, path = await _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DIRECT
 
     result = await pod_view_document_pages(
-        SimpleNamespace(deps=ctx),
+        ctx,
         ViewDocumentPagesRequest(path=path, page_start=1, instructions="read it"),
     )
 
-    assert isinstance(result, ToolReturn), result
-    images = [c for c in result.content if isinstance(c, BinaryContent)]
+    assert isinstance(result, WithImages), result
+    images = list(result.images)
     assert images, "a vision model must receive the rendered page"
     # A real JPEG, not a placeholder.
     assert images[0].media_type == "image/jpeg"
     assert images[0].data.startswith(b"\xff\xd8"), "not JPEG magic bytes"
     assert len(images[0].data) > 2000, "suspiciously small render"
-    assert result.return_value["success"] is True
+    assert result.value["success"] is True
 
 
 async def test_pdf_pages_reach_a_text_only_model_as_words(
@@ -683,12 +682,12 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
     from app.modules.agent.domain.vision import AgentVisionMode
     from app.modules.agent.infrastructure.tools import vision_delegation
     from app.modules.agent.infrastructure.tools.pod import (
-        pydantic_adapter as pod_adapter,
+        tools as pod_adapter,
     )
     from app.modules.agent.infrastructure.tools.pod.models import (
         ViewDocumentPagesRequest,
     )
-    from pydantic_ai import ToolReturn
+    from app.modules.agent.domain.tools import WithImages
 
     ctx, path = await _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DELEGATED
@@ -709,14 +708,14 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
     monkeypatch.setattr(vision_delegation, "describe_images", fake_describe)
 
     result = await pod_adapter.pod_view_document_pages(
-        SimpleNamespace(deps=ctx),
+        ctx,
         ViewDocumentPagesRequest(
             path=path, page_start=1, instructions="describe the pipeline"
         ),
     )
 
-    assert not isinstance(result, ToolReturn), (
-        "a ToolReturn carries BinaryContent, which is what breaks a text-only model"
+    assert not isinstance(result, WithImages), (
+        "a result with images is what breaks a text-only model"
     )
     assert result["success"] is True
     assert result["viewed_by"] == "vision_model"
@@ -749,7 +748,7 @@ async def test_view_image_direct_mode_returns_binary_content_for_a_real_workspac
     from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
         view_image_internal,
     )
-    from pydantic_ai import BinaryContent, ToolReturn
+    from app.modules.agent.domain.tools import WithImages
 
     ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DIRECT
@@ -772,13 +771,13 @@ async def test_view_image_direct_mode_returns_binary_content_for_a_real_workspac
         ctx, ViewImageRequest(workspace_file_path="pixel.png")
     )
 
-    assert isinstance(result, ToolReturn), result
-    images = [c for c in result.content if isinstance(c, BinaryContent)]
+    assert isinstance(result, WithImages), result
+    images = list(result.images)
     assert images, "a DIRECT-mode vision model must receive the rendered bytes"
     assert images[0].media_type == "image/png"
-    assert result.return_value.success is True
-    assert result.return_value.source == "workspace"
-    assert result.return_value.file_path == "pixel.png"
+    assert result.value.success is True
+    assert result.value.source == "workspace"
+    assert result.value.file_path == "pixel.png"
 
 
 async def test_compaction_bounds_a_history_built_from_real_tool_output(

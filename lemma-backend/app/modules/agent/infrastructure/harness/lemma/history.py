@@ -29,7 +29,9 @@ from pydantic_ai.messages import ModelMessage
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
-from app.modules.agent.infrastructure.pydantic_ai_compat import HistoryProcessor
+from app.modules.agent.infrastructure.providers.pydantic_ai_compat import (
+    HistoryProcessor,
+)
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.infrastructure.harness.lemma.context_window import (
     ContextFootprint,
@@ -326,7 +328,7 @@ def _trim_to_ceiling(
 
 
 def history_capabilities[DepsT](
-    options: HarnessOptions[DepsT],
+    options: HarnessOptions,
     *,
     summarization_model: SummarizationModel,
 ) -> list[AbstractCapability[DepsT]]:
@@ -348,7 +350,7 @@ def history_capabilities[DepsT](
 
 
 def build_history_processors[DepsT](
-    options: HarnessOptions[DepsT],
+    options: HarnessOptions,
     *,
     summarization_model: SummarizationModel,
     footprint: ContextFootprint | None = None,

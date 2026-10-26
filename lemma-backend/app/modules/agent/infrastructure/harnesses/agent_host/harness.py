@@ -54,6 +54,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.events import (
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.harness_events import (
     RunEventApplier,
+    adopt_recorded_final_answer,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
     enqueue_run,
@@ -93,10 +94,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.stream_resume import 
     ConsumedCursor,
     restore_normalizer,
 )
-from app.modules.agent.infrastructure.agent_host.final_answer import (
-    adopt_recorded_final_answer,
-)
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
+from app.modules.agent.infrastructure.tools.final_answer.tools import (
     agent_output_schema,
     final_answer_expected,
 )
@@ -180,7 +178,7 @@ class RemoteHarness:
         conversation: Conversation,
         messages: Sequence[Message],
         ctx: DepsT,
-        options: HarnessOptions[DepsT],
+        options: HarnessOptions,
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
         try:
@@ -237,7 +235,7 @@ class RemoteHarness:
         agent: Agent,
         ctx: DepsT,
         conversation: Conversation,
-        options: HarnessOptions[DepsT],
+        options: HarnessOptions,
         run_config: AgentHostRunConfig,
         dispatch: DispatchedRun,
     ) -> AsyncIterator[AgentEvent]:
@@ -379,7 +377,7 @@ class RemoteHarness:
         agent: Agent,
         ctx: DepsT,
         conversation: Conversation,
-        options: HarnessOptions[DepsT],
+        options: HarnessOptions,
     ) -> list[AgentEvent] | None:
         """What the loop checks while no event arrives; the last events if one
         of those checks ends the run."""
@@ -458,7 +456,7 @@ class RemoteHarness:
         agent: Agent,
         ctx: DepsT,
         conversation: Conversation,
-        options: HarnessOptions[DepsT],
+        options: HarnessOptions,
     ) -> bool:
         """Renew the run's credential when due; True once it cannot continue."""
         wall_clock = self._now()
@@ -547,7 +545,7 @@ class RemoteHarness:
         self,
         *,
         agent_run_id: UUID,
-        options: HarnessOptions[DepsT],
+        options: HarnessOptions,
         stop_sent: bool,
     ) -> bool:
         if stop_sent or options.should_stop is None:

@@ -1,35 +1,15 @@
-"""Shared helpers for turning tool-call failures into recoverable responses.
+"""Turning tool-call failures into results the model can read and act on.
 
-A single tool error must never abort an agent run. Both execution paths use these
-helpers so they format and skip errors identically:
-
-  * the in-process LEMMA harness wraps every toolset in ``GracefulToolset`` and
-    returns ``format_tool_error`` instead of raising,
-  * the remote-harness path (per-conversation / pod MCP services + the approval
-    executor)
-    catches dispatcher failures and returns the same payload as an MCP tool error
-    (``CallToolResult(isError=True, ...)``).
-
-``is_control_flow_exception`` marks the exceptions that are NOT tool failures —
-pydantic-ai's retry/deferral/approval/limit signals and task cancellation — which
-must always propagate so the framework can act on them.
+A single tool error must never abort a run. The tool runtime returns
+``format_tool_error`` instead of raising, on every surface; the MCP adapters
+send the same payload as an MCP tool error. Which exceptions are control flow
+rather than failures is ``providers.control_flow``.
 """
 
 from __future__ import annotations
 
-import asyncio
-
-from pydantic_ai import ToolReturn
-from pydantic_ai.exceptions import (
-    ApprovalRequired,
-    CallDeferred,
-    ModelRetry,
-    UnexpectedModelBehavior,
-    UsageLimitExceeded,
-)
-
+from app.modules.agent.domain.tools import WithImages
 from app.core.errors.describe import describe_exception
-from app.core.infrastructure.work import LeaseLost
 from app.core.redaction import redact_text
 from app.core.domain.errors import DomainError
 
@@ -44,46 +24,6 @@ APPROVAL_CODES = {
     "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
     "AUTH_REQUIRED",
 }
-
-
-class AgentInputRequired(Exception):
-    """Control-flow signal: the run must pause and wait for the user.
-
-    Raised by ``ask_user`` / ``request_approval`` instead of blocking the worker.
-    The tool call itself is already persisted, so the harness ends the run cleanly
-    (conversation -> WAITING) and the user's submission later starts a fresh run
-    that replays the synthesized tool return from history. ``tool_call_id`` is the
-    durable approval id; ``kind`` is the tool name that paused.
-    """
-
-    def __init__(self, tool_call_id: str, kind: str):
-        self.tool_call_id = tool_call_id
-        self.kind = kind
-        super().__init__(f"Agent run paused for user input ({kind}:{tool_call_id})")
-
-
-# Exceptions that are control flow, not tool failures: they carry meaning for the
-# pydantic-ai run loop (retry / deferral / approval / usage limit / unexpected
-# behaviour) or signal cancellation/shutdown. Never swallow these. ``LeaseLost``
-# is a tool's commit refused because another worker holds the turn now: the
-# turn ends here, and must not hand the model an error to work around.
-_CONTROL_FLOW_EXCEPTIONS: tuple[type[BaseException], ...] = (
-    ModelRetry,
-    CallDeferred,
-    ApprovalRequired,
-    AgentInputRequired,
-    UsageLimitExceeded,
-    UnexpectedModelBehavior,
-    LeaseLost,
-    asyncio.CancelledError,
-    KeyboardInterrupt,
-    SystemExit,
-)
-
-
-def is_control_flow_exception(exc: BaseException) -> bool:
-    """Return True if ``exc`` must propagate rather than become a tool response."""
-    return isinstance(exc, _CONTROL_FLOW_EXCEPTIONS)
 
 
 def safe_error_text(exc: BaseException) -> str:
@@ -137,7 +77,7 @@ def format_tool_error(name: str, exc: BaseException) -> dict[str, object]:
 def result_is_failure(payload: object) -> bool:
     """Whether a tool's *returned* payload reports a failure.
 
-    Almost nothing here raises. ``GracefulToolset`` turns a raise into
+    Almost nothing here raises. The tool runtime turns a raise into
     ``format_tool_error``'s ``success: False`` dict so one bad tool call cannot
     end a run, and the pod and workspace toolsets build the same shape by hand.
     A caller that only watches for exceptions therefore sees every one of those
@@ -167,8 +107,8 @@ def _uniform_contract_verdict(payload: object) -> tuple[object, bool]:
     ``approval_error_result`` build plain dicts. Reading only the dict shape
     would have missed most failures, since most tools return the model.
     """
-    if isinstance(payload, ToolReturn):
-        payload = payload.return_value
+    if isinstance(payload, WithImages):
+        payload = payload.value
     if isinstance(payload, dict):
         return payload.get("success"), bool(payload.get("needs_approval"))
     return getattr(payload, "success", None), bool(

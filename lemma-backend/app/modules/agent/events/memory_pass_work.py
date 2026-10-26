@@ -18,8 +18,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from pydantic_ai.exceptions import UsageLimitExceeded
-
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.work import (
     Exponential,
@@ -32,6 +30,7 @@ from app.core.infrastructure.work import (
 )
 from app.modules.agent.events.turn_payloads import MemoryPassWork
 from app.modules.agent.events.work_kinds import AGENT_MEMORY
+from app.modules.agent.infrastructure.providers.control_flow import is_usage_limit
 
 MEMORY_PASS_RETRY = RetryPolicy(
     max_attempts=2,
@@ -57,8 +56,10 @@ async def keep_memory(ctx: JobContext, payload: MemoryPassWork) -> None:
         )
     except DomainError as exc:
         raise PermanentFailure(exc.message) from exc
-    except UsageLimitExceeded as exc:
-        raise PermanentFailure(str(exc)) from exc
+    except Exception as exc:
+        if is_usage_limit(exc):
+            raise PermanentFailure(str(exc)) from exc
+        raise
 
 
 def register_memory_pass_work(registry: WorkRegistry) -> None:

@@ -22,7 +22,7 @@ from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.pod import pod_common
 from app.modules.agent.infrastructure.tools.pod import pod_file_tools as pod_files
-from app.modules.agent.infrastructure.tools.pod import pydantic_adapter as pod_adapter
+from app.modules.agent.infrastructure.tools.pod import tools as pod_adapter
 from app.modules.agent.infrastructure.tools.pod.models import (
     GetFileUrlRequest,
     PodGetRecordsRequest,
@@ -34,7 +34,7 @@ from app.modules.agent.infrastructure.tools.pod.models import (
     SearchFilesRequest,
     ViewDocumentPagesRequest,
 )
-from app.modules.agent.infrastructure.tools.registry import resolve_agent_toolsets
+from app.modules.agent.services.tool_catalog import STATIC_SPECS
 from app.modules.datastore.domain.errors import DatastoreConflictError
 
 
@@ -45,14 +45,12 @@ def _run_ctx(
 ) -> SimpleNamespace:
     # DIRECT by default: most pod tools are unaffected by vision, and the ones
     # that are were written against a model that reads images itself.
-    return SimpleNamespace(
-        deps=ToolContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            vision_mode=vision_mode,
-            pod_cwd=pod_cwd,
-        )
+    return ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        vision_mode=vision_mode,
+        pod_cwd=pod_cwd,
     )
 
 
@@ -66,8 +64,7 @@ def _patch_services(monkeypatch, services) -> None:
 
 
 def test_pod_toolset_is_registered_under_pod_toolset_enum():
-    toolsets = resolve_agent_toolsets([AgentToolset.POD])
-    assert pod_adapter.pod_toolset in toolsets
+    assert STATIC_SPECS[AgentToolset.POD] == pod_adapter.SPECS
 
 
 def test_pod_toolset_exposes_exactly_these_tools():
@@ -78,7 +75,7 @@ def test_pod_toolset_exposes_exactly_these_tools():
     one costs prompt budget on every turn. Adding to this list is a real
     decision, so it has to break a test.
     """
-    names = set(pod_adapter.pod_toolset.tools.keys())
+    names = {spec.name for spec in pod_adapter.SPECS}
     assert names == {
         "pod_tables",
         "pod_get_records",
@@ -559,7 +556,8 @@ async def test_a_search_with_hits_never_pays_for_the_pending_count(monkeypatch):
 @pytest.mark.asyncio
 async def test_pod_view_document_pages_returns_images_and_url_refs(monkeypatch):
     from app.modules.datastore.services.files.renderer import RenderedPage
-    from pydantic_ai import BinaryContent, ToolReturn
+    from app.modules.agent.domain.tools import ImagePart
+    from app.modules.agent.domain.tools import WithImages
 
     entity = SimpleNamespace(path="/pod/report.pdf", pod_id=uuid4())
     pages = [
@@ -589,17 +587,17 @@ async def test_pod_view_document_pages_returns_images_and_url_refs(monkeypatch):
         ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1, page_end=2),
     )
 
-    assert isinstance(result, ToolReturn)
+    assert isinstance(result, WithImages)
     # Model receives the bytes inline.
-    assert [c.data for c in result.content] == [b"jpeg-1", b"jpeg-2"]
-    assert all(isinstance(c, BinaryContent) for c in result.content)
+    assert [c.data for c in result.images] == [b"jpeg-1", b"jpeg-2"]
+    assert all(isinstance(c, ImagePart) for c in result.images)
     # DB only persists URL references, never bytes.
-    refs = result.return_value["pages"]
+    refs = result.value["pages"]
     assert [r["page_number"] for r in refs] == [1, 2]
     assert all(r["url"].startswith("https://signed/") for r in refs)
-    assert result.return_value["rendered_pages"] == [1]
-    assert result.return_value["cached_pages"] == [2]
-    dumped = str(result.return_value)
+    assert result.value["rendered_pages"] == [1]
+    assert result.value["cached_pages"] == [2]
+    dumped = str(result.value)
     assert "jpeg-1" not in dumped and "jpeg-2" not in dumped
 
 

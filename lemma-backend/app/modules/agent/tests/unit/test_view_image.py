@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from pydantic_ai import BinaryContent, ToolReturn
+from app.modules.agent.domain.tools import ImagePart
+from app.modules.agent.domain.tools import WithImages
 
 from app.core.domain.errors import DomainError
 from app.core.file_types import sniff_image_mime
@@ -101,14 +102,14 @@ async def test_view_image_reads_datastore(monkeypatch):
         _ctx(), ViewImageRequest(pod_file_path="/me/photo.png")
     )
 
-    assert isinstance(result, ToolReturn)
-    assert result.return_value.success is True
-    assert result.return_value.source == "datastore"
-    assert result.return_value.media_type == "image/png"
-    assert result.return_value.size_bytes == len(_PNG)
-    assert len(result.content) == 1
-    assert isinstance(result.content[0], BinaryContent)
-    assert result.content[0].media_type == "image/png"
+    assert isinstance(result, WithImages)
+    assert result.value.success is True
+    assert result.value.source == "datastore"
+    assert result.value.media_type == "image/png"
+    assert result.value.size_bytes == len(_PNG)
+    assert len(result.images) == 1
+    assert isinstance(result.images[0], ImagePart)
+    assert result.images[0].media_type == "image/png"
 
 
 @pytest.mark.asyncio
@@ -119,9 +120,9 @@ async def test_view_image_reads_workspace(monkeypatch):
         _ctx(), ViewImageRequest(workspace_file_path="images/out.png")
     )
 
-    assert isinstance(result, ToolReturn)
-    assert result.return_value.source == "workspace"
-    assert isinstance(result.content[0], BinaryContent)
+    assert isinstance(result, WithImages)
+    assert result.value.source == "workspace"
+    assert isinstance(result.images[0], ImagePart)
 
 
 # ---- non-image redirect ----------------------------------------------------

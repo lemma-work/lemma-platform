@@ -49,10 +49,9 @@ from app.modules.agent.domain.run_budget_pause import (
     budget_pause_events,
     budget_pause_tool_call_id,
 )
-from app.modules.agent.infrastructure.tools.tool_errors import (
-    AgentInputRequired,
-    result_is_failure,
-)
+from app.modules.agent.domain.tools import AgentInputRequired
+from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.infrastructure.tools.tool_errors import result_is_failure
 
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.harness_options import HarnessOptions
@@ -166,12 +165,15 @@ class NodeLoop[DepsT]:
         ],
         queue: asyncio.Queue[tuple[str, object]],
         streamer: ModelRequestStreamer,
-        options: HarnessOptions[DepsT],
+        options: HarnessOptions,
         agent_run_id: UUID,
         conversation_id: UUID,
         final_output_message: FinalOutputWriter,
+        structured_output: bool = False,
     ) -> None:
         self.run_context = run_context
+        #: The run owes a final answer through an output tool.
+        self.structured_output = structured_output
         self.queue = queue
         self.streamer = streamer
         self.options = options
@@ -331,7 +333,7 @@ class NodeLoop[DepsT]:
             agent_run_id=str(self.agent_run_id),
             dimension=exhausted.dimension.value,
         )
-        raise AgentInputRequired(tool_call_id, "request_approval")
+        raise AgentInputRequired(tool_call_id, PausingKind.REQUEST_APPROVAL)
 
     async def _pump_model_request(
         self,
@@ -503,7 +505,7 @@ class NodeLoop[DepsT]:
                     await self.queue.put(("event", self.streamer.stopped_event()))
                     return True
 
-        elif self.options.output_type is not None:
+        elif self.structured_output:
             final_message = self.final_output_message(
                 output=node.data.output,
                 tool_name=None,

@@ -41,13 +41,11 @@ from app.modules.agent.services.host_execution_selection import (
     triggered_by_run_user,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.browser.vm_browser import vm_browser_toolset
-from app.modules.agent.infrastructure.tools.tool_assembler import (
-    RunToolAssembler,
+from app.modules.agent.domain.tools import ToolGroup
+from app.modules.agent.services.tool_catalog import (
+    ToolSurface,
     _for_host_execution,
-)
-from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
-    is_workspace_cli_toolset,
+    specs_for,
 )
 from app.modules.workspace.contracts.host_execution import (
     HostWorkspace,
@@ -437,32 +435,43 @@ def test_run_slots_and_the_host_execution_report_share_capacity_without_clobberi
 # ------------------------------------------------------------- tool filtering
 
 
-async def test_the_assembler_withholds_only_the_workspace_command_tools():
-    conversation = SimpleNamespace(id=uuid4(), metadata={})
-    assembler = RunToolAssembler(None)
+async def test_the_catalog_withholds_only_the_workspace_command_tools():
+    user_id, pod_id = uuid4(), uuid4()
+    conversation = Conversation(user_id=user_id, pod_id=pod_id)
 
-    everything = await assembler.assemble(agent=None, conversation=conversation)
-    native = await assembler.assemble(
-        agent=None, conversation=conversation, host_execution="native"
-    )
-    sandbox = await assembler.assemble(
-        agent=None, conversation=conversation, host_execution="sandbox"
-    )
+    async def groups(**host: object) -> list[ToolGroup]:
+        ctx = ToolContext(
+            user_id=user_id, pod_id=pod_id, conversation_id=conversation.id, **host
+        )
+        specs = await specs_for(
+            agent=None,
+            conversation=conversation,
+            ctx=ctx,
+            surface=ToolSurface.AGENT_HOST,
+            uow_factory=None,
+        )
+        return [spec.toolset for spec in specs]
 
-    assert any(is_workspace_cli_toolset(t) for t in everything)
-    assert vm_browser_toolset not in everything
+    host = HostWorkspace(sandbox_id=uuid4(), root="/Users/someone/project")
+    everything = await groups()
+    native = await groups(host_runs_native_commands=True)
+    sandbox = await groups(host_workspace=host)
+
+    assert ToolGroup.WORKSPACE_CLI in everything
+    assert ToolGroup.VM_BROWSER not in everything
     # An Agent Host run loses the shell and gains the VM browser in its place.
-    assert not any(is_workspace_cli_toolset(t) for t in native)
-    assert native == [t for t in everything if not is_workspace_cli_toolset(t)] + [
-        vm_browser_toolset
-    ]
+    shell_less = [g for g in everything if g is not ToolGroup.WORKSPACE_CLI]
+    answer = [g for g in shell_less if g is ToolGroup.QUESTIONS]
+    before_answer = [g for g in shell_less if g is not ToolGroup.QUESTIONS]
+    assert native == [*before_answer, ToolGroup.VM_BROWSER, *answer]
     # An in-process host run keeps its shell (now on the Mac) and gains it too.
-    assert sandbox == [*everything, vm_browser_toolset]
+    with_shell = [g for g in everything if g is not ToolGroup.QUESTIONS]
+    assert sandbox == [*with_shell, ToolGroup.VM_BROWSER, *answer]
 
 
 def test_no_browser_tool_for_an_agent_that_never_had_a_shell():
-    assert _for_host_execution([], "native") == []
-    assert _for_host_execution([], "sandbox") == []
+    assert _for_host_execution([], native=True) == []
+    assert _for_host_execution([], native=False) == []
 
 
 # ------------------------------------------------------------------- prompts

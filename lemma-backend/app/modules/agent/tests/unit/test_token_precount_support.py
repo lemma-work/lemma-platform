@@ -151,5 +151,7 @@ def test_the_published_operation_is_where_a_caller_outside_agent_routes() -> Non
     import inspect
 
     from app.modules.agent.contracts import model_runtime
+    from app.modules.agent.infrastructure.providers import system_model
 
-    assert "usage_limits_for" in inspect.getsource(model_runtime)
+    assert model_runtime.resolve_system_runtime is system_model.resolve_system_runtime
+    assert "usage_limits_for" in inspect.getsource(system_model)

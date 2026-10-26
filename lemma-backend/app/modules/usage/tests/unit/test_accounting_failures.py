@@ -8,7 +8,9 @@ from pydantic_ai.exceptions import ModelHTTPError
 from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
     user_facing_error_message,
 )
-from app.modules.agent.infrastructure.transport_errors import is_retryable_stream_error
+from app.modules.agent.infrastructure.providers.transport_errors import (
+    is_retryable_stream_error,
+)
 from app.modules.agent.services.run_finalizer import (
     is_usage_limit_error,
     run_failure_message,

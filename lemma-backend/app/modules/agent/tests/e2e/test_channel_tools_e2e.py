@@ -12,8 +12,6 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic_ai.tools import RunContext
-from pydantic_ai.usage import RunUsage
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
@@ -22,7 +20,7 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
-from app.modules.agent.capabilities.open_questions import open_question_text
+from app.modules.agent.services.context_brief.open_questions import open_question_text
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.domain.value_objects import MessageRole
 from app.modules.agent.events.channel_question_work import (
@@ -47,7 +45,7 @@ from app.modules.agent.infrastructure.tools.messaging.models import (
     ChannelReadRequest,
     ChannelSearchRequest,
 )
-from app.modules.agent.infrastructure.tools.messaging.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.messaging.tools import (
     channel_list,
     channel_post,
     channel_read,
@@ -82,19 +80,14 @@ def _ctx(
     run_id: UUID | None = None,
     call: str | None = None,
     conversation_id: UUID | None = None,
-) -> RunContext[ToolContext]:
-    return RunContext(
-        deps=ToolContext(
-            user_id=user_id or seeded.user_id,
-            pod_id=seeded.pod_id,
-            conversation_id=conversation_id or seeded.conversation_id,
-            agent_run_id=run_id,
-            workload_id=seeded.agent_id,
-            agent_name=seeded.agent_name,
-        ),
-        model=None,  # type: ignore[arg-type]
-        usage=RunUsage(),
-        prompt=None,
+) -> ToolContext:
+    return ToolContext(
+        user_id=user_id or seeded.user_id,
+        pod_id=seeded.pod_id,
+        conversation_id=conversation_id or seeded.conversation_id,
+        agent_run_id=run_id,
+        workload_id=seeded.agent_id,
+        agent_name=seeded.agent_name,
         tool_call_id=call,
     )
 

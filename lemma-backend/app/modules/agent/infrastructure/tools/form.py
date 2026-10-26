@@ -19,11 +19,16 @@ from typing import Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from pydantic_ai import RunContext
-from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import (
+    ReplayClass,
+    ToolGroup,
+    ToolPolicy,
+    ToolSpec,
+    tool,
+)
 from app.modules.datastore.contracts.public_rows import (
     OpenTable,
     PublicColumn,
@@ -32,7 +37,6 @@ from app.modules.datastore.contracts.public_rows import (
 )
 
 FILL_FORM_TOOL = "fill_form"
-FORM_TOOLSET_ID = "visitor_form"
 
 #: The longest value one field is filled with.
 MAX_FILL_CHARS = 2000
@@ -105,22 +109,22 @@ async def _list_tables(uow_factory: UnitOfWorkFactory, *, pod_id: UUID) -> list[
         return [name for name, _ in await open_table_names(uow, pod_id=pod_id)]
 
 
-def build_form_toolset(
+def form_specs(
     *,
     uow_factory: UnitOfWorkFactory,
     read_table: ReadOpenTable | None = None,
     list_tables: ListOpenTables | None = None,
-) -> FunctionToolset[ToolContext]:
+) -> tuple[ToolSpec, ...]:
     read_table = read_table or partial(_read_table, uow_factory)
     list_tables = list_tables or partial(_list_tables, uow_factory)
 
     async def fill_form(
-        ctx: RunContext[ToolContext], request: FillFormRequest
+        ctx: ToolContext, request: FillFormRequest
     ) -> dict[str, object]:
         """Fill in fields of the form on the visitor's page with what they told
         you. It does not send the form: they check it and press Send. Call it
         with no table first if you don't know what the form asks for."""
-        pod_id = ctx.deps.pod_id
+        pod_id = ctx.pod_id
         if pod_id is None:
             return {"success": False, "error": "There is no form here."}
         names = await list_tables(pod_id=pod_id)
@@ -150,4 +154,11 @@ def build_form_toolset(
             "note": "Filled on their page. Ask them to check it and press Send.",
         }
 
-    return FunctionToolset[ToolContext](tools=[fill_form], id=FORM_TOOLSET_ID)
+    # Fills fields on the visitor's own page and writes nothing.
+    return (
+        tool(
+            fill_form,
+            ToolGroup.FORM,
+            ToolPolicy(outsider_allowed=True, replay=ReplayClass.SAFE),
+        ),
+    )

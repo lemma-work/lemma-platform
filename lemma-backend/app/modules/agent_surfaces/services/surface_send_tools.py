@@ -9,10 +9,14 @@ other pod members is the ``surface.send`` API, not this tool.
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.contracts import ToolContext
+from app.modules.agent.contracts.tools import (
+    FlatArguments,
+    ToolContext,
+    ToolGroup,
+    ToolSpec,
+    tool,
+)
 from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 from app.modules.agent_surfaces.services.private_message import PrivateSend
 from app.modules.agent_surfaces.services.surface_display_delivery import (
@@ -27,12 +31,15 @@ class SurfaceSendMessageResult(BaseModel):
     )
 
 
-def build_surface_send_toolset(
+class SurfaceSendMessageArguments(FlatArguments):
+    message: str
+
+
+def surface_send_tools(
     deliver=deliver_surface_message_to_surface,
-) -> FunctionToolset[ToolContext]:
+) -> tuple[ToolSpec, ...]:
     async def surface_send_message(
-        ctx: RunContext[ToolContext],
-        message: str,
+        ctx: ToolContext, request: SurfaceSendMessageArguments
     ) -> SurfaceSendMessageResult:
         """Send a private message to the current user on this surface right now.
 
@@ -43,12 +50,12 @@ def build_surface_send_toolset(
         -- put anything for everybody in your reply instead. On an email thread
         it goes to the sender only, without the people copied on it.
         """
-        conversation_id = getattr(ctx.deps, "conversation_id", None)
+        conversation_id = getattr(ctx, "conversation_id", None)
         if conversation_id is None:
             return SurfaceSendMessageResult(
                 success=False, message="No active surface conversation."
             )
-        if not getattr(ctx.deps, "delivers_to_surface", True):
+        if not getattr(ctx, "delivers_to_surface", True):
             # A private note's run answers in Lemma only -- the same rule
             # `display_resource` and the progress observer keep.
             return SurfaceSendMessageResult(
@@ -56,7 +63,7 @@ def build_surface_send_toolset(
                 message="This was a private note: its answer stays in Lemma.",
             )
         sent = await guarded_tool_result(
-            deliver(conversation_id=conversation_id, message=message),
+            deliver(conversation_id=conversation_id, message=request.message),
             tool="surface_send_message",
             failure=None,
         )
@@ -78,4 +85,4 @@ def build_surface_send_toolset(
             success=False, message="Could not deliver the message."
         )
 
-    return FunctionToolset[ToolContext](tools=[surface_send_message])
+    return (tool(surface_send_message, ToolGroup.SURFACE),)

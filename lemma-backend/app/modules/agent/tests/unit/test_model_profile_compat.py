@@ -50,7 +50,7 @@ from app.modules.agent.infrastructure.providers.anthropic_thinking import (
     adaptive_in_place_of_budget,
     nearest_thinking_effort,
 )
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_tool import (
+from app.modules.agent.infrastructure.harness.lemma.final_answer_output import (
     get_final_answer_tool,
 )
 

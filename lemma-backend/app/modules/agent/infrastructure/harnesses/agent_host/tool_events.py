@@ -41,7 +41,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
     bounded_tool_value,
     unbounded_tool_value,
 )
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
+from app.modules.agent.infrastructure.tools.final_answer.tools import (
     FINAL_ANSWER_TOOL_NAME,
 )
 

@@ -33,6 +33,7 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.tool_errors import safe_error_text
 from app.core.log.log import get_logger
+from app.modules.agent.domain.pausing_tools import PausingKind
 
 logger = get_logger(__name__)
 
@@ -103,7 +104,7 @@ def runs_in_worker(
     deferring them would only add latency to someone who is waiting.
     """
     return (
-        kind == "request_approval"
+        kind == PausingKind.REQUEST_APPROVAL
         and decision != AgentRunApprovalDecision.DENY
         and not has_tool_return
         and agent_host_permission_request(tool_args) is None
@@ -386,10 +387,8 @@ async def execute_approved_tool_as_user(
     approval_id: str | None = None,
 ) -> dict[str, object]:
     """Run an approved tool outside the database transaction; never raise."""
-    # Lazy to avoid importing the tool registry back through the pause use cases.
-    from app.modules.agent.infrastructure.tools.approval.executor import (
-        ApprovalExecutor,
-    )
+    # Lazy: the tool catalog is a large graph the pause use cases need only here.
+    from app.modules.agent.services.approval_executor import ApprovalExecutor
 
     try:
         # Approved commands may run for minutes. Release the checked-out DB

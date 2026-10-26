@@ -34,10 +34,7 @@ from uuid import UUID, uuid4
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.message_state import MessageState
-from app.modules.agent.domain.pausing_tools import (
-    PAUSING_TOOL_NAMES,
-    USER_PAUSING_TOOL_NAMES,
-)
+from app.modules.agent.domain.pausing_tools import PausingKind
 from app.modules.agent.domain.value_objects import (
     JsonObject,
     MessageDraft,
@@ -59,16 +56,12 @@ logger = get_logger(__name__)
 _ID_PREFIX = "lemma-mcp"
 
 
-def is_pausing_tool(tool_name: str) -> bool:
-    return tool_name in PAUSING_TOOL_NAMES
-
-
 async def record_pausing_tool_call(
     uow_factory: UnitOfWorkFactory,
     *,
     conversation_id: UUID,
     agent_run_id: UUID | None,
-    tool_name: str,
+    pauses: PausingKind,
     arguments: JsonObject | None,
 ) -> str | None:
     """Record the call and return the id it is addressed by.
@@ -85,7 +78,7 @@ async def record_pausing_tool_call(
             conversation_id=conversation_id,
             agent_run_id=agent_run_id,
             draft=MessageDraft.of_tool_call(
-                tool_name=tool_name,
+                tool_name=pauses.value,
                 tool_call_id=tool_call_id,
                 tool_args=dict(arguments or {}),
                 # A person's answer is delivered into this same run, which is
@@ -94,7 +87,7 @@ async def record_pausing_tool_call(
                 # is not parked: it ends the remote run (`suspend_remote_run`).
                 state=(
                     MessageState(parked_in_run_id=agent_run_id)
-                    if tool_name in USER_PAUSING_TOOL_NAMES
+                    if pauses is not PausingKind.WAIT_FOR
                     else None
                 ),
             ),
@@ -110,7 +103,7 @@ async def record_pausing_tool_call(
     logger.debug(
         "agent.mcp_pausing_calls.recorded",
         conversation_id=str(conversation_id),
-        tool_name=tool_name,
+        tool_name=pauses.value,
     )
     return tool_call_id
 

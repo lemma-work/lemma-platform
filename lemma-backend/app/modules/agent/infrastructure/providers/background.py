@@ -21,11 +21,16 @@ from app.modules.agent.domain.background import (
     BackgroundAnswer,
     BackgroundCall,
     BackgroundLimits,
-    ImagePart,
     PromptPart,
     ToolReturnRecord,
 )
+from app.modules.agent.domain.tools import ImagePart
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
+from app.modules.agent.infrastructure.harness.lemma.toolset_adapter import (
+    function_toolset,
+)
+from app.modules.agent.services.tool_runtime import ToolRuntime
 from app.modules.agent.infrastructure.providers import (
     model_factory as runtime_model_factory,
 )
@@ -81,8 +86,12 @@ class PydanticAIModelProvider:
             cast(Model | str, model),
             instructions=call.instructions,
             system_prompt=call.system_prompt or (),
-            deps_type=call.deps_type or type(None),
-            toolsets=list(call.toolsets),  # type: ignore[arg-type]
+            deps_type=ToolContext if call.tools else type(None),
+            toolsets=(
+                [function_toolset(call.tools, ToolRuntime(call.tools))]
+                if call.tools
+                else []
+            ),
         )
         limits = _usage_limits(cast(Model | str, model), call.limits)
         prompt = _prompt(call.prompt)

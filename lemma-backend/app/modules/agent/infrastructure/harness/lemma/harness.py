@@ -46,7 +46,6 @@ from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
     ModelRequestStreamer,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompt.templates import build_agent_instruction_parts
 from app.modules.agent.services.run_phase_spans import run_phase
@@ -62,9 +61,19 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     to_json_value,
 )
-from app.modules.agent.capabilities.lease_gate import LeaseGateCapability
-from app.modules.agent.capabilities.outsider_gate import OutsiderToolGateCapability
-from app.modules.agent.capabilities.run_notices import RunNoticeCapability
+from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+    LeaseGate,
+    harness_capabilities,
+)
+from app.modules.agent.infrastructure.harness.lemma.history_parts import (
+    RunNoticeCapability,
+)
+from app.modules.agent.infrastructure.harness.lemma.run_options import (
+    final_answer_output,
+    harness_usage_limits,
+    prompt_caching_enabled,
+)
+from app.modules.agent.services.tool_runtime import ToolRuntime
 from app.modules.agent.infrastructure.harness.lemma.history import history_capabilities
 from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
@@ -88,10 +97,8 @@ from app.modules.agent.infrastructure.providers.summarization import (
 from app.modules.agent.infrastructure.tools.final_answer.final_answer_text import (
     final_answer_text,
 )
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_tool import (
-    FinalAgentResult,
-)
-from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+from app.modules.agent.infrastructure.tools.final_answer.tools import FinalAgentResult
+from app.modules.agent.domain.tools import AgentInputRequired
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 
@@ -169,7 +176,7 @@ class PydanticAIHarness:
         conversation: Conversation,
         messages: Sequence[Message],
         ctx: DepsT,
-        options: HarnessOptions[DepsT],
+        options: HarnessOptions,
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
         # Every tool this run announces, until its result is recorded. A run
@@ -288,7 +295,7 @@ class PydanticAIHarness:
         conversation: Conversation,
         messages: Sequence[Message],
         ctx: DepsT,
-        options: HarnessOptions[DepsT],
+        options: HarnessOptions,
         agent_run_id: UUID,
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
@@ -323,7 +330,17 @@ class PydanticAIHarness:
             run_compaction_settings=options.compaction_model_settings,
             meter=lambda resolved: _meter_compaction_model(resolved, options),
         )
-        capabilities = list(options.capabilities or [])
+        capabilities = harness_capabilities(
+            ctx=ctx,
+            specs=options.tools,
+            runtime=ToolRuntime(options.tools),
+            enable_prompt_caching=prompt_caching_enabled(snapshot),
+            protocol=(
+                snapshot.protocol
+                if snapshot is not None
+                else RuntimeProfileProtocol.OPENAI_COMPATIBLE
+            ),
+        )
         # Before the history processors, not after. Capabilities run in
         # registration order, and the processors include the hard-ceiling guard
         # -- so a notice added after them is a request the guard never measured,
@@ -343,12 +360,9 @@ class PydanticAIHarness:
         capabilities.extend(
             history_capabilities(options, summarization_model=summarization_model)
         )
-        # Last, so it sees the final tool list: on a stranger's run, whatever
-        # every assembler above left in, only the allow-listed names survive.
-        if run_audience(ctx).answers_outsiders:
-            capabilities.append(OutsiderToolGateCapability())
         if options.lease_alive is not None:
-            capabilities.append(LeaseGateCapability(options.lease_alive))
+            capabilities.append(LeaseGate(options.lease_alive))
+        output_type = final_answer_output(agent, conversation)
         pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
             model,
             instructions=_instructions(agent=agent, conversation=conversation, ctx=ctx),
@@ -356,8 +370,7 @@ class PydanticAIHarness:
             retries=DEFAULT_TOOL_RETRIES,
             # A final answer must not skip a sibling approval tool that pauses the run.
             end_strategy="graceful",
-            toolsets=options.toolsets,
-            output_type=options.output_type if options.output_type is not None else str,
+            output_type=output_type if output_type is not None else str,
             model_settings=provider_model_settings(options.model_settings),
             capabilities=capabilities,
         )
@@ -376,7 +389,7 @@ class PydanticAIHarness:
                 # A retry may ask for a shorter answer than the run's own
                 # settings do; merged over them, not in place of them.
                 model_settings=provider_model_settings(attempt_settings),
-                usage_limits=options.usage_limits,
+                usage_limits=harness_usage_limits(),
                 conversation_id=str(conversation.id),
             )
 
@@ -412,6 +425,7 @@ class PydanticAIHarness:
             agent_run_id=agent_run_id,
             conversation_id=ctx.conversation_id,
             final_output_message=self._final_output_message,
+            structured_output=output_type is not None,
         )
 
         async def _drive() -> None:
@@ -545,7 +559,7 @@ class PydanticAIHarness:
         return final_answer_text(data, fallback=fallback)
 
 
-def _runtime_profile_model[DepsT](options: HarnessOptions[DepsT]) -> Model:
+def _runtime_profile_model[DepsT](options: HarnessOptions) -> Model:
     snapshot = options.runtime_profile
     credentials = options.extra.get("runtime_credentials")
     return require_pydantic_ai_model_from_runtime_profile(
@@ -556,7 +570,7 @@ def _runtime_profile_model[DepsT](options: HarnessOptions[DepsT]) -> Model:
 
 
 def _meter_mock_model[DepsT](
-    conversation: Conversation, options: HarnessOptions[DepsT]
+    conversation: Conversation, options: HarnessOptions
 ) -> Model:
     from app.modules.usage.contracts.metering import meter_model
 
@@ -567,7 +581,7 @@ def _meter_mock_model[DepsT](
 
 
 def _meter_compaction_model[DepsT](
-    model: Model | str, options: HarnessOptions[DepsT]
+    model: Model | str, options: HarnessOptions
 ) -> Model | str:
     from app.modules.usage.contracts.metering import meter_model
 

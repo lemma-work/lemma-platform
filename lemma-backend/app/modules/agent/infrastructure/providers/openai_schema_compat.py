@@ -25,7 +25,7 @@ from __future__ import annotations
 from pydantic_ai.profiles import ModelProfile, merge_profile
 from pydantic_ai.profiles.openai import OpenAIJsonSchemaTransformer
 
-from app.modules.agent.infrastructure.pydantic_ai_compat import (
+from app.modules.agent.infrastructure.providers.pydantic_ai_compat import (
     InlineDefsJsonSchemaTransformer,
     JsonSchema,
     JsonSchemaTransformer,

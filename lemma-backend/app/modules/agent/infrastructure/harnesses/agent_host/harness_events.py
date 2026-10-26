@@ -11,7 +11,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
     AgentHostEventType,
     AgentHostRunCheckpoint,
@@ -32,7 +36,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.agent_host.event_stream import StreamedEvent
 from app.modules.agent.infrastructure.agent_host.final_answer import (
-    adopt_recorded_final_answer,
+    read_final_answer,
 )
 from app.modules.agent.infrastructure.agent_host.session_memory import (
     remember_provider_session,
@@ -65,6 +69,8 @@ _RICH_CONTENT_TYPES = frozenset(
 )
 # The terminals a suspended turn can come back as; see `_as_suspension`.
 _ENDED_CLEANLY = frozenset({AgentEventType.COMPLETED, AgentEventType.STOPPED})
+
+logger = get_logger(__name__)
 
 
 class RunEventApplier:
@@ -271,4 +277,30 @@ def _closes_a_pause(event: AgentEvent) -> bool:
     )
 
 
-__all__ = ["RunEventApplier"]
+async def adopt_recorded_final_answer(
+    uow_factory: UnitOfWorkFactory,
+    normalizer: AgentHostEventNormalizer,
+    *,
+    agent_run_id: UUID,
+) -> None:
+    """Let a run prefer the answer the tool recorded over what it inferred.
+
+    Call this as a run goes terminal. Deliberately *not* on the hard-failure
+    paths (stream unavailable, deadline): those abandon the run, and reporting a
+    COMPLETED structured answer for a run we gave up on would be a lie.
+    """
+    if not normalizer.structured_expected:
+        return
+    try:
+        record = await read_final_answer(uow_factory, agent_run_id=agent_run_id)
+    except SQLAlchemyError as exc:
+        raise_if_database_unavailable(exc)
+        # The stream-inferred answer, if any, still stands.
+        logger.warning(
+            "agent.agent_host.final_answer_read_failed.degraded", exc_info=True
+        )
+        return
+    normalizer.adopt_final_answer(record)
+
+
+__all__ = ["RunEventApplier", "adopt_recorded_final_answer"]

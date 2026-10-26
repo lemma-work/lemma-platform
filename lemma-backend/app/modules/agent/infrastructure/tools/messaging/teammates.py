@@ -17,7 +17,6 @@ from __future__ import annotations
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from pydantic_ai.tools import RunContext
 
 from app.core.authorization.session_approvals import has_session_approval
 from app.core.infrastructure.db.session import async_session_maker
@@ -33,6 +32,7 @@ from app.modules.agent.infrastructure.tools.approval.denials import remember_den
 from app.modules.agent.infrastructure.tools.authority import workload_actor_id
 from app.modules.agent.infrastructure.tools.responses import BaseToolResponse
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import NoArguments
 
 ASK_TEAMMATE_TOOL_NAME = "ask_teammate"
 ASK_NEEDS_APPROVAL = "POD_ASK_NEEDS_APPROVAL"
@@ -125,15 +125,17 @@ async def _teammates(deps: ToolContext) -> list[Teammate]:
     return await _service().reachable(deps)
 
 
-async def list_teammates(ctx: RunContext[ToolContext]) -> ListTeammatesResponse:
+async def list_teammates(
+    ctx: ToolContext, request: NoArguments
+) -> ListTeammatesResponse:
     """List the other pods this one can ask: ones the person is also in, and
     ones connected to this pod.
 
     Each is a teammate with its own job, tools and data; `ask_teammate` asks one.
     """
-    teammates = await _teammates(ctx.deps)
+    teammates = await _teammates(ctx)
     if not teammates:
-        reason = await _service().unreachable_reason(ctx.deps)
+        reason = await _service().unreachable_reason(ctx)
         return ListTeammatesResponse(
             success=True,
             message=reason
@@ -158,7 +160,7 @@ async def list_teammates(ctx: RunContext[ToolContext]) -> ListTeammatesResponse:
 
 
 async def ask_teammate(
-    ctx: RunContext[ToolContext], request: AskTeammateRequest
+    ctx: ToolContext, request: AskTeammateRequest
 ) -> AskTeammateResponse:
     """Ask another pod to find something out or look something up.
 
@@ -168,7 +170,7 @@ async def ask_teammate(
     otherwise end your turn: the answer arrives here as a new message, and you
     continue from there. Don't wait or poll for it.
     """
-    deps = ctx.deps
+    deps = ctx
     service = _service()
     try:
         teammates = await _teammates(deps)

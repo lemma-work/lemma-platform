@@ -14,9 +14,10 @@ intake and the shipped reader, and asserts on what a conversation ends up with.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.pausing_tools import PausingKind
+
 import asyncio
 import base64
-from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4, uuid7
 
@@ -73,7 +74,7 @@ from app.modules.agent.services.mcp_pausing_calls import (
 )
 from app.modules.agent.services.wait_wake_service import AgentWaitService
 from app.modules.agent.infrastructure.tools.waiting.models import WaitForRequest
-from app.modules.agent.infrastructure.tools.waiting.pydantic_adapter import wait_for
+from app.modules.agent.infrastructure.tools.waiting.tools import wait_for
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     publish_harnesses,
     conversation_with_a_leased_run,
@@ -655,13 +656,13 @@ async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
         lambda: SqlAlchemyUnitOfWork(db_session),
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        tool_name=WAIT_TOOL_NAME,
+        pauses=PausingKind.WAIT_FOR,
         arguments={"reason": "waiting for the nightly build", "seconds": 600},
     )
     await db_session.commit()
 
     answer = await wait_for(
-        SimpleNamespace(deps=ctx, tool_call_id=tool_call_id),
+        ctx.model_copy(update={"tool_call_id": tool_call_id}),
         WaitForRequest(
             reason="waiting for the nightly build",
             seconds=600,
@@ -799,11 +800,11 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         uow_factory,
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        tool_name=WAIT_TOOL_NAME,
+        pauses=PausingKind.WAIT_FOR,
         arguments={"reason": "polling", "seconds": 5},
     )
     refusal = await wait_for(
-        SimpleNamespace(deps=ctx, tool_call_id=rejected_id),
+        ctx.model_copy(update={"tool_call_id": rejected_id}),
         WaitForRequest(reason="polling", seconds=5),
     )
     assert refusal.success is False
@@ -821,11 +822,11 @@ async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
         uow_factory,
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        tool_name=WAIT_TOOL_NAME,
+        pauses=PausingKind.WAIT_FOR,
         arguments={"reason": "the nightly build", "seconds": 600},
     )
     slept = await wait_for(
-        SimpleNamespace(deps=ctx, tool_call_id=real_id),
+        ctx.model_copy(update={"tool_call_id": real_id}),
         WaitForRequest(reason="the nightly build", seconds=600),
     )
     assert slept.success is True

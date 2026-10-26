@@ -26,12 +26,11 @@ if TYPE_CHECKING:
         SurfaceAgentRunProgressObserver,
     )
 from uuid import UUID
-from pydantic_ai.toolsets import AbstractToolset
-from app.modules.agent.contracts import ToolContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import Conversation, DisplayResourceRequest
+from app.modules.agent.contracts.tools import ToolSpec
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SurfaceEventMetadata,
 )
@@ -65,16 +64,16 @@ def parse_surface_event_metadata(
     return TypeAdapter(SurfaceEventMetadata).validate_python(payload)
 
 
-async def build_surface_toolsets(
+async def build_surface_tools(
     uow_factory: UnitOfWorkFactory,
     conversation: Conversation,
-) -> list[AbstractToolset[ToolContext]]:
-    """The tools this conversation's platform adds to the run."""
+) -> list[ToolSpec]:
+    """The tools this conversation's platform adds to the run, as specs."""
     from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
         SurfacePlatformToolFactory,
     )
 
-    return await SurfacePlatformToolFactory(uow_factory).build_toolsets(
+    return await SurfacePlatformToolFactory(uow_factory).build_tools(
         conversation=conversation
     )
 
@@ -213,7 +212,7 @@ def build_progress_observer(
 __all__ = [
     "APPROVED_ACTION_FAILED_NOTICE",
     "build_progress_observer",
-    "build_surface_toolsets",
+    "build_surface_tools",
     "deliver_display_resource",
     "deliver_voice_note",
     "hold_display_for_one_reply",

@@ -29,7 +29,7 @@ from app.core.infrastructure.db.transient_errors import is_transient_database_er
 from app.modules.agent.infrastructure.harness.lemma.retry import (
     HarnessDriverCancelled,
 )
-from app.modules.agent.infrastructure.transport_errors import (
+from app.modules.agent.infrastructure.providers.transport_errors import (
     connection_failure_message,
     is_retryable_stream_error,
     response_budget_expiry,

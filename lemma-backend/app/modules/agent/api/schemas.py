@@ -51,7 +51,7 @@ from app.modules.agent.domain.workspace_location import (
     pod_cwd_from_workspace_cwd,
     resolve_workspace_location,
 )
-from app.modules.agent.infrastructure.tools.toolset_selection import (
+from app.modules.agent.domain.toolsets import (
     NEW_AGENT_DEFAULT_TOOLSETS,
 )
 

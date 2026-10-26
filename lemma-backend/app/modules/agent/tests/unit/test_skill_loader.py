@@ -15,7 +15,7 @@ from app.modules.agent.infrastructure.tools.skills.skill_loader import (
     read_workspace_skill_resource,
 )
 from app.modules.agent.infrastructure.tools.skills import (
-    pydantic_adapter as skills_adapter,
+    tools as skills_adapter,
 )
 from app.modules.agent.infrastructure.tools.skills.models import (
     SkillLookupRequest,
@@ -261,12 +261,10 @@ async def test_load_skill_appends_local_workspace_override(
         "read_workspace_skill",
         fake_read_workspace_skill,
     )
-    ctx = SimpleNamespace(
-        deps=ToolContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-        )
+    ctx = ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
     )
 
     result = await skills_adapter.load_skill(

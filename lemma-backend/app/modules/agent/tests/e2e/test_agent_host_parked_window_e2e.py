@@ -17,6 +17,8 @@ exactly as before.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.pausing_tools import PausingKind
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
@@ -314,7 +316,7 @@ async def test_a_question_left_past_the_window_ends_the_run_waiting(scenario):
         uow_factory(),
         conversation_id=seeded.conversation_id,
         agent_run_id=run_id,
-        tool_name="ask_user",
+        pauses=PausingKind.ASK_USER,
         arguments=_QUESTION,
     )
     # Asked eleven minutes ago, against the shipped ten-minute window.
@@ -448,7 +450,7 @@ async def test_a_question_answered_inside_the_window_is_answered_in_its_turn(
         uow_factory(),
         conversation_id=seeded.conversation_id,
         agent_run_id=run_id,
-        tool_name="ask_user",
+        pauses=PausingKind.ASK_USER,
         arguments=_QUESTION,
     )
 

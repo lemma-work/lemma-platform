@@ -24,7 +24,9 @@ from pydantic_ai.messages import ModelRequest
 from pydantic_ai.models import Model
 
 from app.modules.agent.infrastructure.providers import model_factory
-from app.modules.agent.infrastructure.transport_errors import local_model_server_name
+from app.modules.agent.infrastructure.providers.transport_errors import (
+    local_model_server_name,
+)
 
 _KEY_REJECTED_STATUSES = frozenset({401, 403})
 

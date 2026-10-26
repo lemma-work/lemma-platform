@@ -265,7 +265,7 @@ async def test_approving_a_sandbox_command_for_the_session_approves_what_it_was_
         actor_id=conversation.pod_id,
     )
     await session_approvals.record_delegated_refusal(
-        claims,  # type: ignore[arg-type]
+        claims,
         code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
         details={"permission_ids": ["datastore.table.delete"]},
     )
@@ -454,6 +454,7 @@ class TestTheSecondDenialOfTheSameCall:
             workload_id=None,
             agent_run_id=uuid4(),
             supports_pause_signal=True,
+            tools=object(),
         )
 
     @staticmethod
@@ -485,7 +486,7 @@ class TestTheSecondDenialOfTheSameCall:
                 f"approval may do that (tried to record {kwargs['permission_id']!r})"
             )
 
-        async def execute_as_user(self, *, deps, tool_name, args):
+        async def run_approved(tools, uow_factory, *, deps, tool_name, args):
             executed.append(tool_name)
             return {"ok": True}
 
@@ -506,15 +507,15 @@ class TestTheSecondDenialOfTheSameCall:
             record_session_approval,
         )
         monkeypatch.setattr(
-            "app.modules.agent.infrastructure.tools.approval.executor.ApprovalExecutor.execute_as_user",
-            execute_as_user,
+            "app.modules.agent.infrastructure.tools.approval.executor.run_approved",
+            run_approved,
         )
 
     @pytest.mark.asyncio
     async def test_a_new_permission_falls_through_to_the_pause(self, monkeypatch):
         """The loop, closed: the request is no longer swallowed."""
         from app.modules.agent.infrastructure.tools.user_interaction import (
-            pydantic_adapter as approvals,
+            tools as approvals,
         )
 
         args = {"table": "orders"}
@@ -541,7 +542,7 @@ class TestTheSecondDenialOfTheSameCall:
     async def test_a_fully_granted_call_still_auto_executes(self, monkeypatch):
         """Once everything is granted, the repeat runs without re-prompting."""
         from app.modules.agent.infrastructure.tools.user_interaction import (
-            pydantic_adapter as approvals,
+            tools as approvals,
         )
 
         args = {"table": "orders"}
@@ -572,7 +573,7 @@ class TestTheSecondDenialOfTheSameCall:
         """M5 on the fast path: the exact call was approved for the
         conversation -- by someone else. This run's person is asked."""
         from app.modules.agent.infrastructure.tools.user_interaction import (
-            pydantic_adapter as approvals,
+            tools as approvals,
         )
 
         args = {"cmd": "ls"}
@@ -598,7 +599,7 @@ class TestTheSecondDenialOfTheSameCall:
         """exec_command has no structured permission -- the exact-command key is
         the whole grant, and that path must keep working."""
         from app.modules.agent.infrastructure.tools.user_interaction import (
-            pydantic_adapter as approvals,
+            tools as approvals,
         )
 
         args = {"cmd": "ls"}
@@ -641,7 +642,7 @@ class TestAnApprovalLendsWhatItsCardShowed:
     @staticmethod
     async def _sandbox_refused(conversation, person, *permission_ids):
         await session_approvals.record_delegated_refusal(
-            TestAnApprovalLendsWhatItsCardShowed._shell(conversation, person),  # type: ignore[arg-type]
+            TestAnApprovalLendsWhatItsCardShowed._shell(conversation, person),
             code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
             details={"permission_ids": list(permission_ids)},
         )
@@ -654,6 +655,7 @@ class TestAnApprovalLendsWhatItsCardShowed:
             workload_id=conversation.pod_id,
             agent_run_id=uuid4(),
             supports_pause_signal=True,
+            tools=object(),
         )
 
     @pytest.mark.asyncio
@@ -662,7 +664,7 @@ class TestAnApprovalLendsWhatItsCardShowed:
     ):
         """The exact scenario. The repeat must go to a new card."""
         from app.modules.agent.infrastructure.tools.user_interaction import (
-            pydantic_adapter as approvals,
+            tools as approvals,
         )
 
         conversation, person = _conversation(), uuid4()
@@ -683,13 +685,13 @@ class TestAnApprovalLendsWhatItsCardShowed:
         await self._sandbox_refused(conversation, person, "datastore.table.delete")
         executed: list[str] = []
 
-        async def execute_as_user(self, *, deps, tool_name, args):
+        async def run_approved(tools, uow_factory, *, deps, tool_name, args):
             executed.append(tool_name)
             return {"ok": True}
 
         monkeypatch.setattr(
-            "app.modules.agent.infrastructure.tools.approval.executor.ApprovalExecutor.execute_as_user",
-            execute_as_user,
+            "app.modules.agent.infrastructure.tools.approval.executor.run_approved",
+            run_approved,
         )
 
         result = await approvals._run_if_exact_match_already_approved(

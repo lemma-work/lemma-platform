@@ -1,0 +1,594 @@
+from __future__ import annotations
+
+from app.core.config import settings
+from app.core.domain.errors import DomainError
+
+from app.modules.agent.domain.value_objects import AgentRunApprovalDecision, JsonObject
+from app.modules.agent.services.widget_token import widget_serve_path
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import (
+    AgentInputRequired,
+    ReplayClass,
+    ToolGroup,
+    ToolPolicy,
+    tool,
+)
+from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.infrastructure.tools.tool_errors import (
+    safe_described_error,
+    safe_error_text,
+)
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
+    AskUserRequest,
+    AskUserResponse,
+    DisplayResourceRequest,
+    DisplayResourceResponse,
+    DisplayResourceType,
+    RequestApprovalArguments,
+    RequestApprovalResponse,
+    validate_display_payload,
+)
+from app.core.widget_html_validation import validate_widget_html
+from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
+
+
+async def _widget_file_error(ctx: ToolContext, path: str) -> str | None:
+    """Why this pod file cannot be the widget, or None when it can.
+
+    The whole point of a file-backed widget is that it can be fixed by editing
+    the file, so the checks that applied to an inline fragment apply here too --
+    and they are worth more here, because the author is still in the loop.
+    """
+    from app.modules.agent.infrastructure.tools.pod.pod_common import resolve_pod_path
+    from app.modules.agent.infrastructure.tools.pod.pod_data_access import pod_services
+
+    resolved = resolve_pod_path(ctx, path)
+    try:
+        async with pod_services(ctx) as services:
+            _, raw = await services.file.download_file_content_by_path(
+                services.ctx.pod_id, resolved, services.ctx
+            )
+    except DomainError as problem:
+        # Missing, or not this agent's to read. Both are things it can act on
+        # from here, which is the whole reason this check runs now and not at
+        # serve time. An infrastructure failure is neither, and propagates.
+        return (
+            f"No readable pod file at '{resolved}'. Write the widget's HTML "
+            "there with pod_write_file first "
+            f"({safe_described_error(problem)})."
+        )
+    try:
+        source = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"'{resolved}' is not text, so it cannot be a widget's source."
+    errors = validate_widget_html(source)
+    if errors:
+        return f"Invalid WIDGET source at '{resolved}': " + " ".join(errors)
+    return None
+
+
+async def display_resource(
+    ctx: ToolContext,
+    request: DisplayResourceRequest,
+) -> DisplayResourceResponse:
+    """
+    Show a pod resource or a rendered view to the user.
+
+    Reach for this whenever the useful answer is more than short prose: several
+    values, records, statuses, comparisons, a timeline, or a chart render as a
+    WIDGET. After creating or changing a pod resource, display it.
+
+    Set `type` and, for most types, a `name` — omit `name` to show all resources
+    of that type. FILE takes a pod `path`, so upload sandbox deliverables with
+    `lemma files upload` first; a workspace path is not pod-visible. WIDGET takes
+    exactly one of `path`, `content`, or `public_url`. Its page already carries
+    the widget tokens and `window.lemma` (query, the common drawing shapes,
+    compose), so most widgets need no skill; load `lemma-widget` for a design of
+    your own. React, routing, or real state means an app.
+
+    A WIDGET is an interactive display, not a picture: it reads pod data through
+    the browser SDK, and its buttons can do anything in Lemma as the person
+    viewing it — write records, run functions and workflows, put a message in
+    the composer, execute connector operations. Its clicks arrive after this run
+    is over, so `ask_user` is for an answer this run needs.
+
+    Give a WIDGET a `path`: write its HTML to a pod file with `pod_write_file`
+    (`/me/c/<date>/<name>.html`) and display that. The widget serves whatever the
+    file says, so correcting one is an edit to the file. `content` inlines the
+    HTML instead and freezes it in this call.
+
+    A display that succeeds is already in front of the person. Nothing here
+    replaces or edits an earlier one, so calling again adds a second resource
+    below the first rather than correcting it — which is the other reason to
+    keep the HTML in a file.
+
+    `ask_user` collects choices this run needs, `request_approval` collects
+    permission for what this run does.
+    """
+    # Semantic payload validation runs here (not as a raising pydantic validator)
+    # so an invalid request comes back as a uniform success:false/error result the
+    # model and frontend can both read, rather than a retry / validation error.
+    payload_error = validate_display_payload(request)
+    if payload_error is not None:
+        return DisplayResourceResponse(success=False, error=payload_error)
+
+    if request.type == DisplayResourceType.WIDGET and request.content:
+        widget_errors = validate_widget_html(request.content)
+        if widget_errors:
+            return DisplayResourceResponse(
+                success=False,
+                error="Invalid WIDGET content: " + " ".join(widget_errors),
+            )
+
+    if request.type == DisplayResourceType.WIDGET and request.path:
+        # Read and check the file now rather than at serve time. The agent is
+        # here, and can fix it; the person opening the widget later is not.
+        source_error = await _widget_file_error(ctx, request.path)
+        if source_error is not None:
+            return DisplayResourceResponse(success=False, error=source_error)
+
+    if request.type == DisplayResourceType.BROWSER:
+        workspace_service = WorkspaceSandboxService()
+        try:
+            access = await workspace_service.create_browser_access(
+                ctx.user_id,
+                ttl_seconds=1800,
+                # The browser in this agent's workspace, beside its shell.
+                pod_id=ctx.pod_id,
+                actor_id=ctx.workload_id,
+            )
+        except Exception as exc:
+            # Redacted: this becomes the tool return the model reads and the
+            # transcript keeps, and the sandbox round-trip that fails here
+            # stringifies with the URL it dialled.
+            return DisplayResourceResponse(
+                success=False,
+                error=(
+                    f"Failed to create browser display URL: {safe_described_error(exc)}"
+                ),
+            )
+        finally:
+            await workspace_service.close()
+
+        response = DisplayResourceResponse(
+            success=True,
+            message="BROWSER resource ready for display.",
+            app="browser",
+            url=access.url,
+            expires_at=access.expires_at,
+        )
+        await _maybe_deliver_to_surface(ctx, request, response)
+        return response
+
+    if (
+        request.type == DisplayResourceType.WIDGET
+        and request.content
+        and request.content.strip()
+    ):
+        # An inline-content widget is the same primitive as an app: serve its
+        # HTML from the backend (with pod context injected) so the frontend embeds
+        # it by URL and it can be promoted to an app. The content lives
+        # durably in this tool call's args, addressed by (conversation, tool_call).
+        conversation_id = getattr(ctx, "conversation_id", None)
+        tool_call_id = ctx.tool_call_id
+        if conversation_id and tool_call_id:
+            # Canonical, token-less address. The widget serve route is
+            # authenticated; the frontend mints a short-lived signed embed URL
+            # per view, so this URL is for addressing/non-frontend consumers only.
+            base = settings.api_url.rstrip("/")
+            response = DisplayResourceResponse(
+                success=True,
+                message="WIDGET resource ready for display.",
+                url=f"{base}{widget_serve_path(conversation_id, tool_call_id)}",
+            )
+            await _maybe_deliver_to_surface(ctx, request, response)
+            return response
+
+    response = DisplayResourceResponse(
+        success=True,
+        message=f"{request.type.value} resource ready for display.",
+    )
+    await _maybe_deliver_to_surface(ctx, request, response)
+    return response
+
+
+async def _maybe_deliver_to_surface(
+    ctx: ToolContext,
+    request: DisplayResourceRequest,
+    response: DisplayResourceResponse,
+) -> None:
+    """Put the resource in front of the person, however this surface delivers.
+
+    Branching, by the platform's delivery cardinality rather than by whether it
+    happens to be email:
+      * not a surface run (web/app/subagent) → nothing to do; the frontend
+        renders the persisted tool result.
+      * MANY (Slack/Teams/Telegram/WhatsApp) → deliver now, native file or link
+        as the surface decides.
+      * ONE (email) → hold the file for the single reply, which the run
+        observer's reply carries when it goes out.
+
+    That last branch used to `return` here, silently, *after* the tool had
+    already told the model "FILE resource ready for display." The model believed
+    it had shown the file and the recipient never saw one. ``response`` is
+    corrected in place when the resource cannot be held, because a tool that
+    reports success it did not have is worse than one that reports failure.
+
+    Best-effort otherwise: a delivery failure never fails the run.
+    """
+    deps = ctx
+    if not response.success:
+        return
+    platform = getattr(deps, "surface_platform", None)
+    # A private note's run stays in Lemma, resources included: the chat app is
+    # where the group reads, and a note is the one thing it must not.
+    if not platform or not getattr(deps, "delivers_to_surface", True):
+        return
+
+    from app.modules.agent_surfaces.contracts.platforms import (
+        platform_delivers_one_reply,
+        platform_supports_chat_delivery,
+    )
+
+    if platform_delivers_one_reply(platform):
+        await _hold_for_the_one_reply(deps, request, response)
+        return
+    if not platform_supports_chat_delivery(platform):
+        return
+
+    from app.modules.agent_surfaces.contracts.egress import deliver_display_resource
+
+    delivered = await deliver_display_resource(
+        conversation_id=deps.conversation_id,
+        request=request,
+        tool_call_id=getattr(ctx, "tool_call_id", None),
+        tool_output=response,
+    )
+    if delivered:
+        return
+    # The same correction the email branch makes, for the same reason: the tool
+    # had already decided it succeeded before delivery was attempted, and a
+    # `success=True` that the person never saw makes the model tell them "here
+    # is the file" about a file that did not arrive. Delivery logs why.
+    response.success = False
+    response.message = None
+    response.error = (
+        "This resource could not be delivered to the person -- they have not "
+        "seen it. Tell them what it was and why it is missing, or describe it "
+        "in your reply instead."
+    )
+
+
+async def _hold_for_the_one_reply(
+    deps: ToolContext,
+    request: DisplayResourceRequest,
+    response: DisplayResourceResponse,
+) -> None:
+    """Queue a displayed file onto the single reply, or say why it cannot be.
+
+    Only a FILE has anything to carry into an email. Everything else is a link
+    into Lemma, which the agent should be writing into the reply body itself --
+    so it is told that rather than being left to think a card went out.
+    """
+    from app.modules.agent_surfaces.contracts.egress import hold_display_for_one_reply
+
+    if request.type is not DisplayResourceType.FILE or not request.path:
+        response.success = False
+        response.message = None
+        response.error = (
+            "This is an email conversation, so there is nothing to display in. "
+            "Put what this resource would have shown into your email reply, and "
+            "use display_resource only for files you want attached."
+        )
+        return
+    if not await hold_display_for_one_reply(
+        deps.conversation_id, request.path, deps.agent_run_id
+    ):
+        response.success = False
+        response.message = None
+        response.error = (
+            "Too many files are already queued for this email reply. Send the "
+            "reply, then show anything further in a new one."
+        )
+        return
+    response.message = (
+        f"{request.path} will be attached to your email reply. Send the reply "
+        "when you are ready; there is nothing else to do for this file."
+    )
+
+
+async def request_approval(
+    ctx: ToolContext, request: RequestApprovalArguments
+) -> RequestApprovalResponse:
+    """
+    Ask the user to approve an action you were refused, then run it.
+
+    Call this when a tool fails needing approval (a 403 for a missing grant or a
+    destructive action) — deleting data, sending email, a privileged command.
+    Describe the FULL action; do not rely on prior context. The run pauses for an
+    approval card. On approval the backend runs the tool as you, allowed exactly
+    what that call was refused (never more, and never beyond what the user may do
+    themselves), and returns its result here. On denial nothing runs.
+    """
+    # `payload` and `permission_ids` are rendered on the card from the
+    # persisted call, and nothing else: an approval lends what the server
+    # recorded refusing the call for (``approval.denials``), never these.
+    tool_name, args = request.tool_name, request.args
+    deps = ctx
+    if deps.agent_run_id is None:
+        return RequestApprovalResponse(
+            success=False,
+            error="request_approval requires an active agent run.",
+        )
+    if tool_name == "request_approval":
+        return RequestApprovalResponse(
+            success=False,
+            error="request_approval cannot approve itself.",
+        )
+    if not getattr(deps, "supports_pause_signal", False):
+        # Remote harnesses (Codex/Claude-Code/OpenCode) run tools over MCP and own
+        # their session, so the run can't pause mid tool-call. Guide the model to
+        # the conversational fallback instead of hanging or aborting the run.
+        # Parked rather than refused -- see the note on `ask_user` below. The
+        # decision reaches this call through the same approvals endpoint every
+        # other surface already resolves, and the bridge waits for it.
+        if not ctx.tool_call_id:
+            return RequestApprovalResponse(
+                success=False,
+                error="request_approval requires a durable tool call id.",
+            )
+        auto_approved = await _run_if_exact_match_already_approved(
+            deps=deps, tool_name=tool_name, args=args
+        )
+        if auto_approved is not None:
+            return auto_approved
+        await _show_card(deps, ctx.tool_call_id, tool_name=tool_name, args=args)
+        return RequestApprovalResponse(
+            success=True,
+            parked_tool_call_id=ctx.tool_call_id,
+            message=f"Waiting for the user's decision on {tool_name}.",
+        )
+    if not ctx.tool_call_id:
+        return RequestApprovalResponse(
+            success=False,
+            error="request_approval requires a durable tool call id.",
+        )
+
+    auto_approved = await _run_if_exact_match_already_approved(
+        deps=deps, tool_name=tool_name, args=args
+    )
+    if auto_approved is not None:
+        return auto_approved
+    await _show_card(deps, ctx.tool_call_id, tool_name=tool_name, args=args)
+
+    # Pause the run for the user's decision instead of blocking the worker. The
+    # harness already persisted this tool call (tool_name/args/title in its args)
+    # for the client to render an approval card. Raising ends the run cleanly
+    # (conversation -> WAITING); on submit the approvals endpoint records the
+    # decision, runs the approved tool as the user (or denies), and feeds the
+    # synthesized RequestApprovalResponse back as this call's return on a fresh
+    # run. request_approval therefore runs only once.
+    raise AgentInputRequired(ctx.tool_call_id, PausingKind.REQUEST_APPROVAL)
+
+
+async def _show_card(
+    deps: ToolContext, approval_id: str, *, tool_name: str, args: JsonObject
+) -> None:
+    """Write on the approval what is pending as its card goes up: all an answer
+    to it may lend (``approval_denials.show_card``). A run with no person
+    behind it has nobody to show it to, and its answer lends nothing."""
+    from app.modules.agent.infrastructure.tools.approval.denials import show_card
+    from app.modules.agent.infrastructure.tools.authority import workload_actor_id
+
+    person = getattr(deps, "user_id", None)
+    if person is None:
+        return
+    await show_card(
+        conversation_id=deps.conversation_id,
+        approval_id=approval_id,
+        person_user_id=person,
+        workload_actor_id=workload_actor_id(deps),
+        tool_name=tool_name,
+        args=args,
+    )
+
+
+async def _run_if_exact_match_already_approved(
+    *,
+    deps: ToolContext,
+    tool_name: str,
+    args: JsonObject,
+) -> RequestApprovalResponse | None:
+    """Skip the pause when this exact call was approved for session earlier.
+
+    Returns the synthesized response (already executed) if so, else ``None`` to
+    fall through to the normal pause. `exec_command`/`execute_python` have no
+    authorization gate at all — request_approval is the only checkpoint that
+    exists for them — so this is the sole place their session-approval reuse
+    can be honored. See session_approvals.exact_command_permission_id for why
+    the match is exact-args-only, never a prefix.
+
+    Every permission the call was refused for is required here as well, and
+    that is the whole of DEV-ACCESS-002. The exact-command key is tool-name-plus-args, so a second
+    denial of the *same* call for a *different* permission still matches it and
+    takes this path -- and the path used to return before anything recorded the
+    new permission. Reading a table needs two permissions and the authorizer
+    stops at the first missing one, so the agent looped: approve, still denied,
+    approve, still denied, forever. Changing one argument broke the exact match
+    and made the identical sequence succeed, which is what made it look like
+    magic rather than a bug.
+    """
+    from app.core.authorization.session_approvals import (
+        exact_command_permission_id,
+        has_session_approval,
+    )
+    from app.modules.agent.infrastructure.tools.approval.denials import pending_refusals
+    from app.modules.agent.infrastructure.tools.authority import (
+        workload_actor_id as actor_of,
+    )
+
+    # The same key the agent's own delegated context carries, so an approval
+    # recorded for this agent is found by the same derivation that checks it.
+    workload_actor_id = actor_of(deps)
+
+    # Every permission this call needs must ALREADY be granted -- the exact
+    # command key on its own is not enough. `permission_ids` is a tool argument,
+    # so it is whatever the model wrote, and a model that has read a poisoned
+    # web page or document writes whatever that page told it to. Recording them
+    # here would let one approval of `exec_command echo hi` be replayed with
+    # `permission_ids=["pod.delete"]` and silently mint that grant, with no
+    # pause and no card: the user approved a harmless command and lost the pod.
+    #
+    # Requiring instead of widening is also what actually fixes the
+    # approve-then-still-denied loop (DEV-ACCESS-002). The loop happened because
+    # this path SWALLOWED a second, differently-scoped request. Falling through
+    # when something is missing means the user is asked exactly once per new
+    # permission, and `record_session_approvals` writes it with a human behind
+    # it.
+    #
+    # And "every permission this call needs" is the server's record of what it
+    # refused this call for, not the model's ``permission_ids``: requiring
+    # those could only ever narrow, but the record is the one list that is
+    # actually right (H6). For a sandbox command that includes what its
+    # session's sandbox was refused since: the person allowed `python job.py`
+    # for the conversation, the agent edited job.py to delete a table, and
+    # asking for `python job.py` again ran it -- and lent it the delete -- with
+    # no card. A refusal nobody approved yet sends the call to a card, and the
+    # run below lends nothing beyond the approvals already standing.
+    refused = await pending_refusals(
+        conversation_id=deps.conversation_id,
+        person_user_id=getattr(deps, "user_id", None),
+        workload_actor_id=workload_actor_id,
+        tool_name=tool_name,
+        args=args,
+    )
+    needed = [exact_command_permission_id(tool_name, args), *sorted(refused)]
+    for permission_id in needed:
+        if not await has_session_approval(
+            session_id=str(deps.conversation_id),
+            # Only this person's approvals: in a group conversation another
+            # member's "allow for this conversation" is not theirs (M5). A run
+            # with nobody behind it has no approvals at all, and pauses.
+            person_user_id=getattr(deps, "user_id", None),
+            workload_actor_id=workload_actor_id,
+            permission_id=permission_id,
+        ):
+            return None
+
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.domain.value_objects import to_json_value
+    from app.modules.agent.infrastructure.tools.approval.executor import run_approved
+
+    try:
+        if deps.tools is None:
+            raise RuntimeError("this run has no tools to run the approved call with")
+        result = await run_approved(
+            deps.tools,
+            SessionUnitOfWorkFactory(async_session_maker),
+            deps=deps,
+            tool_name=tool_name,
+            args=args,
+        )
+    except Exception as exc:  # noqa: BLE001 - reported to the model, not fatal
+        # Redacted for the same reason the ordinary approval path is: this text
+        # is written into the conversation and replayed into the model, and the
+        # tool that just failed was running with the user's authority.
+        return RequestApprovalResponse(
+            success=False,
+            error=(
+                f"Auto-approved (session), but running {tool_name} failed: "
+                f"{safe_error_text(exc)}"
+            ),
+            decision=AgentRunApprovalDecision.APPROVE_FOR_SESSION,
+            executed=False,
+        )
+    return RequestApprovalResponse(
+        success=True,
+        message=(
+            f"Auto-approved: you approved this exact {tool_name} call earlier in "
+            "this conversation. Executed as you."
+        ),
+        decision=AgentRunApprovalDecision.APPROVE_FOR_SESSION,
+        executed=True,
+        result=to_json_value(result),
+    )
+
+
+async def ask_user(
+    ctx: ToolContext,
+    request: AskUserRequest,
+) -> AskUserResponse:
+    """
+    Ask the user one or more multiple-choice questions and wait for their answers.
+
+    Use it for a decision you genuinely cannot infer. Each question carries 2-4
+    concrete options; mark the one you recommend. The run pauses, and answers come
+    back in `answers` keyed by each question's `header`.
+
+    Prefer this over a prose question whenever the answer is a choice among known
+    options. For free-form input, ask in prose and end your turn. Only ask when it
+    changes what you do next — otherwise take the obvious default and proceed.
+    """
+    if not request.questions:
+        return AskUserResponse(
+            success=False, error="ask_user requires at least one question."
+        )
+    for question in request.questions:
+        if not 2 <= len(question.options) <= 4:
+            return AskUserResponse(
+                success=False,
+                error=(
+                    f"Question {question.header!r} must have between 2 and 4 options."
+                ),
+            )
+
+    if ctx.agent_run_id is None:
+        return AskUserResponse(
+            success=False, error="ask_user requires an active agent run."
+        )
+    if not ctx.tool_call_id:
+        return AskUserResponse(
+            success=False, error="ask_user requires a durable tool call id."
+        )
+    if not getattr(ctx, "supports_pause_signal", False):
+        # Parked, not refused. A remote harness reaches this tool over MCP and
+        # cannot end its own turn from inside a tool call -- but it does not
+        # need to. Its bridge holds the MCP response open and waits, which is
+        # exactly what the host already does for its own native ACP permission
+        # requests, so the model sits inside its turn and the person answers on
+        # whichever surface they are already using.
+        #
+        # Falling back to prose was worse than it looked: the questions stopped
+        # rendering as an interaction card, so the choices, the recommended
+        # option and the native buttons on Slack/Teams/Telegram all became a
+        # paragraph the person had to read and answer in their own words.
+        return AskUserResponse(
+            success=True,
+            parked_tool_call_id=ctx.tool_call_id,
+            message="Waiting for the user's answer.",
+        )
+
+    # Pause the run for the user's answers instead of blocking the worker. The
+    # harness already persisted this tool call (the questions ride in its args)
+    # for the client to render. Raising ends the run cleanly (conversation ->
+    # WAITING); on submit the approvals endpoint records the answers and starts a
+    # fresh run that replays the synthesized AskUserResponse from history. A DENY
+    # there means the user dismissed the questions. ask_user runs only once.
+    raise AgentInputRequired(ctx.tool_call_id, PausingKind.ASK_USER)
+
+
+SPECS = (
+    # Renders the tool's own return; nothing is sent.
+    tool(
+        display_resource,
+        ToolGroup.USER_INTERACTION,
+        ToolPolicy(replay=ReplayClass.SAFE),
+    ),
+    tool(
+        request_approval,
+        ToolGroup.USER_INTERACTION,
+        ToolPolicy(pauses=PausingKind.REQUEST_APPROVAL),
+    ),
+    tool(ask_user, ToolGroup.USER_INTERACTION, ToolPolicy(pauses=PausingKind.ASK_USER)),
+)

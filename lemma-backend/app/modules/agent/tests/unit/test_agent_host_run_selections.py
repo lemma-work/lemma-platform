@@ -21,7 +21,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
 )
 
 
-def _options(model: str | None, overrides: dict[str, str]) -> HarnessOptions[object]:
+def _options(model: str | None, overrides: dict[str, str]) -> HarnessOptions:
     return HarnessOptions(
         model_name=model or "default",
         runtime_profile=RuntimeSnapshot(

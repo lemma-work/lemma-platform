@@ -68,11 +68,10 @@ from app.modules.channels.contracts import questions as channel_questions
 from app.modules.channels.contracts.answers import line_answered_in
 from app.modules.channels.contracts.lines import line_by_id
 from app.modules.channels.contracts.questions import AnswerRefused, Answering
+from app.modules.agent.domain.pausing_tools import PausingKind
 
 #: What a question's ``ref`` starts with: an agent's paused tool call.
 TOOL_REF = "tool"
-ASK_USER = "ask_user"
-REQUEST_APPROVAL = "request_approval"
 #: How long a question waits before it stops waiting.
 ASK_EXPIRES_AFTER = timedelta(hours=72)
 APPROVAL_EXPIRES_AFTER = timedelta(days=7)
@@ -130,7 +129,7 @@ def shown(pause: Pause) -> tuple[str, dict[str, object]]:
     secret in it masked, and clipped (``approval_action``).
     """
     args = pause.tool_args
-    if pause.kind == REQUEST_APPROVAL:
+    if pause.kind == PausingKind.REQUEST_APPROVAL:
         title = str(args.get("title") or "May I go ahead?")
         reason = args.get("reason")
         action = args.get("tool_name")
@@ -143,7 +142,7 @@ def shown(pause: Pause) -> tuple[str, dict[str, object]]:
         return (
             text,
             {
-                "tool": REQUEST_APPROVAL,
+                "tool": PausingKind.REQUEST_APPROVAL.value,
                 "prompt": title,
                 "reason": reason,
                 "action": action,
@@ -155,7 +154,7 @@ def shown(pause: Pause) -> tuple[str, dict[str, object]]:
     questions = _questions(args)
     asked = [str(q.get("question") or "") for q in questions if q.get("question")]
     return "\n".join(asked) or "A question for you", {
-        "tool": ASK_USER,
+        "tool": PausingKind.ASK_USER.value,
         "prompt": asked[0] if asked else "",
         "questions": questions,
     }
@@ -163,7 +162,7 @@ def shown(pause: Pause) -> tuple[str, dict[str, object]]:
 
 def effective_answer(kind: str, decided: PauseDecision) -> dict[str, object]:
     """What a decided pause shows on its line."""
-    if kind == ASK_USER:
+    if kind == PausingKind.ASK_USER:
         answers = decided.response.get("answers")
         if decided.decision == AgentRunApprovalDecision.DENY.value:
             return {"decision": decided.decision}
@@ -191,7 +190,8 @@ async def undecided_pauses(
             sequence=call.sequence,
         )
         for call in calls
-        if call.tool_call_id and call.tool_name in (ASK_USER, REQUEST_APPROVAL)
+        if call.tool_call_id
+        and call.tool_name in (PausingKind.ASK_USER, PausingKind.REQUEST_APPROVAL)
     ]
 
 
@@ -264,7 +264,7 @@ async def _ask(uow: SqlAlchemyUnitOfWork, conversation, pause: Pause, ref: str) 
         # What the agent said leading up to the question: a platform's card
         # carries it, and the timeline should read the same.
         text = f"{narration}\n\n{text}"
-    approval = pause.kind == REQUEST_APPROVAL
+    approval = pause.kind == PausingKind.REQUEST_APPROVAL
     await post(
         uow,
         channel_id=channel_id,
@@ -513,7 +513,7 @@ def _cleaned(value: object) -> str | list[str]:
 def _decision(
     question: Mapping[str, object], given: Mapping[str, object]
 ) -> tuple[str, dict[str, object]]:
-    if question.get("tool") == REQUEST_APPROVAL:
+    if question.get("tool") == PausingKind.REQUEST_APPROVAL:
         decision = str(given.get("decision") or "").upper()
         if decision not in channel_questions.APPROVAL_DECISIONS:
             raise AnswerRefused("Approve or deny it", status_code=422)

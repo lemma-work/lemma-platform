@@ -9,6 +9,8 @@ repository answers whatever the test tells it to and the races live in SQL.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.pausing_tools import PausingKind
+
 from uuid import UUID
 
 import pytest
@@ -301,14 +303,14 @@ async def test_a_remote_harness_question_is_answered_inside_its_own_run(
         uow_factory(),
         conversation_id=seeded.conversation_id,
         agent_run_id=working,
-        tool_name="ask_user",
+        pauses=PausingKind.ASK_USER,
         arguments={"questions": ["Which branch?"]},
     )
     waiting = await record_pausing_tool_call(
         uow_factory(),
         conversation_id=seeded.conversation_id,
         agent_run_id=working,
-        tool_name="wait_for",
+        pauses=PausingKind.WAIT_FOR,
         arguments={"seconds": 60},
     )
     marks = {

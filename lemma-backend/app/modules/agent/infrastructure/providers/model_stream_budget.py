@@ -37,7 +37,7 @@ from collections.abc import AsyncIterator
 import httpx2
 
 from app.core.log.log import get_logger
-from app.modules.agent.infrastructure.transport_errors import (
+from app.modules.agent.infrastructure.providers.transport_errors import (
     ModelResponseBudgetExceeded,
 )
 

@@ -28,7 +28,7 @@ from app.modules.agent.infrastructure.harness.lemma.retry import (
     RETRY_AFTER_CAP_SECONDS,
     _retry_delay,
 )
-from app.modules.agent.infrastructure.transport_errors import (
+from app.modules.agent.infrastructure.providers.transport_errors import (
     ModelResponseBudgetExceeded,
 )
 from app.modules.agent.services.run_input_settings import (

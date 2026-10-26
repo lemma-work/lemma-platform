@@ -260,14 +260,31 @@ def test_the_surface_module_no_longer_carries_the_prose():
 
 def test_the_capability_and_the_remote_prompt_inject_the_same_text():
     """Two harnesses, one builder: the in-process capability and remote prompt agree."""
-    from app.modules.agent.capabilities.surface_platform import (
-        SurfacePlatformCapability,
+    from uuid import uuid4
+
+    from app.modules.agent.domain.context import ToolContext
+    from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+        Instructions,
+        harness_capabilities,
     )
+    from app.modules.agent.services.tool_runtime import ToolRuntime
 
     for platform in (*_CHAT_PLATFORMS, "RESEND"):
-        assert SurfacePlatformCapability(platform).get_instructions() == (
-            surface_platform_guidance(platform)
+        ctx = ToolContext(
+            user_id=uuid4(),
+            pod_id=uuid4(),
+            conversation_id=uuid4(),
+            surface_platform=platform,
         )
+        capabilities = harness_capabilities(
+            ctx=ctx, specs=[], runtime=ToolRuntime([]), enable_prompt_caching=False
+        )
+        texts = [
+            capability.get_instructions()
+            for capability in capabilities
+            if isinstance(capability, Instructions)
+        ]
+        assert surface_platform_guidance(platform) in texts
 
 
 # --- P2: attachments no longer name tools that do not exist ----------------

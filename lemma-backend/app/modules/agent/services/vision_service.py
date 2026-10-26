@@ -170,9 +170,9 @@ async def describe_images(
     from app.modules.agent.domain.background import (
         BackgroundCall,
         BackgroundLimits,
-        ImagePart,
         PromptPart,
     )
+    from app.modules.agent.domain.tools import ImagePart
     from app.modules.agent.services.background_model import BackgroundModel
 
     prompt: list[PromptPart] = [

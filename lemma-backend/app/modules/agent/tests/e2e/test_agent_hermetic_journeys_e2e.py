@@ -3031,7 +3031,7 @@ async def test_scripted_connector_tools_reach_a_real_agent_run(
     (`connectors/tests/e2e/test_agent_connector_toolset_e2e.py`) -- no
     conversation, no `AgentRun`, no toolset assembly. So the half that could
     break silently was the half nobody exercised: that `CONNECTORS` survives
-    `RunToolAssembler`, becomes a capability, and arrives at the tool with deps
+    the tool catalog, becomes a toolset, and arrives at the tool with a context
     carrying the run's organization.
 
     That is what this covers, and only that. `run_connector_operation` needs a

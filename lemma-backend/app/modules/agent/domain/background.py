@@ -11,16 +11,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
+from app.modules.agent.domain.tools import ImagePart, ToolSpec
 from app.modules.agent.domain.value_objects import JsonObject
 
-
-@dataclass(frozen=True, slots=True)
-class ImagePart:
-    """Image content in a prompt; the provider turns it into its own type."""
-
-    data: bytes
-    media_type: str
+if TYPE_CHECKING:
+    from app.modules.agent.domain.context import ToolContext
 
 
 #: One element of a prompt: text, or an image.
@@ -55,11 +52,9 @@ class BackgroundCall:
     plain_model_settings: JsonObject | None = None
     #: Called with the refusal's status code before that second ask.
     on_plain_retry: Callable[[int], None] | None = None
-    #: The tools the call may use, as the harness builds them.
-    toolsets: Sequence[object] = ()
-    #: What the tools run against.
-    deps: object | None = None
-    deps_type: type | None = None
+    #: The tools the call may use, and what they run against.
+    tools: Sequence[ToolSpec] = ()
+    deps: ToolContext | None = None
 
 
 @dataclass(frozen=True, slots=True)

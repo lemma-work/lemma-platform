@@ -22,6 +22,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.infrastructure.harnesses.registry import build_harness_registry
 from app.modules.agent.services.run_session import RunSession
+from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
 from app.modules.agent.tests.e2e.turn_work_support import TurnPod, scalar, turn_pod
 from app.modules.test_support.query_counting import counted_queries, format_statements
 
@@ -66,14 +67,13 @@ async def _start_run(run_id: UUID, *, user_id: UUID, pod_id: UUID, agent_name: s
         configured_accounts=runner._resolve_configured_accounts,
     )
     assert session.agent is not None
-    return await runner.tool_assembler.assemble(
+    return await specs_for(
         agent=session.agent,
         conversation=session.conversation,
-        vision_mode=ctx.vision_mode,
+        ctx=ctx,
+        surface=ToolSurface.for_harness(resolved.harness_kind),
+        uow_factory=runner.tool_units,
         grants=session.grants,
-        host_execution=ctx.host_execution_mode,
-        harness_kind=resolved.harness_kind,
-        surface_platform=ctx.surface_platform,
     )
 
 

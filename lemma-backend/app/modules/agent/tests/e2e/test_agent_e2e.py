@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -42,17 +41,19 @@ from app.modules.agent.services.conversation_resume_return import (
 )
 from app.modules.agent.services.run_event_pump import RunOutcome
 from app.modules.agent.services.run_identity import RunIdentity
-from app.modules.agent.infrastructure.tools.approval.executor import ApprovalExecutor
+from app.modules.agent.services.approval_executor import ApprovalExecutor
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
-    FINAL_ANSWER_TOOL_NAME,
-    build_final_answer_toolset,
+from app.modules.agent.infrastructure.tools.final_answer.tools import (
+    final_answer_spec,
 )
 from app.modules.agent.infrastructure.agent_host.final_answer import (
     read_final_answer,
 )
-from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
-from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
+from app.modules.agent.domain.tools import AgentInputRequired
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
+    RequestApprovalArguments,
+)
+from app.modules.agent.infrastructure.tools.user_interaction.tools import (
     request_approval as request_approval_tool,
 )
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
@@ -1694,12 +1695,22 @@ class TestPodAgentLifecycle:
 
         # A later request_approval call with the EXACT same tool_name+args
         # auto-executes — no pause, no new pending approval.
-        repeat_ctx = SimpleNamespace(deps=live_deps, tool_call_id="repeat-call-1")
+        # It runs through the run's own tools, as a live run's context carries them.
+        class _RunTools:
+            async def call(self, name, arguments, ctx):
+                del ctx
+                executed_calls.append(
+                    {"tool_name": name, "args": dict(arguments or {})}
+                )
+                return {"stdout": "ok", "success": True}
+
+        live_deps = live_deps.model_copy(update={"tools": _RunTools()})
+        repeat_ctx = live_deps.model_copy(update={"tool_call_id": "repeat-call-1"})
         repeated = await request_approval_tool(
-            repeat_ctx,  # type: ignore[arg-type]
-            tool_name="exec_command",
-            args=approved_args,
-            title="Run echo again?",
+            repeat_ctx,
+            RequestApprovalArguments(
+                tool_name="exec_command", args=approved_args, title="Run echo again?"
+            ),
         )
         assert repeated.success is True
         assert repeated.executed is True
@@ -1716,13 +1727,15 @@ class TestPodAgentLifecycle:
         # A DIFFERENT command (not just a different label) must still pause —
         # exact match only, never a prefix/category match.
         different_args = {"cmd": "echo bye"}
-        different_ctx = SimpleNamespace(deps=live_deps, tool_call_id="repeat-call-2")
+        different_ctx = live_deps.model_copy(update={"tool_call_id": "repeat-call-2"})
         with pytest.raises(AgentInputRequired):
             await request_approval_tool(
-                different_ctx,  # type: ignore[arg-type]
-                tool_name="exec_command",
-                args=different_args,
-                title="Run something else?",
+                different_ctx,
+                RequestApprovalArguments(
+                    tool_name="exec_command",
+                    args=different_args,
+                    title="Run something else?",
+                ),
             )
         # Never ran — the new command genuinely needed a fresh decision.
         assert len(executed_calls) == 2
@@ -3147,14 +3160,14 @@ class TestAgentRuntimeConfigApis:
 class TestFinalAnswerToolset:
     """The Agent Host ``final_answer`` MCP tool, called directly.
 
-    ``build_final_answer_toolset`` backs the structured-output contract for
+    ``final_answer_spec`` backs the structured-output contract for
     remote (Agent Host) runs only -- the in-process LEMMA harness gets its
     final answer through pydantic-ai's ``output_type`` instead, a completely
     different mechanism covered elsewhere. Nothing drives this tool through a
     real Agent Host wire-protocol run in this suite, and standing one up just
     to reach one validation branch would be a lot of ACP scaffolding for what
     is fundamentally a schema-validation-and-persistence question. So this
-    calls the tool function the toolset actually builds -- the same object an
+    calls the function the spec runs -- the same one an
     MCP call would invoke -- against a real agent run row, exercising the real
     jsonschema validator and the real ``agent_runs.run_metadata`` write.
     """
@@ -3211,13 +3224,11 @@ class TestFinalAnswerToolset:
             instruction="Answer with the required schema.",
             output_schema=output_schema,
         )
-        ctx = SimpleNamespace(
-            deps=ToolContext(
-                user_id=user_id,
-                pod_id=UUID(pod_id),
-                conversation_id=conversation_id,
-                agent_run_id=run.id,
-            )
+        ctx = ToolContext(
+            user_id=user_id,
+            pod_id=UUID(pod_id),
+            conversation_id=conversation_id,
+            agent_run_id=run.id,
         )
 
         # A fresh toolset for every call, because that is what the MCP bridge
@@ -3225,10 +3236,8 @@ class TestFinalAnswerToolset:
         # used to live on the toolset, so under the bridge it was always one
         # and the cap never tripped; it belongs to the run.
         def _build_tool():
-            toolset = build_final_answer_toolset(
-                agent=domain_agent, uow_factory=uow_factory
-            )
-            return toolset.tools[FINAL_ANSWER_TOOL_NAME].function
+            spec = final_answer_spec(agent=domain_agent, uow_factory=uow_factory)
+            return lambda ctx, **arguments: spec.run(ctx, arguments)
 
         invalid_output = {"wrong_field": "nope"}
 

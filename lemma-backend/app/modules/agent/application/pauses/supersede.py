@@ -35,6 +35,7 @@ from app.modules.agent.infrastructure import repositories
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
+from app.modules.agent.domain.pausing_tools import PausingKind
 
 logger = get_logger(__name__)
 
@@ -178,9 +179,9 @@ class SupersedeStalePauses:
             return None
         tool_args = message.tool_args if isinstance(message.tool_args, dict) else {}
         decision_tool_name = (
-            "ask_user"
-            if tool_name == "ask_user"
-            else str(tool_args.get("tool_name") or "request_approval")
+            PausingKind.ASK_USER.value
+            if tool_name == PausingKind.ASK_USER
+            else str(tool_args.get("tool_name") or PausingKind.REQUEST_APPROVAL.value)
         )
         response: JsonObject = {SUPERSEDED_KEY: True}
         recorded = await self.approval_decisions.record_approval_decision(

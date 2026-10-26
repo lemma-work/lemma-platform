@@ -39,7 +39,7 @@ class Harness(Protocol):
         conversation: Conversation,
         messages: Sequence[Message],
         ctx: DepsT,
-        options: HarnessOptions[DepsT],
+        options: HarnessOptions,
         agent_run_id: UUID,
     ) -> AsyncIterator[AgentEvent]:
         """Execute one agent run and yield normalized events."""

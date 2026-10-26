@@ -64,9 +64,9 @@ async def test_platform_tool_factory_adds_native_whatsapp_tools_for_default_agen
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "phone-123")
     monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-123")
 
-    toolsets = await factory.build_toolsets(conversation=conversation)
+    tools = await factory.build_tools(conversation=conversation)
 
-    assert toolsets == []
+    assert tools == []
 
 
 async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypatch):
@@ -204,11 +204,11 @@ async def test_a_pooled_surfaces_tools_are_built_with_that_numbers_credentials(
     built: list[dict] = []
     monkeypatch.setattr(
         "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory._TOOLSET_BUILDERS",
-        {"WHATSAPP": lambda *, credentials: built.append(credentials) or object()},
+        {"WHATSAPP": lambda *, credentials: built.append(credentials) or ()},
     )
 
     factory = SurfacePlatformToolFactory(uow_factory=lambda: _PooledUoW())
-    await factory.build_toolsets(conversation=_conversation_for_surface(surface))
+    await factory.build_tools(conversation=_conversation_for_surface(surface))
 
     assert built, "no WhatsApp toolset was built at all"
     assert built[0].access_token.get_secret_value() == "the-pools-token", (
@@ -250,9 +250,6 @@ async def test_a_chat_surface_without_a_toolset_still_gets_send_when_allowed(
     monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram-token")
 
     factory = SurfacePlatformToolFactory(uow_factory=lambda: _FakeUoW())
-    toolsets = await factory.build_toolsets(
-        conversation=_conversation_for_surface(surface)
-    )
+    tools = await factory.build_tools(conversation=_conversation_for_surface(surface))
 
-    assert len(toolsets) == 1
-    assert list(toolsets[0].tools) == ["surface_send_message"]
+    assert [tool.name for tool in tools] == ["surface_send_message"]

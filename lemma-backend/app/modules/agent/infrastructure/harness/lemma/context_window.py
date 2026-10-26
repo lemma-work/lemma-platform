@@ -28,7 +28,9 @@ from pydantic_ai.messages import ModelRequest
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 
-from app.modules.agent.infrastructure.pydantic_ai_compat import ModelRequestContext
+from app.modules.agent.infrastructure.providers.pydantic_ai_compat import (
+    ModelRequestContext,
+)
 from app.modules.agent.infrastructure.providers.tokens import (
     MessageTokenCounter,
     count_text_tokens,

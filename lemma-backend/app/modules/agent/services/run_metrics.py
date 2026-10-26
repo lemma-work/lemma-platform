@@ -18,6 +18,7 @@ from typing import Literal
 from opentelemetry import metrics
 from opentelemetry.metrics import Meter
 
+from app.modules.agent.domain.tools import ToolKind
 from app.modules.agent.domain.value_objects import ConversationStatus
 from app.core.infrastructure.db.transient_errors import is_transient_database_error
 from app.core.infrastructure.work import LeaseLost
@@ -26,8 +27,6 @@ from app.core.infrastructure.work import LeaseLost
 #: ended (a deploy, a lost lease): it is resumed by another worker, which
 #: counts it again when it does end, so it is not a failure.
 RunOutcomeLabel = Literal["completed", "failed", "cancelled", "waiting", "interrupted"]
-#: What a tool call reached. ``builtin`` is everything Lemma ships in-process.
-ToolKind = Literal["connector", "function", "agent", "sandbox", "builtin"]
 #: How a tool call ended, in the vocabulary its span already uses.
 ToolOutcome = Literal["ok", "error", "cancelled", "control_flow"]
 

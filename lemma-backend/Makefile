@@ -361,18 +361,18 @@ format-check:
 # Standard type checking accepts absent annotations. Keep accounting boundaries
 # and their test doubles explicit so deleting a type cannot make this gate pass.
 AGENT_HARNESS_TYPED_PATHS := \
-	app/modules/agent/capabilities/assembler.py \
-	app/modules/agent/capabilities/deferred_hint.py \
-	app/modules/agent/capabilities/instructed_toolset.py \
-	app/modules/agent/capabilities/todo.py \
 	app/modules/agent/domain/ports.py \
+	app/modules/agent/domain/prompt/deferred_tools.py \
+	app/modules/agent/domain/tools.py \
 	app/modules/agent/domain/value_objects.py \
 	app/modules/agent/infrastructure/harnesses/agent_host/dispatch.py \
 	app/modules/agent/infrastructure/harnesses/agent_host/harness.py \
 	app/modules/agent/infrastructure/harnesses/agent_host/run_config.py \
+	app/modules/agent/infrastructure/harness/lemma/capabilities.py \
 	app/modules/agent/infrastructure/harness/lemma/history.py \
 	app/modules/agent/infrastructure/harness/lemma/harness.py \
 	app/modules/agent/infrastructure/harness/lemma/node_loop.py \
+	app/modules/agent/infrastructure/harness/lemma/toolset_adapter.py \
 	app/modules/agent/infrastructure/harnesses/remote_payload.py \
 	app/modules/agent/services/agent_runner_service.py \
 	app/modules/agent/application/background/title.py \
@@ -384,9 +384,10 @@ AGENT_HARNESS_TYPED_PATHS := \
 	app/modules/agent/services/runtime_resolution.py \
 	app/modules/agent/infrastructure/providers/summarization.py \
 	app/modules/agent/services/vision_service.py \
-	app/modules/agent/infrastructure/tools/graceful_toolset.py \
-	app/modules/agent/infrastructure/tools/registry.py \
-	app/modules/agent/infrastructure/tools/tool_assembler.py \
+	app/modules/agent/infrastructure/mcp/toolspec_adapter.py \
+	app/modules/agent/infrastructure/tools/todo.py \
+	app/modules/agent/services/tool_catalog.py \
+	app/modules/agent/services/tool_runtime.py \
 	app/modules/agent_surfaces/contracts/egress.py \
 	app/modules/agent_surfaces/infrastructure/adapters/platform_tool_factory.py
 

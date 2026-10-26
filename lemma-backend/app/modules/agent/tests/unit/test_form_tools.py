@@ -9,7 +9,7 @@ import pytest
 
 from app.modules.agent.infrastructure.tools.form import (
     FillFormRequest,
-    build_form_toolset,
+    form_specs,
 )
 from app.modules.datastore.contracts.public_rows import (
     OpenTable,
@@ -44,14 +44,14 @@ def _tool(tables: dict[str, OpenTable]):
     async def list_tables(*, pod_id):
         return list(tables)
 
-    toolset = build_form_toolset(
+    [spec] = form_specs(
         uow_factory=None, read_table=read_table, list_tables=list_tables
     )
-    return toolset.tools["fill_form"].function
+    return spec.run
 
 
 def _ctx():
-    return SimpleNamespace(deps=SimpleNamespace(pod_id=POD))
+    return SimpleNamespace(pod_id=POD)
 
 
 async def test_only_open_columns_with_fitting_values_are_filled():

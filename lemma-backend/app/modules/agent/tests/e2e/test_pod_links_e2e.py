@@ -9,7 +9,6 @@ nothing else of Billing's -- not the table it kept, and nothing it could write.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -60,7 +59,7 @@ from app.modules.agent.infrastructure.tools.pod.models import (
     PodTablesRequest,
     PodWriteRecordRequest,
 )
-from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.pod.tools import (
     pod_get_records,
     pod_tables,
     pod_write_record,
@@ -106,14 +105,12 @@ async def _connect(client, *, billing: str, support: str, shares=None):
 
 def _as_support_in_billing(*, user_id: UUID, org_id: UUID, billing: str, support: str):
     """The deps a run in Billing answering Support over the link carries."""
-    return SimpleNamespace(
-        deps=ToolContext(
-            user_id=user_id,
-            org_id=org_id,
-            pod_id=UUID(billing),
-            conversation_id=uuid4(),
-            audience=Audience.pod(UUID(support)),
-        )
+    return ToolContext(
+        user_id=user_id,
+        org_id=org_id,
+        pod_id=UUID(billing),
+        conversation_id=uuid4(),
+        audience=Audience.pod(UUID(support)),
     )
 
 

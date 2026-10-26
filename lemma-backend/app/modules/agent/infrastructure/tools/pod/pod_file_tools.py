@@ -14,13 +14,13 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from pydantic_ai import BinaryContent, ToolReturn
-from pydantic_ai.tools import RunContext
 
 from app.modules.datastore.contracts.agent_tools import (
     build_file_app_url,
     build_object_url,
 )
+from app.modules.agent.domain.tools import ImagePart
+from app.modules.agent.domain.tools import WithImages
 from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.context_brief.memory import invalidate_memory_brief
@@ -124,7 +124,7 @@ async def _overwrite(
 
 
 async def pod_write_file(
-    ctx: RunContext[ToolContext],
+    ctx: ToolContext,
     request: PodWriteFileRequest,
 ) -> JsonObject:
     """Write text content to a pod file, creating or overwriting it.
@@ -136,7 +136,7 @@ async def pod_write_file(
     """
 
     async def op(services: PodServices) -> JsonObject:
-        resolved_path = resolve_pod_path(ctx.deps, request.path)
+        resolved_path = resolve_pod_path(ctx, request.path)
         directory_path, name = split_pod_path(resolved_path)
         content_bytes = request.content.encode("utf-8")
         try:
@@ -155,7 +155,7 @@ async def pod_write_file(
                 "created": True,
                 **await _after_memory_write(
                     services,
-                    agent_name=ctx.deps.agent_name,
+                    agent_name=ctx.agent_name,
                     stored_path=entity.path,
                     content_length=len(request.content),
                 ),
@@ -180,14 +180,14 @@ async def pod_write_file(
                 "created": False,
                 **await _after_memory_write(
                     services,
-                    agent_name=ctx.deps.agent_name,
+                    agent_name=ctx.agent_name,
                     stored_path=updated.path,
                     content_length=len(request.content),
                 ),
             }
 
     return await run_pod_tool(
-        ctx.deps, tool_name="pod_write_file", args=request.model_dump(), op=op
+        ctx, tool_name="pod_write_file", args=request.model_dump(), op=op
     )
 
 
@@ -218,7 +218,7 @@ def _apply_edits(text: str, edits: list[FileEdit]) -> tuple[str, int] | str:
 
 
 async def pod_edit_file(
-    ctx: RunContext[ToolContext],
+    ctx: ToolContext,
     request: PodEditFileRequest,
 ) -> JsonObject:
     """Change part of an existing pod text file by exact-text replacement.
@@ -230,7 +230,7 @@ async def pod_edit_file(
     """
 
     async def op(services: PodServices) -> JsonObject:
-        resolved_path = resolve_pod_path(ctx.deps, request.path)
+        resolved_path = resolve_pod_path(ctx, request.path)
         # A doc open in a browser is saved while the agent works on it, so the
         # text read here can be stale by the time it is written back. Before
         # writing, the stored checksum is compared with the one read; if the
@@ -279,19 +279,19 @@ async def pod_edit_file(
             "replacements": replaced,
             **await _after_memory_write(
                 services,
-                agent_name=ctx.deps.agent_name,
+                agent_name=ctx.agent_name,
                 stored_path=updated.path,
                 content_length=len(new_text),
             ),
         }
 
     return await run_pod_tool(
-        ctx.deps, tool_name="pod_edit_file", args=request.model_dump(), op=op
+        ctx, tool_name="pod_edit_file", args=request.model_dump(), op=op
     )
 
 
 async def pod_list_files(
-    ctx: RunContext[ToolContext],
+    ctx: ToolContext,
     request: PodListFilesRequest,
 ) -> JsonObject:
     """List pod files under a path.
@@ -303,7 +303,7 @@ async def pod_list_files(
     """
 
     async def op(services: PodServices) -> JsonObject:
-        resolved_path = resolve_pod_path(ctx.deps, request.path)
+        resolved_path = resolve_pod_path(ctx, request.path)
         if request.recursive:
             tree = await services.file.get_directory_tree(
                 services.ctx.pod_id,
@@ -328,7 +328,7 @@ async def pod_list_files(
         }
 
     return await run_pod_tool(
-        ctx.deps,
+        ctx,
         tool_name="pod_list_files",
         args=request.model_dump(),
         op=op,
@@ -336,7 +336,7 @@ async def pod_list_files(
 
 
 async def pod_read_file(
-    ctx: RunContext[ToolContext],
+    ctx: ToolContext,
     request: PodReadFileRequest,
 ) -> JsonObject:
     """Read a pod file's text.
@@ -351,18 +351,18 @@ async def pod_read_file(
 
     async def op(services: PodServices) -> JsonObject:
         return await read_file_text(
-            services, request, resolve_pod_path(ctx.deps, request.path)
+            services, request, resolve_pod_path(ctx, request.path)
         )
 
     return await run_pod_tool(
-        ctx.deps, tool_name="pod_read_file", args=request.model_dump(), op=op
+        ctx, tool_name="pod_read_file", args=request.model_dump(), op=op
     )
 
 
 async def pod_view_document_pages(
-    ctx: RunContext[ToolContext],
+    ctx: ToolContext,
     request: ViewDocumentPagesRequest,
-) -> "JsonObject | ToolReturn":
+) -> JsonObject | WithImages:
     """Render PDF pages as images so you can *see* them (layout, tables, figures).
 
     Pages are 1-based. Only PDFs can be rendered visually; for other document
@@ -373,7 +373,7 @@ async def pod_view_document_pages(
     model reads them and returns a description, so this tool works either way.
     """
 
-    async def op(services: PodServices) -> "JsonObject | ToolReturn":
+    async def op(services: PodServices) -> JsonObject | WithImages:
         entity, pages = await services.file.render_document_page_images(
             services.ctx.pod_id,
             request.path,
@@ -401,11 +401,11 @@ async def pod_view_document_pages(
                 )
                 page_refs.append({"page_number": page.page_number, "url": url})
 
-        # This tool used to hand BinaryContent to whatever model was running.
+        # This tool used to hand image content to whatever model was running.
         # `view_image` was withheld from text-only models for exactly that
         # reason; this one was not, so a text-only model asked for a PDF page
         # and the provider rejected the entire request.
-        if getattr(ctx.deps, "vision_mode", None) is not AgentVisionMode.DIRECT:
+        if getattr(ctx, "vision_mode", None) is not AgentVisionMode.DIRECT:
             # A vision model reads the pages, which is a model round trip on a
             # document -- seconds, and the slowest thing this tool does. Every
             # platform read is finished by now and nothing below touches that
@@ -416,29 +416,29 @@ async def pod_view_document_pages(
             # held, 47.1s of it idle, 24ms of querying, one statement.
             async with connection_released(services.uow.session):
                 return await describe_document_pages(
-                    ctx.deps,
+                    ctx,
                     path=entity.path,
                     pages=pages,
                     page_refs=page_refs,
                     instructions=request.instructions,
                 )
 
-        return ToolReturn(
-            return_value={
+        return WithImages(
+            {
                 "success": True,
                 "path": entity.path,
                 "pages": page_refs,
                 "rendered_pages": [p.page_number for p in pages if not p.cached],
                 "cached_pages": [p.page_number for p in pages if p.cached],
             },
-            content=[
-                BinaryContent(data=page.jpeg_bytes, media_type="image/jpeg")
+            tuple(
+                ImagePart(data=page.jpeg_bytes, media_type="image/jpeg")
                 for page in pages
-            ],
+            ),
         )
 
     return await run_pod_tool(
-        ctx.deps,
+        ctx,
         tool_name="pod_view_document_pages",
         args=request.model_dump(),
         op=op,
@@ -446,7 +446,7 @@ async def pod_view_document_pages(
 
 
 async def pod_get_file_url(
-    ctx: RunContext[ToolContext],
+    ctx: ToolContext,
     request: GetFileUrlRequest,
 ) -> JsonObject:
     """Get a URL for a pod file, to share a link or embed an image.
@@ -494,7 +494,7 @@ async def pod_get_file_url(
         }
 
     return await run_pod_tool(
-        ctx.deps,
+        ctx,
         tool_name="pod_get_file_url",
         args=request.model_dump(),
         op=op,
@@ -502,7 +502,7 @@ async def pod_get_file_url(
 
 
 async def pod_search_files(
-    ctx: RunContext[ToolContext],
+    ctx: ToolContext,
     request: SearchFilesRequest,
 ) -> JsonObject:
     """Semantic/keyword search across indexed pod files."""
@@ -511,7 +511,7 @@ async def pod_search_files(
         return await search_files(services, request)
 
     return await run_pod_tool(
-        ctx.deps,
+        ctx,
         tool_name="pod_search_files",
         args=request.model_dump(),
         op=op,

@@ -28,25 +28,22 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.infrastructure.tools.browser.pydantic_adapter import (
-    BROWSER_TOOLS,
-    browser_toolset,
-)
+from app.modules.agent.infrastructure.tools.browser.tools import SPECS
 
 pytestmark = pytest.mark.unit
 
 
 def test_signing_in_is_the_only_typed_browser_tool() -> None:
     """Anything else would be a second way to do what the command line does."""
-    assert [tool.__name__ for tool in BROWSER_TOOLS] == ["browser_sign_in"]
-    assert set(browser_toolset.tools) == {"browser_sign_in"}
+    assert [spec.name for spec in SPECS] == ["browser_sign_in"]
 
 
 def test_the_sign_in_tool_still_says_it_never_wants_a_password() -> None:
     """The docstring is the prompt. It is the only thing standing between a
     model and a login form it thinks it should fill in, so it is asserted
     rather than left to survive an edit by luck."""
-    doc = browser_toolset.tools["browser_sign_in"].function.__doc__ or ""
+    [spec] = SPECS
+    doc = spec.description
     assert "without ever seeing or asking for a password" in doc
     assert "never put one in a command" in doc
 

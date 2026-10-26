@@ -100,11 +100,11 @@ PRODUCERS: dict[str, Producer] = {
         f"{_SURFACES}/test_channel_deliveries_e2e.py"
         "::test_a_line_is_in_their_channel_and_its_push_says_why_it_went_no_further",
     ),
-    "agent/infrastructure/tools/messaging/pydantic_adapter.py:_post_to_member": Producer(
+    "agent/infrastructure/tools/messaging/tools.py:_post_to_member": Producer(
         Sends.PUSH,
         f"{_PRODUCERS_E2E}::test_an_agent_writing_to_a_member_plans_their_push",
     ),
-    "agent/infrastructure/tools/messaging/pydantic_adapter.py:_post_in_channel": Producer(
+    "agent/infrastructure/tools/messaging/tools.py:_post_in_channel": Producer(
         Sends.PUSH,
         f"{_PRODUCERS_E2E}"
         "::test_an_agent_writing_in_its_members_channel_plans_their_push",

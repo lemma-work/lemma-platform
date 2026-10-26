@@ -23,8 +23,8 @@ from app.modules.agent.infrastructure.tools.browser.sign_in import (
     SIGN_IN_TOOL_NAME,
     sign_in_internal,
 )
-from app.modules.agent.infrastructure.tools.tool_errors import (
-    AgentInputRequired,
+from app.modules.agent.domain.tools import AgentInputRequired
+from app.modules.agent.infrastructure.providers.control_flow import (
     is_control_flow_exception,
 )
 

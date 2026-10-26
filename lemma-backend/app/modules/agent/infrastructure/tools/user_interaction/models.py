@@ -13,6 +13,7 @@ from app.modules.agent.domain.value_objects import (
     JsonObject,
     JsonValue,
 )
+from app.modules.agent.domain.tools import FlatArguments
 from app.modules.agent.infrastructure.tools.responses import BaseToolResponse
 from app.modules.datastore.contracts import RecordFilter
 
@@ -317,6 +318,31 @@ class DisplayResourceResponse(BaseToolResponse):
     expires_at: datetime | None = Field(
         default=None,
         description="ISO timestamp when the app access URL expires.",
+    )
+
+
+class RequestApprovalArguments(FlatArguments):
+    tool_name: str = Field(
+        description='Tool to run on approval, e.g. "exec_command". Must be one you have.'
+    )
+    args: JsonObject = Field(
+        description=(
+            "Complete arguments for that tool, e.g. "
+            '{"cmd": "lemma records delete orders --id 42"}.'
+        )
+    )
+    title: str = Field(description="Short user-facing title for the approval card.")
+    reason: str | None = Field(default=None, description="Why this needs approval.")
+    payload: JsonObject | None = Field(
+        default=None, description="Extra structured detail for rendering or audit."
+    )
+    permission_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            "Copy `approval.permission_ids` from the failed tool result, to\n"
+            "show on the card. What an approval allows comes from the refusal the\n"
+            "server recorded, not from this."
+        ),
     )
 
 

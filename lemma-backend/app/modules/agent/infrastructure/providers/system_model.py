@@ -1,0 +1,99 @@
+"""Running one thing on the system model, from outside `agent`.
+
+An operation, not the four names behind it. Two callers needed the system model
+-- `schedule`'s event filter and `pod_bundle`'s README polish -- and each
+assembled it itself: resolve the default system profile, take its public
+snapshot, take its credentials, take its harness model name, hand all three to
+the model factory, then remember to run its own usage limits through
+`usage_limits_for`. Five lines and four names, duplicated, in two modules that
+have no business knowing a model is a thing built out of a runtime profile. That
+knowledge is what `app/composition/{schedule_filter,pod_bundle_readme}.py` were:
+moving `usage_limits_for` between two agent service modules broke a README
+generator. `AgentRuntimeProfileService`, `default_system_runtime` and
+`require_pydantic_ai_model_from_runtime_profile` stay unpublished; this is the
+call that replaces them.
+
+The ceiling is the caller's, which is why it is an argument rather than a
+constant here: the filter and the polish budget different amounts. What comes
+back is not necessarily what went in. A model that cannot pre-count tokens
+enforces a cap only *after* the provider has been called and billed, so
+`usage_limits_for` drops `count_tokens_before_request` rather than raising --
+and `usage_limits` below is what this model will genuinely honour. A caller
+whose input has no upper size still has to bound it itself; `_MAX_EVENT_CHARS`
+in schedule's filter is that bound, and it exists because of exactly this.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from uuid import UUID, uuid4
+
+from pydantic_ai import UsageLimits
+from pydantic_ai.models import Model
+
+from app.modules.agent.infrastructure.providers.model_factory import (
+    require_pydantic_ai_model_from_runtime_profile,
+    usage_limits_for,
+)
+from app.modules.agent.services.runtime_resolution import (
+    resolve_system_or_workspace_runtime,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SystemModelRuntime:
+    """One resolved system model, plus the two things a run needs beside it."""
+
+    #: Hand this to `pydantic_ai.Agent`.
+    model: Model
+    #: The profile snapshot `usage` reserves and records a run against.
+    runtime_profile: dict[str, object | None]
+    #: The caller's ceiling, reduced to what this model can actually enforce.
+    usage_limits: UsageLimits
+
+
+async def resolve_system_runtime(
+    *,
+    usage_limits: UsageLimits,
+    user_id: UUID | None = None,
+    organization_id: UUID | None = None,
+    pod_id: UUID | None = None,
+    model_name: str | None = None,
+) -> SystemModelRuntime:
+    """The system model, ready to run under `usage_limits`.
+
+    `user_id` and `organization_id` scope the profile lookup. A caller running
+    on nobody's behalf may omit them -- the default system profile is
+    code-defined and belongs to no user -- and gets the same profile a
+    per-user resolution would find when the workspace has not overridden it.
+
+    A deployment without a system model falls back to the workspace's own (see
+    `runtime_resolution`), which needs the organization -- and the pod,
+    when there is one, so its chosen default wins. Without an organization that
+    case raises `model_not_configured`, as it always did.
+
+    `model_name` asks for one model of the profile by public name, for a caller
+    with its own setting (a fast model for decisions, say). A name the profile
+    does not know falls back to its default rather than failing, so read the
+    model that ran off `runtime_profile`, not off what was asked for.
+    """
+    resolved = await resolve_system_or_workspace_runtime(
+        organization_id=organization_id,
+        user_id=user_id or uuid4(),
+        pod_id=pod_id,
+        model_name=model_name,
+    )
+    runtime_profile = resolved.runtime_snapshot().as_payload()
+    model = require_pydantic_ai_model_from_runtime_profile(
+        runtime_profile=runtime_profile,
+        runtime_credentials=resolved.credentials or {},
+        fallback_model_name=resolved.model_name_for_harness,
+    )
+    return SystemModelRuntime(
+        model=model,
+        runtime_profile=runtime_profile,
+        usage_limits=usage_limits_for(model, usage_limits),
+    )
+
+
+__all__ = ["SystemModelRuntime", "resolve_system_runtime"]

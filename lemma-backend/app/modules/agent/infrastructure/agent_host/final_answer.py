@@ -6,8 +6,9 @@ nothing that reliably says "this was ``lemma_final_answer``". Recognising it fro
 the stream is therefore a heuristic that varies by adapter.
 
 So the tool records its own result here, and the run reads it back when it goes
-terminal. The stream path stays as the fast path (it produces the answer without
-a database round trip when the adapter does echo enough), but this is the
+terminal (``harnesses/agent_host/harness_events.adopt_recorded_final_answer``).
+The stream path stays as the fast path (it produces the answer without a
+database round trip when the adapter does echo enough), but this is the
 authority: last write wins, and a run that reaches terminal adopts whatever is
 stored over whatever was inferred.
 
@@ -17,23 +18,15 @@ the same reason ``agent_host_session_memory`` is shaped this way.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
-from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.models import AgentRunModel
-
-if TYPE_CHECKING:
-    from app.modules.agent.infrastructure.harnesses.agent_host.events import (
-        AgentHostEventNormalizer,
-    )
 
 logger = get_logger(__name__)
 
@@ -90,35 +83,8 @@ async def read_final_answer(
     return stored if isinstance(stored, dict) else None
 
 
-async def adopt_recorded_final_answer(
-    uow_factory: UnitOfWorkFactory,
-    normalizer: "AgentHostEventNormalizer",
-    *,
-    agent_run_id: UUID,
-) -> None:
-    """Let a run prefer the answer the tool recorded over what it inferred.
-
-    Call this as a run goes terminal. Deliberately *not* on the hard-failure
-    paths (stream unavailable, deadline): those abandon the run, and reporting a
-    COMPLETED structured answer for a run we gave up on would be a lie.
-    """
-    if not normalizer.structured_expected:
-        return
-    try:
-        record = await read_final_answer(uow_factory, agent_run_id=agent_run_id)
-    except SQLAlchemyError as exc:
-        raise_if_database_unavailable(exc)
-        # The stream-inferred answer, if any, still stands.
-        logger.warning(
-            "agent.agent_host.final_answer_read_failed.degraded", exc_info=True
-        )
-        return
-    normalizer.adopt_final_answer(record)
-
-
 __all__ = [
     "FINAL_ANSWER_METADATA_KEY",
-    "adopt_recorded_final_answer",
     "read_final_answer",
     "store_final_answer",
 ]

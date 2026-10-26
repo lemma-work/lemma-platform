@@ -17,12 +17,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.domain.agent_memory_paths import AgentMemoryPaths
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import (
+    ToolAccess,
+    ToolGroup,
+    ToolPolicy,
+    ToolSpec,
+    tool,
+)
 from app.modules.agent.infrastructure.tools.pod import pod_file_tools
 from app.modules.agent.infrastructure.tools.pod.models import (
     PodReadFileRequest,
@@ -88,7 +93,7 @@ def _refused(path: str | None, reason: str) -> JsonObject:
     return {"success": False, "path": path, "error": reason}
 
 
-def memory_pass_toolset(scope: MemoryScope) -> FunctionToolset[ToolContext]:
+def memory_pass_specs(scope: MemoryScope) -> tuple[ToolSpec, ...]:
     """``pod_search_files``, ``pod_read_file`` and ``pod_write_file``, held to ``scope``.
 
     The names the memory contract teaches, so the rules the pass is given
@@ -96,7 +101,7 @@ def memory_pass_toolset(scope: MemoryScope) -> FunctionToolset[ToolContext]:
     """
 
     async def pod_search_files(
-        ctx: RunContext[ToolContext], request: SearchFilesRequest
+        ctx: ToolContext, request: SearchFilesRequest
     ) -> JsonObject:
         """Search memory files; ``scope_path`` must be under /memory or /me."""
         refused = scope.refusal(request.scope_path, write=False)
@@ -105,7 +110,7 @@ def memory_pass_toolset(scope: MemoryScope) -> FunctionToolset[ToolContext]:
         return await pod_file_tools.pod_search_files(ctx, request)
 
     async def pod_read_file(
-        ctx: RunContext[ToolContext], request: PodReadFileRequest
+        ctx: ToolContext, request: PodReadFileRequest
     ) -> JsonObject:
         """Read a memory file's text."""
         refused = scope.refusal(request.path, write=False)
@@ -114,7 +119,7 @@ def memory_pass_toolset(scope: MemoryScope) -> FunctionToolset[ToolContext]:
         return await pod_file_tools.pod_read_file(ctx, request)
 
     async def pod_write_file(
-        ctx: RunContext[ToolContext], request: PodWriteFileRequest
+        ctx: ToolContext, request: PodWriteFileRequest
     ) -> JsonObject:
         """Write a memory file, creating or replacing it whole."""
         refused = scope.refusal(request.path, write=True)
@@ -122,9 +127,12 @@ def memory_pass_toolset(scope: MemoryScope) -> FunctionToolset[ToolContext]:
             return refused
         return await pod_file_tools.pod_write_file(ctx, request)
 
-    return FunctionToolset[ToolContext](
-        tools=[pod_search_files, pod_read_file, pod_write_file]
+    reads = ToolPolicy(access=ToolAccess.READ)
+    return (
+        tool(pod_search_files, ToolGroup.MEMORY_PASS, reads),
+        tool(pod_read_file, ToolGroup.MEMORY_PASS, reads),
+        tool(pod_write_file, ToolGroup.MEMORY_PASS),
     )
 
 
-__all__ = ["MemoryScope", "memory_pass_toolset"]
+__all__ = ["MemoryScope", "memory_pass_specs"]

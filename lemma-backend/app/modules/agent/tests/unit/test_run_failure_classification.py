@@ -50,7 +50,7 @@ from app.modules.agent.infrastructure.harness.lemma.run_failure_classification i
 from app.modules.agent.infrastructure.harness.lemma.retry import (
     HarnessDriverCancelled,
 )
-from app.modules.agent.infrastructure.transport_errors import (
+from app.modules.agent.infrastructure.providers.transport_errors import (
     ModelResponseBudgetExceeded,
 )
 from app.modules.agent.services.run_finalizer import (

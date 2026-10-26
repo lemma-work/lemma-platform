@@ -16,7 +16,7 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TeamsSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms.teams.tools import (
-    build_teams_surface_toolset,
+    teams_surface_tools,
 )
 
 
@@ -106,6 +106,10 @@ class _FakeSession:
         raise AssertionError(f"Unexpected {method} request to {url}")
 
 
+def _by_name(specs):
+    return {spec.name: spec for spec in specs}
+
+
 def _session_factory(planned: list[_PlannedResponse], calls: list[dict]):
     # Accepts whatever the real constructor is given — production builds its
     # sessions through ``new_aiohttp_session``, which always passes a timeout.
@@ -117,26 +121,28 @@ def _session_factory(planned: list[_PlannedResponse], calls: list[dict]):
 
 
 def test_teams_toolset_generates_tool_descriptions():
-    toolset = build_teams_surface_toolset(credentials={})
+    toolset = _by_name(teams_surface_tools(credentials={}))
 
-    recent_messages_tool = toolset.tools["teams_get_recent_channel_messages"]
+    recent_messages_tool = toolset["teams_get_recent_channel_messages"]
 
     assert recent_messages_tool.description
-    assert recent_messages_tool.function_schema.description
+    assert recent_messages_tool.description
     # File send/download tools were removed; files flow via auto-ingest +
     # display_resource now.
-    assert "teams_send_file" not in toolset.tools
-    assert "teams_download_file" not in toolset.tools
+    assert "teams_send_file" not in toolset
+    assert "teams_download_file" not in toolset
 
 
 @pytest.mark.asyncio
 async def test_teams_get_recent_channel_messages_resolves_graph_team_id(
     monkeypatch,
 ):
-    toolset = build_teams_surface_toolset(
-        credentials={"user_data": {"tenant_id": "tenant-123"}, "raw_response": {}}
+    toolset = _by_name(
+        teams_surface_tools(
+            credentials={"user_data": {"tenant_id": "tenant-123"}, "raw_response": {}}
+        )
     )
-    tool = toolset.tools["teams_get_recent_channel_messages"]
+    tool = toolset["teams_get_recent_channel_messages"]
     calls: list[dict] = []
     planned = [
         _PlannedResponse(
@@ -182,23 +188,21 @@ async def test_teams_get_recent_channel_messages_resolves_graph_team_id(
         _session_factory(planned, calls),
     )
 
-    ctx = SimpleNamespace(
-        deps=ToolContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            surface_platform="TEAMS",
-            external_channel_id="19:channel@thread.tacv2",
-            external_thread_id="thread-1",
-            surface_metadata=TeamsSurfaceEventMetadata(
-                team_id="19:team@thread.tacv2",
-                service_url="https://smba.trafficmanager.net/teams",
-            ),
-        )
+    ctx = ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        surface_platform="TEAMS",
+        external_channel_id="19:channel@thread.tacv2",
+        external_thread_id="thread-1",
+        surface_metadata=TeamsSurfaceEventMetadata(
+            team_id="19:team@thread.tacv2",
+            service_url="https://smba.trafficmanager.net/teams",
+        ),
     )
     request = SimpleNamespace(limit=10, scope="channel")
 
-    response = await tool.function(ctx, request)
+    response = await tool.run(ctx, request)
 
     assert response.success is True
     assert [message.text for message in response.messages] == ["Earlier message"]
@@ -292,10 +296,12 @@ async def test_teams_fetch_recent_context_maps_graph_messages(monkeypatch):
 async def test_teams_get_recent_thread_messages_include_files(
     monkeypatch,
 ):
-    toolset = build_teams_surface_toolset(
-        credentials={"user_data": {"tenant_id": "tenant-123"}, "raw_response": {}}
+    toolset = _by_name(
+        teams_surface_tools(
+            credentials={"user_data": {"tenant_id": "tenant-123"}, "raw_response": {}}
+        )
     )
-    tool = toolset.tools["teams_get_recent_channel_messages"]
+    tool = toolset["teams_get_recent_channel_messages"]
     calls: list[dict] = []
     planned = [
         _PlannedResponse(
@@ -344,23 +350,21 @@ async def test_teams_get_recent_thread_messages_include_files(
         _session_factory(planned, calls),
     )
 
-    ctx = SimpleNamespace(
-        deps=ToolContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            surface_platform="TEAMS",
-            external_channel_id="19:channel@thread.tacv2",
-            external_thread_id="thread-1",
-            surface_metadata=TeamsSurfaceEventMetadata(
-                team_id="19:team@thread.tacv2",
-                service_url="https://smba.trafficmanager.net/teams",
-            ),
-        )
+    ctx = ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        surface_platform="TEAMS",
+        external_channel_id="19:channel@thread.tacv2",
+        external_thread_id="thread-1",
+        surface_metadata=TeamsSurfaceEventMetadata(
+            team_id="19:team@thread.tacv2",
+            service_url="https://smba.trafficmanager.net/teams",
+        ),
     )
     request = SimpleNamespace(limit=10, scope="thread")
 
-    response = await tool.function(ctx, request)
+    response = await tool.run(ctx, request)
 
     assert response.success is True
     assert [message.text for message in response.messages] == [

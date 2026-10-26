@@ -2,20 +2,20 @@
 
 A toolset is a bundle, and trusting one is how ``web_fetch`` -- which opens the
 conversation owner's sandbox -- reached strangers: it rides in WEB_SEARCH beside
-``web_search``. These tests hold the line by name:
+``web_search``. So the question is asked of each tool, on its policy
+(``ToolPolicy.outsider_allowed``), and these tests hold the line by name:
 
-* the ratchet: every tool in every toolset a stranger's run keeps is classified,
-  allowed or withheld, so a new one fails here until somebody decides;
-* the assembled run: what the model is actually offered is a subset of the
-  allow-list, ``web_fetch`` and the write tools nowhere in it;
-* the gate and the dispatcher refuse an off-list tool however it is asked for;
+* the decision record: exactly these tools are allowed, ``web_fetch`` and the
+  writes nowhere among them;
+* the assembled run: what the model is actually offered is that set;
+* the runtime refuses an off-list tool however it is asked for;
 * a workspace -- the owner's sandbox, host or files -- is never opened for one.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic_ai import Agent
@@ -23,53 +23,67 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.profiles import ModelProfile
 
-from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.capabilities.outsider_gate import (
-    WITHHELD_MESSAGE,
-    OutsiderToolGateCapability,
-)
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.outsiders import (
     OUTSIDER_TOOLSETS,
+    Audience,
     OutsiderRunRefused,
     refuse_owner_workspace,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.infrastructure.tools import registry
-from app.modules.agent.infrastructure.tools.contact import build_contact_toolset
-from app.modules.agent.infrastructure.tools.form import build_form_toolset
-from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.dispatcher import (
-    AgentToolDispatcher,
-    UnknownToolError,
+from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+    harness_capabilities,
 )
-from app.modules.agent.infrastructure.tools.outsider_tools import (
-    OUTSIDER_TOOL_NAMES,
-    OUTSIDER_TOOLS_WITHHELD,
-)
-from app.modules.agent.infrastructure.tools.web.pydantic_adapter import (
-    web_search_toolset,
-)
-from app.modules.agent.infrastructure.tools.workspace_cli.pydantic_adapter import (
-    workspace_cli_toolset,
+from app.modules.agent.infrastructure.tools.contact import contact_specs
+from app.modules.agent.infrastructure.tools.form import form_specs
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    tools as workspace_cli,
 )
 from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     get_workspace_session,
 )
+from app.modules.agent.services.tool_catalog import (
+    STATIC_SPECS,
+    ToolSurface,
+    specs_for,
+)
+from app.modules.agent.services.tool_runtime import WITHHELD_MESSAGE, ToolRuntime
 
 pytestmark = pytest.mark.unit
 
+#: The decision record. Each goes through the anonymous authorizer, reaches no
+#: sandbox, and acts as nobody: the pod's reads (what it made Public), a search
+#: API call, flagging the channel for a member, a contact's own rows and
+#: functions, and filling a form on a web visitor's own page.
+ALLOWED = {
+    "pod_tables",
+    "pod_get_records",
+    "pod_query",
+    "pod_list_files",
+    "pod_read_file",
+    "pod_view_document_pages",
+    "pod_get_file_url",
+    "pod_search_files",
+    "web_search",
+    "ask_a_person",
+    "contact_records",
+    "contact_function",
+    "fill_form",
+}
 
-def _kept_tool_names() -> set[str]:
-    names: set[str] = set()
-    for toolset in OUTSIDER_TOOLSETS:
-        static = registry._TOOLSET_BY_NAME.get(toolset)
-        if static is not None:
-            names |= set(static.tools)
-    # Built per run rather than registered: on a contact's run, and on a web
-    # visitor's run.
-    names |= set(build_contact_toolset(uow_factory=lambda: None).tools)
-    names |= set(build_form_toolset(uow_factory=lambda: None).tools)
-    return names
+
+def _uow_factory() -> None:
+    raise AssertionError("no unit of work is opened to build a stranger's tools")
+
+
+def _kept_specs() -> list:
+    specs = [spec for name in OUTSIDER_TOOLSETS for spec in STATIC_SPECS[name]]
+    return [
+        *specs,
+        *contact_specs(uow_factory=_uow_factory),
+        *form_specs(uow_factory=_uow_factory),
+    ]
 
 
 def test_the_kept_toolsets_are_exactly_these():
@@ -81,39 +95,17 @@ def test_the_kept_toolsets_are_exactly_these():
     }
 
 
-def test_every_tool_a_stranger_could_reach_is_classified():
-    """A tool added to a kept toolset fails here until somebody decides on it."""
-    unclassified = (
-        _kept_tool_names() - OUTSIDER_TOOL_NAMES - set(OUTSIDER_TOOLS_WITHHELD)
+def test_exactly_the_decided_tools_are_allowed():
+    """A tool added to a kept toolset is withheld until somebody allows it."""
+    allowed = {spec.name for spec in _kept_specs() if spec.policy.outsider_allowed}
+    assert allowed == ALLOWED
+
+
+def test_web_fetch_and_the_writes_are_withheld():
+    withheld = {spec.name for spec in _kept_specs() if not spec.policy.outsider_allowed}
+    assert {"web_fetch", "pod_write_record", "pod_write_file", "pod_edit_file"} <= (
+        withheld
     )
-    assert not unclassified, (
-        f"Classify {sorted(unclassified)} in tools/outsider_tools.py: allowed "
-        "for a stranger's run, or withheld with the reason."
-    )
-
-
-def test_the_allow_list_names_only_tools_that_exist():
-    """A stale name here would read as a decision nobody made."""
-    assert OUTSIDER_TOOL_NAMES <= _kept_tool_names()
-    assert not (OUTSIDER_TOOL_NAMES & set(OUTSIDER_TOOLS_WITHHELD))
-
-
-def test_web_fetch_is_withheld_and_web_search_is_not():
-    assert "web_fetch" in OUTSIDER_TOOLS_WITHHELD
-    assert "web_search" in OUTSIDER_TOOL_NAMES
-    for write in ("pod_write_record", "pod_write_file", "pod_edit_file"):
-        assert write in OUTSIDER_TOOLS_WITHHELD
-
-
-class _FakeUoW:
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_a):
-        return False
-
-    async def commit(self) -> None:
-        pass
 
 
 def _stranger_deps(**overrides) -> ToolContext:
@@ -128,28 +120,34 @@ def _stranger_deps(**overrides) -> ToolContext:
     )
 
 
-@pytest.mark.anyio
-async def test_an_assembled_strangers_run_is_offered_only_the_allow_list(monkeypatch):
-    """Through the real assemblers and the gate, as the harness builds a run."""
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
-
-    deps = _stranger_deps()
-    conversation = SimpleNamespace(
+def _strangers_conversation(deps: ToolContext, **metadata: object) -> Conversation:
+    assert isinstance(deps.audience.contact_id, UUID)
+    return Conversation(
         id=deps.conversation_id,
-        metadata={},
+        user_id=deps.user_id,
+        pod_id=deps.pod_id,
         contact_id=deps.audience.contact_id,
-        is_pod_assistant=True,
-        type=None,
-        parent_id=None,
+        metadata=metadata,
     )
-    full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
-        agent=None, conversation=conversation
+
+
+@pytest.mark.anyio
+async def test_an_assembled_strangers_run_is_offered_only_the_allow_list():
+    """Through the real catalog and capabilities, as the harness builds a run."""
+    deps = _stranger_deps()
+    specs = await specs_for(
+        agent=None,
+        conversation=_strangers_conversation(deps),
+        ctx=deps,
+        surface=ToolSurface.IN_PROCESS,
+        uow_factory=lambda: SimpleNamespace(),
     )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=deps, full_toolsets=full_toolsets, enable_prompt_caching=False
+    capabilities = harness_capabilities(
+        ctx=deps,
+        specs=specs,
+        runtime=ToolRuntime(specs),
+        enable_prompt_caching=False,
     )
-    capabilities.append(OutsiderToolGateCapability())
 
     offered: set[str] = set()
 
@@ -163,13 +161,9 @@ async def test_an_assembled_strangers_run_is_offered_only_the_allow_list(monkeyp
     await Agent(model, capabilities=capabilities).run("hi", deps=deps)
 
     assert offered, "the run was offered nothing at all"
-    assert offered <= OUTSIDER_TOOL_NAMES, sorted(offered - OUTSIDER_TOOL_NAMES)
+    assert offered <= ALLOWED, sorted(offered - ALLOWED)
     assert "web_fetch" not in offered
     assert "ask_a_person" in offered
-
-
-def _tool_names(toolsets) -> set[str]:
-    return {name for toolset in toolsets for name in getattr(toolset, "tools", {})}
 
 
 @pytest.mark.anyio
@@ -182,74 +176,29 @@ async def test_a_contact_is_offered_their_own_rows_only_where_they_alone_read_it
     conversation_kind, offered
 ):
     """In a group, everybody in it would read what the agent quoted back."""
-    from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
-
     deps = _stranger_deps()
-    conversation = SimpleNamespace(
-        id=deps.conversation_id,
-        metadata={"conversation_kind": conversation_kind},
-        contact_id=deps.audience.contact_id,
-        is_pod_assistant=True,
-        type=None,
-        parent_id=None,
+
+    specs = await specs_for(
+        agent=None,
+        conversation=_strangers_conversation(deps, conversation_kind=conversation_kind),
+        ctx=deps,
+        surface=ToolSurface.IN_PROCESS,
+        uow_factory=lambda: SimpleNamespace(),
     )
 
-    toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
-        agent=None, conversation=conversation
-    )
-
-    names = _tool_names(toolsets)
+    names = {spec.name for spec in specs}
     assert ("contact_records" in names) is offered
     assert ("contact_function" in names) is offered
 
 
 @pytest.mark.anyio
-async def test_the_gate_drops_and_refuses_an_off_list_tool():
-    gate = OutsiderToolGateCapability()
-    defs = [
-        SimpleNamespace(name="web_search"),
-        SimpleNamespace(name="web_fetch"),
-        SimpleNamespace(name="exec_command"),
-    ]
+async def test_the_runtime_refuses_an_off_list_tool_whatever_it_is_handed():
+    """Whatever list a caller built, a stranger's run does not reach the shell."""
+    runtime = ToolRuntime(workspace_cli.SPECS)
 
-    kept = await gate.prepare_tools(SimpleNamespace(), defs)
+    refused = await runtime.call("exec_command", {"cmd": "ls"}, _stranger_deps())
 
-    assert [tool.name for tool in kept] == ["web_search"]
-
-    async def must_not_run(_args):
-        raise AssertionError("an off-list tool ran on a stranger's run")
-
-    refused = await gate.wrap_tool_execute(
-        SimpleNamespace(),
-        call=SimpleNamespace(),
-        tool_def=SimpleNamespace(name="web_fetch"),
-        args={},
-        handler=must_not_run,
-    )
     assert refused == {"success": False, "error": WITHHELD_MESSAGE}
-
-
-@pytest.mark.anyio
-async def test_the_dispatcher_hides_off_list_tools_whatever_it_is_handed():
-    """The MCP bridge and the approval executor pass toolsets in explicitly."""
-    dispatcher = AgentToolDispatcher(lambda: _FakeUoW())
-    deps = _stranger_deps()
-
-    listed = await dispatcher.list_tools(
-        ctx=deps, toolsets=[web_search_toolset, workspace_cli_toolset]
-    )
-    names = {tool["name"] if isinstance(tool, dict) else tool.name for tool in listed}
-
-    assert "web_search" in names
-    assert "web_fetch" not in names
-    assert "exec_command" not in names
-    with pytest.raises(UnknownToolError):
-        await dispatcher.call_tool(
-            ctx=deps,
-            name="web_fetch",
-            arguments={"urls": ["https://example.com"]},
-            toolsets=[web_search_toolset],
-        )
 
 
 @pytest.mark.anyio

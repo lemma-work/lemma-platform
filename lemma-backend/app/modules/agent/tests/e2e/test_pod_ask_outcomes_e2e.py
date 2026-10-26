@@ -9,8 +9,9 @@ with the enqueue suppressed and finished by hand, which is all delivery reads.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.tools import NoArguments
+
 import asyncio
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -304,14 +305,12 @@ async def _three_pods(client, org) -> tuple[str, str, str]:
 
 
 def _ctx(user, org, support: str, conversation_id: UUID, **extra):
-    return SimpleNamespace(
-        deps=asking_deps(
-            user_id=UUID(user["id"]),
-            org_id=UUID(org["id"]),
-            pod_id=support,
-            conversation_id=conversation_id,
-            **extra,
-        )
+    return asking_deps(
+        user_id=UUID(user["id"]),
+        org_id=UUID(org["id"]),
+        pod_id=support,
+        conversation_id=conversation_id,
+        **extra,
     )
 
 
@@ -330,14 +329,18 @@ async def test_list_teammates_offers_only_what_this_conversation_could_ask(
     def reach(listed) -> dict[str, list[str]]:
         return {one.teammate: one.reach for one in listed.teammates}
 
-    own = await list_teammates(_ctx(fixed_test_user, fixed_test_org, support, chat_id))
+    own = await list_teammates(
+        _ctx(fixed_test_user, fixed_test_org, support, chat_id), NoArguments()
+    )
     assert reach(own) == {
         billing: ["through the person", "connected"],
         legal: ["through the person"],
     }
 
     task = await task_conversation(client, support)
-    nobody = await list_teammates(_ctx(fixed_test_user, fixed_test_org, support, task))
+    nobody = await list_teammates(
+        _ctx(fixed_test_user, fixed_test_org, support, task), NoArguments()
+    )
     assert reach(nobody) == {billing: ["connected"]}
 
     channel = await list_teammates(
@@ -347,7 +350,8 @@ async def test_list_teammates_offers_only_what_this_conversation_could_ask(
             support,
             chat_id,
             surface_conversation_kind="CHANNEL",
-        )
+        ),
+        NoArguments(),
     )
     assert channel.teammates == []
 

@@ -17,13 +17,18 @@ from typing import Protocol
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from pydantic_ai import RunContext
-from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import (
+    ReplayClass,
+    ToolGroup,
+    ToolPolicy,
+    ToolSpec,
+    tool,
+)
 from app.modules.agent.infrastructure.tools.payload_limits import bounded_tool_payload
 from app.modules.datastore.contracts.contact_rows import (
     MAX_CONTACT_ROWS,
@@ -40,7 +45,6 @@ logger = get_logger(__name__)
 
 CONTACT_RECORDS_TOOL = "contact_records"
 CONTACT_FUNCTION_TOOL = "contact_function"
-CONTACT_TOOLSET_ID = "contact"
 
 _NOT_A_CONTACT = "This conversation is not with a contact."
 
@@ -54,7 +58,7 @@ _STILL_RUNNING = (
 _JSON_SCALARS = (str, int, float, bool, list, dict)
 
 
-def _call_key(ctx: RunContext[ToolContext]) -> str | None:
+def _call_key(ctx: ToolContext) -> str | None:
     """One key per tool call, so a replayed turn does not run it twice.
 
     Scoped to the conversation: a tool call id is only unique within the
@@ -62,7 +66,7 @@ def _call_key(ctx: RunContext[ToolContext]) -> str | None:
     """
     if not ctx.tool_call_id:
         return None
-    return f"{getattr(ctx.deps, 'conversation_id', None)}:{ctx.tool_call_id}"
+    return f"{getattr(ctx, 'conversation_id', None)}:{ctx.tool_call_id}"
 
 
 def _plain(value: object) -> object:
@@ -114,21 +118,21 @@ class ContactFunctionRequest(BaseModel):
     )
 
 
-def build_contact_toolset(
+def contact_specs(
     *,
     uow_factory: UnitOfWorkFactory,
     read_rows: ReadContactRows | None = None,
     run_function: RunContactFunction | None = None,
-) -> FunctionToolset[ToolContext]:
+) -> tuple[ToolSpec, ...]:
     read_rows = read_rows or partial(rows_for_contact, uow_factory)
     run_function = run_function or partial(run_function_for_contact, uow_factory)
 
     async def contact_records(
-        ctx: RunContext[ToolContext], request: ContactRecordsRequest
+        ctx: ToolContext, request: ContactRecordsRequest
     ) -> dict[str, object]:
         """Read the rows a contact-owned table holds about the person you are
         talking to. Only their rows are ever returned."""
-        contact_id, pod_id = ctx.deps.audience.contact_id, ctx.deps.pod_id
+        contact_id, pod_id = ctx.audience.contact_id, ctx.pod_id
         if contact_id is None or pod_id is None:
             return {"success": False, "error": _NOT_A_CONTACT}
         try:
@@ -149,11 +153,11 @@ def build_contact_toolset(
         }
 
     async def contact_function(
-        ctx: RunContext[ToolContext], request: ContactFunctionRequest
+        ctx: ToolContext, request: ContactFunctionRequest
     ) -> dict[str, object]:
         """Run a function the pod opened to contacts, for the person you are
         talking to. Use it for what they ask you to do, not to explore."""
-        contact_id, pod_id = ctx.deps.audience.contact_id, ctx.deps.pod_id
+        contact_id, pod_id = ctx.audience.contact_id, ctx.pod_id
         if contact_id is None or pod_id is None:
             return {"success": False, "error": _NOT_A_CONTACT}
         try:
@@ -188,6 +192,16 @@ def build_contact_toolset(
             ),
         }
 
-    return FunctionToolset[ToolContext](
-        tools=[contact_records, contact_function], id=CONTACT_TOOLSET_ID
+    # Both take the contact from the run, never from the model.
+    return (
+        tool(
+            contact_records,
+            ToolGroup.CONTACT,
+            ToolPolicy(outsider_allowed=True, replay=ReplayClass.SAFE),
+        ),
+        tool(
+            contact_function,
+            ToolGroup.CONTACT,
+            ToolPolicy(outsider_allowed=True, replay=ReplayClass.KEYED),
+        ),
     )

@@ -1,6 +1,6 @@
 """How a pod file's text and a pod file search are answered.
 
-Lifted out of ``pydantic_adapter``, which is over the architecture ratchet's
+Lifted out of ``tools``, which is over the architecture ratchet's
 file-size limit: these two are the reading half of that surface and are what
 grew it. The tool functions there stay as the thin registration points, and the
 decisions -- which text a file actually has, and whether an empty search result

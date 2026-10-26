@@ -14,7 +14,7 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.capabilities.open_questions import open_question_text
+from app.modules.agent.services.context_brief.open_questions import open_question_text
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
 from app.modules.agent.domain.prompt.run_context import (
     render_run_context,

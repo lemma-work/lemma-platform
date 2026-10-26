@@ -11,9 +11,6 @@ from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from uuid import UUID
 
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import AbstractToolset
-from pydantic_ai.usage import RunUsage
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.prompt.user_turn_text import (
@@ -26,9 +23,6 @@ from app.modules.workspace.contracts.host_execution import (
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 from app.modules.agent.domain.outsiders import OutsiderRunRefused, run_audience
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.providers.model_factory import (
-    provider_model_settings,
-)
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompt.templates import build_agent_instructions
 from app.modules.agent.domain.prompt.run_context import run_context_for
@@ -47,12 +41,12 @@ from app.modules.agent.infrastructure.mcp import (
     LEMMA_MCP_SERVER_NAME,
     exported_tool_name,
 )
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
+from app.modules.agent.infrastructure.tools.final_answer.tools import (
     FINAL_ANSWER_TOOL_NAME,
 )
 
 
-from app.modules.agent.infrastructure.tools.skills.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.skills.tools import (
     LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
     SKILL_RUNTIME_OVERRIDES,
 )
@@ -159,9 +153,7 @@ async def mcp_payload[DepsT: ToolContext](
     agent_run_id: UUID,
     conversation_id: UUID,
     ctx: DepsT,
-    options: HarnessOptions[DepsT],
-    prompt: str | None = None,
-    extra_tool_names: Sequence[str] = (),
+    options: HarnessOptions,
     workspace_service: WorkspaceSandboxService | None = None,
     cli_root: Callable[[], str | None] = host_cli_root,
 ) -> JsonObject:
@@ -215,13 +207,9 @@ async def mcp_payload[DepsT: ToolContext](
             "id": str(getattr(ctx, "workspace_id", None) or "default"),
             "cwd": _workspace_cwd(ctx),
         },
-        "tool_names": await _exported_tool_names(
-            agent_run_id=agent_run_id,
-            ctx=ctx,
-            options=options,
-            prompt=prompt,
-            extra_names=extra_tool_names,
-        ),
+        # The names the MCP relay serves: the same specs, so the two lists
+        # cannot drift.
+        "tool_names": [exported_tool_name(spec.name) for spec in options.tools],
     }
     # This release's own `lemma`, for an agent on the same Mac as this backend:
     # the host puts its `bin/` first on the agent's PATH if it accepts it.
@@ -264,45 +252,6 @@ def _token_expiry_iso(token: str) -> str | None:
     if not isinstance(expiry, (int, float)) or isinstance(expiry, bool):
         return None
     return datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()
-
-
-async def _exported_tool_names[DepsT: ToolContext](
-    *,
-    agent_run_id: UUID,
-    ctx: DepsT,
-    options: HarnessOptions[DepsT],
-    prompt: str | None,
-    extra_names: Sequence[str] = (),
-) -> list[str]:
-    if not options.toolsets:
-        return list(extra_names)
-    run_ctx = RunContext(
-        deps=ctx,
-        model=None,  # type: ignore[arg-type]
-        usage=RunUsage(),
-        prompt=prompt,
-        retries={},
-        run_id=str(agent_run_id),
-        metadata={
-            "agent_run_id": str(agent_run_id),
-            "conversation_mcp": True,
-            "model_name": options.model_name,
-        },
-        model_settings=provider_model_settings(options.model_settings),
-    )
-    names: list[str] = []
-    for raw_toolset in options.toolsets:
-        if not isinstance(raw_toolset, AbstractToolset):
-            continue
-        toolset = await raw_toolset.for_run(run_ctx)
-        async with toolset:
-            for original_name, tool in (await toolset.get_tools(run_ctx)).items():
-                names.append(exported_tool_name(tool.tool_def.name or original_name))
-    # Tools the MCP route serves that are not in `options.toolsets` — the MCP
-    # service re-assembles independently, so the two lists must be reconciled
-    # here or this one under-reports what the host can actually call.
-    names.extend(name for name in extra_names if name not in names)
-    return names
 
 
 def _prompt_payload(

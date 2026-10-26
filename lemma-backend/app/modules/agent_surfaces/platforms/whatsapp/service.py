@@ -8,7 +8,6 @@ from app.modules.agent_surfaces.domain.reply_targets import (
 
 from typing import Any
 
-from pydantic_ai.tools import RunContext
 
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import ToolContext
@@ -289,7 +288,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
         event: ParsedInboundSurfaceEvent,
         attachment: dict[str, Any],
     ) -> tuple[bytes, str, str] | None:
-        """Download a single inbound WhatsApp attachment (no RunContext)."""
+        """Download a single inbound WhatsApp attachment."""
         del event
         return await media.download_attachment(self._client, attachment)
 
@@ -302,7 +301,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
         mime_type: str,
         caption: str | None = None,
     ) -> bool:
-        """Upload + send raw file bytes to the inbound chat (egress, no RunContext).
+        """Upload + send raw file bytes to the inbound chat (egress).
 
         Returns True on success; False so the caller falls back to a URL link.
         """
@@ -323,32 +322,32 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
 
     def _whatsapp_metadata(
         self,
-        ctx: RunContext[ToolContext],
+        ctx: ToolContext,
     ) -> WhatsAppSurfaceEventMetadata | None:
-        metadata = ctx.deps.surface_metadata
+        metadata = ctx.surface_metadata
         if isinstance(metadata, WhatsAppSurfaceEventMetadata):
             return metadata
         return None
 
     def _current_message_attachments(
         self,
-        ctx: RunContext[ToolContext],
+        ctx: ToolContext,
     ) -> list[WhatsAppFileAttachment]:
         metadata = self._whatsapp_metadata(ctx)
         if metadata is None:
             return []
         return common.coerce_attachments(metadata.attachments, WhatsAppFileAttachment)
 
-    def _resolve_phone_number_id(self, ctx: RunContext[ToolContext]) -> str | None:
+    def _resolve_phone_number_id(self, ctx: ToolContext) -> str | None:
         metadata = self._whatsapp_metadata(ctx)
         return (
             (metadata.phone_number_id if metadata is not None else None)
-            or ctx.deps.external_channel_id
+            or ctx.external_channel_id
             or self._phone_number_id
             or None
         )
 
-    def _resolve_recipient_wa_id(self, ctx: RunContext[ToolContext]) -> str | None:
+    def _resolve_recipient_wa_id(self, ctx: ToolContext) -> str | None:
         metadata = self._whatsapp_metadata(ctx)
         if metadata is not None:
             for contact in metadata.contacts:
@@ -356,7 +355,7 @@ class WhatsAppPlatformService(WhatsAppInteractiveRenders):
                     wa_id = str(contact.get("wa_id") or "").strip()
                     if wa_id:
                         return wa_id
-        thread_id = str(ctx.deps.external_thread_id or "")
+        thread_id = str(ctx.external_thread_id or "")
         if "@" in thread_id:
             candidate = thread_id.split("@", 1)[0].strip()
             if candidate:

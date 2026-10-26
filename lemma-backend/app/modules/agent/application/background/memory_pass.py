@@ -63,6 +63,7 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.context_brief.memory import AgentMemoryBriefBuilder
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.services.generation_settings import unreasoned_model_settings
+from app.modules.agent.domain.tools import ToolAccess
 from app.modules.agent.domain.background import (
     BackgroundCall,
     BackgroundLimits,
@@ -77,7 +78,7 @@ from app.modules.agent.services.runtime_resolution import (
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.pod.memory_pass_tools import (
     MemoryScope,
-    memory_pass_toolset,
+    memory_pass_specs,
 )
 from app.modules.usage.contracts.execution import UsageExecutionContext
 
@@ -100,7 +101,6 @@ _PASS_USAGE_LIMITS = BackgroundLimits(
     count_tokens_before_request=True,
 )
 
-_WRITE_TOOL = "pod_write_file"
 #: Retries of retries followed back to the message they all answer.
 _RETRIES_FOLLOWED = 3
 
@@ -295,6 +295,10 @@ class MemoryPass:
         # that refuses the reasoning field is asked once more without it --
         # nothing was written yet: the refusal is the first request's.
         own_model = model is run_model
+        tools = memory_pass_specs(MemoryScope(agent_memory_paths(agent)))
+        writes = frozenset(
+            spec.name for spec in tools if spec.policy.access is ToolAccess.WRITE
+        )
         call = BackgroundCall(
             prompt=f"{transcript}\n\n{_QUESTION}",
             limits=_PASS_USAGE_LIMITS,
@@ -305,9 +309,8 @@ class MemoryPass:
                 if own_model
                 else None
             ),
-            toolsets=[memory_pass_toolset(MemoryScope(agent_memory_paths(agent)))],
+            tools=tools,
             deps=deps,
-            deps_type=ToolContext,
         )
         answer = await self._background.ask(
             RuntimePurpose.MEMORY,
@@ -323,7 +326,7 @@ class MemoryPass:
                 source_id=str(turn.run.id),
             ),
         )
-        if _wrote_memory(answer.tool_returns):
+        if _wrote_memory(answer.tool_returns, writes):
             return MemoryPassOutcome.KEPT
         return MemoryPassOutcome.NOTHING
 
@@ -365,10 +368,10 @@ async def _carried_in(
     return carried, began.id
 
 
-def _wrote_memory(returns: list[ToolReturnRecord]) -> bool:
+def _wrote_memory(returns: list[ToolReturnRecord], writes: frozenset[str]) -> bool:
     """Whether any write the pass made succeeded."""
     return any(
-        returned.tool_name == _WRITE_TOOL
+        returned.tool_name in writes
         and isinstance(returned.content, dict)
         and returned.content.get("success") is True
         for returned in returns

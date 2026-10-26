@@ -52,10 +52,8 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
-from app.modules.agent.infrastructure.tools.tool_assembler import (
-    load_agent_grant_summary,
-)
-from app.modules.agent.infrastructure.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.domain.toolsets import AgentGrantSummary
+from app.modules.agent.infrastructure.tools.callables import load_agent_grant_summary
 
 if TYPE_CHECKING:
     from app.modules.agent.services.run_session import RunSession

@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.exposure import exposure_settings, local_relaxations_allowed
 from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
-from app.modules.agent.infrastructure.transport_errors import (
+from app.modules.agent.infrastructure.providers.transport_errors import (
     local_model_server_name,
 )
 from app.modules.agent.services.context_budget import (

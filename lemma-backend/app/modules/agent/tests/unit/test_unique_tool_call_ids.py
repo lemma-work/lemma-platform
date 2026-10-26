@@ -15,8 +15,8 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.capabilities.unique_tool_call_ids import (
-    UniqueToolCallIdsCapability,
+from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+    UniqueToolCallIds as UniqueToolCallIdsCapability,
 )
 from app.modules.agent.domain.tool_call_ids import first_per_call_id
 

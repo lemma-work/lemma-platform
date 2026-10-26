@@ -22,7 +22,7 @@ APP = Path(__file__).resolve().parents[4]
 #: Each module that asks, and what it asks as.
 ASKERS: dict[str, QuestionAsker] = {
     "modules/agent/services/pause_questions.py": QuestionAsker.TOOL,
-    "modules/agent/infrastructure/tools/messaging/pydantic_adapter.py": QuestionAsker.MESSAGE,
+    "modules/agent/infrastructure/tools/messaging/tools.py": QuestionAsker.MESSAGE,
     "modules/workflow/infrastructure/form_questions.py": QuestionAsker.WORKFLOW,
 }
 

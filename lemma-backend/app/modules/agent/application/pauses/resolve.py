@@ -47,6 +47,7 @@ from app.modules.agent.services.approval_reconciliation import (
     stage_approval_execution,
 )
 from app.modules.agent.services.pause_resume import paused_call
+from app.modules.agent.domain.pausing_tools import PausingKind
 
 
 class ResolvePause:
@@ -118,7 +119,7 @@ class ResolvePause:
         paused_run_id = paused.agent_run_id
 
         if decision_row is None:
-            if kind != "ask_user" and user_id != conversation.user_id:
+            if kind != PausingKind.ASK_USER and user_id != conversation.user_id:
                 # An approved call runs with the owner's authority (see
                 # `ApprovedExecution`), so only the owner may decide it. Every
                 # entry point checks this already; this is the one place all
@@ -128,9 +129,11 @@ class ResolvePause:
             # approval) row locks out a concurrent double-submit before any
             # side-effecting tool runs.
             decision_tool_name = (
-                "ask_user"
-                if kind == "ask_user"
-                else str(tool_args.get("tool_name") or "request_approval")
+                PausingKind.ASK_USER.value
+                if kind == PausingKind.ASK_USER
+                else str(
+                    tool_args.get("tool_name") or PausingKind.REQUEST_APPROVAL.value
+                )
             )
             recorded = await self.approval_decisions.record_approval_decision(
                 conversation_id=conversation.id,

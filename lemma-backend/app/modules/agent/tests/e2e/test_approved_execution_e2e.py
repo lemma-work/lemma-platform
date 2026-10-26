@@ -11,7 +11,7 @@ placeholder agent with no grants and failed every time (PS-AGENT-020, seen in
 development on 2026-09-28). And until H7 it ran as the person, whole: an
 approval of one row's delete lent the call everything the person could do.
 
-So nothing here is faked below the tool: the real dispatcher, the real pod
+So nothing here is faked below the tool: the real tool runtime, the real pod
 toolset, the real authorization service, a real database.
 """
 
@@ -35,7 +35,7 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )
-from app.modules.agent.infrastructure.tools.approval.executor import ApprovalExecutor
+from app.modules.agent.services.approval_executor import ApprovalExecutor
 from app.modules.agent.infrastructure.tools.approval.denials import (
     lent_to_the_sandbox,
     sandbox_refusals,
@@ -47,7 +47,8 @@ from app.modules.agent.infrastructure.tools.authority import (
     workload_actor_id,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
+from app.modules.agent.services.tool_runtime import ToolRuntime
 from app.modules.test_support.e2e.function_helpers import create_table
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
@@ -145,13 +146,14 @@ async def _as_the_agent(ctx: ToolContext, args: dict[str, object]) -> dict:
         )
         assert conversation is not None and conversation.agent_id is not None
         agent = await AgentRepository(uow).get(conversation.agent_id)
-    result = await AgentToolDispatcher(_uow_factory()).call_tool(
+    specs = await specs_for(
         agent=agent,
         conversation=conversation,
         ctx=ctx,
-        name="pod_write_record",
-        arguments=args,
+        surface=ToolSurface.RERUN,
+        uow_factory=_uow_factory(),
     )
+    result = await ToolRuntime(specs).call("pod_write_record", args, ctx)
     assert isinstance(result, dict)
     return result
 

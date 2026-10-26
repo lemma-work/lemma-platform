@@ -75,12 +75,7 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
-
-#: The pausing kind a surface renders as a decision rather than as a question.
-#: Named here rather than imported from `pausing_tools` so the published surface
-#: says which kinds a caller may see, and so a new internal pausing tool does
-#: not silently widen it.
-_REQUEST_APPROVAL = "request_approval"
+from app.modules.agent.domain.pausing_tools import PausingKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,7 +119,8 @@ class PendingInteraction:
 
     @property
     def is_approval(self) -> bool:
-        return self.kind == _REQUEST_APPROVAL
+        # The pausing kind a surface renders as a decision, not a question.
+        return self.kind == PausingKind.REQUEST_APPROVAL
 
 
 @dataclass(frozen=True, slots=True)
@@ -529,7 +525,7 @@ async def conversation_metadata_value(
     other side of. Generic rather than named for what a surface stores there,
     because the row is agent's and the meaning of the key is the caller's:
     `agent_surfaces` remembers which paused call somebody tapped "Other" on,
-    the agent host keeps its session memory, and `todo_storage` its list.
+    the agent host keeps its session memory, and the todo tool its list.
 
     ``None`` for anything that is not a string, so a caller comparing an id
     cannot be fooled by a value of another shape written under the same key.

@@ -8,12 +8,10 @@ to that, so the two prompts cannot drift apart anywhere else.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.capabilities.memory import MemoryCapability
 from app.modules.agent.domain.agent_memory_paths import memory_kept_after_turn
 from app.modules.agent.domain.prompt.templates import (
     FRAGMENT_BY_TOOLSET,
@@ -104,21 +102,28 @@ def test_the_pass_is_told_how_to_keep_memory_but_not_when():
 @pytest.mark.anyio
 @pytest.mark.parametrize("after_turn", [False, True])
 async def test_the_assembled_run_is_told_the_contract_its_context_chose(after_turn):
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
+    from app.modules.agent.domain.context import ToolContext
+    from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+        Instructions,
+        harness_capabilities,
+    )
+    from app.modules.agent.services.tool_runtime import ToolRuntime
 
-    ctx = SimpleNamespace(
+    ctx = ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
         conversation_id=uuid4(),
         is_pod_default_agent=True,
         memory_enabled=True,
         memory_after_turn=after_turn,
     )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=ctx, full_toolsets=[], enable_prompt_caching=False
+    capabilities = harness_capabilities(
+        ctx=ctx, specs=[], runtime=ToolRuntime([]), enable_prompt_caching=False
     )
 
     taught = [
         cap.get_instructions()
         for cap in capabilities
-        if isinstance(cap, MemoryCapability)
+        if type(cap) is Instructions and "AGENTS.md" in cap.get_instructions()
     ]
     assert taught == [load_memory_prompt(after_turn=after_turn)]

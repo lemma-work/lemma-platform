@@ -24,7 +24,6 @@ credentials being configured anywhere the suite runs.
 from __future__ import annotations
 
 import os
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -49,7 +48,7 @@ from app.modules.agent.infrastructure.tools.subagents.models import (
     InteractSubagentRequest,
     QuerySubagentsRequest,
 )
-from app.modules.agent.infrastructure.tools.subagents.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.subagents.tools import (
     interact_subagent,
     query_subagents,
 )
@@ -385,14 +384,12 @@ async def test_query_and_interact_subagent_reject_conversations_this_agent_did_n
         parent_conversation_id=stranger_conversation_id,
     )
 
-    ctx = SimpleNamespace(
-        deps=ToolContext(
-            user_id=UUID(fixed_test_user["id"]),
-            pod_id=UUID(pod_id),
-            conversation_id=UUID(owner_conversation_id),
-            workload_id=UUID(owner["id"]),
-            agent_name="owner",
-        )
+    ctx = ToolContext(
+        user_id=UUID(fixed_test_user["id"]),
+        pod_id=UUID(pod_id),
+        conversation_id=UUID(owner_conversation_id),
+        workload_id=UUID(owner["id"]),
+        agent_name="owner",
     )
 
     missing = await query_subagents(
@@ -454,14 +451,12 @@ async def test_interact_subagent_stop_requests_a_real_running_child(
     assert before.status_code == status.HTTP_200_OK, before.text
     assert before.json()["status"] == "RUNNING"
 
-    ctx = SimpleNamespace(
-        deps=ToolContext(
-            user_id=UUID(fixed_test_user["id"]),
-            pod_id=UUID(pod_id),
-            conversation_id=UUID(parent_conversation_id),
-            workload_id=UUID(supervisor["id"]),
-            agent_name="supervisor",
-        )
+    ctx = ToolContext(
+        user_id=UUID(fixed_test_user["id"]),
+        pod_id=UUID(pod_id),
+        conversation_id=UUID(parent_conversation_id),
+        workload_id=UUID(supervisor["id"]),
+        agent_name="supervisor",
     )
 
     stopped = await interact_subagent(
@@ -525,14 +520,12 @@ async def test_query_subagents_list_mode_and_interact_send_on_a_real_owned_child
     assert runless_child.status_code == status.HTTP_201_CREATED, runless_child.text
     runless_child_id = runless_child.json()["id"]
 
-    ctx = SimpleNamespace(
-        deps=ToolContext(
-            user_id=UUID(fixed_test_user["id"]),
-            pod_id=UUID(pod_id),
-            conversation_id=UUID(parent_conversation_id),
-            workload_id=UUID(list_supervisor["id"]),
-            agent_name="list_supervisor",
-        )
+    ctx = ToolContext(
+        user_id=UUID(fixed_test_user["id"]),
+        pod_id=UUID(pod_id),
+        conversation_id=UUID(parent_conversation_id),
+        workload_id=UUID(list_supervisor["id"]),
+        agent_name="list_supervisor",
     )
 
     listed = await query_subagents(ctx, QuerySubagentsRequest(mode="list"))

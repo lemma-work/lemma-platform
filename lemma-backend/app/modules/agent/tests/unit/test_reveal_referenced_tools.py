@@ -25,7 +25,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.capabilities.reveal_referenced_tools import (
+from app.modules.agent.infrastructure.harness.lemma.reveal_referenced_tools import (
     RevealReferencedToolsCapability,
     referenced_tool_names,
 )

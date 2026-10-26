@@ -49,7 +49,7 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy>=0.65b0",
     "authlib>=1.6.6",
     # Upper-bounded on purpose: the agent harness reaches into a few pydantic-ai
-    # internals (see infrastructure/pydantic_ai_compat.py), so a major bump is a
+    # internals (see infrastructure/providers/pydantic_ai_compat.py), so a major bump is a
     # deliberate migration rather than something `uv lock --upgrade` should do.
     # Floored at 2.61 for the history round-trip fixes the prompt cache depends
     # on: compact tool-call args (2.58), tool results in call order (2.58),

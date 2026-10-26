@@ -57,9 +57,9 @@ _AGENT_HOST_HOST_EXECUTION_PROMPT_PATH = _PROMPT_DIR / "agent_host_host_executio
 # prompt. A toolset is listed here if it carries usage guidance, whether or not
 # it ends up deferred: deferral hides a toolset's schemas, not its contract.
 # The pod-default assistant has all of these, so it gets them all.
-# NB: in-process runs get these fragments through the matching pydantic-ai
-# capabilities (build_agent_instructions is called with include_toolset_prompts=
-# False); this map is the remote-harness path, which has no capability layer.
+# NB: in-process runs get these fragments beside each toolset's tools
+# (``toolset_instructions``, so build_agent_instructions is called with
+# include_toolset_prompts=False); this map is the remote-harness path.
 FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     # Before WORKSPACE_CLI on purpose. The CLI fragment is a worked cookbook and
     # the pod tools are deferred behind a search, so an agent that met the CLI
@@ -294,6 +294,20 @@ def load_toolset_fragment(toolset: AgentToolset) -> str | None:
     return _read_required_prompt(path) if path is not None else None
 
 
+def toolset_instructions(group: str, *, host_execution: bool = False) -> str | None:
+    """The usage guidance an in-process run's toolset carries, visible or deferred.
+
+    Deferral hides a toolset's schemas, never its contract. The workspace's
+    contract depends on the machine its commands run on; memory carries no
+    tools, so it rides on its own (``load_memory_prompt``).
+    """
+    if group == AgentToolset.WORKSPACE_CLI:
+        return load_workspace_cli_prompt(host_execution=host_execution)
+    if group == AgentToolset.MEMORY or group not in AgentToolset:
+        return None
+    return load_toolset_fragment(AgentToolset(group))
+
+
 def build_agent_instructions(
     *,
     agent: Agent,
@@ -448,7 +462,7 @@ def _fragment_toolsets(
     """Toolsets whose guidance this run gets: the ones it actually has.
 
     The run's *effective* toolsets -- declared, always-on and grant-derived, as
-    `RunToolAssembler` builds tools from -- not the agent's declared list. Read
+    the tool catalog builds tools from -- not the agent's declared list. Read
     from the declared list, a named agent was never shown its stored task list
     (TODO is always-on, never declared), and one with a folder grant but no
     WORKSPACE_CLI was never told where its pod files are.
@@ -457,9 +471,7 @@ def _fragment_toolsets(
     if run_toolsets is None:
         # A context the run-context builder did not make; resolve the same way
         # it does, minus grants it cannot see.
-        from app.modules.agent.infrastructure.tools.toolset_selection import (
-            resolve_toolset_names,
-        )
+        from app.modules.agent.domain.toolsets import resolve_toolset_names
 
         run_toolsets, _ = resolve_toolset_names(
             None if conversation.is_pod_assistant else agent, conversation

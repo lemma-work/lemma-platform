@@ -12,7 +12,7 @@ spent once. Anything typed without it is what it looks like: a new message.
 
 Kept in the conversation's own metadata rather than a new table: it is one
 short-lived flag per conversation, read on the next inbound message and cleared
-there, and `todo_storage` and the Agent Host's session memory already use that
+there, and the todo tool and the Agent Host's session memory already use that
 seam for the same kind of state.
 """
 

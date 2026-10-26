@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from pydantic_ai.tools import RunContext
 
 from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.session import async_session_maker
@@ -55,7 +54,7 @@ CALLED_IN_GROUP = (
 
 
 async def ask_a_person(
-    ctx: RunContext[ToolContext], request: AskAPersonRequest
+    ctx: ToolContext, request: AskAPersonRequest
 ) -> AskAPersonResponse:
     """Call a person from the pod into this conversation.
 
@@ -65,7 +64,7 @@ async def ask_a_person(
     person; the member will step in and reply here themselves.
     Tell the person someone will get back to them -- do not promise when.
     """
-    deps = ctx.deps
+    deps = ctx
     if deps.pod_id is None or deps.conversation_id is None:
         return AskAPersonResponse(success=False, error="Only in a conversation.")
     if not run_audience(deps).answers_outsiders:
@@ -141,7 +140,7 @@ async def call_a_person_in(
 
 
 async def list_pod_members(
-    ctx: RunContext[ToolContext], request: ListPodMembersRequest
+    ctx: ToolContext, request: ListPodMembersRequest
 ) -> ListPodMembersResponse:
     """Look up who is in this pod, to find who to write to.
 
@@ -152,7 +151,7 @@ async def list_pod_members(
 
     Searches names and email addresses; omit `search` to list everyone.
     """
-    deps = ctx.deps
+    deps = ctx
     if deps.pod_id is None:
         return ListPodMembersResponse(
             success=False, error="list_pod_members is only available inside a pod."

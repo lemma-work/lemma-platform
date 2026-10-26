@@ -4,21 +4,18 @@ from __future__ import annotations
 
 from contextlib import suppress
 import asyncio
+import dataclasses
 import json
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import TypeAdapter
-from pydantic_ai.tools import RunContext, Tool
-from pydantic_ai.toolsets import FunctionToolset
-from pydantic_core import SchemaValidator
-
-from app.modules.agent.infrastructure.tools.payload_limits import bounded_tool_payload
-from app.modules.agent.infrastructure.pydantic_ai_compat import (
-    FunctionSchema,
-    InlineDefsJsonSchemaTransformer,
+from app.modules.agent.domain.tools import ToolGroup, ToolPolicy, ToolSpec
+from app.modules.agent.infrastructure.providers.tool_schemas import (
+    inline_schema,
+    normalize_json_schema,
 )
+from app.modules.agent.infrastructure.tools.payload_limits import bounded_tool_payload
 
 from app.modules.agent.config import agent_settings
 from app.core.log.log import get_logger
@@ -35,7 +32,7 @@ from app.modules.agent.infrastructure.repositories import (
 )
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.domain.toolsets import AgentGrantSummary
 from app.modules.function.contracts import (
     FunctionEntity,
     FunctionRunEntity,
@@ -49,40 +46,6 @@ from app.modules.function.contracts import agent_tools as function_tools
 logger = get_logger(__name__)
 
 _SUBAGENT_TOOL_TIMEOUT_SECONDS = 300
-
-
-def normalize_json_schema(schema: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(schema, dict) or not schema:
-        return {"type": "object", "properties": {}, "additionalProperties": True}
-    normalized = dict(schema)
-    if normalized.get("type") != "object":
-        normalized["type"] = "object"
-    normalized.setdefault("properties", {})
-    normalized.setdefault("additionalProperties", True)
-    return normalized
-
-
-def inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    return InlineDefsJsonSchemaTransformer(schema, strict=False).walk()
-
-
-def inline_tool_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
-    """Inline non-recursive ``$defs``/``$ref`` in a tool's input schema.
-
-    OpenAI-compatible providers (notably Fireworks' GLM) can't resolve
-    ``$ref`` -> ``#/$defs/...`` server-side and reject the request with
-    ``Error resolving schema reference ... AttributeError("'NoneType' ... lookup")``.
-    The pydantic-ai model path already inlines refs via a model profile, but tool
-    schemas served over MCP to remote harnesses (Claude Code, Cursor, OpenCode,
-    ...) were passed through raw. Inline them here too. Best-effort: a schema the
-    transformer can't process falls back to the original.
-    """
-    if not isinstance(schema, dict):
-        return schema
-    try:
-        return InlineDefsJsonSchemaTransformer(dict(schema), strict=False).walk()
-    except Exception:  # noqa: BLE001 -- never break tool listing over a schema quirk
-        return dict(schema)
 
 
 def _with_output_schema(prefix: str, output_schema: dict[str, Any] | None) -> str:
@@ -160,22 +123,22 @@ class AgentCallableToolFactory:
     def __init__(self, uow_factory: UnitOfWorkFactory):
         self.uow_factory = uow_factory
 
-    async def build_toolsets(
+    async def build_specs(
         self,
         *,
         agent: Agent,
         allow_subagents: bool = True,
         grants: AgentGrantSummary | None = None,
-    ) -> list[FunctionToolset[ToolContext]]:
+    ) -> tuple[ToolSpec, ...]:
         """``function_<name>`` / ``agent_<name>`` tools for this agent's grants.
 
         ``grants`` is the summary the caller already loaded for toolset
         selection; passing it through spares a second read of the same rows.
         """
         if agent.pod_id is None or agent.id is None:
-            return []
+            return ()
 
-        tools: list[Tool] = []
+        tools: list[ToolSpec] = []
         async with self.uow_factory() as uow:
             agent_repo = AgentRepository(uow)
             if grants is None:
@@ -212,13 +175,9 @@ class AgentCallableToolFactory:
                         self._build_agent_tool(child_agent, parent_agent=agent)
                     )
 
-        if not tools:
-            return []
-        # The sub-agent control toolset (spawn/await/list/stop/...) is wired as the
-        # AgentToolset.SUBAGENTS enum and resolved by RunToolAssembler — not
-        # appended here — so it is opt-in for user agents and gated to top-level
-        # conversations.
-        return [FunctionToolset[ToolContext](tools=distinct_tool_names(tools))]
+        # The sub-agent controls (spawn/interact/query) are the SUBAGENTS
+        # toolset, not these: opt-in for user agents, top-level runs only.
+        return tuple(distinct_tool_names(tools))
 
     async def load_grant_summary(
         self, *, pod_id: UUID, agent_id: UUID
@@ -262,21 +221,17 @@ class AgentCallableToolFactory:
 
     def _build_function_tool(
         self, function: FunctionEntity, *, parent_agent: Agent
-    ) -> Tool:
+    ) -> ToolSpec:
         schema = inline_schema(normalize_json_schema(function.input_schema))
         description = self._build_function_description(function)
         function_name = resource_tool_name("function_", function.name)
         parent_agent_id = parent_agent.id
         parent_agent_name = parent_agent.name
 
-        # pydantic-ai invokes this as `_run_function(ctx, **validated_args)`: the
-        # tool's JSON schema is the function's flat input schema, so the model's
-        # arguments arrive as top-level kwargs (e.g. `apps=...`), not nested under
-        # `request`. Collect them via **request so arbitrary input fields bind here
-        # instead of raising "unexpected keyword argument".
+        # The tool's JSON schema is the function's own flat input schema, so the
+        # model's arguments arrive as one object of top-level fields.
         async def _run_function(
-            ctx: RunContext[ToolContext],
-            **request: Any,
+            ctx: ToolContext, request: dict[str, Any]
         ) -> dict[str, Any]:
             # The use case authorizes the call as the agent (which holds the
             # function.execute grant) on behalf of the user. It builds the
@@ -293,7 +248,7 @@ class AgentCallableToolFactory:
                 pod_id=function.pod_id,
                 name=function.name,
                 input_data=dict(request),
-                user_id=ctx.deps.user_id,
+                user_id=ctx.user_id,
                 agent_id=parent_agent_id,
                 agent_name=parent_agent_name,
                 # Minimal single-operation scope; implication-expanded, so the
@@ -310,21 +265,11 @@ class AgentCallableToolFactory:
 
             return function_tool_result(function.name, run)
 
-        return Tool(
-            _run_function,
-            name=function_name,
-            description=description,
-            takes_ctx=True,
-            strict=False,
-            function_schema=self._build_dynamic_function_schema(
-                name=function_name,
-                function=_run_function,
-                description=description,
-                schema=schema,
-            ),
+        return _dynamic_spec(
+            function_name, description, schema, _run_function, kind="function"
         )
 
-    def _build_agent_tool(self, agent: Agent, *, parent_agent: Agent) -> Tool:
+    def _build_agent_tool(self, agent: Agent, *, parent_agent: Agent) -> ToolSpec:
         del parent_agent  # grant is enforced in SubAgentService.spawn
         # A plain agent (no input_schema) is exposed as a single-string-input
         # tool; one with an input_schema takes that schema's fields as flat kwargs.
@@ -338,13 +283,11 @@ class AgentCallableToolFactory:
         description = self._build_agent_description(agent)
         agent_tool_name = resource_tool_name("agent_", agent.name)
 
-        # See _build_function_tool: model arguments arrive as flat kwargs, so
-        # collect them via **request rather than a single `request` parameter.
+        # See _build_function_tool: the arguments are one flat object.
         async def _run_agent(
-            ctx: RunContext[ToolContext],
-            **request: Any,
+            ctx: ToolContext, request: dict[str, Any]
         ) -> dict[str, Any] | str:
-            if ctx.deps.agent_name == agent.name:
+            if ctx.agent_name == agent.name:
                 raise RuntimeError(f"Agent {agent.name} cannot call itself as a tool")
             # Spawn a real, persisted child conversation linked to the parent
             # (parent_id + parent_run_id) and run it via the job queue, then wait
@@ -359,12 +302,12 @@ class AgentCallableToolFactory:
             )
             service = SubAgentService(self.uow_factory)
             handle = await service.spawn(
-                ctx.deps,
+                ctx,
                 agent_name=agent.name,
                 input_data=input_data,
             )
             result = await service.await_run(
-                ctx.deps,
+                ctx,
                 conversation_id=handle.conversation_id,
                 run_id=handle.run_id,
                 timeout_seconds=_SUBAGENT_TOOL_TIMEOUT_SECONDS,
@@ -400,18 +343,8 @@ class AgentCallableToolFactory:
                 "error": result.get("error"),
             }
 
-        return Tool(
-            _run_agent,
-            name=agent_tool_name,
-            description=description,
-            takes_ctx=True,
-            strict=False,
-            function_schema=self._build_dynamic_function_schema(
-                name=agent_tool_name,
-                function=_run_agent,
-                description=description,
-                schema=schema,
-            ),
+        return _dynamic_spec(
+            agent_tool_name, description, schema, _run_agent, kind="agent"
         )
 
     async def _await_function_run(self, run_id: UUID) -> FunctionRunEntity:
@@ -467,33 +400,40 @@ class AgentCallableToolFactory:
         prefix = agent.description or f"Execute agent `{agent.name}`."
         return _with_output_schema(prefix, agent.output_schema)
 
-    def _build_dynamic_function_schema(
-        self,
-        *,
-        name: str,
-        function,
-        description: str,
-        schema: dict[str, Any],
-    ) -> FunctionSchema:
-        validator = cast(
-            SchemaValidator,
-            TypeAdapter(dict[str, Any]).validator,
-        )
-        # No single_arg_name: the model's arguments are passed through as flat
-        # kwargs to the tool function (which collects them via **request), so there
-        # is no single wrapper parameter to advertise.
-        return FunctionSchema(
-            name=name,
-            function=function,
-            description=description,
-            validator=validator,
-            json_schema=schema,
-            takes_ctx=True,
-            is_async=True,
-        )
+
+def _dynamic_spec(
+    name: str,
+    description: str,
+    schema: dict[str, Any],
+    run: Any,
+    *,
+    kind: Literal["function", "agent"],
+) -> ToolSpec:
+    """A tool whose arguments are a stored JSON schema, not a request model."""
+    return ToolSpec(
+        name=name,
+        description=description,
+        parameters=None,
+        json_schema=schema,
+        toolset=ToolGroup.CALLABLES,
+        run=run,
+        policy=ToolPolicy(kind=kind),
+        strict=False,
+    )
 
 
-def distinct_tool_names(tools: list[Tool]) -> list[Tool]:
+async def load_agent_grant_summary(
+    uow_factory: UnitOfWorkFactory, *, agent: Agent
+) -> AgentGrantSummary:
+    """This agent's grant summary, or an empty one where it cannot have grants."""
+    if agent.pod_id is None or agent.id is None:
+        return AgentGrantSummary()
+    return await AgentCallableToolFactory(uow_factory).load_grant_summary(
+        pod_id=agent.pod_id, agent_id=agent.id
+    )
+
+
+def distinct_tool_names(tools: list[ToolSpec]) -> list[ToolSpec]:
     """The same tools, no two sharing a name.
 
     `resource_tool_name` keeps a valid name as it is and gives any other a
@@ -504,15 +444,16 @@ def distinct_tool_names(tools: list[Tool]) -> list[Tool]:
     from turn to turn.
     """
     seen: set[str] = set()
+    distinct: list[ToolSpec] = []
     for tool in tools:
         name, counter = tool.name, 2
         while name in seen:
             suffix = f"_{counter}"
             name = tool.name[: MAX_LOCAL_TOOL_NAME_LENGTH - len(suffix)] + suffix
             counter += 1
-        tool.name = name
+        distinct.append(dataclasses.replace(tool, name=name))
         seen.add(name)
-    return tools
+    return distinct
 
 
 def grant_summary_of(

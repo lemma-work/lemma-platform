@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from app.modules.agent.capabilities.pending_user_messages import (
+from app.modules.agent.infrastructure.harness.lemma.pending_user_messages import (
     PendingUserMessagesCapability,
 )
 

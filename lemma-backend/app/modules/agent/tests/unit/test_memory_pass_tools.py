@@ -11,7 +11,7 @@ import pytest
 from app.modules.agent.domain.agent_memory_paths import agent_memory_paths_for_name
 from app.modules.agent.infrastructure.tools.pod.memory_pass_tools import (
     MemoryScope,
-    memory_pass_toolset,
+    memory_pass_specs,
 )
 from app.modules.agent.infrastructure.tools.pod.models import (
     PodReadFileRequest,
@@ -69,12 +69,12 @@ def test_the_pass_may_read_memory_but_not_the_rest_of_the_pod():
 async def test_a_refused_call_never_reaches_the_datastore():
     """Refused before the agent's tool runs: with no run context at all, the
     wrapped tool would fail on its first line rather than answer."""
-    tools = memory_pass_toolset(_SCOPE).tools
+    tools = {spec.name: spec for spec in memory_pass_specs(_SCOPE)}
 
-    written = await tools["pod_write_file"].function(
+    written = await tools["pod_write_file"].run(
         None, PodWriteFileRequest(path="/me/report.md", content="overwritten")
     )
-    read = await tools["pod_read_file"].function(
+    read = await tools["pod_read_file"].run(
         None, PodReadFileRequest(path="/projects/roadmap.md")
     )
 

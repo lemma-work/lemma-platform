@@ -23,6 +23,7 @@ from enum import Enum
 from uuid import UUID
 
 from app.modules.agent.domain.value_objects import ConversationStatus
+from app.modules.agent.domain.pausing_tools import PausingKind
 
 #: The host's `PERMISSION_DECISION_TIMEOUT` (desktop/agent-host). Not Lemma's
 #: choice: past it the host has already denied the request.
@@ -30,7 +31,10 @@ AGENT_HOST_PERMISSION_DECISION_WINDOW = timedelta(minutes=30)
 
 #: The pausing calls a person answers. `browser_sign_in` also waits, but on
 #: somebody going somewhere to sign in, which its own link already says.
-WAITING_ON_A_PERSON_TOOLS = ("ask_user", "request_approval")
+WAITING_ON_A_PERSON_TOOLS = (
+    PausingKind.ASK_USER.value,
+    PausingKind.REQUEST_APPROVAL.value,
+)
 
 #: How much of a question or a title the list carries. The conversation has the
 #: whole of it; this is what fits on one line of an inbox.
@@ -46,7 +50,7 @@ class PendingInteractionKind(str, Enum):
 
     @classmethod
     def of(cls, *, tool_name: str, is_host_permission: bool) -> PendingInteractionKind:
-        if tool_name == "ask_user":
+        if tool_name == PausingKind.ASK_USER:
             return cls.QUESTION
         return cls.PERMISSION if is_host_permission else cls.APPROVAL
 

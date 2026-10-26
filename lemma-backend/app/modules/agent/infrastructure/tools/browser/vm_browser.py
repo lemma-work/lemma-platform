@@ -16,7 +16,7 @@ can run through it.
 
 Offered only on runs whose commands execute on the host, and only to agents
 that could drive the browser before (they have the workspace CLI); see
-`RunToolAssembler`.
+`services/tool_catalog`.
 """
 
 from __future__ import annotations
@@ -25,11 +25,10 @@ import shlex
 from typing import Optional
 
 from pydantic import BaseModel, Field
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.infrastructure.tools.responses import TOOL_COMMENT_DESC
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import ToolGroup, ToolPolicy, tool
 from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecCommandResult,
@@ -143,7 +142,7 @@ async def browser_command_internal(
 
 
 async def browser(
-    ctx: RunContext[ToolContext],
+    ctx: ToolContext,
     request: BrowserCommandRequest,
 ) -> ExecCommandResult:
     """
@@ -162,11 +161,7 @@ async def browser(
     Not a shell: only `agent-browser` runs, and pipes or `&&` are passed to it
     as arguments.
     """
-    return await browser_command_internal(ctx.deps, request)
+    return await browser_command_internal(ctx, request)
 
 
-vm_browser_toolset = FunctionToolset[ToolContext](tools=[browser])
-
-
-def is_vm_browser_toolset(toolset: object) -> bool:
-    return toolset is vm_browser_toolset
+SPECS = (tool(browser, ToolGroup.VM_BROWSER, ToolPolicy(kind="sandbox")),)

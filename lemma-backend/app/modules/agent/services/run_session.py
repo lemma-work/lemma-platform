@@ -91,7 +91,7 @@ from app.modules.agent.services.surface_context import surface_context_for_run
 from app.modules.agent.services.vision_service import vision_delegate_available
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.callables import grant_summary_of
-from app.modules.agent.infrastructure.tools.toolset_selection import (
+from app.modules.agent.domain.toolsets import (
     AgentGrantSummary,
     resolve_toolset_names,
 )
@@ -337,7 +337,7 @@ class RunSession:
         await self._record_cwd(uow_factory)
         # From the run's *effective* toolsets, not the agent's configured ones:
         # the always-on set, the grant-derived ones and the sub-agent
-        # withholding are all accounted for -- the list `RunToolAssembler`
+        # withholding are all accounted for -- the list `tool_catalog.specs_for`
         # builds tools from. The grants are kept so it need not read them again.
         grant_rows = await self._load_grants(uow_factory)
         run_toolsets, _ = resolve_toolset_names(agent, conversation, grants=self.grants)

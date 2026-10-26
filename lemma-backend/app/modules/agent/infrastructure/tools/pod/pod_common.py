@@ -14,9 +14,8 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-from pydantic_ai import ToolReturn
-
 from app.core.domain.errors import DomainError
+from app.modules.agent.domain.tools import WithImages
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.tools.approval.denials import remember_denial
 from app.modules.agent.domain.context import ToolContext
@@ -69,12 +68,12 @@ async def run_pod_tool(
     *,
     tool_name: str,
     args: JsonObject,
-    op: Callable[[PodServices], Awaitable["JsonObject | ToolReturn"]],
+    op: Callable[[PodServices], Awaitable[JsonObject | WithImages]],
     needs: frozenset[str] = frozenset(),
-) -> "JsonObject | ToolReturn":
+) -> JsonObject | WithImages:
     """Run a pod operation, mapping authorization 403s to ``needs_approval``.
 
-    Most ops return a ``JsonObject``; image tools return a ``ToolReturn`` so the
+    Most ops return a ``JsonObject``; image tools return ``WithImages`` so the
     model receives inline image content while only a reference is persisted.
 
     ``needs`` is every permission the operation will ask for, when the tool

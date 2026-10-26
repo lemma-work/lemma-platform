@@ -14,8 +14,6 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 import pytest
-from pydantic_ai.tools import RunContext
-from pydantic_ai.usage import RunUsage
 from sqlalchemy import select
 
 from app.core.infrastructure.db.session import async_session_maker
@@ -33,7 +31,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.infrastructure.tools.messaging.models import ChannelPostRequest
 from app.modules.agent.infrastructure.tools.messaging.people import call_a_person_in
-from app.modules.agent.infrastructure.tools.messaging.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.messaging.tools import (
     channel_post,
 )
 from app.modules.agent_surfaces.services.direct_messages import tell_member
@@ -99,19 +97,14 @@ async def _colleague(scenario: E2EScenario, name: str) -> tuple[dict, UUID]:
     return person, UUID(found.json()["pod_member_id"])
 
 
-def _ctx(seeded: Seeded, *, call: str) -> RunContext[ToolContext]:
+def _ctx(seeded: Seeded, *, call: str) -> ToolContext:
     """The run's context a messaging tool is called with."""
-    return RunContext(
-        deps=ToolContext(
-            user_id=seeded.user_id,
-            pod_id=seeded.pod_id,
-            conversation_id=seeded.conversation_id,
-            workload_id=seeded.agent_id,
-            agent_name=seeded.agent_name,
-        ),
-        model=None,  # type: ignore[arg-type]
-        usage=RunUsage(),
-        prompt=None,
+    return ToolContext(
+        user_id=seeded.user_id,
+        pod_id=seeded.pod_id,
+        conversation_id=seeded.conversation_id,
+        workload_id=seeded.agent_id,
+        agent_name=seeded.agent_name,
         tool_call_id=call,
     )
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +18,15 @@ from app.modules.workspace.contracts.host_execution import HostWorkspace
 
 if TYPE_CHECKING:
     from app.modules.workspace.contracts.tooling import WorkspaceFileManager
+
+
+@runtime_checkable
+class ToolCaller(Protocol):
+    """Runs another of the run's tools by name: the approval re-run's way in."""
+
+    async def call(
+        self, name: str, arguments: Mapping[str, object] | None, ctx: ToolContext
+    ) -> object: ...
 
 
 class ApprovedExecution(BaseModel):
@@ -191,6 +201,11 @@ class ToolContext(BaseModel):
     # `AgentInputRequired` pause signal. Over MCP the run cannot be paused mid
     # tool call, so the pausing tools park instead.
     supports_pause_signal: bool = False
+    # Set per call by the tool runtime: the call's durable id (an approval
+    # card, a widget and a parked call are addressed by it), and the runtime
+    # itself, through which an approved call re-runs a sibling tool.
+    tool_call_id: str | None = None
+    tools: ToolCaller | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

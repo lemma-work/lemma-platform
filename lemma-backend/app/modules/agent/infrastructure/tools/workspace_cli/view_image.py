@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import mimetypes
 
-from pydantic_ai import BinaryContent, ToolReturn
 
 from app.core.domain.errors import DomainError
+from app.modules.agent.domain.tools import ImagePart
+from app.modules.agent.domain.tools import WithImages
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.infrastructure.tools.approval.denials import remember_denial
 from app.modules.agent.domain.context import ToolContext
@@ -123,7 +124,7 @@ async def view_image_internal(
         )
 
     # Only a model that can actually accept image parts is given them. Handing
-    # BinaryContent to a text-only model poisons the whole request, and the
+    # image content to a text-only model poisons the whole request, and the
     # provider rejects the turn rather than the tool call.
     if getattr(ctx, "vision_mode", AgentVisionMode.UNAVAILABLE) is not (
         AgentVisionMode.DIRECT
@@ -139,8 +140,8 @@ async def view_image_internal(
             instructions=request.instructions,
         )
 
-    return ToolReturn(
-        return_value=ViewImageResponse(
+    return WithImages(
+        ViewImageResponse(
             success=True,
             message=f"Successfully read image {file_path}",
             file_path=file_path,
@@ -148,7 +149,5 @@ async def view_image_internal(
             source=source,
             size_bytes=len(content),
         ),
-        content=[
-            BinaryContent(data=payload, media_type=payload_media_type),
-        ],
+        (ImagePart(data=payload, media_type=payload_media_type),),
     )

@@ -18,7 +18,7 @@ import httpx2
 import pytest
 
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
-from app.modules.agent.infrastructure.transport_errors import (
+from app.modules.agent.infrastructure.providers.transport_errors import (
     local_model_server_down_message,
 )
 from app.modules.agent.infrastructure.providers import discovery

@@ -90,9 +90,9 @@ class TestTheApprovalPathsRedactToo:
         """Redacted for the model, but logged in full for whoever has to debug
         it: the redacted line was the only record, so a failing approved action
         left nothing to diagnose from."""
-        from app.modules.agent.services import approval_reconciliation
-        from app.modules.agent.infrastructure.tools.approval import (
-            executor as approval_executor,
+        from app.modules.agent.services import (
+            approval_executor,
+            approval_reconciliation,
         )
 
         class _Uow:
@@ -133,15 +133,16 @@ class TestTheApprovalPathsRedactToo:
             executor as approval_executor,
         )
         from app.modules.agent.domain.context import ToolContext
+        from app.modules.agent.services.tool_runtime import ToolRuntime
         from app.modules.agent.infrastructure.tools.user_interaction import (
-            pydantic_adapter,
+            tools as user_interaction,
         )
 
         async def _granted(**_kwargs) -> bool:
             return True
 
-        async def _explode(self, *, deps, tool_name, args):
-            del self, deps, tool_name, args
+        async def _explode(tools, uow_factory, *, deps, tool_name, args):
+            del tools, uow_factory, deps, tool_name, args
             raise RuntimeError(
                 "connect failed: https://hooks.example.com/x?token=sk-secret-value"
             )
@@ -149,12 +150,15 @@ class TestTheApprovalPathsRedactToo:
         monkeypatch.setattr(
             "app.core.authorization.session_approvals.has_session_approval", _granted
         )
-        monkeypatch.setattr(
-            approval_executor.ApprovalExecutor, "execute_as_user", _explode
-        )
+        monkeypatch.setattr(approval_executor, "run_approved", _explode)
 
-        response = await pydantic_adapter._run_if_exact_match_already_approved(
-            deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
+        response = await user_interaction._run_if_exact_match_already_approved(
+            deps=ToolContext(
+                user_id=uuid4(),
+                pod_id=uuid4(),
+                conversation_id=uuid4(),
+                tools=ToolRuntime([]),
+            ),
             tool_name="http_request",
             args={},
         )

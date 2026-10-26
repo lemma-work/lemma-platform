@@ -9,7 +9,6 @@ goes through.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -31,7 +30,7 @@ from app.modules.agent.infrastructure.tools.pod.pod_file_tools import (
     pod_read_file,
     pod_write_file,
 )
-from app.modules.agent.infrastructure.tools.pod.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.pod.tools import (
     pod_get_records,
     pod_tables,
     pod_write_record,
@@ -132,18 +131,16 @@ def _run_ctx(*, user_id, pod_id, workload_id, agent_name):
     and ``is_pod_default_agent`` follows from that rather than from the name.
     """
     resolved_workload_id = UUID(workload_id) if workload_id is not None else None
-    return SimpleNamespace(
-        deps=ToolContext(
-            user_id=UUID(user_id),
-            pod_id=UUID(pod_id),
-            conversation_id=uuid4(),
-            workload_type="agent" if workload_id is not None else None,
-            workload_id=resolved_workload_id,
-            agent_name=agent_name,
-            is_pod_default_agent=is_pod_default_agent(
-                resolved_workload_id, pod_id=UUID(pod_id)
-            ),
-        )
+    return ToolContext(
+        user_id=UUID(user_id),
+        pod_id=UUID(pod_id),
+        conversation_id=uuid4(),
+        workload_type="agent" if workload_id is not None else None,
+        workload_id=resolved_workload_id,
+        agent_name=agent_name,
+        is_pod_default_agent=is_pod_default_agent(
+            resolved_workload_id, pod_id=UUID(pod_id)
+        ),
     )
 
 
@@ -180,7 +177,7 @@ async def test_view_image_reads_a_pod_image_intact_without_leaking_bytes(
     from PIL import Image
 
     from app.modules.agent.domain.vision import AgentVisionMode
-    from app.modules.agent.infrastructure.mcp_content import tool_call_result
+    from app.modules.agent.infrastructure.mcp.content import tool_call_result
     from app.modules.agent.infrastructure.tools.workspace_cli.models import (
         ViewImageRequest,
     )

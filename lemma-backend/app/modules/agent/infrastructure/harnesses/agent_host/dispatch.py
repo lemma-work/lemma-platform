@@ -50,7 +50,6 @@ from app.modules.agent.infrastructure.harnesses.agent_host.pre_approvals import 
 )
 from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     AgentHostRunConfig,
-    joined_prompt,
     json_object,
     offered_selections,
 )
@@ -65,11 +64,6 @@ from app.modules.agent.infrastructure.harnesses.remote_payload import (
     mcp_payload,
     run_start_payload,
     token_expires_at,
-)
-from app.modules.agent.infrastructure.mcp import exported_tool_name
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_toolset import (
-    FINAL_ANSWER_TOOL_NAME,
-    final_answer_expected,
 )
 from app.modules.agent.domain.workspace_location import resolve_workspace_location
 
@@ -119,7 +113,7 @@ async def refresh_credential[DepsT: ToolContext](
     uow_factory: UnitOfWorkFactory,
     agent_run_id: UUID,
     ctx: DepsT,
-    options: HarnessOptions[DepsT],
+    options: HarnessOptions,
     agent: Agent,
     conversation: Conversation,
 ) -> datetime | None:
@@ -139,11 +133,6 @@ async def refresh_credential[DepsT: ToolContext](
             conversation_id=conversation.id,
             ctx=ctx,
             options=options,
-            extra_tool_names=(
-                [exported_tool_name(FINAL_ANSWER_TOOL_NAME)]
-                if final_answer_expected(agent=agent, conversation=conversation)
-                else []
-            ),
         )
         encrypted = await get_secret_cipher().encrypt_json_async(mcp)
         if encrypted is None:
@@ -199,7 +188,7 @@ async def enqueue_run[DepsT: ToolContext](
     conversation: Conversation,
     messages: Sequence[Message],
     ctx: DepsT,
-    options: HarnessOptions[DepsT],
+    options: HarnessOptions,
     agent_run_id: UUID,
     run_config: AgentHostRunConfig,
 ) -> DispatchedRun:
@@ -489,7 +478,7 @@ async def _admit[DepsT: ToolContext](
     conversation: Conversation,
     messages: Sequence[Message],
     ctx: DepsT,
-    options: HarnessOptions[DepsT],
+    options: HarnessOptions,
     agent_run_id: UUID,
     run_config: AgentHostRunConfig,
     admission: _Admission,
@@ -518,15 +507,6 @@ async def _admit[DepsT: ToolContext](
         conversation_id=conversation.id,
         ctx=ctx,
         options=options,
-        prompt=joined_prompt(prompt),
-        # final_answer is served by the MCP route but is not in
-        # options.toolsets (the in-process harness gets it via output_type),
-        # so name it explicitly.
-        extra_tool_names=(
-            [exported_tool_name(FINAL_ANSWER_TOOL_NAME)]
-            if final_answer_expected(agent=agent, conversation=conversation)
-            else []
-        ),
     )
     encrypted_mcp = await get_secret_cipher().encrypt_json_async(mcp)
     if encrypted_mcp is None:

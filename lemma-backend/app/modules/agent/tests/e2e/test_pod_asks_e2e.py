@@ -9,7 +9,6 @@ finished by hand, which is all the delivery rules look at.
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -288,13 +287,11 @@ async def test_the_first_ask_to_a_pod_needs_the_persons_ok(
 ):
     support, billing = await _two_pods(authenticated_client, fixed_test_org)
     asking = await _chat(authenticated_client, support)
-    ctx = SimpleNamespace(
-        deps=_deps(
-            user_id=UUID(fixed_test_user["id"]),
-            org_id=UUID(fixed_test_org["id"]),
-            pod_id=support,
-            conversation_id=asking,
-        )
+    ctx = _deps(
+        user_id=UUID(fixed_test_user["id"]),
+        org_id=UUID(fixed_test_org["id"]),
+        pod_id=support,
+        conversation_id=asking,
     )
     response = await ask_teammate(
         ctx,
@@ -320,13 +317,11 @@ async def test_a_pod_cannot_ask_itself_and_names_what_it_can_ask(
 ):
     support, billing = await _two_pods(authenticated_client, fixed_test_org)
     asking = await _chat(authenticated_client, support)
-    ctx = SimpleNamespace(
-        deps=_deps(
-            user_id=UUID(fixed_test_user["id"]),
-            org_id=UUID(fixed_test_org["id"]),
-            pod_id=support,
-            conversation_id=asking,
-        )
+    ctx = _deps(
+        user_id=UUID(fixed_test_user["id"]),
+        org_id=UUID(fixed_test_org["id"]),
+        pod_id=support,
+        conversation_id=asking,
     )
     itself = await ask_teammate(
         ctx, AskTeammateRequest(teammate=support, request="Hello?")
@@ -359,7 +354,7 @@ async def _approve_asks(
     )
     # The pod's assistant runs as the workload whose id is its pod's.
     deps.workload_id = UUID(str(agent_id)) if agent_id else pod_id
-    refused = await ask_teammate(SimpleNamespace(deps=deps), request)
+    refused = await ask_teammate(deps, request)
     assert refused.needs_approval is True, refused
     # The card going up, with what was refused written on it.
     approval_id = f"call-{uuid4().hex[:12]}"

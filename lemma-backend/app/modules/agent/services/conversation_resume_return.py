@@ -41,6 +41,7 @@ from app.modules.agent.services.approval_reconciliation import (
     execute_approved_tool_as_user,
     record_session_approvals,
 )
+from app.modules.agent.domain.pausing_tools import PausingKind
 
 if TYPE_CHECKING:
     from app.modules.agent.domain.context import ToolContext
@@ -133,7 +134,7 @@ class ResumeToolReturnBuilder:
             # branch would try to run it.
             return "request_approval", _budget_decision_return(decision)
 
-        if kind == "ask_user":
+        if kind == PausingKind.ASK_USER:
             if decision == AgentRunApprovalDecision.DENY:
                 content = AskUserResponse(
                     success=False,
@@ -153,7 +154,7 @@ class ResumeToolReturnBuilder:
                 )
             return "ask_user", content.model_dump(mode="json")
 
-        if kind == "browser_sign_in":
+        if kind == PausingKind.BROWSER_SIGN_IN:
             return "browser_sign_in", await self._browser_sign_in_return(
                 tool_args=tool_args,
                 decision=decision,

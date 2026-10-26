@@ -15,8 +15,10 @@ from app.modules.agent.domain.calls import (
     worker_canvas_note,
 )
 from app.modules.agent.infrastructure.tools.call.models import RelayToVoiceRequest
-from app.modules.agent.infrastructure.tools.call.pydantic_adapter import relay_to_voice
-from app.modules.agent.infrastructure.tools.tool_assembler import _call_toolsets
+from app.modules.agent.infrastructure.tools.call.tools import relay_to_voice
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
 
 pytestmark = pytest.mark.unit
 
@@ -30,18 +32,28 @@ def test_a_call_mark_round_trips_and_a_worker_inherits_the_call() -> None:
     assert CallMark.from_json(None) is None
 
 
-def test_only_the_coordinator_gets_the_voice_and_nothing_else_is_added() -> None:
-    def conversation(call: CallMark | None) -> SimpleNamespace:
-        return SimpleNamespace(call=call)
+async def test_only_the_coordinator_gets_the_voice_and_nothing_else_is_added() -> None:
+    user_id, pod_id = uuid4(), uuid4()
 
-    call_id = uuid4()
-    coordinator = CallMark(call_id=call_id, role=CallRole.COORDINATOR)
-    [toolset] = _call_toolsets(conversation(coordinator))
-    assert set(toolset.tools) == {"relay_to_voice"}  # type: ignore[attr-defined]
+    async def voice_tools(call: CallMark | None) -> set[str]:
+        conversation = Conversation(user_id=user_id, pod_id=pod_id, call=call)
+        ctx = ToolContext(
+            user_id=user_id, pod_id=pod_id, conversation_id=conversation.id
+        )
+        specs = await specs_for(
+            agent=None,
+            conversation=conversation,
+            ctx=ctx,
+            surface=ToolSurface.IN_PROCESS,
+            uow_factory=None,
+        )
+        return {spec.name for spec in specs} & {"relay_to_voice"}
+
+    coordinator = CallMark(call_id=uuid4(), role=CallRole.COORDINATOR)
+    assert await voice_tools(coordinator) == {"relay_to_voice"}
     # Its sub-agents show things with `display_resource` like any run.
-    assert _call_toolsets(conversation(coordinator.for_worker())) == []
-    assert _call_toolsets(conversation(None)) == []
-    assert _call_toolsets(None) == []
+    assert await voice_tools(coordinator.for_worker()) == set()
+    assert await voice_tools(None) == set()
 
 
 def test_the_canvas_is_what_runs_already_show() -> None:
@@ -57,7 +69,7 @@ def test_the_canvas_is_what_runs_already_show() -> None:
 
 
 async def test_a_relay_is_acknowledged_as_recorded_not_as_said() -> None:
-    ctx = SimpleNamespace(tool_call_id="call-1", deps=SimpleNamespace())
+    ctx = SimpleNamespace(tool_call_id="call-1")
     said = await relay_to_voice(
         ctx, RelayToVoiceRequest(text="found three", urgency="when_idle")
     )  # type: ignore[arg-type]

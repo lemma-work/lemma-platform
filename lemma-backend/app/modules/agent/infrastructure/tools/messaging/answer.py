@@ -12,13 +12,12 @@ comes through an agent.
 
 from __future__ import annotations
 
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import ReplayClass, ToolGroup, ToolPolicy, tool
 from app.modules.agent.infrastructure.tools.messaging.models import (
     AnswerQuestionRequest,
     AnswerQuestionResponse,
@@ -31,7 +30,7 @@ ANSWER_TOOL_NAME = "answer_question"
 
 
 async def answer_question(
-    ctx: RunContext[ToolContext], request: AnswerQuestionRequest
+    ctx: ToolContext, request: AnswerQuestionRequest
 ) -> AnswerQuestionResponse:
     """Record their answer to a question waiting on them.
 
@@ -40,7 +39,7 @@ async def answer_question(
     refused, and you can ask them again. Never answer for them, or with detail
     they did not give you.
     """
-    deps = ctx.deps
+    deps = ctx
     if deps.pod_id is None or run_audience(deps).answers_outsiders:
         return AnswerQuestionResponse(
             success=False, error="Only a member's questions are answered here."
@@ -64,4 +63,8 @@ async def answer_question(
     )
 
 
-answer_toolset = FunctionToolset[ToolContext](tools=[answer_question])
+# A question is answered once: a replayed call is refused and the first
+# answer is the one recorded.
+SPECS = (
+    tool(answer_question, ToolGroup.QUESTIONS, ToolPolicy(replay=ReplayClass.KEYED)),
+)

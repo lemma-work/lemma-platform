@@ -32,8 +32,6 @@ from pydantic_ai.profiles import ModelProfile
 
 from app.core.auth_state_cache import AccountStanding
 from app.core.security import PrincipalLookups
-from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-from app.modules.agent.capabilities.outsider_gate import OutsiderToolGateCapability
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.calls import CallMark, CallRole
 from app.modules.agent.domain.entities import Agent, Conversation
@@ -42,11 +40,16 @@ from app.modules.agent.domain.value_objects import (
     AgentToolset,
     ConversationOrigin,
     ConversationType,
-    HarnessKind,
 )
 from app.modules.agent.domain.vision import AgentVisionMode
+from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+    harness_capabilities,
+)
 from app.modules.agent.infrastructure.harness.lemma.run_options import (
     final_answer_output,
+)
+from app.modules.agent.infrastructure.harness.lemma.toolset_adapter import (
+    function_toolset,
 )
 from app.modules.agent.services.conversation_mcp_service import (
     ConversationMCPService,
@@ -56,9 +59,9 @@ from app.modules.agent.services.pod_mcp_service import (
     VerifiedSession,
 )
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.infrastructure.tools.dispatcher import AgentToolDispatcher
-from app.modules.agent.infrastructure.tools.tool_assembler import RunToolAssembler
-from app.modules.agent.infrastructure.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.domain.toolsets import AgentGrantSummary
+from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
+from app.modules.agent.services.tool_runtime import ToolRuntime
 from app.modules.mcp_access.contracts import McpPrincipal, Scope
 from app.modules.workspace.contracts.host_execution import HostWorkspace
 
@@ -246,7 +249,7 @@ def _stubbed_loads(monkeypatch: pytest.MonkeyPatch) -> None:
     """The reads a run's tools make while being built, answered without a database."""
     from app.modules.agent.infrastructure.repositories import AgentRepository
     from app.modules.agent.infrastructure.tools.connectors import (
-        pydantic_adapter as connectors_adapter,
+        tools as connectors_adapter,
     )
     from app.modules.agent_surfaces.domain.credentials import SlackCredentials
     from app.modules.agent_surfaces.infrastructure.adapters import (
@@ -338,20 +341,20 @@ async def _in_process_listing(
     grants: AgentGrantSummary | None,
 ) -> dict[str, Any]:
     """What the model's first request carries, through the real assembly."""
-    toolsets = await RunToolAssembler(_uow_factory).assemble(
+    specs = await specs_for(
         agent=agent,
         conversation=conversation,
-        vision_mode=ctx.vision_mode,
+        ctx=ctx,
+        surface=ToolSurface.IN_PROCESS,
+        uow_factory=_uow_factory,
         grants=grants,
-        host_execution=ctx.host_execution_mode,
-        harness_kind=HarnessKind.LEMMA,
-        surface_platform=ctx.surface_platform,
     )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=ctx, full_toolsets=toolsets, enable_prompt_caching=False
+    capabilities = harness_capabilities(
+        ctx=ctx,
+        specs=specs,
+        runtime=ToolRuntime(specs),
+        enable_prompt_caching=False,
     )
-    if ctx.audience.answers_outsiders:
-        capabilities.append(OutsiderToolGateCapability())
     return await _first_request(
         capabilities=capabilities,
         ctx=ctx,
@@ -406,7 +409,6 @@ async def _agent_host_listing(
 ) -> list[dict[str, Any]]:
     service = ConversationMCPService()
     service.uow_factory = _uow_factory
-    service.dispatcher = AgentToolDispatcher(_uow_factory)
 
     async def load(**_kwargs: object) -> tuple[Any, ...]:
         return agent, conversation, ctx, grants
@@ -433,7 +435,6 @@ async def _pod_listings() -> dict[str, list[dict[str, Any]]]:
         ),
     )
     service.uow_factory = _uow_factory
-    service.dispatcher = AgentToolDispatcher(_uow_factory)
     session = await service.list_tools(pod_id=POD, token="session")
     read_only = await service.list_tools(
         pod_id=POD,
@@ -465,32 +466,35 @@ async def _standalone_toolsets() -> dict[str, Any]:
     from app.modules.agent.domain.agent_memory_paths import agent_memory_paths
     from app.modules.agent.infrastructure.tools.pod.memory_pass_tools import (
         MemoryScope,
-        memory_pass_toolset,
+        memory_pass_specs,
     )
     from app.modules.agent_surfaces.domain.credentials import TeamsCredentials
     from app.modules.agent_surfaces.platforms.teams.tools import (
-        build_teams_surface_toolset,
+        teams_surface_tools,
     )
     from app.modules.agent_surfaces.services.surface_send_tools import (
-        build_surface_send_toolset,
+        surface_send_tools,
     )
     from app.modules.agent_surfaces.services.whatsapp_group_tool import (
-        build_whatsapp_group_toolset,
+        whatsapp_group_tools,
     )
 
     named = _named(toolsets=_NAMED_TOOLSETS)
     ctx = _ctx(named, _conversation())
     toolsets = {
-        "memory_pass": memory_pass_toolset(MemoryScope(agent_memory_paths(named))),
-        "teams": build_teams_surface_toolset(credentials=TeamsCredentials()),
-        "surface_send": build_surface_send_toolset(),
-        "whatsapp_group": build_whatsapp_group_toolset(
+        "memory_pass": memory_pass_specs(MemoryScope(agent_memory_paths(named))),
+        "teams": teams_surface_tools(credentials=TeamsCredentials()),
+        "surface_send": surface_send_tools(),
+        "whatsapp_group": whatsapp_group_tools(
             uow_factory=_uow_factory, surface_id=SANDBOX
         ),
     }
     return {
-        name: await _first_request(capabilities=[Toolset(toolset)], ctx=ctx)
-        for name, toolset in toolsets.items()
+        name: await _first_request(
+            capabilities=[Toolset(function_toolset(specs, ToolRuntime(specs)))],
+            ctx=ctx,
+        )
+        for name, specs in toolsets.items()
     }
 
 

@@ -18,28 +18,27 @@ import pytest
 
 from app.core.domain.errors import DomainError
 from app.modules.agent.infrastructure.tools.connectors import (
-    pydantic_adapter as adapter,
+    tools as adapter,
 )
 from app.modules.agent.infrastructure.tools.connectors.models import (
     RunConnectorOperationRequest,
     SearchConnectorOperationsRequest,
 )
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import NoArguments
 
 
 _DEFAULT = object()
 
 
-def _run_ctx(*, org_id=_DEFAULT) -> SimpleNamespace:
+def _run_ctx(*, org_id=_DEFAULT) -> ToolContext:
     # Sentinel, not None: org_id=None is the case under test, so it must be
     # distinguishable from "caller did not specify".
-    return SimpleNamespace(
-        deps=ToolContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            org_id=uuid4() if org_id is _DEFAULT else org_id,
-        )
+    return ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        org_id=uuid4() if org_id is _DEFAULT else org_id,
     )
 
 
@@ -67,7 +66,7 @@ def _patch_services(monkeypatch, services) -> None:
 def test_the_toolset_is_four_tools_not_one_per_operation():
     """Compiling a tool per operation would blow the budget the moment a tenant
     installs an MCP server; discovery stays dynamic instead."""
-    assert set(adapter.connectors_toolset.tools) == {
+    assert {spec.name for spec in adapter.SPECS} == {
         "list_connectors",
         "search_connector_operations",
         "describe_connector_operation",
@@ -213,8 +212,8 @@ async def test_a_conversation_without_a_pod_says_so_once(monkeypatch):
     """Connectors are the pod's; an unbound conversation should get one clear
     answer rather than a connection attempt that fails obscurely."""
     ctx = _run_ctx()
-    ctx.deps.pod_id = None
-    result = await adapter.list_connectors(ctx)
+    ctx.pod_id = None
+    result = await adapter.list_connectors(ctx, NoArguments())
     assert result["code"] == "no_pod"
     assert result["success"] is False
 
@@ -232,7 +231,7 @@ async def test_the_list_names_only_the_connectors_the_agent_may_use(monkeypatch)
         ),
     )
 
-    result = await adapter.list_connectors(_run_ctx())
+    result = await adapter.list_connectors(_run_ctx(), NoArguments())
 
     assert result["count"] == 1
     assert result["items"][0]["connector"] == "gmail"
@@ -375,7 +374,7 @@ async def test_an_attachment_is_read_as_the_agent_and_output_path_stays_lemmas(
         monkeypatch,
         SimpleNamespace(
             ctx=agent_ctx,
-            files=OperationFiles(Pod(), pod_id=run_ctx.deps.pod_id, ctx=agent_ctx),
+            files=OperationFiles(Pod(), pod_id=run_ctx.pod_id, ctx=agent_ctx),
             operations=SimpleNamespace(
                 pod_connector_operation=AsyncMock(
                     return_value=SimpleNamespace(input_schema=None)
@@ -411,7 +410,7 @@ async def test_an_attachment_is_read_as_the_agent_and_output_path_stays_lemmas(
         {"file_to_upload": MaterializedFile(b"%PDF", "q3.pdf", "application/pdf")}
     ]
     # Read in the agent's own pod, under the agent's delegated context.
-    assert reads == [(run_ctx.deps.pod_id, "/me/q3.pdf", agent_ctx)]
+    assert reads == [(run_ctx.pod_id, "/me/q3.pdf", agent_ctx)]
 
 
 def _offer(name: str) -> SimpleNamespace:
@@ -438,7 +437,7 @@ async def test_the_list_offers_the_persons_own_installations_too(monkeypatch):
         ),
     )
 
-    result = await adapter.list_connectors(_run_ctx())
+    result = await adapter.list_connectors(_run_ctx(), NoArguments())
 
     assert [item["connector"] for item in result["items"]] == ["support", "gmail"]
     assert result["items"][1]["mode"] == "PER_MEMBER"

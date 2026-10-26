@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
+    RequestApprovalArguments,
+)
+
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -21,12 +25,10 @@ def _email_ctx(platform: str) -> SimpleNamespace:
     """A run context on an email surface with pause support available (so only
     the email guard, not the pause-signal guard, can trigger the fallback)."""
     return SimpleNamespace(
-        deps=SimpleNamespace(
-            agent_run_id=uuid4(),
-            conversation_id=uuid4(),
-            supports_pause_signal=True,
-            surface_platform=platform,
-        ),
+        agent_run_id=uuid4(),
+        conversation_id=uuid4(),
+        supports_pause_signal=True,
+        surface_platform=platform,
         tool_call_id="tool-1",
     )
 
@@ -43,11 +45,11 @@ async def test_ask_user_pauses_on_an_email_surface_too(platform):
     delivery cardinality -- the question has to ride in the reply -- and an
     agent facing a destructive action can now ask instead of guessing.
     """
-    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.domain.tools import AgentInputRequired
     from app.modules.agent.infrastructure.tools.user_interaction.models import (
         AskUserRequest,
     )
-    from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.user_interaction.tools import (
         ask_user,
     )
 
@@ -74,28 +76,30 @@ async def test_request_approval_pauses_on_an_email_surface_too(platform):
     It previously either happened unapproved or silently did not happen, because
     the agent was told to pick a default and proceed.
     """
-    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
-    from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
+    from app.modules.agent.domain.tools import AgentInputRequired
+    from app.modules.agent.infrastructure.tools.user_interaction.tools import (
         request_approval,
     )
 
     with pytest.raises(AgentInputRequired):
         await request_approval(
             _email_ctx(platform),
-            tool_name="exec_command",
-            args={"cmd": "lemma records delete orders --id 42"},
-            title="Delete order 42",
+            RequestApprovalArguments(
+                tool_name="exec_command",
+                args={"cmd": "lemma records delete orders --id 42"},
+                title="Delete order 42",
+            ),
         )
 
 
 @pytest.mark.asyncio
 async def test_ask_user_still_pauses_on_chat_surface():
     """The email guard must not affect chat surfaces — ask_user still pauses."""
-    from app.modules.agent.infrastructure.tools.tool_errors import AgentInputRequired
+    from app.modules.agent.domain.tools import AgentInputRequired
     from app.modules.agent.infrastructure.tools.user_interaction.models import (
         AskUserRequest,
     )
-    from app.modules.agent.infrastructure.tools.user_interaction.pydantic_adapter import (
+    from app.modules.agent.infrastructure.tools.user_interaction.tools import (
         ask_user,
     )
 
