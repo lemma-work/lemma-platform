@@ -50,7 +50,11 @@ app no longer signs its user out over it, and any other provider `4xx` is
 reported as the provider's answer with its reason quoted. A session that cannot
 be checked is a `503`, not a `401`. `lemma` gains `channels` for chats and
 `decisions` for asking a closed question about any evidence, in one call, from
-the API and both SDKs too.
+the API and both SDKs too. `lemma connectors run` reaches your own connection
+in one call, `lemma files retry` reprocesses a file that failed for good, and
+`lemma schedules create` takes `--timezone`, says when a new schedule will
+first fire, and refuses two triggers rather than keeping the last. A cron
+without a zone is UTC.
 
 If you use `lemma-sdk` for Python or TypeScript, or the `lemma` CLI, upgrade the
 package; the generated clients carry every change above.
@@ -99,7 +103,9 @@ filters, workflow questions and call routing are asked through decisions.
 Agents can hold voice calls. The call runs on the API with a coordinator agent
 and a canvas both sides see, captions arrive once, the transcript stays in
 view, a failure is audible rather than silent, and Gemini Live runs on Vertex
-AI.
+AI. A call placed from a chat is held in that chat (`POST /calls` takes
+`conversation_id`), a dropped connection rejoins the call, and the voice says
+only what the team has actually done.
 
 ## Agents that answer first
 
@@ -108,8 +114,11 @@ its memory after the turn, a worker is warm before its first turn, and text
 streams every 50 milliseconds. Runs are faster and cheaper — no request cap,
 honest timeouts, cacheable prompts — and a run woken later gets the tools it is
 told about, while a call repeated in a loop pauses the run to ask. Agents have
-a library of widgets that act on the real thing rather than only display it,
-and a live Gmail inbox widget shows unread mail in one turn.
+a library of widgets that act on the real thing rather than only display it --
+their buttons run through the pod's connectors, and offer to connect an account
+that is missing -- and a live Gmail inbox widget shows unread mail in one turn.
+An agent may delete a schedule it made, and reactivating a paused schedule
+forgives the failures that paused it.
 
 ## Desktop
 
