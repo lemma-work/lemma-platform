@@ -39,6 +39,8 @@ from app.modules.agent.services.runtime_profile_service import (
     runtime_profile_service_for,
 )
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
+from app.modules.agent.config import agent_settings
+from app.modules.agent.services.run_signals import RunSignals
 from app.modules.agent.services.run_limits import (
     budget_for_run,
     make_stop_checker,
@@ -286,6 +288,12 @@ class AgentRunnerService:
             # that had 900k to spare, and a 110k "ceiling" on a 128k model is
             # not a ceiling at all.
             context_budget = context_budget_for(resolved_runtime.model)
+            # Steer and stop are pushed to the run; the database is read when
+            # signalled, and on a slow backstop.
+            signals = RunSignals(
+                agent_run_id,
+                backstop_seconds=agent_settings.agent_run_control_backstop_seconds,
+            )
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 tools=tools,
@@ -295,8 +303,9 @@ class AgentRunnerService:
                 compaction_model_settings=compaction_model_settings,
                 lighter_reasoning_settings=lighter_reasoning_settings,
                 should_stop=make_stop_checker(
-                    agent_run_id, uow_factory=self.uow_factory
+                    agent_run_id, uow_factory=self.uow_factory, signals=signals
                 ),
+                steer_due=signals.steer_due,
                 spend=budget_for_run(run_with_usage),
                 history_summarization_token_limit=(
                     context_budget.summarization_token_limit
@@ -354,8 +363,11 @@ class AgentRunnerService:
                             source_type=run.usage_source,
                             source_id=str(agent_run_id),
                         )
-                        async with metering_execution(
-                            run_usage_context, factory=self.uow_factory
+                        async with (
+                            metering_execution(
+                                run_usage_context, factory=self.uow_factory
+                            ),
+                            signals.listening(conversation.pod_id),
                         ):
                             await drive_harness(
                                 self.event_pump,

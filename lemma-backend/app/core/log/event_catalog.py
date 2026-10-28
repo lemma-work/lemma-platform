@@ -185,6 +185,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.run_observer.failure_delivery.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.run_observer.finish_delivery.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.run_observer.start_delivery.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
+    'agent.run_signals.listen_failed.degraded': EventSpec('warning', frozenset({'pod_id'})),
     'agent.runtime_availability.lookup_failed.degraded': EventSpec('warning', frozenset({'profile_id'})),
     'agent.runtime_availability.mark_failed.degraded': EventSpec('warning', frozenset({'profile_id'})),
     'agent.runtime_model_factory.provider_client_close_failed.degraded': EventSpec('warning', frozenset()),

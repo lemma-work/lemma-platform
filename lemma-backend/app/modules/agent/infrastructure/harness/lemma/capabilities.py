@@ -91,6 +91,7 @@ def harness_capabilities(
     claim_steered: ClaimSteered | None = None,
     on_steered: OnSteered | None = None,
     reveals_tools_natively: bool = True,
+    steer_due: Callable[[], bool] | None = None,
 ) -> list[AgentCapability[ToolContext]]:
     """Every capability an in-process run gets, its tools included.
 
@@ -106,7 +107,7 @@ def harness_capabilities(
             runtime=runtime,
             enable_prompt_caching=enable_prompt_caching,
             protocol=protocol,
-            steering=(claim_steered, on_steered),
+            steering=(claim_steered, on_steered, steer_due),
             reveals_tools_natively=reveals_tools_natively,
         )
         span.set_attribute("lemma.capabilities", len(capabilities))
@@ -120,7 +121,9 @@ def _capabilities(
     runtime: ToolRuntime,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol,
-    steering: tuple[ClaimSteered | None, OnSteered | None] = (None, None),
+    steering: tuple[
+        ClaimSteered | None, OnSteered | None, Callable[[], bool] | None
+    ] = (None, None, None),
     reveals_tools_natively: bool = True,
 ) -> list[AgentCapability[ToolContext]]:
     groups = _groups(spec for spec in specs if spec.toolset is not ToolGroup.QUESTIONS)
@@ -209,6 +212,7 @@ def _run_hooks(
     ctx: ToolContext,
     claim_steered: ClaimSteered | None = None,
     on_steered: OnSteered | None = None,
+    steer_due: Callable[[], bool] | None = None,
 ) -> list[AgentCapability[ToolContext]]:
     """Steering, memory guidance and the platform's guidance, as the run has them."""
     hooks: list[AgentCapability[ToolContext]] = []
@@ -219,6 +223,7 @@ def _run_hooks(
                 agent_run_id=ctx.agent_run_id,
                 claim=claim_steered,
                 on_steered=on_steered,
+                due=steer_due,
             )
         )
     if ctx.memory_enabled:

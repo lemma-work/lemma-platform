@@ -56,10 +56,12 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         agent_run_id: UUID,
         claim: ClaimSteered | None = None,
         on_steered: OnSteered | None = None,
+        due: Callable[[], bool] | None = None,
     ) -> None:
         self._agent_run_id = agent_run_id
         self._claim_from = claim
         self._on_steered = on_steered
+        self._due = due
 
     def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
         return "pending_user_messages"
@@ -67,14 +69,18 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
     async def before_node_run(self, ctx: RunContext[Any], *, node: Any) -> Any:
         """Claim anything the person has said since, and hand it to the model.
 
-        One indexed statement per node, which is normally an update matching no
-        rows -- the person is usually not typing while the agent works.
+        One indexed statement, only when ``due`` says so: a message queued to
+        the run signals it (``services/run_signals``); with no ``due``, before
+        every node.
 
         The claim is one statement, so a database error is the whole of what it
         can fail with, and losing it must not lose the turn already in hand: the
         rows stay unclaimed and the completion backstop answers them. Anything
         else raised here is a bug and is left to surface.
         """
+        if self._due is not None and not self._due():
+            # Nothing was signalled to this run: no statement.
+            return node
         try:
             messages = await (
                 self._claim_from(self._agent_run_id)

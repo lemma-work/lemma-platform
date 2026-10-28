@@ -55,6 +55,9 @@ class HarnessOptions:
     #: budget as the settings give it.
     context_window: int = 0
     should_stop: Callable[[], Awaitable[bool]] | None = None
+    #: Whether to claim what the person sent to the run now: signalled to it,
+    #: or overdue (``services/run_signals``). None claims before every node.
+    steer_due: Callable[[], bool] | None = None
     # What this run may spend before it pauses to ask whether to carry on. None
     # leaves it uncapped, which is what every caller did before budgets existed
     # and what a test that is not about budgets still wants.

@@ -19,6 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.infrastructure.db.transient_errors import is_database_unavailable
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.agent.services.run_signals import RunSignals
 from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.run_budget import RunBudget, RunSpend
@@ -57,9 +58,17 @@ def budget_for_run(run: object) -> RunSpend:
 
 
 def make_stop_checker(
-    agent_run_id: UUID, *, uow_factory: UnitOfWorkFactory
+    agent_run_id: UUID,
+    *,
+    uow_factory: UnitOfWorkFactory,
+    signals: RunSignals | None = None,
 ) -> Callable[[], Awaitable[bool]]:
-    """The stop signal the harness polls, throttled and sticky."""
+    """The stop signal the harness polls, throttled and sticky.
+
+    With ``signals`` the stop is pushed: a signalled stop is true at once, and
+    the run's status is read only when signalled or on the slow backstop
+    (``services/run_signals``). Without, it is polled every interval.
+    """
 
     async def _stop_requested() -> bool:
         try:
@@ -82,10 +91,18 @@ def make_stop_checker(
             AgentRunStatus.STOPPED,
         }
 
-    return throttled_sticky(
-        _stop_requested,
-        interval=agent_settings.agent_run_stop_poll_interval_seconds,
-    )
+    if signals is None:
+        return throttled_sticky(
+            _stop_requested,
+            interval=agent_settings.agent_run_stop_poll_interval_seconds,
+        )
+
+    async def _pushed() -> bool:
+        if signals.stop_signalled():
+            return True
+        return signals.stop_check_due() and await _stop_requested()
+
+    return throttled_sticky(_pushed, interval=0)
 
 
 def throttled_sticky(

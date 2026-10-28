@@ -125,6 +125,13 @@ class AgentSettings(BaseSettings):
         default=1.0,
         description="Minimum interval between database polls of an agent run's stop flag.",
     )
+    agent_run_control_backstop_seconds: float = Field(
+        default=15.0,
+        description=(
+            "How often a run looks for a stop or a steered message nobody "
+            "signalled to it (a lost live signal): the pushed path's backstop."
+        ),
+    )
     agent_context_brief_cache_ttl_seconds: int = Field(
         default=60,
         description="TTL for cached rendered agent runtime-context briefs; zero disables caching.",

@@ -31,6 +31,12 @@ EXPECTED = [
         7200.0,
     ),
     ("agent_run_warn_at", "AGENT_RUN_WARN_AT", 0.8),
+    # How often a run looks for a stop or a steer nobody signalled to it.
+    (
+        "agent_run_control_backstop_seconds",
+        "AGENT_RUN_CONTROL_BACKSTOP_SECONDS",
+        15.0,
+    ),
     # How long an Agent Host turn may hold its worker parked on a person.
     (
         "agent_host_parked_window_seconds",

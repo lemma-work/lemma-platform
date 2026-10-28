@@ -19,6 +19,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.services.run_signals import STEER, signal_run
 from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
 from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
@@ -63,6 +64,17 @@ from app.modules.agent.services.surface_context import (
 )
 from app.modules.agent.services.usage_preflight import assert_turn_allowed
 from app.modules.usage.contracts.execution import UsageService, build_usage_service
+
+
+def _tell_the_run_in_flight(
+    uow: SqlAlchemyUnitOfWork,
+    conversation: Conversation,
+    run_id: UUID,
+    held: HeldTurn | None,
+) -> None:
+    """A message queued into the run in flight: it claims it when told to."""
+    if held is None and conversation.pod_id is not None:
+        signal_run(uow.session, pod_id=conversation.pod_id, run_id=run_id, op=STEER)
 
 
 def _queued_unless(started_new_run: bool, state: MessageState) -> MessageState:
@@ -242,6 +254,8 @@ class AdmitMessage:
             ),
         )
 
+        if not started_new_run:
+            _tell_the_run_in_flight(self.uow, conversation, answering_run_id, held)
         if started_new_run:
             # The turn commits with the run and its message, or not at all.
             await stage_agent_turn(

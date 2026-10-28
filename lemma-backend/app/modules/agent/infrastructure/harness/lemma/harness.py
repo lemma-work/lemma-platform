@@ -320,6 +320,7 @@ class PydanticAIHarness:
             claim_steered=self._claim_steered,
             on_steered=recorder.claimed if recorder is not None else None,
             reveals_tools_natively=reveals_natively,
+            steer_due=options.steer_due,
         )
         # Before the history processors, not after. Capabilities run in
         # registration order, and the processors include the hard-ceiling guard
