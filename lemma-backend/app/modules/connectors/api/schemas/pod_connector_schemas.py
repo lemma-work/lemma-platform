@@ -7,7 +7,9 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.modules.connectors.api.schemas.strict_patch import StrictPatch
 
 from app.modules.connectors.domain.pod_connector import (
     SLUG_PATTERN,
@@ -21,21 +23,36 @@ from app.modules.connectors.domain.pod_connector import (
 
 
 class PodConnectorCreateRequest(BaseModel):
-    slug: str = Field(
+    slug: str | None = Field(
+        default=None,
         description=(
             "Pod-local name apps, agents and bundles address it by, e.g. "
-            "`gmail` or `support-inbox`."
-        )
+            "`gmail` or `support-inbox`. Left out: the installation's name, "
+            "made free in this pod."
+        ),
     )
-    auth_config_id: UUID = Field(
-        description="The organization installation this connector uses."
+    auth_config_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The organization installation this connector uses. Give this or "
+            "`connector_id`."
+        ),
+    )
+    connector_id: str | None = Field(
+        default=None,
+        description=(
+            "A catalog connector (`gmail`) instead of an installation: its "
+            "organization default, or -- when the organization has none and you "
+            "may install connectors -- Lemma's own app for it, installed now."
+        ),
     )
     mode: PodConnectorMode = Field(
+        default=PodConnectorMode.PER_MEMBER,
         description=(
-            "PER_MEMBER: each call uses the acting member's own account. "
-            "SHARED: every call uses the one account set as "
+            "PER_MEMBER (the default): each call uses the acting member's own "
+            "account. SHARED: every call uses the one account set as "
             "`shared_pod_account_id`."
-        )
+        ),
     )
     shared_pod_account_id: UUID | None = Field(
         default=None,
@@ -56,17 +73,28 @@ class PodConnectorCreateRequest(BaseModel):
 
     @field_validator("slug")
     @classmethod
-    def _slug(cls, value: str) -> str:
-        if not SLUG_PATTERN.match(value):
+    def _slug(cls, value: str | None) -> str | None:
+        if value is not None and not SLUG_PATTERN.match(value):
             raise ValueError(
                 "slug must be lowercase letters, digits, '-' or '_', starting "
                 "with a letter or digit, at most 63 characters"
             )
         return value
 
+    @model_validator(mode="after")
+    def _one_installation(self) -> PodConnectorCreateRequest:
+        if (self.auth_config_id is None) == (self.connector_id is None):
+            raise ValueError("give exactly one of auth_config_id or connector_id")
+        return self
 
-class PodConnectorUpdateRequest(BaseModel):
-    """Fields left out are unchanged; `shared_pod_account_id: null` clears it."""
+
+class PodConnectorUpdateRequest(StrictPatch):
+    """Fields left out are unchanged; `shared_pod_account_id: null` clears it.
+    Its slug and installation are fixed: a different one is a different
+    connector, which apps, agents and bundles already address."""
+
+    fixed_fields = frozenset({"slug", "auth_config_id", "connector_id"})
+    fixed_remedy = "remove the connector and add it again"
 
     mode: PodConnectorMode | None = None
     shared_pod_account_id: UUID | None = None
@@ -176,7 +204,10 @@ class PodAccountCreateRequest(BaseModel):
     )
 
 
-class PodAccountUpdateRequest(BaseModel):
+class PodAccountUpdateRequest(StrictPatch):
+    fixed_fields = frozenset({"account_id", "auth_config_id", "owner_user_id"})
+    fixed_remedy = "take the account out of the pod and add another"
+
     visibility: PodAccountVisibility | None = Field(
         default=None,
         description=(

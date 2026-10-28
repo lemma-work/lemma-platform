@@ -2778,6 +2778,29 @@
 
 /* ── the call, given the whole pane ── */
 
+/* A call beside its chat: the canvas on the left, the conversation it is held
+   in on the right, so the teammate is seen working while it is talked to. On
+   a narrow screen only one fits, and it is the call. */
+.main--calling > .call-stage {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 58%;
+    z-index: 2;
+    border-right: 1px solid var(--line);
+}
+.main--calling > .workspace {
+    margin-left: 58%;
+}
+@media (max-width: 1099px) {
+    .main--calling > .call-stage {
+        position: static;
+        width: auto;
+        border-right: 0;
+    }
+    .main--calling > .workspace {
+        display: none;
+    }
+}
 .call-view {
     flex: 1;
     min-height: 0;

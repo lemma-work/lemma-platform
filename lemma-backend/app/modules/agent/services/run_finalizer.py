@@ -116,6 +116,62 @@ async def waiting_on_work(uow: Any, conversation_id: UUID) -> bool:
     return await AgentConversationWaitRepository(uow).has_active(conversation_id)
 
 
+def completed_event(
+    run: RunIdentity,
+    *,
+    status: AgentRunStatus,
+    data: JsonObject | None,
+    usage: AgentRunUsage | None,
+    tool_calls_seen: int | None = None,
+) -> AgentRunCompletedEvent:
+    """The ``agent.run.completed`` a finished run announces.
+
+    Everything but the outcome is copied off the identity the finalizer already
+    holds: a consumer that wants to say which pod a run belonged to would
+    otherwise have to load the conversation back. The origin is set explicitly
+    because this commits on a work item's task, where nothing is bound for the
+    event to capture.
+    """
+    return AgentRunCompletedEvent(
+        conversation_id=run.conversation_id,
+        agent_run_id=run.agent_run_id,
+        status=status,
+        data=data,
+        pod_id=run.pod_id,
+        organization_id=run.organization_id,
+        agent_id=run.agent_id,
+        user_id=run.user_id,
+        started_at=run.started_at,
+        token_count=counted_tokens(usage),
+        tool_call_count=counted_tool_calls(run, usage, seen=tool_calls_seen),
+        origin=run.origin_kind,
+        origin_platform=run.origin_platform,
+    )
+
+
+def counted_tokens(usage: AgentRunUsage | None) -> int | None:
+    """Model tokens in and out, or ``None`` when no usage was reported."""
+    return usage.input_tokens + usage.output_tokens if usage is not None else None
+
+
+def counted_tool_calls(
+    run: RunIdentity, usage: AgentRunUsage | None, *, seen: int | None = None
+) -> int | None:
+    """The run's tool calls, from its usage or else from the calls it streamed.
+
+    An Agent Host reports tokens per turn and nothing about tools, so its
+    ``tool_call_count`` is the field's default -- reporting that as "called no
+    tools" would be a made-up zero. The in-process harness reports no usage at
+    all (it bills per request through the metered model), so its count is the
+    tool calls the event pump saw this run write.
+    """
+    if (run.runtime_profile or {}).get("harness_id"):
+        return None
+    if usage is not None:
+        return usage.tool_call_count
+    return seen
+
+
 async def _marked_as_the_answer(
     uow: SqlAlchemyUnitOfWork, answer: Message | None
 ) -> Message | None:
@@ -165,6 +221,7 @@ class RunFinalizer:
         output_data: JsonValue | None = None,
         usage_data: AgentRunUsage | None = None,
         answer: Message | None = None,
+        tool_calls_seen: int | None = None,
     ) -> None:
         """Record the run's end, once.
 
@@ -203,19 +260,12 @@ class RunFinalizer:
                         event_data["waiting_on_work"] = await waiting_on_work(
                             uow, run.conversation_id
                         )
-                    event = AgentRunCompletedEvent(
-                        conversation_id=run.conversation_id,
-                        agent_run_id=run.agent_run_id,
+                    event = completed_event(
+                        run,
                         status=status,
                         data=event_data or None,
-                        # Copied off the identity this finalizer already holds.
-                        # A consumer that wants to say which pod a run belonged
-                        # to would otherwise have to load the conversation back.
-                        pod_id=run.pod_id,
-                        organization_id=run.organization_id,
-                        agent_id=run.agent_id,
-                        user_id=run.user_id,
-                        started_at=run.started_at,
+                        usage=usage_data,
+                        tool_calls_seen=tool_calls_seen,
                     )
                     # Analytics only now; every follow-up is staged below.
                     uow.collect_events([event])

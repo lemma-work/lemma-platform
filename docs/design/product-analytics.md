@@ -466,10 +466,15 @@ against it can honestly claim:
   than `WEB`/`DESKTOP` — safe by construction (an unknown caller is never
   counted as a person in a browser) but the origin split is incomplete for the
   two biggest human surfaces.
-- **Server-initiated origins** (schedule, data trigger, workflow, connector) are
-  not set where the work is enqueued, so those events carry no origin. Guessing
-  them downstream from the consumer is what makes an origin dimension quietly
-  wrong, so the consumer leaves them empty instead.
+- **A work item starts with no origin bound.** The work runtime runs each item
+  in a fresh context, so an event raised there carries an origin only where the
+  code names one from what it holds: a workflow step binds `WORKFLOW`, a table
+  trigger `DATA_TRIGGER`, a schedule run's outcome takes its schedule's type,
+  and an agent turn takes what its conversation records (a schedule's type, a
+  surface's platform, a workflow step). A person's chat turn, run by a worker,
+  still carries none, because the row does not record which client was used.
+  Guessing it downstream from the consumer is what makes an origin dimension
+  quietly wrong, so the consumer leaves it empty instead.
 - **Not every catalog event has an emitter.** Most of the gaps need a domain
   event the platform does not publish today; `pod_bundle` and `connectors` raise
   none at all, which is why the share→import→remix loop is only half measurable

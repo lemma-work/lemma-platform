@@ -50,8 +50,11 @@ DEFAULT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 # reports it as unverified, and one more job stops being covered. The value is
 # passed in rather than inferred; without it the expression stays unevaluable,
 # which is the honest answer for a run that did not say what it was.
+#
+# `!=` as well as `==`: the desktop suites run on a pull request and on main
+# but not in the merge queue, and say so as `github.event_name != 'merge_group'`.
 OUTPUT = re.compile(r"needs\.changes\.outputs\.([A-Za-z0-9_-]+)\s*==\s*'true'")
-EVENT = re.compile(r"github\.event_name\s*==\s*'([a-z_]+)'")
+EVENT = re.compile(r"github\.event_name\s*(==|!=)\s*'([a-z_]+)'")
 STRUCTURE = re.compile(r"^[\s()]*(?:\|\||&&|[\s()])*$")
 
 
@@ -82,7 +85,7 @@ def evaluate(
         else:
             if event is None:
                 raise Unevaluable(condition)
-            values.append(event == match.group(2))
+            values.append((event == match.group(3)) == (match.group(2) == "=="))
         return "@"
 
     skeleton = combined.sub(dispatch, condition)

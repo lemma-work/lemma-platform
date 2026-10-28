@@ -28,6 +28,11 @@ from app.modules.connectors.domain.errors import (
 )
 from app.modules.connectors.domain.ports import ConnectorRepositoryPort
 from app.modules.connectors.services.auth.auth_provider import AuthProviderInterface
+from app.modules.connectors.services.auth.composio_auth_configs import (
+    AuthConfigIdCache,
+    ConnectionStart,
+    auth_config_key,
+)
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 
@@ -51,8 +56,12 @@ class ComposioAuthProvider(AuthProviderInterface):
         connector_repository: ConnectorRepositoryPort,
         composio_client_factory: ComposioClientFactory | None = None,
         http_session_factory: HttpSessionFactory = aiohttp.ClientSession,
+        auth_config_ids: AuthConfigIdCache | None = None,
     ):
         self._connector_repository = connector_repository
+        # Composio's auth config for a toolkit and set of options, remembered
+        # across requests. None (tests, scripts): made on every connect.
+        self._auth_config_ids = auth_config_ids
         # Shared: this provider is built per request, and the SDK client costs
         # 42-262ms to construct.
         self._composio_client_factory = composio_client_factory or get_composio_client
@@ -180,8 +189,15 @@ class ComposioAuthProvider(AuthProviderInterface):
         composio: Any,
         *,
         custom_auth_scheme: str | None = None,
+        remembered: bool = False,
     ) -> str:
         """Create the Composio auth config this connect will run under.
+
+        ``remembered``: reuse the one made for the same toolkit and options
+        before, rather than making another on every connect -- a provider
+        round trip each, and one more auth config left in Composio per click.
+        Only for a sign-in link, which has no per-user guard that a shared
+        auth config would trip.
 
         Three cases, and the discriminator is the install, not the caller:
 
@@ -240,14 +256,44 @@ class ComposioAuthProvider(AuthProviderInterface):
             )
         else:
             options = {"type": "use_composio_managed_auth"}
+        toolkit = self._toolkit_slug(install)
+        key = auth_config_key(toolkit, options)
+        if remembered and self._auth_config_ids is not None:
+            cached = await self._auth_config_ids.get(key, str)
+            if cached:
+                return cached
         auth_config = await run_blocking(
-            lambda: composio.auth_configs.create(
-                toolkit=self._toolkit_slug(install),
-                options=options,
-            ),
+            lambda: composio.auth_configs.create(toolkit=toolkit, options=options),
             limiter="external_http",
         )
+        if remembered and self._auth_config_ids is not None:
+            await self._auth_config_ids.set(key, str(auth_config.id))
         return auth_config.id
+
+    async def _forget_auth_config_id(self, install: ResolvedAuthInstall) -> None:
+        """Drop every remembered auth config for this install's toolkit and
+        options, after Composio refused one (deleted on its side, or made
+        under another API key)."""
+        if self._auth_config_ids is None:
+            return
+        for options in self._candidate_options(install):
+            await self._auth_config_ids.delete(
+                auth_config_key(self._toolkit_slug(install), options)
+            )
+
+    def _candidate_options(
+        self, install: ResolvedAuthInstall
+    ) -> list[dict[str, object]]:
+        if install.config_source == AuthConfigSource.ORG_CUSTOM:
+            scheme = self._CUSTOM_AUTH_SCHEME.get(install.auth_scheme)
+            return [
+                {
+                    "type": "use_custom_auth",
+                    "auth_scheme": scheme,
+                    "credentials": self._org_custom_credentials(install),
+                }
+            ]
+        return [{"type": "use_composio_managed_auth"}]
 
     @staticmethod
     def _org_custom_credentials(install: ResolvedAuthInstall) -> dict[str, Any]:
@@ -341,7 +387,10 @@ class ComposioAuthProvider(AuthProviderInterface):
             self._composio_client_factory, limiter="external_http"
         )
 
-        auth_config_id = await self._resolve_auth_config_id(install, composio)
+        remembered = not connection_fields
+        auth_config_id = await self._resolve_auth_config_id(
+            install, composio, remembered=remembered
+        )
 
         redirect_url = f"{redirect_uri}?state={state}"
 
@@ -360,18 +409,42 @@ class ComposioAuthProvider(AuthProviderInterface):
                 config=config,
             )
         else:
-            # `link()`, not `initiate()`: Composio is retiring `initiate()` for
-            # redirect sign-ins on its managed auth configs, and says so with a
-            # Sunset header on every call. Same connected-account id, same
-            # redirect. `initiate()` stays for the connect that carries fields,
-            # because `link()` takes none.
-            start = lambda: composio.connected_accounts.link(  # noqa: E731
-                user_id=str(user_id),
-                auth_config_id=auth_config_id,
-                callback_url=redirect_url,
-            )
+            # A Connect Link, not `initiate()`: Composio is retiring
+            # `initiate()` for redirect sign-ins on its managed auth configs,
+            # and says so with a Sunset header on every call. Same
+            # connected-account id, same redirect. `initiate()` stays for the
+            # connect that carries fields, because a link takes none.
+            #
+            # The API call, not the SDK's `connected_accounts.link()`: that
+            # lists the person's active connections first, a round trip only
+            # to refuse a second account on one auth config -- which, with the
+            # auth config now reused, is every reconnect and second account.
+            # The callback dedups by provider identity instead.
+            def start() -> ConnectionStart:
+                response = composio.client.link.create(
+                    auth_config_id=auth_config_id,
+                    user_id=str(user_id),
+                    callback_url=redirect_url,
+                )
+                return ConnectionStart(
+                    id=response.connected_account_id,
+                    redirect_url=getattr(response, "redirect_url", None),
+                )
 
-        connection_request = await run_blocking(start, limiter="external_http")
+        try:
+            connection_request = await run_blocking(start, limiter="external_http")
+        except Exception:
+            if not remembered:
+                raise
+            # The remembered auth config may be gone on Composio's side, or
+            # made under another API key: forget it and try once on a fresh
+            # one. `start` reads `auth_config_id` when it runs, so it sends
+            # the new id.
+            await self._forget_auth_config_id(install)
+            auth_config_id = await self._resolve_auth_config_id(
+                install, composio, remembered=True
+            )
+            connection_request = await run_blocking(start, limiter="external_http")
 
         if not connection_request.redirect_url:
             raise ConnectorValidationError("No redirect URL found for Composio app")

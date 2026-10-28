@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, personalNameFor, teamNameFor } from "../src/org/arrival.ts";
+import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, isDomainTaken, personalNameFor, teamNameFor } from "../src/org/arrival.ts";
 
 test("a domain is read off the address, lowercased", () => {
     assert.equal(domainOf("Alice@Acme.COM"), "acme.com");
@@ -47,15 +47,25 @@ test("a shared mailbox provider is never offered as a company name", () => {
     assert.equal(teamNameFor("alice@proton.me"), "");
 });
 
-test("a personal workspace takes the person's first name, or no name at all", () => {
-    // `shortOrgName` in data/live.ts already reads this shape back off the
-    // wire; a workspace this app makes should shorten the same way.
-    assert.equal(personalNameFor("Alice Chen"), "Alice's Personal");
-    assert.equal(personalNameFor("Alice"), "Alice's Personal");
-    // The local part of an address is a mailbox, not a name: this screen
-    // offered somebody "ada+99's Personal".
-    assert.equal(personalNameFor(""), "Personal");
-    assert.equal(personalNameFor(null), "Personal");
+test("a personal workspace is named after its person, never a counter", () => {
+    // Production grew "Personal 5": a bare "Personal", numbered on a clash.
+    assert.equal(personalNameFor("Alice Chen"), "Alice's workspace");
+    assert.equal(personalNameFor("Alice", "zed@acme.com"), "Alice's workspace");
+    // No name given: an address whose first word reads as a name is used...
+    assert.equal(personalNameFor(null, "anukul@lemma.work"), "Anukul's workspace");
+    assert.equal(personalNameFor("", "alice.chen+test@acme.com"), "Alice's workspace");
+    // ...and a mailbox is not: this screen offered somebody
+    // "ada0196+99's Personal".
+    assert.equal(personalNameFor("", "ada0196+99@example.com"), "My workspace");
+    assert.equal(personalNameFor(null), "My workspace");
+    assert.ok(!/\d/.test(personalNameFor(null, "x1@acme.com")));
+});
+
+test("a domain another organization holds is told apart from other failures", () => {
+    assert.ok(isDomainTaken({ code: "ORGANIZATION_DOMAIN_CONFLICT", message: "" }));
+    assert.ok(isDomainTaken(new Error("This email domain is already taken by another organization")));
+    assert.ok(!isDomainTaken({ code: "ORGANIZATION_SLUG_CONFLICT", message: "Organization slug already exists" }));
+    assert.ok(!isDomainTaken(null));
 });
 
 test("the heading says invited only for a real invitation", () => {

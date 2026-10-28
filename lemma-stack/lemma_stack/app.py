@@ -947,7 +947,9 @@ def main() -> None:
     try:
         app()
     except AdminError as exc:
-        raise fail(str(exc))
+        # Outside app() nothing catches typer.Exit, so raising fail() itself
+        # printed the message and then a traceback. Exit with its code instead.
+        raise SystemExit(fail(str(exc)).exit_code) from None
 
 
 if __name__ == "__main__":

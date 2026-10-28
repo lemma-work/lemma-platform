@@ -158,3 +158,76 @@ async def test_a_reused_provider_id_is_a_new_pause_with_its_own_answer(scenario)
     }
     assert returns[_REUSED]["answers"] == {"size": "large"}
     assert returns[renamed]["answers"] == {"colour": "blue"}
+
+
+async def _searches_again(run_id) -> AsyncIterator[AgentEvent]:
+    """A run whose provider numbers every call ``call_0``: twice in one run."""
+    for query in ("weather", "news"):
+        yield AgentEvent(
+            type=AgentEventType.MESSAGE,
+            data=MessageDraft.of_tool_call(
+                tool_name="web_search", tool_call_id=_REUSED, tool_args={"q": query}
+            ),
+            agent_run_id=run_id,
+        )
+        yield AgentEvent(
+            type=AgentEventType.MESSAGE,
+            data=MessageDraft.of_tool_return(
+                tool_name="web_search",
+                tool_call_id=_REUSED,
+                tool_result={"found": query},
+            ),
+            agent_run_id=run_id,
+        )
+
+
+async def test_a_reused_id_on_any_call_pairs_each_result_with_its_own_call(scenario):
+    """Results are paired with calls by id across the conversation -- the
+    transcript's cards, history, a synthesized return -- so a call reusing an
+    id showed an earlier call's result."""
+    seeded = await seeded_conversation(scenario)
+    first = await running_run(seeded)
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        repository = ConversationRepository(uow)
+        await repository.append_message(
+            conversation_id=seeded.conversation_id,
+            agent_run_id=first,
+            draft=MessageDraft.of_tool_call(
+                tool_name="web_search", tool_call_id=_REUSED, tool_args={"q": "old"}
+            ),
+        )
+        await repository.append_message(
+            conversation_id=seeded.conversation_id,
+            agent_run_id=first,
+            draft=MessageDraft.of_tool_return(
+                tool_name="web_search",
+                tool_call_id=_REUSED,
+                tool_result={"found": "old"},
+            ),
+        )
+        await uow.commit()
+    await finish(first)
+    second = await running_run(seeded)
+
+    await RunEventPump(RunMessageWriter(uow_factory()), _Finalizer()).drive(
+        _searches_again(second),
+        run=RunIdentity(conversation_id=seeded.conversation_id, agent_run_id=second),
+        outcome=RunOutcome(),
+        observer=_Surface(),
+        conversation=await conversation(seeded.conversation_id),
+        ctx=None,
+    )
+
+    stored = [m for m in await messages(seeded.conversation_id) if m.tool_call_id]
+    calls = {
+        m.tool_call_id: m.tool_args["q"]
+        for m in stored
+        if m.kind is MessageKind.TOOL_CALL
+    }
+    results = {
+        m.tool_call_id: m.tool_result["found"]
+        for m in stored
+        if m.kind is MessageKind.TOOL_RETURN
+    }
+    assert len(calls) == 3, "every call has an id of its own"
+    assert results == calls

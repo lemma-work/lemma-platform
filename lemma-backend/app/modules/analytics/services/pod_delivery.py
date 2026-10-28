@@ -101,8 +101,13 @@ async def maybe_emit_pod_delivered(
     origin: Origin | None,
     recipient_user_id: UUID | None,
     creator_user_id: UUID | None,
+    delegated_by_user_id: UUID | None = None,
 ) -> None:
     """Emit ``pod.delivered`` if this is the first qualifying outcome for the pod.
+
+    ``delegated_by_user_id`` is who unattended work was done for -- a schedule's
+    owner -- when nobody received it: the activation goes on their timeline as
+    delegated work rather than on the machine actor.
 
     Safe to call on every outcome, and safe to call twice for the same one: the
     claim is the lock, so only the caller it returns ``True`` to emits. Runs
@@ -167,13 +172,15 @@ async def maybe_emit_pod_delivered(
     age_days = None
     if created_at is not None:
         age_days = (datetime.now(timezone.utc) - created_at).days
+    if recipient_user_id:
+        actor = AnalyticsActor.user(recipient_user_id)
+    elif delegated_by_user_id:
+        actor = AnalyticsActor.delegated(delegated_by_user_id=delegated_by_user_id)
+    else:
+        actor = AnalyticsActor.autonomous(ActorType.SYSTEM)
     emit(
         "pod.delivered",
-        actor=(
-            AnalyticsActor.user(recipient_user_id)
-            if recipient_user_id
-            else AnalyticsActor.autonomous(ActorType.SYSTEM)
-        ),
+        actor=actor,
         origin=origin,
         organization_id=organization_id,
         pod_id=pod_id,

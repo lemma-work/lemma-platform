@@ -1,21 +1,20 @@
 """Pay the heavy imports at startup rather than on somebody's first request.
 
-Three of the libraries this backend depends on are large enough that importing
-them is visible work, and all three are imported lazily on purpose:
+The model clients and the tokenizer are large enough that loading them is
+visible work, and they are imported lazily on purpose:
 ``check_import_budget.py`` and ``test_startup_import_laziness.py`` both exist to
 keep them off the module graph of a process that only serves health checks.
 
-Lazy is right, and it moves the cost rather than removing it. Measured against
-this tree, the first agent request pays 0.5s to import
-``runtime_model_factory`` (800 modules, pulling ``openai``, ``anthropic`` and
-``pydantic_ai``), another 0.5s for ``metered_model`` (1,112 more), and about
-three seconds the first time anything counts tokens, because ``tiktoken`` has to
-fetch and build its vocabulary. On the event loop, in a request, that is a stall
-every other request in the process shares.
+Lazy is right, and it moves the cost rather than removing it. Whatever first
+reaches ``runtime_model_factory`` imports ``openai`` and ``pydantic_ai``, and
+whatever first counts tokens builds ``tiktoken``'s vocabulary -- fetching it
+over the network first, unless the image carries it. On the event loop that is
+a stall everything else in the process shares: every request in the API, every
+turn running beside the first one in a worker.
 
-So the modules stay lazily imported and a startup task imports them anyway --
-which is the same trade `ensure_task_lanes_registered` already makes one line
-below it in the lifespan.
+So the modules stay lazily imported and each process imports them at startup
+anyway: the API in its lifespan (``app/app.py``), and a worker that runs agent
+turns through the agent module's worker lifespan, before it claims one.
 
 Two things this is not. It is not a guarantee: ``importlib`` holds a per-module
 lock, so a request that loses the race waits for the warm-up rather than
@@ -26,22 +25,39 @@ failure here is logged and dropped, because a backend that cannot import
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
+from app.core.request_context import create_background_task
 
 logger = get_logger(__name__)
 
 #: First-party, not the third-party libraries themselves: these are the modules
 #: a request actually reaches for, and they pull the heavy trees transitively.
-#: Naming them here rather than `openai`/`anthropic`/`pydantic_ai` keeps the
-#: list honest when a provider is swapped out -- an import that no longer
-#: happens is one that no longer needs warming.
+#: Naming them here rather than `openai`/`pydantic_ai` keeps the list honest
+#: when a provider is swapped out -- an import that no longer happens is one
+#: that no longer needs warming.
 WARM_MODULES: tuple[str, ...] = (
     "app.modules.agent.services.runtime_model_factory",
     "app.modules.usage.infrastructure.metered_model",
 )
+#: A worker's list: the API's, plus the runner a turn starts from, which no
+#: request reaches. The rest of a turn's imports hang off these, so the first
+#: turn a fresh worker claims finds them loaded.
+TURN_WARM_MODULES: tuple[str, ...] = (
+    *WARM_MODULES,
+    "app.modules.agent.services.agent_runner_service",
+    # The Anthropic SDK, which metering no longer pulls in. The API leaves it to
+    # the first Anthropic-profile request; a worker pays it here, before it
+    # claims a turn, so that turn does not import it on the event loop.
+    "app.modules.agent.services.anthropic_thinking",
+)
+#: How long a stopping worker waits for a tokenizer warm-up it cancelled.
+_TOKENIZER_SHUTDOWN_WAIT_SECONDS = 2.0
 
 
 async def warm_lazy_imports() -> None:
@@ -55,7 +71,7 @@ async def warm_lazy_imports() -> None:
     await warm_tokenizer()
 
 
-async def warm_modules() -> None:
+async def warm_modules(modules: Sequence[str] = WARM_MODULES) -> None:
     """The imports alone. The lifespan awaits these before serving.
 
     Backgrounded, they raced the first requests: ``importlib``'s per-module lock
@@ -64,8 +80,32 @@ async def warm_modules() -> None:
     that, inside ``from openai import AsyncOpenAI``. About a second in a thread
     before the port opens costs less than a stall every request shares.
     """
-    for module_name in WARM_MODULES:
+    for module_name in modules:
         await _warm(module_name, importlib.import_module, module_name)
+
+
+@asynccontextmanager
+async def warmed_for_turns() -> AsyncIterator[None]:
+    """A worker's warm-up, held open for as long as the worker runs.
+
+    The API's split, for the same reasons. The imports are awaited, so the
+    worker claims nothing until they are done: a turn claimed mid-import would
+    wait for the module lock on the event loop thread, which is the stall this
+    removes. The tokenizer builds in the background, since its vocabulary may
+    come over the network, and is cancelled if the worker stops first.
+    """
+    await warm_modules(TURN_WARM_MODULES)
+    tokenizer = create_background_task(warm_tokenizer(), name="worker-warm-tokenizer")
+    try:
+        yield
+    finally:
+        tokenizer.cancel()
+        # `wait` rather than `await`: a warm-up that failed has already been
+        # logged by the task's done callback, and must not fail the shutdown.
+        # Bounded, because cancelling does not stop the thread the build runs
+        # in, and tiktoken's download has no timeout: a stalled fetch would
+        # otherwise hold the worker's shutdown open until it is killed.
+        await asyncio.wait({tokenizer}, timeout=_TOKENIZER_SHUTDOWN_WAIT_SECONDS)
 
 
 async def warm_tokenizer() -> None:

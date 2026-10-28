@@ -51,6 +51,8 @@ class WorkflowRunTerminalEvent(WorkflowRunEvent):
     pod_id: UUID | None = None
     user_id: UUID | None = None
     started_at: datetime | None = None
+    #: Whether any step stopped for a person's form on the way.
+    waited_on_form: bool = False
 
     @classmethod
     def from_run(cls, run) -> "WorkflowRunTerminalEvent":
@@ -71,4 +73,5 @@ class WorkflowRunTerminalEvent(WorkflowRunEvent):
             pod_id=run.pod_id,
             user_id=run.user_id,
             started_at=run.started_at,
+            waited_on_form=any(step.waited_on_form for step in run.step_history),
         )

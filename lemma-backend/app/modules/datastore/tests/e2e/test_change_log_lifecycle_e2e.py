@@ -22,11 +22,17 @@ from app.core.infrastructure.work import (
 )
 from app.core.infrastructure.work.testing import run_until_idle
 from app.modules.datastore.changes.reader import ChangeOp, read_after
-from app.modules.datastore.changes.retention import retain, retain_pod
+from app.modules.datastore.changes.retention import (
+    _schemas_with_log,
+    retain,
+    retain_pod,
+)
 from app.modules.datastore.changes.schema import changes_table, subscribers_table
 from app.modules.datastore.changes.subscribers import SubscriberTable
 from app.modules.datastore.changes.work import register_change_work
+from app.modules.datastore.infrastructure.pod_schema_catalog import drop_pod_schema
 from app.modules.datastore.infrastructure.pod_schema_migrations import (
+    VERSIONS_TABLE,
     schema_name_for_pod,
 )
 from app.modules.datastore.infrastructure.session import get_datastore_engine
@@ -97,6 +103,51 @@ async def test_retention_keeps_the_window_for_a_pod_nobody_subscribes_to(
     assert await retain(pod_id, []) == 3
     [kept] = await log(pod_id)
     assert kept.at > datetime.now(timezone.utc) - timedelta(minutes=5)
+
+
+async def _version_row(schema: str) -> int | None:
+    async with get_datastore_engine().connect() as conn:
+        return await conn.scalar(
+            text(f"SELECT version FROM {VERSIONS_TABLE} WHERE schema_name = :name"),
+            {"name": schema},
+        )
+
+
+async def test_retention_passes_over_a_pod_whose_schema_is_gone(
+    pod_api: DatastoreApi,
+):
+    """A deleted pod's leftover version row is not retention's to fail on.
+
+    Before a drop forgot the row, one deleted pod failed the hourly page it
+    was listed in, so every pod after it on that page went unretained.
+    """
+    pod_id = UUID(pod_api.pod_id)
+    schema = schema_name_for_pod(pod_id)
+    await orders_table(pod_api)
+    await pod_api.create_record("orders", {"status": "new", "total": 1})
+    assert schema in await _schemas_with_log(""), "precondition: a live log is listed"
+
+    # How a deleted pod looked before `drop_pod_schema` removed its version
+    # row: the schema gone, the row still there.
+    async with get_datastore_engine().begin() as conn:
+        await conn.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+    assert await _version_row(schema) is not None
+
+    assert schema not in await _schemas_with_log("")
+    # And a pod that goes between the listing and its pass is skipped too.
+    assert await retain(pod_id, []) == 0
+
+
+async def test_dropping_a_pod_schema_forgets_its_version(pod_api: DatastoreApi):
+    pod_id = UUID(pod_api.pod_id)
+    schema = schema_name_for_pod(pod_id)
+    await orders_table(pod_api)
+    assert await _version_row(schema) is not None
+
+    async with get_datastore_engine().begin() as conn:
+        await drop_pod_schema(conn, schema)
+
+    assert await _version_row(schema) is None
 
 
 _TEND = "test.changes.retain_pod"

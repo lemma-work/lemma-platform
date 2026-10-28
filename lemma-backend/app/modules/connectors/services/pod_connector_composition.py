@@ -78,7 +78,15 @@ def build_installation_reach(uow: SqlAlchemyUnitOfWork) -> InstallationReach:
         InstallationReach,
     )
 
-    return InstallationReach(build_pod_connector_resolver(uow))
+    from app.modules.connectors.infrastructure.repositories.connector_repository import (
+        ConnectorRepository,
+    )
+
+    return InstallationReach(
+        build_pod_connector_resolver(uow),
+        catalog=ConnectorRepository(uow),
+        organization_access=SqlAlchemyOrganizationAccessAdapter(uow),
+    )
 
 
 __all__ = [

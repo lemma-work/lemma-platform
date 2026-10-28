@@ -101,11 +101,20 @@ class OrganizationRepository(OrganizationRepositoryPort):
 
         return query.where(OrganizationInvitation.status == status)
 
-    async def create(self, entity: OrganizationEntity) -> OrganizationEntity:
+    async def create(
+        self, entity: OrganizationEntity, *, created_by_user_id: UUID | None = None
+    ) -> OrganizationEntity:
         instance = Organization(**entity.model_dump())
         self.session.add(instance)
         await self.session.flush()
-        entity.add_event(OrganizationCreatedEvent(organization_id=instance.id))
+        # Who created it rides on the event: without it the organization lands
+        # on nobody's timeline, and a sign-up cannot be followed into the
+        # organization it made.
+        entity.add_event(
+            OrganizationCreatedEvent(
+                organization_id=instance.id, created_by_user_id=created_by_user_id
+            )
+        )
         await self._collect_events(entity)
         return instance.to_entity()
 

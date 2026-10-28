@@ -53,11 +53,15 @@ _GOOGLE_IDENTITY_SCOPES: tuple[str, ...] = (
 # This is deliberately SEPARATE from the login OAuth client (SuperTokens user
 # login, GOOGLE_CLIENT_ID in core config): a system-default connector client
 # typically needs a different client id with broader, app-specific scopes
-# (gmail.modify, calendar, ...). Prefer the connector-scoped env vars and fall
-# back to the legacy shared GOOGLE_CLIENT_ID/SECRET for backward compatibility.
+# (gmail.modify, calendar, ...). Only the connector-scoped env vars count.
+# There is no fallback to the login client: a login client verified for
+# openid/email is not verified for gmail.modify, so borrowing it put every
+# person in front of Google's "unverified app" screen and its test-user cap.
+# A deployment without CONNECTOR_GOOGLE_CLIENT_ID has no Lemma-app default for
+# the Google apps, and Connect offers the Composio-managed one instead.
 _GOOGLE_SYSTEM_OAUTH = SystemOAuthCredentialRef(
-    client_id_env=["CONNECTOR_GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_ID"],
-    client_secret_env=["CONNECTOR_GOOGLE_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"],
+    client_id_env=["CONNECTOR_GOOGLE_CLIENT_ID"],
+    client_secret_env=["CONNECTOR_GOOGLE_CLIENT_SECRET"],
 )
 
 

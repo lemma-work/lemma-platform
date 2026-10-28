@@ -10,7 +10,11 @@ from app.modules.agent.contracts.provisioning import ensure_pod_default_agent
 from app.modules.pod.api.dependencies import get_pod_service
 from app.modules.pod.contracts.members import pod_member_id
 from app.modules.pod.domain.errors import PodLimitReachedError
-from app.modules.pod.domain.pod_entities import PodEntity, PodJoinPolicy
+from app.modules.pod.domain.pod_entities import (
+    PodCreationSource,
+    PodEntity,
+    PodJoinPolicy,
+)
 from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
 
 
@@ -90,6 +94,7 @@ async def ensure_personal_workspace(
                 user_id=owner_user_id, organization_id=organization_id, name=name
             ),
             owner_user_id,
+            source=PodCreationSource.PROVISIONED,
         )
     except PodLimitReachedError:
         # Refused before anything was written, so the transaction is intact.

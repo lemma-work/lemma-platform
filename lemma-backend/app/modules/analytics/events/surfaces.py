@@ -7,7 +7,11 @@ from app.core.analytics import emit
 from app.modules.agent_surfaces.domain.events import (
     SurfaceConnectedEvent,
 )
-from app.modules.analytics.events.wiring import actor_or_system, origin_of
+from app.modules.analytics.events.wiring import (
+    ProjectionReads,
+    actor_or_system,
+    origin_of,
+)
 
 WIRED = frozenset({"surface.connected"})
 
@@ -20,7 +24,11 @@ _AUTO_PROVISIONED_SURFACES = frozenset({"RESEND"})
 @projection(
     SurfaceConnectedEvent.get_event_type(),
 )
-async def on_surface_event(event: dict[str, object]) -> None:
+async def on_surface_event(
+    event: dict[str, object],
+    reads: ProjectionReads | None = None,
+) -> None:
+    reads = reads or ProjectionReads()
     if event.get("event_type") != SurfaceConnectedEvent.get_event_type():
         return
 
@@ -32,6 +40,7 @@ async def on_surface_event(event: dict[str, object]) -> None:
             "surface.connected",
             actor=actor_or_system(parsed.connected_by_user_id),
             origin=origin_of(event),
+            organization_id=await reads.organization_of_pod(parsed.pod_id),
             pod_id=parsed.pod_id,
             properties={
                 "pod_id": parsed.pod_id,

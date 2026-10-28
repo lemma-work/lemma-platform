@@ -101,11 +101,10 @@ compare headline results before publishing.
 
 ## Publish to Lemma
 
-Use a private path by default:
+Use a private path by default. `upload` creates missing folders on the way, so
+there is no `mkdir` step:
 
 ```bash
-lemma files mkdir /me/analysis
-lemma files mkdir /me/analysis/<slug>
 lemma files upload ./outputs/report.md /me/analysis/<slug>/report.md
 lemma files upload ./src/analysis.py /me/analysis/<slug>/analysis.py --no-search
 lemma files upload ./outputs/results.csv /me/analysis/<slug>/results.csv --no-search

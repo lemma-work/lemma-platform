@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from app.core.api.dependencies import UoWDep
 from app.core.api.deprecation import note_deprecated_use
 from app.core.api.pagination import parse_uuid_page_token
-from app.core.authorization.context import ResourceRef
+from app.core.authorization.context import Context, ResourceRef
 from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.core.authorization.permissions import Permissions
 from app.modules.connectors.contracts.deprecations import (
@@ -37,6 +37,7 @@ from app.modules.schedule.api.schemas.schedule_schemas import (
 from app.modules.schedule.domain.schedule import (
     MCP_EVENT_SOURCE,
     ScheduleCreateEntity,
+    ScheduleEntity,
     ScheduleRunStatus,
     ScheduleType,
     ScheduleUpdateEntity,
@@ -154,6 +155,7 @@ async def create_schedule(
         "filter_instruction": request.filter_instruction,
         "filter_output_schema": request.filter_output_schema,
         "include_outside_rows": request.include_outside_rows,
+        "created_by_workload_id": _acting_workload_id(ctx, pod_id),
     }
     if request.visibility is not None:
         schedule_create_data["visibility"] = request.visibility
@@ -402,9 +404,45 @@ async def delete_schedule(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found"
         )
-    await ctx.require(
-        Permissions.SCHEDULE_DELETE, ResourceRef.schedule(pod_id, schedule_id)
-    )
+    if _deleting_own_agent_schedule(ctx, schedule, pod_id):
+        await ctx.require(Permissions.SCHEDULE_CREATE, ResourceRef.pod(pod_id))
+    else:
+        await ctx.require(
+            Permissions.SCHEDULE_DELETE, ResourceRef.schedule(pod_id, schedule_id)
+        )
 
     await service.delete_schedule(schedule_id)
     return
+
+
+def _acting_workload_id(ctx: Context, pod_id: UUID) -> UUID | None:
+    """The agent acting for a person on this request: a named agent's id, or
+    the pod's id for its default assistant, which is how its row is keyed.
+    ``None`` for a person acting for themselves."""
+    if ctx.is_assistant:
+        return pod_id
+    workload = ctx.workload
+    if ctx.is_named_workload and workload is not None:
+        return workload.workload_id
+    return None
+
+
+def _deleting_own_agent_schedule(
+    ctx: Context, schedule: ScheduleEntity, pod_id: UUID
+) -> bool:
+    """Whether an agent is deleting a schedule it created, for the same person.
+
+    ``schedule.delete`` is a destructive action no agent holds by default, so
+    an agent that made a schedule -- to try something out, or by mistake --
+    could not take it back without asking the person to approve the delete,
+    and the pod kept both the schedule and the approval request. Undoing your
+    own creation needs no more authority than making it did: the delete is
+    authorized as ``schedule.create`` on the pod. Only for the same agent
+    acting for the schedule's owner; anyone else's schedule keeps the gate.
+    """
+    acting = _acting_workload_id(ctx, pod_id)
+    return (
+        acting is not None
+        and schedule.created_by_workload_id == acting
+        and schedule.user_id == ctx.delegating_user_id
+    )

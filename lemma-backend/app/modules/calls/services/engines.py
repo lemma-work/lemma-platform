@@ -13,7 +13,7 @@ from app.modules.calls.domain.party import CallParty
 def engines_offered(settings: CallsSettings) -> list[VoiceEngineName]:
     """The engines this deployment has keys for, the configured default first."""
     engines: list[VoiceEngineName] = []
-    if settings.gemini_api_key is not None:
+    if settings.gemini_api_key is not None or settings.gemini_vertex_project:
         engines.append("gemini_live")
     if settings.openai_api_key is not None:
         engines.append("openai_realtime")
@@ -31,12 +31,28 @@ async def build_engine(
 ) -> VoiceEngine:
     match name:
         case "gemini_live":
+            from app.modules.calls.infrastructure.engines import google_auth
             from app.modules.calls.infrastructure.engines.gemini_live import (
                 GeminiLiveEngine,
             )
 
+            project = settings.gemini_vertex_project
+            if project:
+                # The service account wins over a key: no secret to hold.
+                location = settings.gemini_vertex_location
+                return GeminiLiveEngine(
+                    headers=google_auth.service_account_headers(),
+                    endpoint=google_auth.vertex_endpoint(location),
+                    model=google_auth.vertex_model(
+                        project, location, settings.gemini_live_model
+                    ),
+                    instructions=instructions,
+                    voice=settings.gemini_live_voice,
+                )
             return GeminiLiveEngine(
-                api_key=_key(settings.gemini_api_key, "Gemini"),
+                headers=google_auth.api_key_headers(
+                    _key(settings.gemini_api_key, "Gemini")
+                ),
                 model=settings.gemini_live_model,
                 instructions=instructions,
                 voice=settings.gemini_live_voice,

@@ -12,6 +12,7 @@ import { LoadingIndicator } from "@/ui/loading";
 import { ConnectDialog } from "./connect-dialog";
 import { connectorProblem, type CatalogEntry, type Install } from "./install";
 import { completionPath, hereWith, openAuthorization, useConnectOutcome } from "./round-trip";
+import { SignInLink } from "./sign-in-link";
 
 /** My organization accounts, in the shape the connections page reads. */
 export function asMine(accounts: ConnectorAccount[]): MyAccount[] {
@@ -64,13 +65,24 @@ export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, install
     const [dialog, setDialog] = useState<{ connector: PodConnector; entry: CatalogEntry; install: Install | null } | null>(null);
     const [waiting, setWaiting] = useState<string | null>(null);
     const [problem, setProblem] = useState<{ slug: string; text: string } | null>(null);
+    const [link, setLink] = useState<SignIn | null>(null);
 
     const refresh = useCallback(() => {
         void cache.invalidateQueries({ queryKey: ["accounts"] });
         void cache.invalidateQueries({ queryKey: ["pod-accounts", pod.id] });
         void cache.invalidateQueries({ queryKey: ["pod-connectors", pod.id] });
     }, [cache, pod.id]);
-    useConnectOutcome(() => { setWaiting(null); refresh(); }, refresh);
+    useConnectOutcome(() => { setWaiting(null); setLink(null); ISSUED.clear(); refresh(); }, refresh);
+
+    const appOf = (connector: PodConnector) => titles.get(connector.connectorId)?.title ?? connector.slug;
+    /* The tab where it opens, and the link beside it whether or not it did:
+       an in-app browser that swallows the tab leaves the person the link. */
+    const send = (connector: PodConnector, url: string) => {
+        const app = appOf(connector);
+        const opened = openAuthorization(url, app);
+        setWaiting(opened ? connector.slug : null);
+        setLink({ slug: connector.slug, url, app, opened });
+    };
 
     const start = useMutation({
         mutationFn: ({ connector, fields }: { connector: PodConnector; fields?: Record<string, unknown> }) =>
@@ -81,16 +93,23 @@ export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, install
                 setProblem({ slug: connector.slug, text: "This one offered no way to sign in. Ask whoever set it up for the organization." });
                 return;
             }
-            const title = titles.get(connector.connectorId)?.title ?? connector.slug;
-            if (openAuthorization(started.authorizeUrl, title)) setWaiting(connector.slug);
-            else window.location.assign(started.authorizeUrl);
+            ISSUED.set(issuedKey(pod.id, connector.slug), { url: started.authorizeUrl, at: Date.now() });
+            send(connector, started.authorizeUrl);
         },
         onError: (error, { connector }) => setProblem({ slug: connector.slug, text: connectorProblem(error, "That could not be started.") }),
     });
 
     /** Connect, or with `reconnect` sign in again on the same installation. */
     const connect = (connector: PodConnector, reconnect = false) => {
+        /* One sign-in at a time: a second click while the first is being
+           fetched would only leave a second request waiting on the server. */
+        if (start.isPending) return;
         setProblem(null);
+        /* An address this page was handed a moment ago is still good, and
+           asking again — every click on a Connect that seemed to do nothing —
+           only piles up requests nobody finishes. */
+        const held = ISSUED.get(issuedKey(pod.id, connector.slug));
+        if (held && Date.now() - held.at < REUSE_MS) { send(connector, held.url); return; }
         const entry = titles.get(connector.connectorId);
         /* Signing in again is the same consent page whatever the kind, and so
            is a connector this page cannot read the kinds of. */
@@ -98,8 +117,13 @@ export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, install
         setDialog({
             connector,
             entry: { id: entry.id, title: entry.title, description: entry.description, icon: entry.icon, kinds: entry.kinds },
+            /* No installation named is an app the organization may not have
+               installed yet: the dialog then asks for what a fresh one needs,
+               and the server installs it on the way where it may. */
             install: installs.find((one) => one.id === connector.authConfigId)
-                ?? { id: connector.authConfigId, connector_id: connector.connectorId, kind: "", name: connector.installationName || connector.authConfigId, status: "ACTIVE" },
+                ?? (connector.authConfigId
+                    ? { id: connector.authConfigId, connector_id: connector.connectorId, kind: "", name: connector.installationName || connector.authConfigId, status: "ACTIVE" }
+                    : null),
         });
     };
 
@@ -123,11 +147,30 @@ export function useConnectFlow(pod: Pod, titles: Map<string, Connector>, install
         element,
         /** The slug whose sign-in is being fetched, or whose provider tab is open. */
         busy: start.isPending ? start.variables?.connector.slug ?? null : null,
+        /** A sign-in is being fetched, for any connector: every Connect waits. */
+        pending: start.isPending,
         waiting,
         problem,
+        /** The last sign-in address handed out here, to show beside its
+         *  connector until the round trip comes back. */
+        link,
         refresh,
     };
 }
+
+/** A sign-in address handed out for one connector. */
+export interface SignIn { slug: string; url: string; app: string; opened: boolean }
+
+/** How long an address handed out for a connector is reused rather than
+ *  asking for another. Under the server's own reuse window for a pending
+ *  request, so a reused address has not expired there. */
+const REUSE_MS = 5 * 60_000;
+
+/** Addresses handed out, by pod and connector. Module-level because the
+ *  banner and the Connections page each run a flow, and one person clicking
+ *  both is still one sign-in. */
+const ISSUED = new Map<string, { url: string; at: number }>();
+const issuedKey = (podId: string, slug: string) => podId + "\u0000" + slug;
 
 /** How long the banner trusts what it read. It is drawn on every pod open,
  *  so it reads from the cache under the keys every other part shares, and
@@ -179,10 +222,11 @@ export function ConnectBanner({ pod }: { pod: Pod }) {
                 {bannerLine(missing, name, pod.name)}
                 {flow.problem && <small role="alert">{flow.problem.text}</small>}
                 {flow.waiting && <small>Finish in the other tab…</small>}
+                {flow.link && <SignInLink url={flow.link.url} app={flow.link.app} opened={flow.link.opened} />}
             </span>
             <span className="connectbanner__acts">
                 {missing.map(({ connector, status }) => (
-                    <button key={connector.slug} className="btn btn--primary" disabled={flow.busy === connector.slug}
+                    <button key={connector.slug} className="btn btn--primary" disabled={flow.pending}
                         onClick={() => flow.connect(connector, status.standing === "reconnect")}>
                         {flow.busy === connector.slug
                             ? <LoadingIndicator inline label="Opening sign-in" />

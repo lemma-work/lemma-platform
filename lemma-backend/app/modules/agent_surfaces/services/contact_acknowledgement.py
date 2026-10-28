@@ -94,7 +94,11 @@ async def acknowledge_contact(
         ),
         deliver_to=[source.id],
     )
-    if line is not None and source.platform == WEB:
+    if line is None:
+        # Nothing was sent, so there is no line for the next run to read as
+        # words the agent already said to them.
+        return None
+    if source.platform == WEB:
         # A web chat shows it from their conversation; nothing carries it.
         await shown_on_web(uow, line, source)
     logger.info(
