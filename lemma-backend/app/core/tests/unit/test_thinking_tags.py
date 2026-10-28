@@ -10,6 +10,9 @@ reasoning in an answer bubble).
 
 from __future__ import annotations
 
+import sys
+from types import CodeType
+
 from app.core.text.thinking_tags import (
     ThinkingStreamSplitter,
     has_thinking_tokens,
@@ -40,6 +43,34 @@ def _stream(deltas: list[str]) -> list[tuple[str, str]]:
         else:
             merged.append((kind, chunk))
     return merged
+
+
+def _instructions_spent_stripping(text: str) -> int:
+    """Bytecode instructions the reader's own code runs to strip ``text``."""
+    monitoring = sys.monitoring
+    # Six tool slots, and coverage holds one of them in CI.
+    tool = next(slot for slot in range(6) if monitoring.get_tool(slot) is None)
+    # Events are process-wide: pytest's own code, another thread, or a
+    # finalizer the collector runs meanwhile is not the reader's work.
+    reader_file = strip_thinking_tokens.__code__.co_filename
+    executed = 0
+
+    def count(code: CodeType, _offset: int) -> None:
+        nonlocal executed
+        if code.co_filename == reader_file:
+            executed += 1
+
+    monitoring.use_tool_id(tool, "test_thinking_tags")
+    try:
+        monitoring.register_callback(tool, monitoring.events.INSTRUCTION, count)
+        monitoring.set_events(tool, monitoring.events.INSTRUCTION)
+        try:
+            strip_thinking_tokens(text)
+        finally:
+            monitoring.set_events(tool, monitoring.events.NO_EVENTS)
+    finally:
+        monitoring.free_tool_id(tool)
+    return executed
 
 
 # --- whole-string splitting -------------------------------------------------
@@ -193,42 +224,37 @@ def test_a_stream_with_no_tags_passes_straight_through():
     ]
 
 
-def _growth(read, make, size: int) -> float:
-    """How much longer ``read`` takes on four times the input.
-
-    Linear work takes about 4x as long, quadratic about 16x. A ratio rather than
-    a time limit, because a limit is a guess about the runner: on a loaded CI
-    worker the same linear read took 1.2s against a 0.5s bound. And this
-    process's CPU time rather than the wall clock, which on an oversubscribed
-    machine also counts the time spent waiting for a core -- unevenly between
-    the two sizes, so even the ratio failed under load. Best of five.
-    """
-    import time
-
-    def best(text: str) -> float:
-        runs = []
-        for _ in range(5):
-            started = time.process_time()
-            read(text)
-            runs.append(time.process_time() - started)
-        return min(runs)
-
-    return best(make(4 * size)) / best(make(size))
+def test_an_unfinished_tag_ends_at_the_next_angle_bracket():
+    """A tag never contains another ``<``. That stop is what keeps a run of
+    unfinished tags -- ``<think <think <think ...``, text a model was made to
+    repeat -- linear: without it every ``<think`` scans to the end of the message
+    for its ``>``. The cost is spent inside one regex call, where nothing
+    deterministic can count it, so this holds the stop itself, with answers that
+    change without it."""
+    assert split_thinking_segments(f"<think a{OPEN}b{CLOSE}") == [
+        ("text", "<think a"),
+        ("thinking", "b"),
+    ]
+    # Read past the ``<``, the fence and the stray ``<b>`` become one tag's
+    # attributes, and the rest of the answer is hidden as reasoning.
+    answer = "x <think a ``` <b> ``` y"
+    assert split_thinking_segments(answer) == [("text", answer)]
+    assert _stream(list(answer)) == [("text", answer)]
 
 
-def test_a_run_of_unfinished_tags_is_read_in_linear_time():
-    """Text a model was made to repeat -- ``<think<think=<think=...`` -- once made
-    every ``<think`` scan to the end of the message: 0.2s at 32k characters and
-    quadratic beyond. Blocks are now found by walking forward from each open
-    tag to its close."""
+def test_a_half_written_tag_is_released_once_a_later_angle_bracket_rules_it_out():
+    """Held back only while it could still become a tag. Without the stop the
+    held text waits for a ``>`` that never comes: the answer stalls until the
+    stream ends, and every delta that brings a ``<`` re-reads all of it, which is
+    quadratic in the stream."""
+    splitter = ThinkingStreamSplitter()
+    assert splitter.feed("Sure. <think a ") == [("text", "Sure. ")]
 
-    def read(text: str) -> None:
-        split_thinking_segments(text)
-        strip_thinking_tokens(text)
+    released = splitter.feed("``` code <b")
 
-    for repeated, size in ((OPEN, 300_000), ("<think=", 30_000)):
-        growth = _growth(read, lambda n: "<think" + repeated * n, size)
-        assert growth < 8, (repeated, growth)
+    assert "".join(chunk for kind, chunk in released if kind == "text") == (
+        "<think a ``` code <b"
+    )
 
 
 # --- the review's probes ----------------------------------------------------
@@ -288,15 +314,21 @@ def test_the_stream_and_the_saved_message_hide_the_same_text():
 
 
 def test_many_fences_and_blocks_are_read_in_linear_time():
-    """The fence check was ``any`` over every fence for every block."""
+    """The fence check was ``any`` over every fence for every block.
+
+    Counted, not timed: a time bound on a shared runner fails whenever the
+    runner is busy, and the count is the same however busy it is. A linear
+    reader given four times the text runs at most four times the instructions,
+    a quadratic one sixteen; the bound sits just above linear.
+    """
     unit = f"```\ncode {OPEN} quoted\n```\n{OPEN}reasoning{CLOSE}answer ~~~x~~~ "
+    kept = f"```\ncode {OPEN} quoted\n```\nanswer ~~~x~~~ "
 
-    def make(size: int) -> str:
-        return unit * (size // len(unit))
+    small = _instructions_spent_stripping(unit * 50)
+    large = _instructions_spent_stripping(unit * 200)
 
-    assert "reasoning" not in strip_thinking_tokens(make(200_000))
-    growth = _growth(strip_thinking_tokens, make, 200_000)
-    assert growth < 8, growth
+    assert large < 5 * small, f"4x the text ran {large / small:.1f}x the instructions"
+    assert strip_thinking_tokens(unit * 200) == (kept * 200).strip()
 
 
 def test_the_platforms_own_context_blocks_a_model_echoed_are_dropped():

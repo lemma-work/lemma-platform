@@ -1,13 +1,13 @@
 {
   "name": "lemma-frontend",
   "private": true,
-  "version": "0.10.0",
+  "version": "0.10.1",
   "type": "module",
   "scripts": {
     "dev": "node server/dev-watch.mjs --dev",
     "build": "npm run lint && npm run check:naming && npm run check:design && next build",
     "start": "node server.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests/tsconfig.json",
     "test": "node --experimental-strip-types --import ./tests/resolve.mjs --test tests/*.test.ts",
     "lint": "eslint src server scripts tests server.mjs",
     "check:naming": "node scripts/check-naming.mjs",

@@ -81,7 +81,7 @@ test("each sample chat ends with a correction the teammate writes down", async (
     const page = messages.slice(-8);
     assert.equal(page[0].role, "user");
     assert.equal(page.filter(message => message.role === "user").length, 1);
-    const write = messages.findLast(message => message.tool_name === "pod_write_file");
+    const write = messages.filter(message => message.tool_name === "pod_write_file").at(-1);
     assert.ok(write);
     assert.equal(isMemoryPath((write.tool_args as { path: string }).path), true);
 });
