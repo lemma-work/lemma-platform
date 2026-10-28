@@ -25,6 +25,7 @@ from app.modules.agent.contracts.run_failures import user_safe_stored_reason
 from app.modules.agent.contracts.run_replies import (
     RunReplyMaterial,
     answer_line_client_id,
+    earlier_answer_client_id,
 )
 from app.modules.agent.domain.asked_questions import line_client_id
 from app.modules.agent.infrastructure.models import AgentModel
@@ -57,14 +58,20 @@ async def post_answer(
     line: ChannelMessage,
     material: RunReplyMaterial | None,
 ) -> ChannelMessage | None:
-    """The run's answer to ``line``; nothing for a run that wrote none."""
-    if material is None or not material.answer:
+    """The run's answer to ``line``; nothing for a run that wrote none.
+
+    Whatever it answered before the person said more comes first, a line
+    each (``domain/steered_answers``)."""
+    if material is None:
         return None
     if material.private and not line.members_only:
         return None
+    await _post_earlier(
+        uow, run_id=run_id, conversation=conversation, line=line, material=material
+    )
     # The same boundary as a platform's answer: no reasoning, and none of the
     # platform's own context blocks a model repeated back.
-    text = strip_context_echo(strip_thinking_tokens(material.answer))
+    text = _shown(material.answer)
     if not text:
         return None
     return await _post_line(
@@ -79,6 +86,37 @@ async def post_answer(
     )
 
 
+def _shown(answer: str | None) -> str:
+    return strip_context_echo(strip_thinking_tokens(answer or ""))
+
+
+async def _post_earlier(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    run_id: UUID,
+    conversation: ConversationModel,
+    line: ChannelMessage,
+    material: RunReplyMaterial,
+) -> None:
+    """Each answer the run gave before a steer, as a line of its own."""
+    for number, answer in enumerate(material.earlier, start=1):
+        text = _shown(answer)
+        if not text:
+            continue
+        await _post_line(
+            uow,
+            line=line,
+            agent_id=effective_agent_id(
+                conversation.agent_id, pod_id=conversation.pod_id
+            ),
+            for_user_id=conversation.user_id,
+            text=text,
+            client_message_id=earlier_answer_client_id(run_id, number),
+            conversation_id=conversation.id,
+            run_id=run_id,
+        )
+
+
 async def post_why_unanswered(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -91,6 +129,17 @@ async def post_why_unanswered(
     In Lemma only: a group's place is not told about a run nobody there saw."""
     if material is None:
         return None
+    if material.status in ("FAILED", "STOPPED") and (
+        line.members_only or not material.private
+    ):
+        # What it did say before it failed was said.
+        await _post_earlier(
+            uow,
+            run_id=run_id,
+            conversation=conversation,
+            line=line,
+            material=material,
+        )
     if material.status == "FAILED":
         reason = clipped(user_safe_stored_reason(material.error))
         text = f"I couldn't answer this: {reason}" if reason else COULD_NOT_ANSWER

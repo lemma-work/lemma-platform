@@ -134,6 +134,11 @@ async def _read(run_id: UUID) -> LiveDisplay | None:
         return None
 
 
+async def live_display_of(run_id: UUID) -> LiveDisplay | None:
+    """The run's stream as last recorded, without waiting for its seal."""
+    return await _read(run_id)
+
+
 async def take_live_display(
     run_id: UUID, *, wait_seconds: float | None = None
 ) -> LiveDisplay | None:
@@ -177,6 +182,7 @@ __all__ = [
     "SEAL_WAIT_SECONDS",
     "LiveDisplay",
     "forget_live_display",
+    "live_display_of",
     "record_live_display",
     "remainder_after",
     "take_live_display",
