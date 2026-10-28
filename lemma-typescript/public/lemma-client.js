@@ -16727,6 +16727,92 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Create Identity Link
+     * A one-time code that proves, once confirmed, a Telegram account is the
+     * caller's. Ten minutes long, one use.
+     * @param podId
+     * @param requestBody
+     * @returns IdentityLinkResponse Successful Response
+     * @throws ApiError
+     */
+    static telegramIdentityLinkCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/telegram-identity-links",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Identity Link
+     * Whether the caller's code was opened yet, and from which account.
+     * @param podId
+     * @param code
+     * @returns IdentityLinkStatusResponse Successful Response
+     * @throws ApiError
+     */
+    static telegramIdentityLinkGet(podId, code) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/telegram-identity-links/{code}",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Confirm Identity Link
+     * The account the code was opened from is the caller's: bind it.
+     * @param podId
+     * @param code
+     * @returns TelegramAccountResponse Successful Response
+     * @throws ApiError
+     */
+    static telegramIdentityLinkConfirm(podId, code) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/telegram-identity-links/{code}/confirm",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Decline Identity Link
+     * The account the code was opened from is not the caller's: spend it.
+     * @param podId
+     * @param code
+     * @returns void
+     * @throws ApiError
+     */
+    static telegramIdentityLinkDecline(podId, code) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/telegram-identity-links/{code}/decline",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Widgets
      * @param podId
      * @returns WebWidgetListResponse Successful Response
@@ -18326,6 +18412,35 @@ var LemmaClient = (() => {
     telegramLink(podId, surfaceName) {
       return this.client.request(
         () => ChannelSourcesService.channelTelegramLinkCreate(podId, { surface_name: surfaceName })
+      );
+    }
+    /** A ten-minute code proving, once confirmed, a Telegram account is the
+     *  caller's. With `contactId`, only that person's account may open it. */
+    identityLink(podId, surfaceId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return AgentSurfacesService.telegramIdentityLinkCreate(podId, {
+            surface_id: surfaceId,
+            contact_id: (_a = options.contactId) != null ? _a : null
+          });
+        }
+      );
+    }
+    /** Whether the caller's code was opened, and from which account. */
+    identityLinkStatus(podId, code) {
+      return this.client.request(() => AgentSurfacesService.telegramIdentityLinkGet(podId, code));
+    }
+    /** The account that opened the code is the caller's: bind it. */
+    confirmIdentityLink(podId, code) {
+      return this.client.request(
+        () => AgentSurfacesService.telegramIdentityLinkConfirm(podId, code)
+      );
+    }
+    /** The account that opened the code is not the caller's: spend it. */
+    declineIdentityLink(podId, code) {
+      return this.client.request(
+        () => AgentSurfacesService.telegramIdentityLinkDecline(podId, code)
       );
     }
   };

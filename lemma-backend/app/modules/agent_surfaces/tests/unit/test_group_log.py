@@ -14,8 +14,8 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.services.group_log import (
-    _MAX_PARTICIPANTS,
+from app.modules.agent_surfaces.services.live_group_roster import (
+    MAX_PARTICIPANTS as _MAX_PARTICIPANTS,
     participants_in_lines,
     pod_members_in_lines,
 )

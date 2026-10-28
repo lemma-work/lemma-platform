@@ -46,6 +46,18 @@ class VerifiedSurfaceIdentity(UUIDAuditBase):
     )
     verified_phone: Mapped[str | None] = mapped_column(String(32))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Proved by its owner from a signed-in Lemma session: a one-time code minted
+    # there, opened in the platform from this account, confirmed back in the
+    # same session (``services/telegram_identity_link``). Such a binding needs no
+    # phone, and a phone change does not undo it. Telegram only.
+    session_proved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    proved_through_surface_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "agent_surfaces.id",
+            ondelete="SET NULL",
+            name="fk_surface_identity_proved_through_surface",
+        )
+    )
     # Where this identity talks, once it has somewhere to talk. Null until a
     # workspace is chosen or provisioned -- being recognised and having a
     # destination are different things, and the gap between them is a real

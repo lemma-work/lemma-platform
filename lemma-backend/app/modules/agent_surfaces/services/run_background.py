@@ -48,10 +48,12 @@ from app.modules.agent_surfaces.services.group_audience import (
 )
 from app.modules.agent_surfaces.services.group_log import (
     GroupBackground,
-    RosterReads,
     group_background,
     group_source,
     background_from_log,
+)
+from app.modules.agent_surfaces.services.live_group_roster import (
+    RosterReads,
     live_members,
     marked_for_member_run,
     participants_in_lines,

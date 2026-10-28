@@ -32,7 +32,9 @@ from app.modules.agent_surfaces.services.group_audience import (
     chat_audience,
     email_audience,
 )
-from app.modules.agent_surfaces.services.group_log import marked_for_member_run
+from app.modules.agent_surfaces.services.live_group_roster import (
+    marked_for_member_run,
+)
 from app.modules.agent_surfaces.services.private_message import PrivateSend
 
 pytestmark = pytest.mark.unit
