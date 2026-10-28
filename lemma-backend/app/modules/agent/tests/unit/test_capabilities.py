@@ -769,50 +769,13 @@ async def test_run_context_and_deferral_in_real_run():
     # First request: just before the person's message, which stays last.
     assert user_texts(turns[0])[-2:] == [context, "hello"]
 
-    # Later request: once, at the tail -- after the tool result, not left in
-    # the middle of a transcript the next run will replay without it.
+    # Later request: once, where the first request had it -- nothing already
+    # sent moves, so the request starts with the whole of the one before.
     assert len(turns) == 2
-    assert user_texts(turns[1]).count(context) == 1
-    tail = turns[1][-1].parts
-    assert isinstance(tail[-1], UserPromptPart) and tail[-1].content == context
-    assert user_texts(turns[1])[0] == "hello"
+    assert user_texts(turns[1]) == [context, "hello"]
 
     # Prompt-cache session affinity is applied to the request settings.
     assert captured["settings"].get("openai_user") == str(conversation_id)
-
-
-@pytest.mark.anyio
-async def test_on_anthropic_the_context_part_marks_the_prefix_before_it():
-    """The breakpoint goes in front of the part, which moves every step: one
-    after it would cache a prefix no later request starts with."""
-    from pydantic_ai.messages import CachePoint, ModelMessage, ModelRequest
-
-    history: list[ModelMessage] = [
-        ModelRequest(parts=[UserPromptPart(content="earlier question")]),
-        ModelResponse(parts=[TextPart("earlier answer")]),
-    ]
-    seen: list[list[object]] = []
-
-    def model_fn(messages, info: AgentInfo) -> ModelResponse:
-        del info
-        seen.append(list(messages))
-        return ModelResponse(parts=[TextPart("done")])
-
-    context = "<run_context>\nx\n</run_context>"
-    agent = Agent(
-        FunctionModel(model_fn),
-        capabilities=[RunContextCapability(context, mark_cache_boundary=True)],
-    )
-    await agent.run("hello", message_history=history, deps=object())
-
-    part = next(
-        part
-        for message in seen[0]
-        for part in getattr(message, "parts", [])
-        if isinstance(part, UserPromptPart) and isinstance(part.content, list)
-    )
-    assert isinstance(part.content[0], CachePoint)
-    assert part.content[1] == context
 
 
 _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {

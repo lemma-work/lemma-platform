@@ -20,10 +20,12 @@ the prefix before:
 - between runs, a contact's message held for a person and a copy a contact
   merge folded in;
 - a pause (``ask_user``) and the run that resumes from its answer;
-- a compaction, and a later run past the same threshold.
+- a compaction, and a later run past the same threshold;
+- a table created between runs, which changes the pod inventory in the
+  conversation's context.
 
-The rule: each request, less the run-context part that rides at its tail, is a
-prefix of the next one -- within a run and across runs. The one exception is
+The rule: each request is a prefix of the next one -- within a run and across
+runs, the run-context part and the instructions included. The one exception is
 the request a compaction rewrites, once; the run after it must start from what
 the compaction left, and make no second summary call.
 """
@@ -46,6 +48,7 @@ from pydantic_ai.messages import (
     TextPart,
     ThinkingPart,
     ToolCallPart,
+    UserPromptPart,
 )
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -156,6 +159,8 @@ class Model:
     meanwhile: Callable[[Model], None] | None = None
     #: What the person sent while the run worked, as the run claims it.
     claim: ClaimSteered | None = None
+    #: The pod inventory the conversation's context reports, as the runner reads it.
+    brief: str = "## Tables\n(none yet)"
 
     async def summarize(
         self, messages: list[ModelMessage], info: AgentInfo
@@ -354,6 +359,7 @@ async def _run(
         agent_name=agent.name,
         agent_run_id=run_id,
         run_context=f"{_RUN_CONTEXT}\nrun {model.run}\n</run_context>",
+        context_brief=model.brief,
     )
     harness = PydanticAIHarness(
         model=FunctionModel(model.summarize, stream_function=model.stream),
@@ -478,7 +484,9 @@ async def _play() -> Played:
         trigger_tokens=trigger,
     )
 
-    # Run 4: past the same threshold, it starts from what the compaction left.
+    # Run 4: past the same threshold, it starts from what the compaction left;
+    # and a table was created since, so the pod's inventory changed.
+    model.brief = _NEW_TABLE
     run4 = uuid4()
     storage.user("Thanks!", run_id=run4)
     await _run(
@@ -490,6 +498,9 @@ async def _play() -> Played:
         trigger_tokens=trigger,
     )
     return Played(sent=model.sent, summaries=model.summaries)
+
+
+_NEW_TABLE = "## Tables\nbookings(city, day)"
 
 
 async def _fixed_tokens(agent: Agent, conversation: Conversation) -> int:
@@ -577,19 +588,6 @@ async def _wire(messages: list[ModelMessage], protocol: Protocol) -> list[str]:
     return blocks
 
 
-def _without_tail_context(blocks: list[str]) -> list[str]:
-    """``blocks`` less the run-context part riding at their end."""
-    end = len(blocks)
-    while end and _RUN_CONTEXT in blocks[end - 1]:
-        end -= 1
-    return blocks[:end]
-
-
-def _without_context(blocks: list[str]) -> list[str]:
-    """``blocks`` less the run-context part, wherever it sits."""
-    return [block for block in blocks if _RUN_CONTEXT not in block]
-
-
 @dataclass(slots=True)
 class Break:
     after: int
@@ -611,22 +609,12 @@ class Break:
         )
 
 
-async def _breaks(
-    played: Played, protocol: Protocol, *, context_anywhere: bool
-) -> list[Break]:
-    """Where a request does not start with the one before it.
-
-    ``context_anywhere`` leaves the run-context part out wherever it sits, for
-    the history's own prefix; otherwise only at the tail, where it belongs.
-    """
+async def _breaks(played: Played, protocol: Protocol) -> list[Break]:
+    """Where a request does not start with the one before it."""
     found: list[Break] = []
     for index, (earlier, later) in enumerate(zip(played.sent, played.sent[1:])):
         before = await _wire(earlier.messages, protocol)
         after = await _wire(later.messages, protocol)
-        if context_anywhere:
-            before, after = _without_context(before), _without_context(after)
-        else:
-            before = _without_tail_context(before)
         if earlier.instructions != later.instructions:
             found.append(
                 Break(index, earlier.run, later.run, -1, "instructions", "changed")
@@ -664,8 +652,79 @@ async def test_every_request_starts_with_the_one_before(protocol: Protocol) -> N
     played = await _play()
 
     assert [sent.run for sent in played.sent] == [1, 1, 2, 3, 3, 3, 4]
-    breaks = await _breaks(played, protocol, context_anywhere=True)
+    breaks = await _breaks(played, protocol)
     assert not breaks, "\n\n".join(str(item) for item in breaks)
+
+
+@pytest.mark.anyio
+async def test_the_run_context_part_stays_at_its_turn() -> None:
+    """Each run's context is written once, just before its turn, and stays."""
+    played = await _play()
+
+    last = played.sent[-1].messages
+    texts = [
+        part.content
+        for message in last
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+    ]
+    for turn, run in (("Plan me three days in Oslo.", 1), ("Thanks!", 4)):
+        at = next(i for i, text in enumerate(texts) if text.endswith(turn))
+        assert texts[at - 1].startswith(f"{_RUN_CONTEXT}\nrun {run}")
+
+
+@pytest.mark.anyio
+async def test_a_table_created_mid_conversation_is_appended_not_rewritten() -> None:
+    """The inventory sits in the conversation's context, frozen where the
+    conversation started: a new table arrives after everything already sent."""
+    played = await _play()
+
+    first, last = played.sent[0], played.sent[-1]
+    assert first.instructions == last.instructions
+    assert first.instructions is not None and "(none yet)" in first.instructions
+    assert _NEW_TABLE not in first.instructions
+    wire = await _wire(last.messages, "openai")
+    table = "bookings(city, day)"
+    assert table in wire[-1] and "Thanks!" in wire[-2]
+    assert not any(table in block for block in wire[:-1])
+
+
+@pytest.mark.anyio
+async def test_a_new_conversation_reuses_the_prefix_up_to_the_agent() -> None:
+    """Two conversations with one agent share every byte up to the end of the
+    agent's own instruction; the conversation's context follows it."""
+    agent_instruction = "Plan trips."
+
+    async def first_instructions(brief: str) -> str:
+        conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+        agent = Agent(
+            pod_id=conversation.pod_id,
+            user_id=conversation.user_id,
+            name="planner",
+            instruction=agent_instruction,
+        )
+        storage = Storage(conversation)
+        model = Model(brief=brief)
+        run_id = uuid4()
+        storage.user("Hello.", run_id=run_id)
+        await _run(
+            model,
+            storage,
+            agent=agent,
+            run_id=run_id,
+            script=[_text("Hi.")],
+            trigger_tokens=10**6,
+        )
+        assert model.sent[0].instructions is not None
+        return model.sent[0].instructions
+
+    one = await first_instructions("## Tables\nflights(no)")
+    two = await first_instructions("## Tables\ntrains(no)")
+    shared = one.index(agent_instruction) + len(agent_instruction)
+    assert one[:shared] == two[:shared]
+    assert one[shared:] != two[shared:]
+    assert "flights" in one[shared:]
 
 
 @pytest.mark.anyio
@@ -675,26 +734,6 @@ async def test_a_conversation_past_the_threshold_compacts_once() -> None:
     # Once, in the run that crossed it: the next run starts from what it left.
     assert played.summaries == [3]
     assert _carries_summary(played.sent[-1])
-
-
-@pytest.mark.anyio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Prompt tiers (PR B, next phase): a run's first request carries the "
-        "run-context part just before the person's turn, and every later request "
-        "moves it to the tail -- so request 2 of a run re-reads the turn, and the "
-        "next run re-reads a one-request run's turn."
-    ),
-)
-@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
-async def test_the_run_context_part_only_ever_rides_at_the_tail(
-    protocol: Protocol,
-) -> None:
-    played = await _play()
-
-    breaks = await _breaks(played, protocol, context_anywhere=False)
-    assert not breaks, "\n\n".join(str(item) for item in breaks)
 
 
 @pytest.mark.anyio
@@ -732,6 +771,5 @@ async def test_a_history_of_pasted_text_compacts_once_and_shrinks() -> None:
     breaks = await _breaks(
         Played(sent=model.sent[-2:], summaries=model.summaries),
         "openai",
-        context_anywhere=True,
     )
     assert not breaks, "\n\n".join(str(item) for item in breaks)

@@ -16,9 +16,9 @@ that request -- so it is never rebuilt again:
 * **the rows written outside any run's log** (``pending_rows``): the run's own
   prompt, what was held or folded in, notices, turns another harness answered.
 
-The recorder strips the run-context part before comparing: it rides at the tail
-of every request and is never history. When what the run now holds no longer
-starts with what was logged -- a compaction, a clipped tool result, a detached
+The run-context part is history like any other: written once at the run's
+turn, logged with the step that first sent it. When what the run now holds no
+longer starts with what was logged -- a compaction, a clipped tool result, a detached
 image -- the whole history is written as a ``COMPACTION`` checkpoint, once, and
 replay starts there.
 """
@@ -37,7 +37,6 @@ from pydantic_ai.messages import (
     RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
-    UserPromptPart,
 )
 
 from app.modules.agent.domain.entities import Message
@@ -195,7 +194,6 @@ class RunLogRecorder:
     """
 
     logged: list[ModelMessage]
-    context_text: str | None = None
     labels: dict[int, RunStepKind] = field(default_factory=dict)
     covers: list[UUID] = field(default_factory=list)
     _logged_bytes: list[bytes] = field(default_factory=list)
@@ -209,7 +207,7 @@ class RunLogRecorder:
 
     def take(self, messages: Sequence[ModelMessage]) -> list[RunStepDraft]:
         """The steps that bring the log up to ``messages``; none when it is."""
-        current = self._without_context(messages)
+        current = list(messages)
         current_bytes = [
             known if message is self._logged_at(index) else _bytes(message)
             for index, message in enumerate(current)
@@ -257,32 +255,6 @@ class RunLogRecorder:
     def _known_bytes(self, index: int) -> bytes:
         return self._logged_bytes[index] if index < len(self._logged_bytes) else b""
 
-    def _without_context(self, messages: Sequence[ModelMessage]) -> list[ModelMessage]:
-        """``messages`` less the run-context part: it is never history."""
-        text = self.context_text
-        if not text:
-            return list(messages)
-        kept: list[ModelMessage] = []
-        for message in messages:
-            if isinstance(message, ModelRequest) and any(
-                _is_context(part, text) for part in message.parts
-            ):
-                parts = [part for part in message.parts if not _is_context(part, text)]
-                if not parts:
-                    continue
-                message = replace(message, parts=parts)
-            kept.append(message)
-        return kept
-
-
-def _is_context(part: object, text: str) -> bool:
-    if not isinstance(part, UserPromptPart):
-        return False
-    content = part.content
-    if isinstance(content, str):
-        return content == text
-    return text in content
-
 
 def _bytes(message: ModelMessage) -> bytes:
     return ModelMessagesTypeAdapter.dump_json([message])
@@ -302,7 +274,6 @@ def start_from_log(
     *,
     conversation_id: UUID,
     pausing: frozenset[str],
-    context_text: str | None,
 ) -> LogStart:
     """The run's history from the log, and what it takes in before it starts."""
     from app.modules.agent.infrastructure.harness.lemma.history_replay import (
@@ -340,9 +311,7 @@ def start_from_log(
     recorder = (
         None
         if log.read_only
-        else RunLogRecorder(
-            logged=replay, context_text=context_text, labels=labels, covers=covers
-        )
+        else RunLogRecorder(logged=replay, labels=labels, covers=covers)
     )
     return LogStart(
         history=[*replay, *taken], user_prompt=user_prompt, recorder=recorder
@@ -354,7 +323,6 @@ def starting_history(
     *,
     options: HarnessOptions,
     conversation_id: UUID,
-    context_text: str | None,
     agent_run_id: UUID,
 ) -> tuple[list[ModelMessage], str | None, RunLogRecorder | None]:
     """The run's history and prompt, and how it logs its steps.
@@ -377,7 +345,6 @@ def starting_history(
             pausing=frozenset(
                 spec.name for spec in options.tools if spec.policy.pauses
             ),
-            context_text=context_text,
         )
         return start.history, start.user_prompt, start.recorder
     snapshot = options.runtime_profile

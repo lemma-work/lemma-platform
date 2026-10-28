@@ -578,13 +578,18 @@ def _generator(
     )
 
 
+_POD = uuid4()
+#: Sent like an agent request's, so the provider routes it to its cache.
+_AFFINITY = {"openai_user": f"{_POD}:title"}
+
+
 async def _ask(
     generator: ConversationTitleGenerator, *, reply_text=None, user_text="hi"
 ):
     return await generator.generate(
         user_id=uuid4(),
         organization_id=None,
-        pod_id=uuid4(),
+        pod_id=_POD,
         user_text=user_text,
         reply_text=reply_text,
     )
@@ -607,7 +612,10 @@ async def test_generator_does_not_pay_for_a_hidden_reasoning_trace() -> None:
 
     await _ask(generator, user_text="Plan a trip to Japan")
 
-    assert capture["model_settings"] == {"openai_reasoning_effort": "none"}
+    assert capture["model_settings"] == {
+        "openai_reasoning_effort": "none",
+        **_AFFINITY,
+    }
     assert capture["usage_limits"].request_limit == 1
     assert capture["system_prompt"] == cts._TITLE_SYSTEM_PROMPT
 
@@ -620,7 +628,9 @@ async def test_an_undeclared_model_is_asked_for_no_effort_too() -> None:
 
     await _ask(generator, user_text="Plan a trip to Japan")
 
-    assert capture["settings_seen"] == [{"openai_reasoning_effort": "none"}]
+    assert capture["settings_seen"] == [
+        {"openai_reasoning_effort": "none", **_AFFINITY}
+    ]
 
 
 @pytest.mark.asyncio
@@ -634,7 +644,10 @@ async def test_a_model_that_refuses_the_effort_field_is_asked_again_without_it()
     title = await _ask(generator, user_text="Plan a trip to Japan")
 
     assert title == "A nice title"
-    assert capture["settings_seen"] == [{"openai_reasoning_effort": "none"}, {}]
+    assert capture["settings_seen"] == [
+        {"openai_reasoning_effort": "none", **_AFFINITY},
+        _AFFINITY,
+    ]
 
 
 @pytest.mark.asyncio

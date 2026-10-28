@@ -347,6 +347,7 @@ def build_agent_instruction_parts(
     ctx: ToolContext,
     include_toolset_prompts: bool = True,
     runs_as_remote_process: bool = False,
+    include_agent_instruction: bool = True,
 ) -> tuple[str, str]:
     """Compose the system prompt for an agent run.
 
@@ -368,6 +369,10 @@ def build_agent_instruction_parts(
     folded in here. The in-process LEMMA harness passes ``False`` because those
     fragments are contributed by the matching pydantic-ai capabilities instead;
     remote harnesses keep ``True`` since they have no capability layer.
+
+    ``include_agent_instruction`` leaves the agent's own instruction out, for a
+    harness that places it after the capability guidance
+    (`agent_instruction_section`).
 
     ``runs_as_remote_process`` says this run is a coding agent executing as a
     real OS process on somebody's own computer, rather than inside the
@@ -395,8 +400,8 @@ def build_agent_instruction_parts(
     if include_toolset_prompts:
         sections.extend(_remote_fragments(enabled, ctx=ctx))
 
-    if agent.instruction.strip():
-        sections.append("# Agent Instructions\n" + agent.instruction.strip())
+    if include_agent_instruction:
+        sections.append(agent_instruction_section(agent))
 
     stable = sections
     # The agent's working directory is per conversation, so it cannot live in a
@@ -425,6 +430,12 @@ def build_agent_instruction_parts(
         _SEPARATOR.join(section.strip() for section in stable if section.strip()),
         _SEPARATOR.join(section.strip() for section in sections if section.strip()),
     )
+
+
+def agent_instruction_section(agent: Agent) -> str:
+    """The agent's own instruction, as its section of the system prompt."""
+    text = agent.instruction.strip()
+    return "# Agent Instructions\n" + text if text else ""
 
 
 def _remote_fragments(enabled: set[AgentToolset], *, ctx: ToolContext) -> list[str]:

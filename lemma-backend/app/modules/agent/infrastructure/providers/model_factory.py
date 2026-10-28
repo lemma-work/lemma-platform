@@ -79,6 +79,20 @@ class ProviderModelSettings(ModelSettings):
 _PROVIDER_SETTINGS_ADAPTER = TypeAdapter(ProviderModelSettings)
 
 
+def with_affinity(
+    settings: Mapping[str, object] | None, affinity_key: str | None
+) -> dict[str, object] | None:
+    """``settings`` plus the replica-affinity key a request is sent under.
+
+    The ``user`` field of OpenAI-compatible Chat Completions: the one affinity
+    lever there, keyed so requests sharing a prefix land where it is cached. A
+    request on another protocol ignores it.
+    """
+    if affinity_key is None:
+        return dict(settings) if settings is not None else None
+    return {**(settings or {}), "openai_user": affinity_key}
+
+
 def provider_model_settings(
     settings: Mapping[str, object] | None,
 ) -> ModelSettings | None:

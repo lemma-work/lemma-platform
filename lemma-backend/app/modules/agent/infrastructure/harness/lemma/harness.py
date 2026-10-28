@@ -6,7 +6,7 @@ from pydantic_ai.run import AgentRun
 from contextlib import AbstractAsyncContextManager
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import AsyncIterator, Sequence
 from uuid import UUID
 
@@ -48,7 +48,9 @@ from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
 )
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
-from app.modules.agent.domain.prompt.templates import build_agent_instruction_parts
+from app.modules.agent.infrastructure.harness.lemma.prompt_layout import (
+    run_instructions,
+)
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.harness_options import HarnessOptions
@@ -66,7 +68,6 @@ from app.modules.agent.infrastructure.harness.lemma.capabilities import (
 from app.modules.agent.infrastructure.harness.lemma.pending_user_messages import (
     ClaimSteered,
 )
-from app.modules.agent.domain.prompt.run_context import run_context_for
 from app.modules.agent.infrastructure.harness.lemma.run_log import (
     starting_history,
 )
@@ -101,6 +102,7 @@ from app.modules.usage.contracts.metering import (
 from app.modules.agent.infrastructure.providers.model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
     provider_model_settings,
+    with_affinity,
 )
 from app.modules.agent.infrastructure.providers.summarization import (
     lazy_compaction_target,
@@ -117,43 +119,6 @@ logger = get_logger(__name__)
 _STREAM_QUEUE_ITEMS = 256
 
 DEFAULT_TOOL_RETRIES = 5
-
-
-def _instructions(
-    *,
-    agent: Agent,
-    conversation: Conversation,
-    ctx: ToolContext,
-) -> list[str | Callable[[], str]]:
-    """The run's system instructions, timed as its own phase.
-
-    Prompt assembly reads and renders every prompt fragment the agent's
-    configuration pulls in, so it is worth telling apart from the model call it
-    sits immediately in front of.
-
-    Two parts, and the second is a function on purpose. PydanticAI puts every
-    literal instruction first -- this agent's, then each capability's -- and
-    instruction functions after them. So the stable part leads, the capability
-    guidance (large, and the same for every conversation) follows it, and the
-    per-conversation part comes last: a new conversation reuses the cached
-    prefix up to its own working directory instead of re-reading everything
-    after it.
-    """
-    with run_phase("instructions") as span:
-        stable, per_conversation = build_agent_instruction_parts(
-            agent=agent,
-            conversation=conversation,
-            ctx=ctx,
-            include_toolset_prompts=False,
-        )
-        span.set_attribute(
-            "lemma.instructions.chars", len(stable) + len(per_conversation)
-        )
-
-        def this_conversation() -> str:
-            return per_conversation
-
-        return [stable, this_conversation]
 
 
 class PydanticAIHarness:
@@ -314,7 +279,6 @@ class PydanticAIHarness:
                 messages,
                 options=options,
                 conversation_id=conversation.id,
-                context_text=run_context_for(ctx),
                 agent_run_id=agent_run_id,
             )
             history_span.set_attribute("lemma.history.model_messages", len(history))
@@ -335,7 +299,10 @@ class PydanticAIHarness:
             organization_id=conversation.organization_id,
             user_id=conversation.user_id,
             run_model=model,
-            run_compaction_settings=options.compaction_model_settings,
+            run_compaction_settings=with_affinity(
+                options.compaction_model_settings,
+                f"{ctx.pod_id}:compaction" if ctx.pod_id else None,
+            ),
             meter=lambda resolved: (
                 resolved
                 if self._model is not None
@@ -380,7 +347,9 @@ class PydanticAIHarness:
         output_type = final_answer_output(agent, conversation)
         pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
             model,
-            instructions=_instructions(agent=agent, conversation=conversation, ctx=ctx),
+            instructions=run_instructions(
+                agent=agent, conversation=conversation, ctx=ctx
+            ),
             deps_type=type(ctx),
             retries=DEFAULT_TOOL_RETRIES,
             # A final answer must not skip a sibling approval tool that pauses the run.

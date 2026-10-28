@@ -119,7 +119,6 @@ def test_what_extends_the_log_is_a_step_and_a_rewrite_is_a_checkpoint() -> None:
     held = ModelRequest(parts=[UserPromptPart("held")])
     recorder = RunLogRecorder(
         logged=[first],
-        context_text="<run_context>now</run_context>",
         labels={id(held): RunStepKind.HELD},
         covers=[uuid4()],
     )
@@ -130,7 +129,8 @@ def test_what_extends_the_log_is_a_step_and_a_rewrite_is_a_checkpoint() -> None:
 
     assert [draft.kind for draft in drafts] == [RunStepKind.HELD, RunStepKind.STEP]
     assert drafts[0].covers and not drafts[1].covers
-    assert "run_context" not in drafts[1].messages
+    # The run's context is logged where it was sent: it is history.
+    assert "run_context" in drafts[1].messages
     assert recorder.take([first, held, context, answer]) == []
 
     rewritten = ModelRequest(parts=[UserPromptPart("[summary]")])

@@ -217,14 +217,16 @@ async def test_the_next_run_starts_with_exactly_what_the_last_one_sent(monkeypat
     last_of_first = await _wire(first.requests[-1])
     first_of_second = await _wire(second.requests[0])
 
-    # The first run's last request ends with its context part, and nothing
-    # else of it is anywhere but the tail.
-    assert "<run_context>" in last_of_first[-1]
-    assert not any("<run_context>" in entry for entry in last_of_first[:-1])
-    sent_before_the_context = last_of_first[:-1]
-    assert first_of_second[: len(sent_before_the_context)] == sent_before_the_context
-    # ...followed by the first run's final answer, as the provider produced it.
-    assert "It is 42." in first_of_second[len(sent_before_the_context)]
+    # Within the run the context part stays where the first request put it,
+    # just before the turn, so the second request starts with the first.
+    first_of_first = await _wire(first.requests[0])
+    assert last_of_first[: len(first_of_first)] == first_of_first
+    at = next(i for i, entry in enumerate(last_of_first) if "<run_context>" in entry)
+    assert "Find the answer." in last_of_first[at + 1]
+    # Rebuilt from rows (no run log: the one-release fallback), the next run
+    # starts with everything the last one sent before its context part -- the
+    # rows do not hold it; the run log does (test_cache_stable_prefix).
+    assert first_of_second[:at] == last_of_first[:at]
     # And the system prompt in front of all of it did not move either.
     assert second.instructions[0] == first.instructions[-1]
 

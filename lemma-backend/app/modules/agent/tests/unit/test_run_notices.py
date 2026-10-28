@@ -266,7 +266,7 @@ async def test_a_notice_stays_in_the_history_whatever_is_registered_after_it():
 
 
 async def test_the_run_context_part_is_where_the_history_has_it():
-    """Moved to the tail on every request, and kept there in the run's history,
+    """Placed once before the turn, and kept there in the run's history,
     whatever is registered after it."""
     context = "<run_context>\nnow\n</run_context>"
     seen: list[list[ModelMessage]] = []
@@ -278,4 +278,6 @@ async def test_the_run_context_part_is_where_the_history_has_it():
 
     kept = [t for m in result.all_messages() for t in _texts(m)]
     assert kept.count(context) == 1
-    assert _texts(seen[1][-1])[-1] == context
+    assert kept.index(context) == kept.index("hello") - 1
+    second = [t for m in seen[1] for t in _texts(m)]
+    assert second.index(context) == second.index("hello") - 1

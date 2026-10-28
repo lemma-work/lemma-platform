@@ -133,13 +133,7 @@ def _capabilities(
         if group not in deferred
     ]
     capabilities.append(UniqueToolCallIds())
-    capabilities.append(
-        RunContextCapability(
-            run_context_for(ctx),
-            mark_cache_boundary=enable_prompt_caching
-            and protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
-        )
-    )
+    capabilities.append(RunContextCapability(run_context_for(ctx)))
     capabilities.extend(_run_hooks(ctx, *steering))
     if deferred:
         # Provider-native search on Anthropic/OpenAI, a local `search_tools`
