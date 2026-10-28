@@ -29,7 +29,7 @@ from app.modules.agent.services.runtime_availability import (
     ensure_turn_runtime_available,
     turn_runtime,
 )
-from app.modules.agent.services.usage_preflight import assert_turn_allowed
+from app.modules.agent.services.run_admission import admit_turn
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.ports import AgentRepository
 from app.modules.agent.infrastructure import repositories
@@ -111,14 +111,13 @@ class RetryFailedRun:
                 conversation, user_id=user_id, agent_repository=self.agent_repository
             ),
         )
-        await self.runtime_check(
+        await admit_turn(
             self.uow,
+            conversation,
             runtime,
-            organization_id=conversation.organization_id,
             user_id=user_id,
-        )
-        await assert_turn_allowed(
-            self.usage_service, conversation, user_id=user_id, agent_runtime=runtime
+            usage_service=self.usage_service,
+            runtime_check=self.runtime_check,
         )
         retry_run = await self.runs.create_agent_run(
             conversation_id=conversation.id,
@@ -126,18 +125,14 @@ class RetryFailedRun:
             agent_runtime=runtime,
             state=RunState(
                 trigger=RunTrigger.RETRY,
+                kind=failed_run.state.kind,
                 retried_run_id=failed_run.id,
                 **failed_run.state.privacy.model_dump(),
             ),
         )
         await stage_agent_turn(
             self.uow,
-            turn_for(
-                conversation,
-                run_id=retry_run.id,
-                user_id=user_id,
-                agent_name=agent_name,
-            ),
+            turn_for(conversation, retry_run, user_id=user_id, agent_name=agent_name),
         )
         await self.uow.commit()
         return AgentRunStartResult(

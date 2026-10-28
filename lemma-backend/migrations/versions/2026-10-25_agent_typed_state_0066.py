@@ -14,7 +14,10 @@ whose presence stood for it, in `run_origin`'s precedence), `workflow_run_id`,
 `workspace_name`, `repo` and `todos`. `started_by` gets none: every writer
 stamped the literal `SCHEDULE`, which `origin` now says.
 
-`agent_runs`: `trigger` (from `source`), `private_note`, `asked_in_lemma`,
+`agent_runs`: `trigger` (from `source`), `kind` (who the turn is for: set by
+whatever starts a run from now on, backfilled from its conversation's `origin`,
+except that a person's message into a workflow's or a schedule's conversation
+is a person's turn), `private_note`, `asked_in_lemma`,
 `written_in`, `resumed_tool_call_id`, `retried_run_id`, `queued_behind_run_id`,
 `queued_leftovers_behind` (a list of run ids, as it always was),
 `stop_requested_after_sequence`, `delivered_to_parent_at` (the run's
@@ -287,6 +290,23 @@ UPDATE agent_runs SET
 WHERE {_R} IS NOT NULL AND {_R} <> '{{}}'::jsonb
 """
 
+#: A run's kind, from its conversation's origin as `run_origin` read it -- but
+#: a person's message (`MESSAGE`) into an automation's conversation started a
+#: person's turn. A call's coordinator and a channel line have kinds of their
+#: own now.
+_RUN_KIND_BACKFILL = """
+UPDATE agent_runs r SET kind = CASE
+  WHEN c.origin IN ('WORKFLOW_STEP', 'SCHEDULE') AND r.trigger = 'MESSAGE'
+    THEN 'CHAT'
+  WHEN c.origin = 'WORKFLOW_STEP' THEN 'WORKFLOW'
+  WHEN c.origin = 'NOTIFICATION' THEN 'SURFACE'
+  WHEN c.origin IN ('SCHEDULE', 'SUBAGENT', 'POD_ASK', 'SURFACE', 'CONTACT',
+    'CHANNEL', 'CALL') THEN c.origin
+  ELSE 'CHAT' END
+FROM agent_conversations c
+WHERE c.id = r.conversation_id AND c.origin NOT IN ('CHAT', 'PROJECT', 'SETUP')
+"""
+
 _RUN_UNMAPPED = {
     "source": f"({_TRIGGER}) IS NULL",
     "written_in_lemma": _unreadable(_R, "written_in_lemma", _written_in(_R)),
@@ -416,6 +436,17 @@ def _flag_column(name: str) -> sa.Column:
 
 
 _WRITTEN_IN = ("GROUP", "OUTSIDERS")
+_RUN_KINDS = (
+    "CHAT",
+    "SURFACE",
+    "CHANNEL",
+    "CONTACT",
+    "WORKFLOW",
+    "SCHEDULE",
+    "SUBAGENT",
+    "POD_ASK",
+    "CALL",
+)
 
 
 def _add_columns() -> None:
@@ -479,6 +510,12 @@ def _add_columns() -> None:
             ),
             nullable=False,
             server_default="MESSAGE",
+        ),
+        sa.Column(
+            "kind",
+            _enum("runkind", *_RUN_KINDS, length=16),
+            nullable=False,
+            server_default="CHAT",
         ),
         _flag_column("private_note"),
         _flag_column("asked_in_lemma"),
@@ -1179,6 +1216,8 @@ def upgrade() -> None:
 
     conversations = conn.execute(sa.text(_CONVERSATION_BACKFILL)).rowcount
     runs = conn.execute(sa.text(_RUN_BACKFILL)).rowcount
+    # After both: it reads the conversation's origin and the run's trigger.
+    conn.execute(sa.text(_RUN_KIND_BACKFILL))
     messages = conn.execute(sa.text(_MESSAGE_BACKFILL)).rowcount
     send_copies = conn.execute(sa.text(_CLIENT_ID_DUPLICATES)).rowcount
     _log().info(
@@ -1269,6 +1308,7 @@ def downgrade() -> None:
             "agent_runs",
             (
                 "trigger",
+                "kind",
                 "private_note",
                 "asked_in_lemma",
                 "written_in",

@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.agent_memory_paths import memory_kept_after_turn
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.prompt.templates import (
     FRAGMENT_BY_TOOLSET,
     load_memory_pass_prompt,
@@ -38,16 +39,24 @@ def _sections(text: str) -> dict[str, str]:
     return {name: body.strip() for name, body in sections.items()}
 
 
-@pytest.mark.parametrize("origin", ["chat", "surface"])
-def test_a_run_a_person_waits_on_leaves_its_memory_to_the_pass(origin):
-    assert memory_kept_after_turn(**_WAITED_ON, origin=origin)
+@pytest.mark.parametrize("kind", [RunKind.CHAT, RunKind.SURFACE, RunKind.CHANNEL])
+def test_a_run_a_person_waits_on_leaves_its_memory_to_the_pass(kind):
+    assert memory_kept_after_turn(**_WAITED_ON, kind=kind)
 
 
 @pytest.mark.parametrize(
-    "origin", ["schedule", "workflow", "trigger", "subagent", "pod_ask"]
+    "kind",
+    [
+        RunKind.SCHEDULE,
+        RunKind.WORKFLOW,
+        RunKind.SUBAGENT,
+        RunKind.POD_ASK,
+        # Every voice turn is a run: a pass after each would be noise.
+        RunKind.CALL,
+    ],
 )
-def test_a_run_nobody_waits_on_keeps_saving_memory_in_the_turn(origin):
-    assert not memory_kept_after_turn(**_WAITED_ON, origin=origin)
+def test_a_run_nobody_waits_on_keeps_saving_memory_in_the_turn(kind):
+    assert not memory_kept_after_turn(**_WAITED_ON, kind=kind)
 
 
 @pytest.mark.parametrize(
@@ -63,7 +72,7 @@ def test_a_run_nobody_waits_on_keeps_saving_memory_in_the_turn(origin):
 def test_a_chat_run_keeps_saving_in_the_turn_when_the_pass_cannot_follow_it(
     condition,
 ):
-    assert not memory_kept_after_turn(**{**_WAITED_ON, **condition}, origin="chat")
+    assert not memory_kept_after_turn(**{**_WAITED_ON, **condition}, kind=RunKind.CHAT)
 
 
 def test_the_after_turn_contract_differs_only_in_when_to_write():

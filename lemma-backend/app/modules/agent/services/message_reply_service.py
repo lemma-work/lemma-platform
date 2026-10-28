@@ -114,6 +114,8 @@ class MessageReplyService:
                 content=REPLIES_ARRIVED,
                 agent_name=None,
                 message_metadata={"source": REPLY_SOURCE},
+                # Continues the run it answers.
+                kind=None,
                 client_message_id=client_id,
                 supersede_pauses=False,
             )

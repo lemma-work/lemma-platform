@@ -22,6 +22,7 @@ from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.run_state import RunPrivacy, RunState
 from app.modules.agent.domain.value_objects import MessageDraft, RunTrigger
 from app.modules.agent.infrastructure.db.messages import Messages
@@ -171,6 +172,7 @@ async def start_resume_run(
         agent_runtime=selected_agent_runtime,
         state=RunState(
             trigger=trigger,
+            kind=paused_run.state.kind if paused_run else RunKind.CHAT,
             resumed_tool_call_id=resumed_tool_call_id,
             # A note that paused for an approval finishes where it began.
             **privacy.model_dump(),
@@ -185,12 +187,7 @@ async def start_resume_run(
     )
     await stage_agent_turn(
         uow,
-        turn_for(
-            conversation,
-            run_id=resume_run.id,
-            user_id=user_id,
-            agent_name=agent_name,
-        ),
+        turn_for(conversation, resume_run, user_id=user_id, agent_name=agent_name),
     )
     if publish_claimed:
         publish_after_commit(

@@ -15,6 +15,7 @@ from uuid import UUID
 
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.services.run_admission import admit_turn
 from app.modules.agent.services.turn_staging import AgentTurnStart, stage_agent_turn
 from app.modules.agent.domain.automation_prompts import (
     conversation_title,
@@ -24,6 +25,7 @@ from app.modules.agent.domain.automation_prompts import (
 )
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.project_repo import parse_project_repo
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import (
     ConversationOrigin,
@@ -38,16 +40,29 @@ from app.modules.agent.infrastructure.conversation_idempotency_store import (
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.services.runtime_availability import (
+    TurnRuntimeCheck,
+    ensure_turn_runtime_available,
+)
 from app.modules.agent.services.runtime_resolution import (
     default_agent_runtime_for_pod,
 )
 from app.modules.pod.contracts.agent_access import pod_organization_id
+from app.modules.usage.contracts.execution import UsageService, build_usage_service
 
-#: The trigger each automated origin starts its run with, and the ``source``
-#: its first message has always been labelled with.
-_TRIGGERS: dict[ConversationOrigin, tuple[RunTrigger, str]] = {
-    ConversationOrigin.SCHEDULE: (RunTrigger.SCHEDULE_FIRE, "SCHEDULE"),
-    ConversationOrigin.WORKFLOW_STEP: (RunTrigger.WORKFLOW_START, "WORKFLOW_RUN"),
+#: The kind and trigger each automated origin starts its run with, and the
+#: ``source`` its first message has always been labelled with.
+_TRIGGERS: dict[ConversationOrigin, tuple[RunKind, RunTrigger, str]] = {
+    ConversationOrigin.SCHEDULE: (
+        RunKind.SCHEDULE,
+        RunTrigger.SCHEDULE_FIRE,
+        "SCHEDULE",
+    ),
+    ConversationOrigin.WORKFLOW_STEP: (
+        RunKind.WORKFLOW,
+        RunTrigger.WORKFLOW_START,
+        "WORKFLOW_RUN",
+    ),
 }
 
 #: The pod's default runtime (``services/runtime_resolution``).
@@ -62,8 +77,12 @@ class StartAutomatedRun:
         uow: SqlAlchemyUnitOfWork,
         *,
         default_runtime: DefaultRuntime = default_agent_runtime_for_pod,
+        usage_service: UsageService | None = None,
+        runtime_check: TurnRuntimeCheck = ensure_turn_runtime_available,
     ) -> None:
         self.uow = uow
+        self.usage_service = usage_service
+        self.runtime_check = runtime_check
         self.conversations = Conversations(uow)
         self.runs = Runs(uow)
         self.messages = Messages(uow)
@@ -71,7 +90,7 @@ class StartAutomatedRun:
 
     @classmethod
     def build(cls, uow: SqlAlchemyUnitOfWork) -> StartAutomatedRun:
-        return cls(uow)
+        return cls(uow, usage_service=build_usage_service(uow))
 
     async def default_runtime(self, pod_id: UUID) -> AgentRuntimeConfig:
         """This module's default runtime for the pod -- the same one a run
@@ -101,7 +120,7 @@ class StartAutomatedRun:
         stays as tags. ``instructions`` is what the run is for, layered after
         the agent's own; ``runtime_override`` a step's narrower model choice,
         kept for every later run of the conversation."""
-        trigger, source = _TRIGGERS[origin]
+        kind, trigger, source = _TRIGGERS[origin]
         scheduled = origin is ConversationOrigin.SCHEDULE
         metadata = dict(conversation_metadata or {})
         repo = parse_project_repo(metadata.pop("repo", None))
@@ -134,14 +153,27 @@ class StartAutomatedRun:
         else:
             conversation = await self.conversations.create_conversation(entity)
 
+        runtime = (
+            runtime_override
+            or agent.agent_runtime
+            or await self.default_runtime(pod_id)
+        )
+        # Admitted like a person's turn: automation used to skip both checks.
+        await admit_turn(
+            self.uow,
+            entity,
+            runtime,
+            user_id=user_id,
+            usage_service=self.usage_service,
+            runtime_check=self.runtime_check,
+        )
         run = await self.runs.create_agent_run(
             conversation_id=conversation.id,
             agent_id=agent.id,
-            agent_runtime=runtime_override
-            or agent.agent_runtime
-            or await self.default_runtime(pod_id),
+            agent_runtime=runtime,
             state=RunState(
                 trigger=trigger,
+                kind=kind,
                 schedule_firing=schedule_firing(input_data, metadata, schedule_type)
                 if scheduled
                 else None,
@@ -166,7 +198,7 @@ class StartAutomatedRun:
                 pod_id=pod_id,
                 user_id=user_id,
                 agent_name=agent.name,
-                origin="schedule" if scheduled else "workflow",
+                kind=kind,
             ),
         )
         return conversation.id

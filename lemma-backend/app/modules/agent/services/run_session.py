@@ -49,7 +49,6 @@ from app.modules.agent.domain.private_notes import (
     run_delivers_to_surface,
 )
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
-from app.modules.agent.domain.run_origin import run_origin
 from app.modules.agent.domain.runtime_choice import RuntimePurpose
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.value_objects import (
@@ -380,7 +379,7 @@ class RunSession:
                 memory_enabled=memory_enabled,
                 in_process=in_process,
                 answers_outsiders=for_outsider,
-                origin=run_origin(conversation).origin,
+                kind=agent_run.state.kind,
             ),
             run_toolsets=run_toolsets,
             workspace_readable=AgentToolset.WORKSPACE_CLI in run_toolsets,

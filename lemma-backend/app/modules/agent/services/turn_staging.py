@@ -18,9 +18,8 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkClass, WorkWriter, pod_namespace
-from app.modules.agent.contracts.run_facts import AgentRunOrigin
-from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.run_origin import run_origin
+from app.modules.agent.domain.entities import AgentRun, Conversation
+from app.modules.agent.domain.run_kind import Lane, RunKind
 from app.modules.agent.events.turn_payloads import AgentTurnWork, ConversationWork
 from app.modules.agent.events.work_kinds import (
     AGENT_TITLE,
@@ -33,12 +32,6 @@ from app.modules.agent.events.work_kinds import (
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.run_dispatch import run_enqueue_suppressed
 
-#: Origins whose turns nobody is watching live: they run in the automation
-#: class, so a burst of them never queues behind (or ahead of) a person.
-_AUTOMATION_ORIGINS: frozenset[AgentRunOrigin] = frozenset(
-    {"schedule", "workflow", "trigger"}
-)
-
 
 @dataclass(frozen=True, slots=True)
 class AgentTurnStart:
@@ -49,31 +42,32 @@ class AgentTurnStart:
     pod_id: UUID
     user_id: UUID
     agent_name: str | None = None
-    origin: AgentRunOrigin = "chat"
+    kind: RunKind = RunKind.CHAT
 
 
 def turn_for(
     conversation: Conversation,
+    run: AgentRun,
     *,
-    run_id: UUID,
     user_id: UUID,
     agent_name: str | None = None,
 ) -> AgentTurnStart:
-    """The turn of ``run_id`` in ``conversation``, its origin read off the row."""
-    origin = run_origin(conversation).origin
+    """The turn of ``run`` in ``conversation``, of the kind it was started as."""
     return AgentTurnStart(
         conversation_id=conversation.id,
-        run_id=run_id,
+        run_id=run.id,
         pod_id=conversation.pod_id,
         user_id=user_id,
         agent_name=agent_name,
-        origin=origin,
+        kind=run.state.kind,
     )
 
 
-def turn_class_for(origin: AgentRunOrigin) -> WorkClass:
-    """The work class a turn started from ``origin`` runs in."""
-    if origin in _AUTOMATION_ORIGINS:
+def turn_class_for(kind: RunKind) -> WorkClass:
+    """The work class a turn of ``kind`` runs in: its policy's lane. Nobody
+    watches a background turn live, so a burst of them never queues behind
+    (or ahead of) a person."""
+    if kind.policy.lane is Lane.BACKGROUND:
         return WorkClass.AUTOMATION
     return WorkClass.INTERACTIVE
 
@@ -96,7 +90,7 @@ async def stage_agent_turn(
 ) -> None:
     """Write ``run``'s turn (and its title, when owed) into ``uow``'s transaction.
 
-    ``cls`` overrides the class ``turn_class_for(run.origin)`` picks. Honours
+    ``cls`` overrides the class ``turn_class_for(run.kind)`` picks. Honours
     ``suppress_agent_run_enqueue`` (a caller running the turn inline).
     """
     if run_enqueue_suppressed():
@@ -105,7 +99,7 @@ async def stage_agent_turn(
     work = WorkWriter.of(uow)
     ns = pod_namespace(run.pod_id)
     await work.add(
-        turn_kind_for(cls or turn_class_for(run.origin)),
+        turn_kind_for(cls or turn_class_for(run.kind)),
         ns,
         AgentTurnWork(
             run_id=run.run_id,

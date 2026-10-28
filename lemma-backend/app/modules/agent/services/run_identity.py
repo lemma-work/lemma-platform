@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.origin import Origin, current_origin
-from app.modules.agent.domain.run_origin import conversation_origin
+from app.modules.agent.domain.run_waiters import run_work_origin
 from app.modules.usage.contracts import UsageReservation
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ class RunIdentity:
     memory_after_turn: bool = False
     #: How the run's work arrived, for the completion event. Resolved where the
     #: run starts, because the finalizer runs in a work item that has no origin
-    #: of its own to inherit (``domain.run_origin.conversation_origin``).
+    #: of its own to inherit (``domain.run_waiters.run_work_origin``).
     origin: Origin | None = None
 
     @classmethod
@@ -67,7 +67,7 @@ class RunIdentity:
         """The identity of ``agent_run``, a turn of ``conversation``, as it starts.
 
         Its origin is the request's when the turn runs inside one; otherwise --
-        the usual case, a work item -- what the conversation records, and the
+        the usual case, a work item -- what the run's kind says, and the
         ``platform`` its surface records.
         """
         return cls(
@@ -80,7 +80,7 @@ class RunIdentity:
             started_at=agent_run.started_at,
             usage_source=usage_source,
             origin=current_origin()
-            or conversation_origin(conversation, platform=platform),
+            or run_work_origin(agent_run.state.kind, conversation, platform=platform),
         )
 
     @property

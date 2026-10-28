@@ -111,9 +111,7 @@ async def _interrupted_run(
                     tool_name=tool_name, tool_call_id=call_id, tool_args=args
                 ),
             )
-        await stage_agent_turn(
-            uow, turn_for(conversation, run_id=run.id, user_id=user_id)
-        )
+        await stage_agent_turn(uow, turn_for(conversation, run, user_id=user_id))
         return run.id
 
 

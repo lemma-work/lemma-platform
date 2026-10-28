@@ -15,6 +15,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.state_kinds import RunTrigger, WrittenIn
 
 JsonObject = dict[str, object]
@@ -133,6 +134,8 @@ class RunState(RunPrivacy):
     """The typed facts of one run, as its row stores them."""
 
     trigger: RunTrigger = RunTrigger.MESSAGE
+    #: Who the turn is for, set by the code that started it (``run_kind``).
+    kind: RunKind = RunKind.CHAT
     #: The pausing call a resumed run picks up from.
     resumed_tool_call_id: str | None = None
     #: The failed run a retry replaces.

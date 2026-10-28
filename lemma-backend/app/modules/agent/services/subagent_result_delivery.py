@@ -108,6 +108,8 @@ class SubagentResultDelivery:
                         content=result.content,
                         agent_name=None,
                         message_metadata=result.metadata,
+                        # Continues the run it answers.
+                        kind=None,
                         supersede_pauses=False,
                     )
             finally:

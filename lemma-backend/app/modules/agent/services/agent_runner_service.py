@@ -25,7 +25,6 @@ from app.modules.agent.services.context_budget import (
 )
 from app.modules.agent.domain.entities import Agent, Message
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.run_origin import run_origin
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -206,7 +205,7 @@ class AgentRunnerService:
             return
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
-        run_kind = run_origin(conversation).origin
+        run_kind = agent_run.state.kind.value
         # Known once the runtime resolves; a run that fails before that is
         # counted against no model rather than not counted.
         run_model: str | None = None

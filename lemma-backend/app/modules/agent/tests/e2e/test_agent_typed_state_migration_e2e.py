@@ -51,6 +51,7 @@ _CONVERSATION_COLUMNS = (
 )
 _RUN_COLUMNS = (
     "trigger",
+    "kind",
     "private_note",
     "asked_in_lemma",
     "written_in",
@@ -376,13 +377,33 @@ def _seed(plain_url: str) -> _Ids:
                 "COMPLETED",
             ),
         ]
+        # Where each run is, when not the plain chat: its kind is read off it.
+        placed = {
+            "fired_run": "schedule",
+            "person_in_schedule_run": "schedule",
+            "voice_run": "coordinator",
+            "widget_run": "widget",
+            "worker_run": "child",
+        }
+        runs += [
+            ("fired_run", {"source": "SCHEDULE"}, "COMPLETED"),
+            ("person_in_schedule_run", {"source": "user_message"}, "COMPLETED"),
+            ("voice_run", {"source": "user_message"}, "COMPLETED"),
+            ("widget_run", {"source": "user_message"}, "COMPLETED"),
+            ("worker_run", {"source": "user_message"}, "COMPLETED"),
+        ]
         for name, metadata, status in runs:
             run(
                 "INSERT INTO agent_runs (id, conversation_id, status, agent_runtime, "
                 "started_at, finished_at, run_metadata, created_at, updated_at) "
                 "VALUES (%s, %s, %s, '{}', now(), "
                 "'2026-10-01T12:00:00+00:00', %s, now(), now())",
-                (ids[name], ids["chat"], status, json.dumps(metadata)),
+                (
+                    ids[name],
+                    ids[placed.get(name, "chat")],
+                    status,
+                    json.dumps(metadata),
+                ),
             )
 
         messages: list[tuple[str, str, str, dict[str, object], str | None]] = [
@@ -660,6 +681,26 @@ def _assert_runs(rows: dict[UUID, dict], ids: _Ids) -> None:
     delivered = rows[ids["child_run"]]["delivered_to_parent_at"]
     assert delivered is not None and delivered.isoformat().startswith("2026-10-01T12")
     assert rows[ids["wake_run"]]["delivered_to_parent_at"] is None
+    kinds = {
+        name: rows[ids[name]]["kind"]
+        for name in (
+            "asked_run",
+            "fired_run",
+            "person_in_schedule_run",
+            "voice_run",
+            "widget_run",
+            "worker_run",
+        )
+    }
+    assert kinds == {
+        "asked_run": "CHAT",
+        "fired_run": "SCHEDULE",
+        # A person writing into a schedule's conversation: their turn.
+        "person_in_schedule_run": "CHAT",
+        "voice_run": "CALL",
+        "widget_run": "CONTACT",
+        "worker_run": "SUBAGENT",
+    }
 
 
 def _assert_messages(rows: dict[UUID, dict], ids: _Ids) -> None:

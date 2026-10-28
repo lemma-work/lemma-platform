@@ -28,6 +28,7 @@ from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.pod_ask_record import PodAsk
 from app.modules.agent.domain.project_repo import parse_project_repo
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.run_state import (
     ParkedSuspension,
     RunFailure,
@@ -142,6 +143,7 @@ def conversation_state_values(conversation: Conversation) -> dict[str, object]:
 def run_state_of(row: AgentRunModel) -> RunState:
     return RunState(
         trigger=row.trigger or RunTrigger.MESSAGE,  # None until the INSERT.
+        kind=row.kind or RunKind.CHAT,
         private_note=bool(row.private_note),
         asked_in_lemma=bool(row.asked_in_lemma),
         written_in=row.written_in,

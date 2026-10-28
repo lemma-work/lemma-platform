@@ -49,6 +49,7 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.domain.calls import worker_canvas_note
 from app.modules.agent.application.conversations.start import StartConversation
 from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.application.turns.stop import StopConversation
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.agent.services.subagent_result_delivery import mark_collected
@@ -244,6 +245,7 @@ class SubAgentService:
                     agent_name=target_name,
                     message_metadata={"source": "subagent"},
                     require_execute_grant=not is_self,
+                    kind=RunKind.SUBAGENT,
                 )
                 await uow.commit()
                 return SubAgentHandle(
@@ -420,6 +422,7 @@ class SubAgentService:
                     pod_id=deps.pod_id,
                     agent_name=agent.name if agent else None,
                     message_metadata={"source": "subagent_message"},
+                    kind=RunKind.SUBAGENT,
                     # Ownership is already proven via _owned_child (this child was
                     # spawned by this agent), so skip the cross-agent read/execute
                     # grant check — mirrors self-spawn in spawn().
