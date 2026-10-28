@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from pydantic_ai.models import Model
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.run import AgentRun
 from contextlib import AbstractAsyncContextManager
 
@@ -16,6 +17,11 @@ from app.core.infrastructure.work import LeaseLost
 from app.modules.agent.infrastructure.harness.lemma.tool_returns import (
     OutstandingToolCalls,
 )
+from app.modules.agent.infrastructure.harness.lemma.deferred_projection import (
+    DeferredCallProjection,
+)
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.tools import ToolSpec
 from app.modules.agent.infrastructure.harness.lemma.mock_model import (
     build_mock_model,
     is_mock_llm_enabled,
@@ -158,6 +164,7 @@ class PydanticAIHarness:
         # the tool never ran and invited to repeat it -- a duplicate email, a
         # duplicate record write.
         outstanding = OutstandingToolCalls()
+        projection = DeferredCallProjection(_pauses(options.tools))
         terminal: AgentEvent | None = None
         pause_tool_call_id: str | None = None
 
@@ -171,6 +178,7 @@ class PydanticAIHarness:
                 agent_run_id=agent_run_id,
                 should_stop=options.should_stop,
             ):
+                event = projection.project(event)
                 outstanding.observe(event)
                 if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
                     # Held back, not yielded here. The closing returns for tool
@@ -290,6 +298,11 @@ class PydanticAIHarness:
             model = _meter_mock_model(conversation, options)
         else:
             model = _runtime_profile_model(options)
+        # The e2e mock scripts call a found tool by its own name, as a model
+        # with a tool-addition channel does.
+        reveals_natively = (
+            self._model is None and is_mock_llm_enabled()
+        ) or reveals_tools_natively(model)
         # The graph driver owns stream resets, history recovery and retry limits.
         # Retrying inside the model would hide connection drops from that driver.
         model = with_external_stream_retries(model)
@@ -321,6 +334,7 @@ class PydanticAIHarness:
             ),
             claim_steered=self._claim_steered,
             on_steered=recorder.claimed if recorder is not None else None,
+            reveals_tools_natively=reveals_natively,
         )
         # Before the history processors, not after. Capabilities run in
         # registration order, and the processors include the hard-ceiling guard
@@ -401,11 +415,7 @@ class PydanticAIHarness:
             emit_tokens=self.emit_tokens,
             agent_run_id=agent_run_id,
             should_stop=should_stop,
-            pauses={
-                spec.name: spec.policy.pauses
-                for spec in options.tools
-                if spec.policy.pauses is not None
-            },
+            pauses=_pauses(options.tools),
         )
 
         node_loop = NodeLoop(
@@ -508,6 +518,31 @@ class PydanticAIHarness:
         return final_output_message(
             output=output, tool_name=tool_name, tool_call_id=tool_call_id
         )
+
+
+def _pauses(specs: Sequence[ToolSpec]) -> dict[str, PauseKind]:
+    """Each pausing tool of the run, and the pause it opens."""
+    return {
+        spec.name: spec.policy.pauses
+        for spec in specs
+        if spec.policy.pauses is not None
+    }
+
+
+def reveals_tools_natively(model: Model) -> bool:
+    """Whether ``model`` can be shown a tool mid-run without rewriting ``tools``.
+
+    Either it has a channel for tools added mid-run, or it declares a tool with
+    its schema withheld from the first request on (Anthropic's standalone
+    ``defer_loading``), so a reveal unhides what was always in the array.
+    Read off the model under the wrappers (metering, stream retries), which
+    declare neither of their own.
+    """
+    while isinstance(model, WrapperModel):
+        model = model.wrapped
+    return isinstance(model, Model) and (
+        model.tool_addition_mode is not None or model.tool_deferral_mode == "standalone"
+    )
 
 
 def _runtime_profile_model[DepsT](options: HarnessOptions) -> Model:

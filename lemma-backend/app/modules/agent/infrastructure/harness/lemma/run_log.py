@@ -43,6 +43,7 @@ from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.run_log import RunLogReplay, RunStepDraft, RunStepKind
 from app.modules.agent.domain.runtime_history import STOPPED_BY_MEMBER
+from app.modules.agent.infrastructure.tools.deferred.tools import as_called
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     MessageDraft,
@@ -123,7 +124,7 @@ def resume_request(
             else {
                 "success": False,
                 "error": unanswered_call_text(
-                    pauses=call.tool_name in pausing, moved_on=moved_on
+                    pauses=_name_run(call) in pausing, moved_on=moved_on
                 ),
             }
         )
@@ -135,6 +136,12 @@ def resume_request(
             )
         )
     return ModelRequest(parts=parts)
+
+
+def _name_run(call: ToolCallPart) -> str:
+    """The tool a call ran: through ``call_tool``, the one it named."""
+    called = as_called(call.tool_name, call.args_as_dict())
+    return called[0] if called is not None else call.tool_name
 
 
 def budget_pause_response(events: Sequence[AgentEvent]) -> list[ModelResponse]:

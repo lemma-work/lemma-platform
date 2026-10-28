@@ -122,7 +122,7 @@ async def test_run_emits_waiting_event_when_tool_requests_input(monkeypatch) -> 
             conversation=SimpleNamespace(id=conversation_id),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None),
+            options=SimpleNamespace(should_stop=None, tools=[]),
             agent_run_id=agent_run_id,
         )
     ]

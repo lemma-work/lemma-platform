@@ -75,6 +75,7 @@ from app.modules.agent.domain.tools import (
     AgentInputRequired,
     ToolGroup,
     ToolPolicy,
+    ToolSpec,
     tool,
 )
 from app.modules.agent.domain.value_objects import (
@@ -127,6 +128,16 @@ async def ask_user(ctx: ToolContext, request: Question) -> str:
     raise AgentInputRequired(_ASK_ID, PauseKind.QUESTION)
 
 
+class Booking(BaseModel):
+    hotel: str
+    nights: int
+
+
+async def book_hotel(ctx: ToolContext, request: Booking) -> dict[str, object]:
+    """Book a hotel room for some nights."""
+    return {"booked": request.hotel, "nights": request.nights}
+
+
 _ASK_ID = "call_ask"
 _TOOLS = [
     tool(lookup, ToolGroup.CALLABLES),
@@ -161,6 +172,8 @@ class Model:
     claim: ClaimSteered | None = None
     #: The pod inventory the conversation's context reports, as the runner reads it.
     brief: str = "## Tables\n(none yet)"
+    #: The pod's own assistant: its optional tools are found on demand.
+    pod_default: bool = False
 
     async def summarize(
         self, messages: list[ModelMessage], info: AgentInfo
@@ -178,10 +191,15 @@ class Model:
                 run=self.run,
                 messages=list(messages),
                 instructions=info.instructions,
+                # As the wire declares them: a tool whose schema is withheld
+                # (deferred, not found yet) is not in the array.
                 tools=json.dumps(
                     [
                         [tool.name, tool.parameters_json_schema]
-                        for tool in [*info.function_tools, *info.output_tools]
+                        for tool in [
+                            *info.model_request_parameters.declared_function_tools,
+                            *info.output_tools,
+                        ]
                     ],
                     sort_keys=True,
                 ),
@@ -348,6 +366,7 @@ async def _run(
     run_id: UUID,
     script: list[ModelResponse],
     trigger_tokens: int,
+    tools: Sequence[ToolSpec] = _TOOLS,
 ) -> list[AgentEvent]:
     model.run += 1
     model.script = list(script)
@@ -360,10 +379,11 @@ async def _run(
         agent_run_id=run_id,
         run_context=f"{_RUN_CONTEXT}\nrun {model.run}\n</run_context>",
         context_brief=model.brief,
+        is_pod_default_agent=model.pod_default,
     )
     harness = PydanticAIHarness(
         model=FunctionModel(model.summarize, stream_function=model.stream),
-        claim_steered=model.claim,
+        claim_steered=model.claim or _nothing_steered,
     )
     events: list[AgentEvent] = []
     async for event in harness.run(
@@ -373,7 +393,7 @@ async def _run(
         ctx=ctx,
         options=HarnessOptions(
             model_name="scripted",
-            tools=list(_TOOLS),
+            tools=list(tools),
             history_summarization_token_limit=trigger_tokens,
             history_summarization_keep_messages=4,
             history_hard_token_ceiling=trigger_tokens * 4,
@@ -385,6 +405,10 @@ async def _run(
     storage.store(events, run_id=run_id)
     assert model.script == [], f"run {model.run} left its script unread"
     return events
+
+
+async def _nothing_steered(run_id: UUID) -> list[Message]:
+    return []
 
 
 async def _play() -> Played:
@@ -773,3 +797,83 @@ async def test_a_history_of_pasted_text_compacts_once_and_shrinks() -> None:
         "openai",
     )
     assert not breaks, "\n\n".join(str(item) for item in breaks)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_a_tool_found_mid_run_leaves_the_tools_as_they_were(
+    protocol: Protocol,
+) -> None:
+    """Found and run mid-run through the two fixed entries, a deferred tool
+    changes nothing already sent, in this run or the next; and the stored
+    call names the tool that ran.
+
+    Measured against the alternative: pydantic-ai's own tool search on a
+    model with no channel for tools added mid-run (Chat Completions) puts the
+    found tool into ``tools`` -- "request 1 -> 2: tools changed", the whole
+    conversation re-read on every provider whose chat template renders the
+    tools ahead of the messages."""
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="assistant",
+        instruction="Help.",
+    )
+    tools = [
+        *_TOOLS,
+        tool(book_hotel, ToolGroup.SUBAGENTS, ToolPolicy(deferrable=True)),
+    ]
+    storage = Storage(conversation)
+    model = Model(pod_default=True)
+    run1 = uuid4()
+    storage.user("Book me a hotel.", run_id=run1)
+    events = await _run(
+        model,
+        storage,
+        agent=agent,
+        run_id=run1,
+        script=[
+            _call("search_tools", '{"queries": ["book a hotel"]}', "call_find"),
+            _call(
+                "call_tool",
+                '{"name": "book_hotel", "arguments": {"hotel": "Grand", "nights": 2}}',
+                "call_book",
+            ),
+            _text("Booked."),
+        ],
+        trigger_tokens=10**6,
+        tools=tools,
+    )
+    run2 = uuid4()
+    storage.user("Thanks.", run_id=run2)
+    await _run(
+        model,
+        storage,
+        agent=agent,
+        run_id=run2,
+        script=[_text("You are welcome.")],
+        trigger_tokens=10**6,
+        tools=tools,
+    )
+
+    played = Played(sent=model.sent, summaries=model.summaries)
+    assert [sent.run for sent in played.sent] == [1, 1, 1, 2]
+    assert "book_hotel" not in played.sent[0].tools
+    breaks = await _breaks(played, protocol)
+    assert not breaks, "\n\n".join(str(item) for item in breaks)
+    stored = [
+        (row.tool_name, row.tool_args)
+        for row in storage.rows
+        if row.kind is MessageKind.TOOL_CALL
+    ]
+    assert ("book_hotel", {"hotel": "Grand", "nights": 2}) in stored
+    returned = [
+        event.data
+        for event in events
+        if isinstance(event.data, MessageDraft)
+        and event.data.kind is MessageKind.TOOL_RETURN
+        and event.data.tool_call_id == "call_book"
+    ]
+    assert [draft.tool_name for draft in returned] == ["book_hotel"]
+    assert returned[0].tool_result == {"booked": "Grand", "nights": 2}

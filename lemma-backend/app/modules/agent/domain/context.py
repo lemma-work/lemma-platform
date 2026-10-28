@@ -22,10 +22,16 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class ToolCaller(Protocol):
-    """Runs another of the run's tools by name: the approval re-run's way in."""
+    """Runs another of the run's tools by name: the approval re-run's way in,
+    and ``call_tool``'s."""
 
     async def call(
-        self, name: str, arguments: Mapping[str, object] | None, ctx: ToolContext
+        self,
+        name: str,
+        arguments: Mapping[str, object] | None,
+        ctx: ToolContext,
+        *,
+        tool_call_id: str | None = None,
     ) -> object: ...
 
 

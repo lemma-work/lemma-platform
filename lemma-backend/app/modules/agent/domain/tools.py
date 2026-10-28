@@ -84,6 +84,9 @@ class ToolGroup(StrEnum):
     SURFACE = "SURFACE"
     FINAL_ANSWER = "FINAL_ANSWER"
     MEMORY_PASS = "MEMORY_PASS"
+    #: ``search_tools`` and ``call_tool``: the fixed entries to the deferred
+    #: tools where the provider has no channel for tools added mid-run.
+    DEFERRED = "DEFERRED"
 
 
 @dataclass(frozen=True, slots=True)
