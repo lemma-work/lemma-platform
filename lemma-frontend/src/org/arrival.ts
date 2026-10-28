@@ -100,7 +100,7 @@ export function freshTeamNameFor(email: string | null | undefined, taken: readon
  *  says whose it is. */
 export function personalNameFor(name: string | null | undefined, email?: string | null): string {
     /* The first name, and only a real one. A mailbox is not a name — this
-       screen once offered somebody "deepakjha0196+99's Personal" — so an
+       screen once offered somebody "ada0196+99's Personal" — so an
        address is used only when its first word reads as one: letters, and
        nothing else, before any `+tag`, dot or dash. */
     const who = (name ?? "").trim().split(/\s+/)[0] || nameFromAddress(email);
