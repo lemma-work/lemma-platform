@@ -221,31 +221,21 @@ class Pause(AggregateRoot):
             now=now,
         )
 
-    def answer_by_reply(self, reply: str, *, by: UUID) -> bool:
-        """A question the person answered by writing back, not on its card.
+    def supersede(self, *, by: UUID, reply: str | None = None) -> bool:
+        """The person moved past it: DENY on their behalf, never an approval.
 
-        Their message is the answer, and reaches the model as one -- not as a
-        question passed over. Only a question: an approval is never decided by
-        a message that does not say which way.
+        ``reply`` is what they wrote instead, kept on a question: the model is
+        handed it as the answer (live, a free-text answer read as "dismissed"),
+        while the question itself stays unanswered -- nobody answered it.
         """
-        if self.kind is not PauseKind.QUESTION:
-            return False
-        return self._end(
-            PauseStatus.RESOLVED,
-            PauseResolution(
-                decision=AgentRunApprovalDecision.APPROVE_ONCE,
-                response={"answers": {"reply": reply}, ANSWERED_BY_REPLY: True},
-                resolved_by_user_id=by,
-            ),
-        )
-
-    def supersede(self, *, by: UUID) -> bool:
-        """The person moved past it: DENY on their behalf, never an approval."""
+        response: dict[str, object] = {SUPERSEDED_KEY: True}
+        if reply is not None and self.kind is PauseKind.QUESTION:
+            response[ANSWERED_BY_REPLY] = reply
         return self._end(
             PauseStatus.SUPERSEDED,
             PauseResolution(
                 decision=AgentRunApprovalDecision.DENY,
-                response={SUPERSEDED_KEY: True},
+                response=response,
                 resolved_by_user_id=by,
             ),
         )

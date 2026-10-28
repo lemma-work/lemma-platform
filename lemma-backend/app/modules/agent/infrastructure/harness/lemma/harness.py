@@ -16,6 +16,7 @@ from app.core.infrastructure.db.transient_errors import is_transient_database_er
 from app.core.infrastructure.work import LeaseLost
 from app.modules.agent.infrastructure.harness.lemma.tool_returns import (
     OutstandingToolCalls,
+    paused_call_ids,
 )
 from app.modules.agent.infrastructure.harness.lemma.deferred_projection import (
     DeferredCallProjection,
@@ -27,6 +28,7 @@ from app.modules.agent.infrastructure.harness.lemma.mock_model import (
     is_mock_llm_enabled,
 )
 from pydantic_ai import Agent as PydanticAIAgent
+from pydantic_ai import DeferredToolRequests
 from pydantic_ai.exceptions import (
     ModelHTTPError,
     UnexpectedModelBehavior,
@@ -113,7 +115,6 @@ from app.modules.agent.infrastructure.providers.model_factory import (
 from app.modules.agent.infrastructure.providers.summarization import (
     lazy_compaction_target,
 )
-from app.modules.agent.domain.tools import AgentInputRequired
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
 
@@ -166,7 +167,6 @@ class PydanticAIHarness:
         outstanding = OutstandingToolCalls()
         projection = DeferredCallProjection(_pauses(options.tools))
         terminal: AgentEvent | None = None
-        pause_tool_call_id: str | None = None
 
         try:
             async for event in self._execute(
@@ -180,7 +180,11 @@ class PydanticAIHarness:
             ):
                 event = projection.project(event)
                 outstanding.observe(event)
-                if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
+                if event.type in {
+                    AgentEventType.ERROR,
+                    AgentEventType.STOPPED,
+                    AgentEventType.WAITING,
+                }:
                     # Held back, not yielded here. The closing returns for tool
                     # calls still open are emitted below, and the pump drops
                     # every event after the terminal one -- so emitting the
@@ -219,25 +223,6 @@ class PydanticAIHarness:
                 "agent.pydantic_ai.agent_run_hit_usage_limit.degraded", exc_info=True
             )
             terminal = failure_event(exc, agent_run_id=agent_run_id)
-        except AgentInputRequired as exc:
-            # The agent called ask_user / request_approval: pause the run cleanly
-            # rather than failing. The tool call is already persisted; the runner
-            # finishes this run and flips the conversation to WAITING. The user's
-            # submission later starts a fresh run that resumes from history.
-            logger.debug(
-                "agent.pydantic_ai.agent_input_required_kind_call.observed",
-                tool_call_id=exc.tool_call_id,
-            )
-            pause_tool_call_id = exc.tool_call_id
-            terminal = AgentEvent(
-                type=AgentEventType.WAITING,
-                data={
-                    "tool_call_id": exc.tool_call_id,
-                    "kind": exc.kind,
-                    "conversation_id": str(conversation.id),
-                },
-                agent_run_id=agent_run_id,
-            )
         except Exception as exc:
             if is_transient_database_error(exc) or isinstance(exc, LeaseLost):
                 # Lemma's own database, not the model: a stop check, a step
@@ -259,10 +244,10 @@ class PydanticAIHarness:
                 agent_run_id=agent_run_id,
             )
         # Close whatever is still open before the run ends, whichever way it
-        # ended. The pausing call is excluded: its real return is appended when
-        # the user answers, so a synthetic one would duplicate it.
+        # ended. The pausing calls are excluded: their real returns are
+        # appended when they are resolved, so a synthetic one would duplicate.
         for closing in outstanding.closing_events(
-            terminal, skip_tool_call_id=pause_tool_call_id
+            terminal, skip_tool_call_ids=paused_call_ids(terminal)
         ):
             yield closing
         # Always last. Every path now holds its terminal back to here, so the
@@ -358,7 +343,9 @@ class PydanticAIHarness:
         if options.lease_alive is not None:
             capabilities.append(LeaseGate(options.lease_alive))
         capabilities.append(CacheTelemetry(run_index=options.run_index))
-        output_type = final_answer_output(agent, conversation)
+        output_type = final_answer_output(
+            agent, conversation, pausing=frozenset(_pauses(options.tools))
+        )
         pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
             model,
             instructions=run_instructions(
@@ -368,7 +355,12 @@ class PydanticAIHarness:
             retries=DEFAULT_TOOL_RETRIES,
             # A final answer must not skip a sibling approval tool that pauses the run.
             end_strategy="graceful",
-            output_type=output_type if output_type is not None else str,
+            # A run that pauses ends on its deferred calls, every one of them,
+            # once the step's other calls have finished.
+            output_type=[
+                output_type if output_type is not None else str,
+                DeferredToolRequests,
+            ],
             model_settings=provider_model_settings(options.model_settings),
             capabilities=capabilities,
         )

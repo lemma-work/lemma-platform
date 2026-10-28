@@ -206,23 +206,26 @@ class Model:
             )
         )
         response = self.script.pop(0)
-        for part in response.parts:
-            yield _delta(part)
+        for index, part in enumerate(response.parts):
+            yield _delta(part, index)
         if self.meanwhile is not None:
             self.meanwhile(self)
 
 
-def _delta(part: object) -> object:
+def _delta(part: object, index: int) -> object:
+    """``part`` as a stream delta at its own index in the response."""
     from pydantic_ai.models.function import DeltaThinkingPart, DeltaToolCall
 
     if isinstance(part, TextPart):
         return part.content
     if isinstance(part, ThinkingPart):
-        return {0: DeltaThinkingPart(content=part.content, signature=part.signature)}
+        return {
+            index: DeltaThinkingPart(content=part.content, signature=part.signature)
+        }
     assert isinstance(part, ToolCallPart)
     assert isinstance(part.args, str)
     return {
-        1: DeltaToolCall(
+        index: DeltaToolCall(
             name=part.tool_name, json_args=part.args, tool_call_id=part.tool_call_id
         )
     }

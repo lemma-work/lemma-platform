@@ -64,9 +64,9 @@ class SupersedeStalePauses:
     ) -> list[Message]:
         """Close what the person moved past; return the messages it wrote.
 
-        ``reply`` is what the person wrote, when they wrote back: one question
-        left open is answered by it rather than passed over -- the person
-        answered in the chat instead of on the card.
+        ``reply`` is what the person wrote, when they wrote back: with one
+        question left open, the model is handed it as that question's answer
+        rather than told the question was passed over.
 
         A ``wait_for`` the person typed past is cancelled first, with its timer,
         in the same (caller's) transaction: left PENDING, its timer would later
@@ -143,12 +143,9 @@ class SupersedeStalePauses:
         user_id: UUID,
         reply: str | None,
     ) -> Message | None:
-        closed = (
-            pause.answer_by_reply(reply, by=user_id)
-            if reply is not None
-            else pause.supersede(by=user_id)
-        )
-        if not closed or not await self.pauses.save(pause):
+        if not pause.supersede(by=user_id, reply=reply) or not await self.pauses.save(
+            pause
+        ):
             # A concurrent resolve already decided it; that resolve (or its
             # own reconcile) owns synthesizing the return.
             return None

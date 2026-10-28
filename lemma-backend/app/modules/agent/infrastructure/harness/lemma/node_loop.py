@@ -31,7 +31,7 @@ import time
 from typing import Protocol
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from pydantic_ai import ModelRequestNode, CallToolsNode
+from pydantic_ai import CallToolsNode, DeferredToolRequests, ModelRequestNode
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.run import AgentRun
 from pydantic_ai.result import FinalResult
@@ -40,15 +40,14 @@ from uuid import UUID
 
 from pydantic_ai import Agent as PydanticAIAgent
 
-from opentelemetry import trace
-from opentelemetry.trace import Status, StatusCode
 
 from app.core.log.log import get_logger
 from app.modules.agent.domain.run_budget_pause import (
     budget_pause_events,
     budget_pause_tool_call_id,
 )
-from app.modules.agent.domain.tools import AgentInputRequired
+from app.modules.agent.domain.pauses import CALL_NAMES
+from app.modules.agent.infrastructure.harness.lemma.tool_returns import waiting_event
 from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.infrastructure.tools.tool_errors import result_is_failure
 
@@ -201,8 +200,11 @@ class NodeLoop[DepsT]:
                         # it.
                         if already_counted:
                             already_counted = False
-                        else:
-                            await self._spend_a_model_request(node)
+                        elif await self._spend_a_model_request(node):
+                            # Out of allowance: stopped before the request,
+                            # waiting on a person to say whether to go on.
+                            clean = True
+                            return
                         if await self._pump_model_request(node, run, state):
                             return
                     elif PydanticAIAgent.is_call_tools_node(node):
@@ -213,21 +215,6 @@ class NodeLoop[DepsT]:
                         if await self._pump_end_node(node):
                             return
                 clean = True
-            except AgentInputRequired:
-                clean = True
-                # A pause, not a failure, and this is the last place that can
-                # say so. The span pydantic-ai opened for the whole run is the
-                # current one here; by the time the harness catches this
-                # outside the graph, that span has already closed ERROR.
-                # `StatusCode.OK` is final in the SDK, so setting it now
-                # survives the unwind.
-                #
-                # Deliberately narrower than the tool-level set. A tool that
-                # raises `ModelRetry` has not failed, but a run that ends on
-                # `UnexpectedModelBehavior` has -- that is the token-limit
-                # failure -- so only the pause is excused here.
-                trace.get_current_span().set_status(Status(StatusCode.OK))
-                raise
             finally:
                 # However the attempt ended, what the model said is kept, and
                 # nothing came after it.
@@ -271,19 +258,16 @@ class NodeLoop[DepsT]:
 
     async def _spend_a_model_request(
         self, node: ModelRequestNode[DepsT, object] | None = None
-    ) -> None:
-        """Count this step, and stop the run if it has spent its allowance.
+    ) -> bool:
+        """Count this step; True when it has spent the run's allowance.
 
-        Raised rather than returned so it leaves by the path a pause already
-        takes: `reraise_driver_failure` passes control-flow exceptions through
-        untouched, `pydantic_ai.py` catches `AgentInputRequired` and emits
-        WAITING, and `OutstandingToolCalls.closing_events` leaves the call this
-        queues open for its real return. No new terminal path, and nothing
-        downstream needs to learn what a budget is.
+        Then the run stops before the request, with no exception: it queues
+        the approval it asks instead and the WAITING terminal, and the harness
+        leaves that call open for its real return, as it does every pause's.
         """
         spend = self.options.spend
         if spend is None:
-            return
+            return False
         spend.record_model_request()
         elapsed_seconds = time.monotonic() - self._started_at
         exhausted = spend.exhausted(elapsed_seconds=elapsed_seconds)
@@ -303,7 +287,7 @@ class NodeLoop[DepsT]:
                     agent_run_id=str(self.agent_run_id),
                     dimension=warning.dimension.value,
                 )
-            return
+            return False
 
         tool_call_id = budget_pause_tool_call_id()
         events = budget_pause_events(
@@ -323,7 +307,17 @@ class NodeLoop[DepsT]:
             agent_run_id=str(self.agent_run_id),
             dimension=exhausted.dimension.value,
         )
-        raise AgentInputRequired(tool_call_id, PauseKind.BUDGET)
+        await self.queue.put(
+            (
+                "event",
+                waiting_event(
+                    [(tool_call_id, CALL_NAMES[PauseKind.BUDGET])],
+                    conversation_id=str(self.conversation_id),
+                    agent_run_id=self.agent_run_id,
+                ),
+            )
+        )
+        return True
 
     async def _pump_model_request(
         self,
@@ -414,6 +408,20 @@ class NodeLoop[DepsT]:
                 return True
         return False
 
+    def _waiting(self, deferred: DeferredToolRequests) -> AgentEvent:
+        calls = [*deferred.calls, *deferred.approvals]
+        return waiting_event(
+            [
+                (
+                    call.tool_call_id,
+                    str(deferred.metadata.get(call.tool_call_id, {}).get("kind", "")),
+                )
+                for call in calls
+            ],
+            conversation_id=str(self.conversation_id),
+            agent_run_id=self.agent_run_id,
+        )
+
     def _remember_tool_call(self, event: AgentEvent) -> None:
         draft = event.data
         if event.type is not AgentEventType.MESSAGE:
@@ -451,6 +459,12 @@ class NodeLoop[DepsT]:
 
     async def _pump_end_node(self, node: End[FinalResult[object]]) -> bool:
         """Emit whatever the run ended with."""
+        deferred = node.data.output
+        if isinstance(deferred, DeferredToolRequests):
+            # Paused: every pausing call of the step is written, and every
+            # other call of it has returned. The run waits on all of them.
+            await self.queue.put(("event", self._waiting(deferred)))
+            return True
         if node.data.tool_call_id:
             if node.data.tool_call_id not in self.emitted_tool_response_ids:
                 await self.queue.put(

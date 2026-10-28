@@ -102,6 +102,17 @@ def _question_return(
         AskUserResponse,
     )
 
+    reply = response.get(ANSWERED_BY_REPLY)
+    if isinstance(reply, str):
+        content = AskUserResponse(
+            success=True,
+            answers={"reply": reply},
+            message=(
+                "User answered by writing back rather than on the question "
+                "card: their reply is the answer."
+            ),
+        )
+        return content.model_dump(mode="json")
     if decision == AgentRunApprovalDecision.DENY:
         content = AskUserResponse(success=False, message=_unanswered_message(response))
         return content.model_dump(mode="json")
@@ -114,12 +125,7 @@ def _question_return(
     content = AskUserResponse(
         success=True,
         answers=answers,
-        message=(
-            "User answered by writing back rather than on the question card: "
-            "their reply is the answer."
-            if response.get(ANSWERED_BY_REPLY) is True
-            else "User answered the questions."
-        ),
+        message="User answered the questions.",
     )
     return content.model_dump(mode="json")
 

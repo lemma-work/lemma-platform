@@ -15,6 +15,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.approvals import ANSWERED_BY_REPLY
 from app.modules.agent.domain.pauses import Pause
 from app.modules.agent.domain.state_kinds import (
     AgentRunApprovalDecision,
@@ -113,14 +114,16 @@ def test_only_a_decided_approval_may_run_its_tool_and_only_once() -> None:
     assert approved.claim_execution() is False
 
 
-def test_a_question_written_back_to_is_answered_by_the_reply() -> None:
+def test_a_question_written_past_keeps_the_reply_for_the_model() -> None:
     """Live, a free-text reply to an open question reached the model as the
-    question "dismissed". The reply is the answer; an approval is never
-    decided by a message that does not say which way."""
+    question "dismissed". The question is still passed over -- nobody answered
+    it -- but the reply is kept for the model as its answer. An approval keeps
+    nothing: a message that does not say which way never decides one."""
     question, approval = _pause(PauseKind.QUESTION), _pause(PauseKind.APPROVAL)
 
-    assert question.answer_by_reply("The 3rd to the 5th.", by=uuid4())
-    assert question.status is PauseStatus.RESOLVED
-    assert question.response["answers"] == {"reply": "The 3rd to the 5th."}
-    assert not approval.answer_by_reply("yes", by=uuid4())
-    assert approval.status is PauseStatus.PENDING
+    assert question.supersede(by=uuid4(), reply="The 3rd to the 5th.")
+    assert approval.supersede(by=uuid4(), reply="yes")
+
+    assert question.status is PauseStatus.SUPERSEDED
+    assert question.response[ANSWERED_BY_REPLY] == "The 3rd to the 5th."
+    assert ANSWERED_BY_REPLY not in approval.response

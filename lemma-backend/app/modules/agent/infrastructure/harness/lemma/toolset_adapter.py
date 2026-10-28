@@ -4,7 +4,9 @@ pydantic-ai validates a call's arguments itself -- from a function signature
 built for the spec, so a model's malformed call is retried exactly as before --
 and hands the validated request to ``ToolRuntime.run``. The JSON schema and the
 description the model is shown are the spec's own, the same ones the MCP
-listing serves. Pausing tools keep raising ``AgentInputRequired``.
+listing serves. A pausing tool raises ``AgentInputRequired`` once its pause is
+written; here that becomes pydantic-ai's ``CallDeferred``, so the step's other
+calls run to the end and the run ends on ``DeferredToolRequests``.
 """
 
 from __future__ import annotations
@@ -15,13 +17,18 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
 
 from pydantic import TypeAdapter
-from pydantic_ai import BinaryContent, ToolReturn
+from pydantic_ai import BinaryContent, CallDeferred, ToolReturn
 from pydantic_ai.tools import GenerateToolJsonSchema, RunContext, Tool, ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_core import SchemaValidator
 
 from app.modules.agent.domain.context import ToolContext
-from app.modules.agent.domain.tools import ToolGroup, ToolSpec, WithImages
+from app.modules.agent.domain.tools import (
+    AgentInputRequired,
+    ToolGroup,
+    ToolSpec,
+    WithImages,
+)
 from app.modules.agent.infrastructure.providers.pydantic_ai_compat import (
     FunctionSchema,
     function_schema,
@@ -63,7 +70,16 @@ def as_tool_return(result: object) -> object:
 def _tool(spec: ToolSpec, runtime: ToolRuntime) -> Tool[ToolContext]:
     async def call(ctx: RunContext[ToolContext], **arguments: object) -> object:
         args = arguments[spec.argument] if spec.parameters is not None else arguments
-        result = await runtime.run(spec, args, ctx.deps, tool_call_id=ctx.tool_call_id)
+        try:
+            result = await runtime.run(
+                spec, args, ctx.deps, tool_call_id=ctx.tool_call_id
+            )
+        except AgentInputRequired as pause:
+            # The pause is written; the run ends once this step's other calls
+            # have finished, waiting on every pause the step opened.
+            raise CallDeferred(
+                metadata={"kind": pause.kind, "tool_call_id": pause.tool_call_id}
+            ) from None
         return as_tool_return(result)
 
     call.__name__ = spec.name
