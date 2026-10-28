@@ -17,6 +17,7 @@ post's to write, so a new case is named on it through ``set_on_head``.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import datetime
 from uuid import UUID, uuid7
 
@@ -473,13 +474,18 @@ def narrowed_by_case(
 
 
 def _waiting_on_a_person(pod_id: UUID) -> CompoundSelect:
-    """The pod's contacts' channels waiting on a person, from two small
+    return _waiting_on_a_person_among([pod_id])
+
+
+def _waiting_on_a_person_among(pod_ids: Collection[UUID]) -> CompoundSelect:
+    """The pods' contacts' channels waiting on a person, from two small
     indexes: open cases that asked for one (``ix_channel_cases_needs_person``),
     and channels whose agents are off (``ix_channels_agents_off``) with an
     open case nobody holds."""
     channel, case = ChannelModel, ChannelCaseModel
+    pods = sorted(set(pod_ids))
     asked = select(case.channel_id).where(
-        case.pod_id == pod_id,
+        case.pod_id.in_(pods),
         case.status == _OPEN,
         case.assignee_user_id.is_(None),
         case.attention_at.is_not(None),
@@ -488,7 +494,7 @@ def _waiting_on_a_person(pod_id: UUID) -> CompoundSelect:
         select(channel.id)
         .join(case, case.id == channel.current_case_id)
         .where(
-            channel.pod_id == pod_id,
+            channel.pod_id.in_(pods),
             channel.kind == ChannelKind.CONTACT.value,
             ~channel.agents_answer,
             case.status == _OPEN,
@@ -496,6 +502,28 @@ def _waiting_on_a_person(pod_id: UUID) -> CompoundSelect:
         )
     )
     return union_all(asked, agents_off)
+
+
+async def contacts_waiting_on_a_person(
+    session: AsyncSession, pod_ids: Collection[UUID], *, limit: int
+) -> list[tuple[UUID, UUID, UUID | None]]:
+    """``(pod, channel, contact)`` for the pods' contacts waiting on a person
+    -- the channel list's ``needs_person`` -- most recently active first, at
+    most ``limit`` across them all. One read however many pods."""
+    if not pod_ids:
+        return []
+    channel = ChannelModel
+    rows = await session.execute(
+        select(channel.pod_id, channel.id, channel.contact_id)
+        .where(
+            channel.id.in_(_waiting_on_a_person_among(pod_ids)),
+            channel.kind == ChannelKind.CONTACT.value,
+            channel.archived_at.is_(None),
+        )
+        .order_by(channel.last_line_at.desc(), channel.id)
+        .limit(limit)
+    )
+    return [(pod_id, channel_id, contact_id) for pod_id, channel_id, contact_id in rows]
 
 
 def _is_open(case: ChannelCaseModel | None) -> bool:

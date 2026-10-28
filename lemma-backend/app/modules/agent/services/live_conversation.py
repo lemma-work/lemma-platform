@@ -352,9 +352,12 @@ class ConversationTopic:
 
 
 def live_contribution() -> LiveContribution:
+    from app.modules.agent.services.org_runs import RunningConversations
+
     return LiveContribution(
         topics=(ConversationTopic(),),
         streams={CONVERSATION_STREAM: conversation_events},
+        org_states=(RunningConversations(),),
     )
 
 

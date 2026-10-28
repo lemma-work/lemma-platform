@@ -192,6 +192,27 @@ async def load_navigation(*, session, user_id: UUID) -> list[NavigationOrganizat
     ]
 
 
+async def organization_pod_ids(
+    *, session, user_id: UUID, organization_id: UUID
+) -> list[UUID] | None:
+    """The pods one organization's listing shows the caller, in its order;
+    None when they are not a member. Two queries, as ``load_navigation``."""
+    memberships = await _memberships(
+        session=session, user_id=user_id, organization_id=organization_id
+    )
+    if not memberships:
+        return None
+    pods = await list_visible_pods(
+        session=session,
+        organization_ids=[organization_id],
+        organization_member_ids_by_org={
+            organization_id: memberships[0].organization_member_id
+        },
+        owned_organization_ids=_owned(memberships),
+    )
+    return [pod.id for pod in pods]
+
+
 async def load_organization_home(
     *, session, user_id: UUID, organization_id: UUID
 ) -> OrganizationHome | None:

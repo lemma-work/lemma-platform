@@ -118,8 +118,9 @@ def configure_live(modules: Sequence[LemmaModule]) -> None:
 
 def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> None:
     """Include every module's API routers, in module-list then thunk order,
-    and the pod's live socket the modules feed."""
+    and the live sockets the modules feed: the pod's and the organization's."""
     from app.core.live.api import router as live_router
+    from app.core.live.org_api import router as org_live_router
 
     register_module_work(modules)
     configure_resource_names(modules)
@@ -133,6 +134,7 @@ def include_module_routers(app: "FastAPI", modules: Sequence[LemmaModule]) -> No
         for router in module.routers():
             app.include_router(router)
     app.include_router(live_router)
+    app.include_router(org_live_router)
 
 
 async def enter_api_lifespans(

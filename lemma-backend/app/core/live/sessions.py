@@ -36,7 +36,7 @@ from app.core.config import settings
 from app.core.domain.realtime import RealtimeSlowConsumerError
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.redis.client import get_redis
-from app.core.live.connection import LiveConnection
+from app.core.live.connection import SocketConnection
 from app.core.live.protocol import CLOSE_UNAUTHENTICATED
 from app.core.log.log import get_logger
 from app.core.request_context import create_background_task
@@ -104,7 +104,7 @@ class SessionWatch:
             return True
 
 
-def end_for_session(connection: LiveConnection) -> None:
+def end_for_session(connection: SocketConnection) -> None:
     connection.close_with(CLOSE_UNAUTHENTICATED, _ENDED_REASON)
 
 
@@ -115,12 +115,12 @@ class OpenSockets:
     def __init__(self, *, listen: bool = True) -> None:
         #: Whether to hear announcements on Redis; off for a test of the index.
         self._listens = listen
-        self._by_handle: dict[str, set[LiveConnection]] = {}
-        self._by_user: dict[UUID, set[LiveConnection]] = {}
+        self._by_handle: dict[str, set[SocketConnection]] = {}
+        self._by_user: dict[UUID, set[SocketConnection]] = {}
         self._task: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
-    def hold(self, connection: LiveConnection, session: LiveSession) -> None:
+    def hold(self, connection: SocketConnection, session: LiveSession) -> None:
         loop = asyncio.get_running_loop()
         if self._loop is not loop:
             # A test that started a fresh loop starts fresh state.
@@ -134,14 +134,14 @@ class OpenSockets:
                 self._listen(), name="live-sessions-ended"
             )
 
-    def release(self, connection: LiveConnection, session: LiveSession) -> None:
+    def release(self, connection: SocketConnection, session: LiveSession) -> None:
         if session.handle is not None:
             _discard(self._by_handle, session.handle, connection)
         _discard(self._by_user, session.user_id, connection)
 
     def ended(self, *, handles: Iterable[str] = (), user_id: UUID | None = None) -> int:
         """Close the sockets of these sessions (every session of ``user_id``)."""
-        doomed: set[LiveConnection] = set()
+        doomed: set[SocketConnection] = set()
         for handle in handles:
             doomed |= self._by_handle.get(handle, set())
         if user_id is not None:
@@ -193,7 +193,7 @@ class OpenSockets:
 
 
 def _discard[K](
-    table: dict[K, set[LiveConnection]], key: K, connection: LiveConnection
+    table: dict[K, set[SocketConnection]], key: K, connection: SocketConnection
 ) -> None:
     held = table.get(key)
     if held is not None:

@@ -126,9 +126,12 @@ class _CallWindow:
     at: deque[float] = field(default_factory=deque)
 
 
-@dataclass(eq=False)
-class LiveConnection:
-    pod_id: UUID
+@dataclass(eq=False, kw_only=True)
+class SocketConnection:
+    """What every live socket is, whatever it is opened on: a user, their
+    subscriptions and the queue. ``LiveConnection`` is a socket on a pod;
+    ``OrgConnection`` one on an organization."""
+
     user_id: UUID
     send_text: SendText
     queue_bytes: int
@@ -354,6 +357,38 @@ class LiveConnection:
                 ResyncReason.OVERFLOW,
             )
 
+    @property
+    def log_pod_id(self) -> str | None:
+        """The pod a log line about this socket names, if it is on one."""
+        return None
+
+    @property
+    def log_organization_id(self) -> str | None:
+        """The organization a log line about this socket names, if it is on one."""
+        return None
+
+
+@dataclass(eq=False, kw_only=True)
+class LiveConnection(SocketConnection):
+    """A socket on one pod: ``/pods/{pod_id}/live``."""
+
+    pod_id: UUID
+
+    @property
+    def log_pod_id(self) -> str | None:
+        return str(self.pod_id)
+
+
+@dataclass(eq=False, kw_only=True)
+class OrgConnection(SocketConnection):
+    """A socket on one organization: ``/organizations/{organization_id}/live``."""
+
+    organization_id: UUID
+
+    @property
+    def log_organization_id(self) -> str | None:
+        return str(self.organization_id)
+
 
 __all__ = [
     "FRAME_BYTES",
@@ -361,6 +396,8 @@ __all__ = [
     "LiveConnection",
     "LiveFrames",
     "LiveSubscription",
+    "OrgConnection",
     "SendText",
+    "SocketConnection",
     "chunk",
 ]

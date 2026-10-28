@@ -23,6 +23,11 @@ The SSE endpoints (`/pods/{pod}/conversations/{c}/stream`, workflow runs) stay
 for the CLI, the SDKs and the Agent Host, which hold one stream and gain
 nothing from multiplexing. The public web visitor stream stays separate too.
 
+A client showing every pod of an organization at once -- a sidebar of every
+pod's chats, automations and tables -- holds one more socket instead of one
+per pod: `/organizations/{organization_id}/live`, carrying the `org` topic
+([below](#the-organization-socket-and-topic-org)).
+
 ## Connecting
 
 Open `wss://<api>/pods/{pod_id}/live`, authenticated by any one of:
@@ -257,6 +262,100 @@ finished meanwhile -- so a client need not poll the conversation to find a
 run that ended while its socket was away. A `status` event naming a new run
 moves the watch to it.
 
+## The organization socket and topic `org`
+
+`wss://<api>/organizations/{organization_id}/live` is the pod socket's
+transport on an organization: the same handshake and session rules, the same
+frames, queue and resync reasons. It answers one topic, `org`, and no calls;
+`ready` says so (`"topics": ["org"], "calls": []`). Close codes as above, with
+these meanings:
+
+| Close code | Meaning |
+| --- | --- |
+| `4401` | As the pod socket |
+| `4403` | The caller is not in the organization, or there is no such organization (REST answers 403 for both, and the socket never says which) -- at connect, or, on an open socket, no longer (checked as it refreshes its slot, every 30 s, and whenever the `org` topic decides its pods again) |
+| `4429` | The user already holds `LIVE_MAX_SOCKETS_PER_USER_PER_ORG` sockets on it |
+
+```json
+{"op": "subscribe", "id": "o1", "topic": "org"}
+```
+
+The subscription covers the pods the organization's pod listing shows the
+reader (an owner sees every pod; anyone else the pods they are in) that they
+may also open -- `pod.read`, the rule the pod socket is held to -- in the
+listing's order, up to `LIVE_ORG_MAX_PODS`. Right after `subscribed` comes
+`pods`, naming them. Then read each pod's summary over REST; every notice
+after that is a change from what held when the subscription started, which is
+also what that read shows. Notices are not a log: with `since`, the server
+answers `resync` (`no_replay`) -- read again.
+
+Every event but `pods` carries `pod_id`. A notice names what moved and enough
+to redraw a sidebar line; the detail is read over REST.
+
+| Event | Fields | |
+| --- | --- | --- |
+| `pods` | `pod_ids`, `more` | The pods covered; `more` when some were left out past the cap |
+| `pod.added` | `pod_id`, `more` | A pod the reader may open now (added to it, or it was made); read its summary |
+| `pod.removed` | `pod_id` | A pod they may no longer open; nothing more is said of it |
+| `pod.stale` | `pod_id` | What was said of the pod's channels can no longer be trusted (the reader's access in it moved, or its channel reading ended): read its summary again |
+| `inbox.updated` | `pod_id`, `channel_id`, `unread`, `totals` | The pod's [`inbox`](#topic-inbox) event, unchanged: one channel's counts and the reader's totals in that pod |
+| `question.waiting` | `pod_id`, `channel_id`, `message_id`, `message` | An ask newly waiting on the reader, as the `inbox` topic says it |
+| `conversation.running` | `pod_id`, `conversation_id`, `agent_run_id`, `agent_id`, `running` | A top-level conversation of the reader's started running (`true`) or stopped (`false`). Only its owner is told, holding `agent.read` on its agent -- who `GET …/conversations/{c}` answers |
+| `waiting.started` / `waiting.stopped` | `pod_id`, `kind`, and per kind below | Something started, or stopped, waiting on the reader |
+| `app.added` / `app.removed` | `pod_id`, `app_id`, `name` | An app joined, or left, the pod's app list as the reader may see it (made, deleted, or its visibility moved) |
+| `table.added` / `table.removed` | `pod_id`, `table_id`, `name` | The same for the pod's tables |
+
+`waiting.*` by `kind`:
+
+| `kind` | Fields | Told to |
+| --- | --- | --- |
+| `workflow` | `wait_id`, `workflow_run_id`, `workflow_id`, `workflow_name` | The pod member a workflow form is assigned to, as `GET …/workflow-runs/waiting/assigned-to-me` lists it; it stops when the form is submitted, cancelled or expires |
+| `contact` | `channel_id`, `contact_id` | Who may see the pod's contacts (`contact.read`): a contact waiting on a person (the channel list's `needs_person`); it stops when somebody takes it, it is handed back, or it closes |
+
+Asks an agent puts to a member are channel questions: they arrive as
+`question.waiting` and the `waiting` count of `inbox.updated`.
+
+```json
+{"type": "events", "id": "o1", "cursor": null, "events": [
+  {"type": "conversation.running", "pod_id": "…", "conversation_id": "…", "agent_run_id": "…", "agent_id": null, "running": true},
+  {"type": "inbox.updated", "pod_id": "…", "channel_id": "…", "unread": {"lines": 2, "mentions": 0, "waiting": 1, "read_seq": 40}, "totals": {"channels": 3, "mentions": 0, "waiting": 1}}
+]}
+```
+
+**What it never says.** A pod the reader may not open is never named. Within
+a pod, each notice reaches only who the matching REST read would show it to:
+an item is weighed against the reader's standing in that pod -- their role
+snapshot, the item's owner, visibility and grants -- when it is read, and again
+whenever the pod's grants epoch moves. A notice that stops being theirs (a
+grant gone, an app made personal) is sent as its `…removed`/`…stopped`, once.
+
+**How it works.** One hub per organization per API process
+(`app/core/live/org_hub.py`), shared by every `org` subscription there, as a
+pod's hubs are. Modules feed it (`app/core/live/org_feeds.py`):
+
+- a *relay* is handed one reader per covered pod and offers it events: channels
+  follows the pod's `inbox` through the pod's own channels hub, so counts are
+  worked out exactly as for the pod socket;
+- a *state* says what holds in each pod now (running conversations, open
+  forms, contacts waiting, the app and table lists), each item with who may
+  hear of it. The hub reads every state once per batch for all the pods that
+  may have moved -- the pods a signal named (`run`, `wait`, `channel`, `apps`,
+  `tables` on `pod:<id>:live`) -- and tells each reader only what moved for
+  them. A read that finds nothing new weighs no reader. Every state of every
+  covered pod is read each `LIVE_ORG_POLL_SECONDS` regardless, so a lost
+  signal delays a notice, never loses it.
+
+Which pods a subscription covers is decided again when a covered pod's grants
+epoch moves (a role, a membership, a grant), when the organization's channel
+`org:<id>:live` says its pods or members moved (`pods`, published after a pod
+is made or deleted and a member added or taken out), and every
+`LIVE_AUTHZ_RECHECK_SECONDS` regardless.
+
+Per-organization cost is bounded by `LIVE_ORG_MAX_PODS` per subscription:
+database work grows with covered pods and what moved in them, one read per
+state per batch, never with readers. The channels relay keeps a channels hub
+per covered pod, as a pod socket's `inbox` would.
+
 ## Calls
 
 | Method | `params` | `result` | Needs |
@@ -270,6 +369,10 @@ moves the watch to it.
 | Setting | Default | |
 | --- | --- | --- |
 | `LIVE_MAX_SOCKETS_PER_USER_PER_POD` | 5 | Across every API process; past it, close `4429` |
+| `LIVE_MAX_SOCKETS_PER_USER_PER_ORG` | 5 | The same, on an organization's socket |
+| `LIVE_MAX_SUBSCRIPTIONS_PER_ORG_SOCKET` | 4 | An organization socket's subscriptions; a client needs one |
+| `LIVE_ORG_MAX_PODS` | 50 | Pods one `org` subscription covers; the rest are left out and `pods` says so (`more`) |
+| `LIVE_ORG_POLL_SECONDS` | 15 | How often the `org` topic reads every state of every covered pod, signalled or not |
 | `LIVE_MAX_SUBSCRIPTIONS_PER_SOCKET` | 50 | Past it, `error {code: "limit"}` |
 | `LIVE_LIMIT_OVERRIDES_JSON` | | Per-pod exceptions to the two above |
 | `LIVE_MAX_CHANGES_PER_BATCH` | 500 | Past it, `resync {reason: "too_many"}` |
@@ -339,7 +442,9 @@ flowchart LR
 ## Writing a topic
 
 A module returns a `LiveContribution(topics=…, calls=…, streams=…)` from its
-`LemmaModule.live` thunk (`app/core/live/topics.py`). A topic's
+`LemmaModule.live` thunk (`app/core/live/topics.py`); for the `org` topic, also
+`org_relays=…` and `org_states=…` (`app/core/live/org_feeds.py`), and the
+module that owns organizations `org_directory=…`. A topic's
 `subscribe(connection, request)` parses `request.params`
 (`parse_params`), authorizes, puts a `LiveSubscription` (an `id`, an
 `active` flag and `release()`) at `connection.subscriptions[request.id]`,
