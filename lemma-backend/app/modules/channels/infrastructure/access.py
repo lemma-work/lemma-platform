@@ -58,9 +58,24 @@ def visible_to(viewer: Viewer) -> ColumnElement[bool]:
 def shown_in_full_to(viewer: Viewer) -> ColumnElement[bool]:
     """``domain.projection.withheld_from``, negated, as SQL: the lines
     ``viewer`` reads in full rather than only as given. Over a query of
-    ``channel_messages`` joined to its ``channels`` row and outer-joined to its
-    ``channel_questions`` row."""
-    message, channel = ChannelMessageModel, ChannelModel
+    ``channel_messages`` outer-joined to its ``channel_questions`` row; it
+    needs no ``channels`` row -- the viewer's own DIRECT channel is looked up
+    once (``uq_channels_direct_member``), not joined, so a read using this is
+    free to leave the channels out of its join (``line_search``)."""
+    message = ChannelMessageModel
+    # Never correlated: a caller joining ``channels`` must not have this read
+    # its own row instead of the viewer's DIRECT.
+    channel = aliased(ChannelModel)
+    their_direct = (
+        select(channel.id)
+        .where(
+            channel.pod_id == viewer.pod_id,
+            channel.kind == ChannelKind.DIRECT.value,
+            channel.member_user_id == viewer.user_id,
+        )
+        .correlate(None)
+        .scalar_subquery()
+    )
     return or_(
         message.sender_kind != SenderKind.AGENT.value,
         # An agent acting for a contact used nobody's own access.
@@ -68,9 +83,6 @@ def shown_in_full_to(viewer: Viewer) -> ColumnElement[bool]:
         message.on_behalf_user_id == viewer.user_id,
         # Shared with the channel by the member it was made for.
         message.shared_at.is_not(None),
-        and_(
-            channel.kind == ChannelKind.DIRECT.value,
-            channel.member_user_id == viewer.user_id,
-        ),
+        message.channel_id == their_direct,
         ChannelQuestionModel.awaits_user_id == viewer.user_id,
     )
