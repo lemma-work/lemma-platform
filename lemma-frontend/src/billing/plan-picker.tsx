@@ -4,6 +4,7 @@ import { LoadingIndicator } from "@/ui/loading";
 
 import { useEffect, useState } from "react";
 import { CheckIcon, ExternalIcon, RefreshIcon } from "@/ui/icons";
+import { captureEvent } from "@/site/analytics/client";
 import {
     highlights, isContactSales, moveTo, offered as offeredPlans, priceLine,
     type ChangeAcknowledged, type Plan, type PlanAudience, type StartedCheckout, type Subscription,
@@ -106,7 +107,8 @@ export function PlanPicker({
             {(checkout || asked) && (
                 <div className="plans__waiting" role="status">
                     {checkout && (
-                        <a className="btn btn--primary" href={checkout} target="_blank" rel="noreferrer">
+                        <a className="btn btn--primary" href={checkout} target="_blank" rel="noreferrer"
+                            onClick={() => captureEvent("billing.checkout_opened", { plan: chosen ?? "" })}>
                             Complete the payment <ExternalIcon size={14} />
                         </a>
                     )}
@@ -124,6 +126,7 @@ export function PlanPicker({
                         there is nothing here to cancel: an abandoned checkout
                         writes nothing at either end. */}
                     <button className="plans__give-up" onClick={() => {
+                        captureEvent("billing.checkout_abandoned", { plan: chosen ?? "" });
                         setChosen(null);
                         setCheckout(null);
                         setAsked(false);

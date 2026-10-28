@@ -1,6 +1,6 @@
 import { LoadingRows } from "@/ui/loading";
 import { WorkspaceLoading } from "@/shell/workspace-loading";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
 import type { Invitation, NewOrg, Org } from "@/data";
@@ -11,6 +11,10 @@ import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNam
 import { isLocalDeployment } from "@/site/config";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
 import { ResumeInstall } from "@/site/import/resume-install";
+import { captureEvent } from "@/site/analytics/client";
+
+/** Which way somebody got into an organization, for `onboarding.arrived`. */
+type ArrivalRoute = "invite" | "domain" | "new_org";
 
 /** The first morning.
  *
@@ -54,12 +58,13 @@ export function ArrivalView({
        the same team, by invitation only — is one click, not a retyped form. */
     const [domainTaken, setDomainTaken] = useState<NewOrg | null>(null);
     const enter = useMutation({
-        mutationFn: async (act: { id: string; run: () => Promise<unknown>; land: string | null; wanted?: NewOrg }) => {
+        mutationFn: async (act: { id: string; route: ArrivalRoute; run: () => Promise<unknown>; land: string | null; wanted?: NewOrg }) => {
             setBusy(act.id);
             await act.run();
             return act.land;
         },
-        onSuccess: (land) => {
+        onSuccess: (land, act) => {
+            captureEvent("onboarding.arrived", { route: act.route });
             onEntered(land ?? null);
             return queryClient.invalidateQueries({ queryKey: ["orgs"] });
         },
@@ -72,12 +77,12 @@ export function ArrivalView({
             setProblem(failure instanceof Error ? failure.message : "Couldn’t complete organization setup. Try again.");
         },
     });
-    const go = (id: string, run: () => Promise<unknown>, land?: string | null, wanted?: NewOrg) => {
+    const go = (id: string, route: ArrivalRoute, run: () => Promise<unknown>, land?: string | null, wanted?: NewOrg) => {
         setProblem(null);
         setDomainTaken(null);
-        enter.mutate({ id, run, land: land ?? null, wanted });
+        enter.mutate({ id, route, run, land: land ?? null, wanted });
     };
-    const make = (wanted: NewOrg) => go("make", () => source.createOrg(wanted), null, wanted);
+    const make = (wanted: NewOrg) => go("make", "new_org", () => source.createOrg(wanted), null, wanted);
     /* A choice changed is a new question; the answer to the last one is no
        longer about anything on the screen. */
     const forget = () => { setProblem(null); setDomainTaken(null); };
@@ -102,6 +107,16 @@ export function ArrivalView({
         () => (suggested.data ?? []).filter((org) => !invites.some((invite) => invite.orgId === org.id)),
         [suggested.data, invites],
     );
+
+    /* What the first screen offered, once its lists are in: somebody who sees
+       an invitation and leaves makes no request, and is the person this screen
+       most needs to keep. */
+    const offered = useRef(false);
+    useEffect(() => {
+        if (offered.current || waiting || unread) return;
+        offered.current = true;
+        captureEvent("onboarding.arrival_viewed", { invited: invites.length > 0, domain_match: matches.length > 0 });
+    }, [waiting, unread, invites.length, matches.length]);
 
     return (
         <div className="arrival-page">
@@ -148,7 +163,7 @@ export function ArrivalView({
                                 key={invite.id}
                                 invite={invite}
                                 busy={busy === invite.id}
-                                onAccept={() => go(invite.id, () => source.acceptInvitation(invite.id), invite.podId)}
+                                onAccept={() => go(invite.id, "invite", () => source.acceptInvitation(invite.id), invite.podId)}
                             />
                         ))}
 
@@ -158,7 +173,7 @@ export function ArrivalView({
                                 org={org}
                                 domain={domainOf(email)}
                                 busy={busy === org.id}
-                                onJoin={() => go(org.id, () => source.joinOrg(org.id))}
+                                onJoin={() => go(org.id, "domain", () => source.joinOrg(org.id))}
                             />
                         ))}
 

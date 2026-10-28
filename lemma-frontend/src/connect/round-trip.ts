@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { isDesktop } from "@/desktop/bridge";
 import { holdTab, openExternal } from "@/desktop/open-external";
+import { captureEvent } from "@/site/analytics/client";
 
 /** Getting somebody back from a provider's consent page, and hearing how it went.
  *
@@ -160,6 +161,9 @@ export function deliverOutcome(
 export function noteRoundTrip(): void {
     sentAt = Date.now();
     rememberWaiting(sentAt);
+    /* The top of the connect funnel, however the sign-in went out: what comes
+       back is the backend's `connector.connected`. */
+    captureEvent("connector.authorization_opened");
 }
 
 /** Open the provider in a new tab the completion page can report back to.

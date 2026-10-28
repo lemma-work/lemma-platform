@@ -144,7 +144,7 @@ export const privacyPolicy: LegalDocument = {
                     text: "Your screen or your session. No session replay, and no autocapture — the feature that quietly scrapes the text off a page into event properties — because Lemma renders your business data and that is the fastest way to put it somewhere it does not belong.",
                 },
                 {
-                    text: "Identifiers in page addresses. A URL is reduced to its route pattern before it leaves your browser, so the id of the pod you were looking at is not carried out with the pageview.",
+                    text: "Identifiers in page addresses, and page titles. Every address is reduced to its route pattern before it leaves your browser, so the id of the pod you were looking at, or the name of the file, is not carried out with the pageview. An error report keeps where in our code it happened and drops what the error said.",
                 },
                 {
                     text: "Anything bought from a data broker. We do not enrich, append, or buy information about you, and there is no advertising profile to build because we do not advertise against you.",
@@ -211,7 +211,11 @@ export const privacyPolicy: LegalDocument = {
                 },
                 {
                     label: "After you answer",
-                    text: "Saying yes stores one identifier in this browser so your visits join up. Saying no leaves nothing behind and keeps every visit unlinked. Either way we ask once and remember the answer.",
+                    text: "Saying yes stores one identifier in this browser so your visits join up, including the ones from before you signed in. Saying no leaves no identifier behind, and visits made while signed out stay unlinked. Either way we ask once and remember the answer.",
+                },
+                {
+                    label: "While you are signed in",
+                    text: "What you do in the workspace is counted against your account's identifier, whichever you answered: the same identifier the service already knows you by. Signing out ends that in this browser.",
                 },
             ],
         },
