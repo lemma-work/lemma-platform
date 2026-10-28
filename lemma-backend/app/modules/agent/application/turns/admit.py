@@ -208,6 +208,7 @@ class AdmitMessage:
                 superseded_returns = await self.supersede.supersede(
                     conversation=conversation,
                     user_id=user_id,
+                    reply=content,
                 )
             held = await _pause_holding_the_turn(
                 self.pauses,

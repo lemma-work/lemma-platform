@@ -24,7 +24,11 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from app.core.domain.aggregate import AggregateRoot
-from app.modules.agent.domain.approvals import EXPIRED_UNANSWERED, SUPERSEDED_KEY
+from app.modules.agent.domain.approvals import (
+    ANSWERED_BY_REPLY,
+    EXPIRED_UNANSWERED,
+    SUPERSEDED_KEY,
+)
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.pause_opening import (
     AgentHostPermissionRequest,
@@ -215,6 +219,24 @@ class Pause(AggregateRoot):
                 resolved_by_user_id=on_behalf_of,
             ),
             now=now,
+        )
+
+    def answer_by_reply(self, reply: str, *, by: UUID) -> bool:
+        """A question the person answered by writing back, not on its card.
+
+        Their message is the answer, and reaches the model as one -- not as a
+        question passed over. Only a question: an approval is never decided by
+        a message that does not say which way.
+        """
+        if self.kind is not PauseKind.QUESTION:
+            return False
+        return self._end(
+            PauseStatus.RESOLVED,
+            PauseResolution(
+                decision=AgentRunApprovalDecision.APPROVE_ONCE,
+                response={"answers": {"reply": reply}, ANSWERED_BY_REPLY: True},
+                resolved_by_user_id=by,
+            ),
         )
 
     def supersede(self, *, by: UUID) -> bool:

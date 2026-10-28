@@ -45,3 +45,6 @@ def expired_unanswered(response: dict[str, object]) -> bool:
 #: On the DENY recorded for a pause somebody moved past: nobody decided it
 #: (``application/pauses/supersede``).
 SUPERSEDED_KEY = "superseded_by_new_message"
+#: On a question the person answered by writing a message rather than on its
+#: card: the message is the answer (``application/pauses/supersede``).
+ANSWERED_BY_REPLY = "answered_by_reply"

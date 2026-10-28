@@ -111,3 +111,16 @@ def test_only_a_decided_approval_may_run_its_tool_and_only_once() -> None:
     assert denied.claim_execution() is False
     assert approved.claim_execution() is True
     assert approved.claim_execution() is False
+
+
+def test_a_question_written_back_to_is_answered_by_the_reply() -> None:
+    """Live, a free-text reply to an open question reached the model as the
+    question "dismissed". The reply is the answer; an approval is never
+    decided by a message that does not say which way."""
+    question, approval = _pause(PauseKind.QUESTION), _pause(PauseKind.APPROVAL)
+
+    assert question.answer_by_reply("The 3rd to the 5th.", by=uuid4())
+    assert question.status is PauseStatus.RESOLVED
+    assert question.response["answers"] == {"reply": "The 3rd to the 5th."}
+    assert not approval.answer_by_reply("yes", by=uuid4())
+    assert approval.status is PauseStatus.PENDING
