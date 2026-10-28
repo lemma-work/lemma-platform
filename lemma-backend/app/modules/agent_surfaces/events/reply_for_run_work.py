@@ -35,7 +35,7 @@ from app.core.infrastructure.work import (
     registry as default_registry,
 )
 from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent.contracts.run_replies import run_reply_material
+from app.modules.agent.contracts.channel_replies import run_reply_material
 from app.modules.agent_surfaces.events.work_kinds import (
     SURFACE_REPLY_FOR_RUN,
     run_reply_key,

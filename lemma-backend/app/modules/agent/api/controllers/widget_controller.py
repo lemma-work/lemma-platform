@@ -50,7 +50,7 @@ from app.modules.agent.config import agent_settings
 from app.core.html_document import wrap_html_fragment
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.errors import ConversationNotFoundError
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.widget_asset_service import (
     WidgetAssetService,
     WidgetSourceUnavailable,
@@ -123,12 +123,10 @@ class WidgetRouteServices:
     widget_content: Callable[[SqlAlchemyUnitOfWork], WidgetContentReader] = (
         WidgetAssetService
     )
-    #: Reads the conversation the widget lives in. A repository, not the whole
-    #: `ConversationService`: that built an agent repository, an authorization
-    #: service and a usage service per request to read one row.
-    conversations: Callable[[SqlAlchemyUnitOfWork], ConversationLookup] = (
-        ConversationRepository
-    )
+    #: Reads the conversation the widget lives in. A repository, not a whole
+    #: conversation service: the one this replaced built an agent repository,
+    #: an authorization service and a usage service per request to read a row.
+    conversations: Callable[[SqlAlchemyUnitOfWork], ConversationLookup] = Conversations
     #: Builds the caller's permission context, through the sanctioned factory
     #: rather than by reaching into ``uow.session`` here.
     authorization: Callable[[SqlAlchemyUnitOfWork], UserContextBuilder] = (

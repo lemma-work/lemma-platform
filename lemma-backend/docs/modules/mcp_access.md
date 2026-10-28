@@ -43,6 +43,7 @@ The MCP endpoint itself. `app/mcp_server.py` mounts one FastMCP app twice: at
 `/agent-runtime/pods` for the Agent Host and at `/mcp` for outside clients. It
 reaches this module through `mcp_access/contracts`. Which tools a pod exposes,
 and what scope each needs, belongs to `agent`
-(`services/pod_mcp_service.py`, `services/pod_mcp_tool_policy.py`).
+(`services/pod_mcp_service.py`, and the `ToolPolicy` on each spec in
+`infrastructure/tools/pod/tools.py`).
 Authorization of each tool call is the person's own, built by core
 authorization exactly as for a Lemma session.

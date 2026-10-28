@@ -17,7 +17,7 @@ from fastapi import status
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     LinkMcpClient,
     app_of,
@@ -33,15 +33,15 @@ from app.modules.agent.tests.e2e.test_agent_e2e import (
     _assert_completed_without_error,
     _post_sse,
 )
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     ExecutePythonRequest,
     ListProcessesRequest,
     TerminateProcessRequest,
     WriteStdinRequest,
 )
-from app.modules.agent.tools.workspace_cli.workspace_cli import (
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     exec_command_internal,
     execute_python_internal,
     list_processes_internal,
@@ -448,7 +448,7 @@ async def test_a_real_agent_finds_with_the_shell_what_it_wrote_with_python(
     # worked because both tools were there -- not because they happened to
     # share the image's default.
     probe = await exec_command_internal(
-        BaseAgentContext(
+        ToolContext(
             user_id=UUID(fixed_test_user["id"]),
             org_id=UUID(fixed_test_org["id"]),
             pod_id=UUID(pod["id"]),
@@ -682,7 +682,7 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     conversation = create_conversation.json()
     conversation_cwd = conversation["metadata"]["cwd"]
 
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),
@@ -893,11 +893,10 @@ async def test_workspace_cli_tools_execute_over_real_mcp_with_latency_summary(
     conversation_id = UUID(create_conversation.json()["id"])
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        run = await ConversationRepository(uow).create_agent_run(
+        run = await Runs(uow).create_agent_run(
             conversation_id=conversation_id,
             agent_id=UUID(agent["id"]),
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "workspace_mcp_latency_e2e"},
         )
         await uow.commit()
 

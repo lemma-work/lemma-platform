@@ -11,9 +11,7 @@ from app.core.authorization.approval_wording import (
 )
 from app.core.authorization.session_approvals import shown_card
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts.conversations_for_surfaces import (
-    PendingInteraction,
-)
+from app.modules.agent.contracts.channels import PendingInteraction
 from app.modules.agent_surfaces.domain.models import SurfaceApprovalRenderPlan
 from app.modules.agent_surfaces.services.approval_preview import (
     approval_action_summary,

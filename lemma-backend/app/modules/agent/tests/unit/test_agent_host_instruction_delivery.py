@@ -22,13 +22,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     NEW_SESSION_ONLY,
     AgentHostRunCheckpoint,
     AgentHostRunSpec,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host import session_memory as memory
+from app.modules.agent.agent_host.control import session_memory as memory
 
 
 def test_the_digest_moves_when_the_instructions_do() -> None:
@@ -43,27 +43,26 @@ def test_the_digest_moves_when_the_instructions_do() -> None:
 
 
 class _Repository:
-    """The two conversation-metadata calls this module makes, in memory."""
+    """The conversation's ``agent_host_sessions`` row, in memory, as a binding."""
 
-    def __init__(self, stored: object = None) -> None:
+    def __init__(self, stored: dict | None = None) -> None:
         self.stored = stored
         self.locked_reads = 0
 
-    async def get_conversation_metadata_key(self, *_args, **kwargs) -> object:
-        if kwargs.get("for_update"):
+    async def load(self, _uow, _conversation_id, *, for_update: bool = False) -> dict:
+        if for_update:
             self.locked_reads += 1
-        return self.stored
+        return dict(self.stored or {})
 
-    async def set_conversation_metadata_key(
-        self, _conversation_id, _key, value
-    ) -> None:
-        self.stored = value
+    async def save(self, _uow, _conversation_id, binding: dict) -> None:
+        self.stored = binding
 
 
 @pytest.fixture
 def repository(monkeypatch: pytest.MonkeyPatch) -> _Repository:
     instance = _Repository()
-    monkeypatch.setattr(memory, "ConversationRepository", lambda _uow: instance)
+    monkeypatch.setattr(memory, "load_binding", instance.load)
+    monkeypatch.setattr(memory, "_save", instance.save)
     return instance
 
 

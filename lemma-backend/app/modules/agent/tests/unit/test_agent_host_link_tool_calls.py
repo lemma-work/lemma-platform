@@ -15,13 +15,13 @@ from uuid import uuid7
 
 from fakeredis import aioredis as fake_aioredis
 
-from app.modules.agent.services.agent_host_link_tool_calls import (
+from app.modules.agent.agent_host.link.tool_calls import (
     MAX_RECORDED_RESULT_BYTES,
     ToolCallLedger,
     ToolCallOutcome,
     tool_call_key,
 )
-from app.modules.agent.services.realtime import conversation_channel
+from app.modules.agent.infrastructure.live import conversation_channel
 from app.modules.agent.tests.unit.agent_host_link_fakes import (
     TOKEN,
     FakeConversationMcp,
@@ -397,7 +397,7 @@ def test_the_fake_service_counts_as_the_real_ones_shape():
     """Keeps the stand-in honest about the one new keyword it must accept."""
     import inspect
 
-    from app.modules.agent.services.conversation_mcp_service import (
+    from app.modules.agent.agent_host.mcp import (
         ConversationMCPService,
     )
 

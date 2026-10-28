@@ -11,7 +11,7 @@ placeholder agent with no grants and failed every time (PS-AGENT-020, seen in
 development on 2026-09-28). And until H7 it ran as the person, whole: an
 approval of one row's delete lent the call everything the person could do.
 
-So nothing here is faked below the tool: the real dispatcher, the real pod
+So nothing here is faked below the tool: the real tool runtime, the real pod
 toolset, the real authorization service, a real database.
 """
 
@@ -28,26 +28,27 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.context import ApprovedExecution
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
 from app.modules.agent.services.approval_reconciliation import (
     record_session_approvals,
 )
-from app.modules.agent.tools.approval.executor import ApprovalExecutor
-from app.modules.agent.tools.approval_denials import (
+from app.modules.agent.services.approval_executor import ApprovalExecutor
+from app.modules.agent.infrastructure.tools.approval.denials import (
     lent_to_the_sandbox,
     sandbox_refusals,
     show_card,
 )
-from app.modules.agent.tools.authority import (
+from app.modules.agent.infrastructure.tools.authority import (
     conversation_workload_actor_id,
     tool_authorization_context,
     workload_actor_id,
 )
-from app.modules.agent.tools.context import ConversationContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
+from app.modules.agent.services.tool_runtime import ToolRuntime
 from app.modules.test_support.e2e.function_helpers import create_table
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
@@ -91,9 +92,9 @@ class _Pod:
 
     def context(
         self, *, conversation_id: UUID | None = None, user_id: str | None = None
-    ) -> ConversationContext:
+    ) -> ToolContext:
         """The agent's run context, as a real run builds it."""
-        return ConversationContext(
+        return ToolContext(
             user_id=UUID(user_id or self.scenario.owner_user["id"]),
             org_id=UUID(self.scenario.org_id),
             pod_id=UUID(self.pod_id),
@@ -137,28 +138,27 @@ def _delete(row_id: str) -> dict[str, object]:
     return {"action": "delete", "table_name": _TABLE, "record_id": row_id}
 
 
-async def _as_the_agent(ctx: ConversationContext, args: dict[str, object]) -> dict:
+async def _as_the_agent(ctx: ToolContext, args: dict[str, object]) -> dict:
     """Call ``pod_write_record`` the way a run does: with the agent's own authority."""
     async with _uow_factory()() as uow:
-        conversation = await ConversationRepository(uow).get_conversation(
+        conversation = await Conversations(uow).get_conversation(
             ctx.conversation_id, include_runs=False
         )
         assert conversation is not None and conversation.agent_id is not None
         agent = await AgentRepository(uow).get(conversation.agent_id)
-    result = await AgentToolDispatcher(_uow_factory()).call_tool(
+    specs = await specs_for(
         agent=agent,
         conversation=conversation,
         ctx=ctx,
-        name="pod_write_record",
-        arguments=args,
+        surface=ToolSurface.RERUN,
+        uow_factory=_uow_factory(),
     )
+    result = await ToolRuntime(specs).call("pod_write_record", args, ctx)
     assert isinstance(result, dict)
     return result
 
 
-async def _card(
-    ctx: ConversationContext, tool_name: str, args: dict[str, object]
-) -> str:
+async def _card(ctx: ToolContext, tool_name: str, args: dict[str, object]) -> str:
     """The run pausing for a card: what is pending now is what it lends."""
     approval_id = f"call-{uuid4().hex[:12]}"
     await show_card(
@@ -172,7 +172,7 @@ async def _card(
     return approval_id
 
 
-async def _approved(ctx: ConversationContext, args: dict[str, object]) -> dict:
+async def _approved(ctx: ToolContext, args: dict[str, object]) -> dict:
     result = await ApprovalExecutor(_uow_factory()).execute_as_user(
         deps=ctx,
         tool_name="pod_write_record",

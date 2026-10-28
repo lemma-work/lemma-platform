@@ -88,7 +88,7 @@ class TestAnInterruptedToolCallDoesNotInviteARepeat:
 
         from app.modules.agent.domain.entities import Message
         from app.modules.agent.domain.value_objects import MessageKind, MessageRole
-        from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+        from app.modules.agent.infrastructure.harness.lemma.history_replay import (
             history_and_prompt,
         )
 

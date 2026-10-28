@@ -17,7 +17,7 @@ import pytest
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.value_objects import MessageDraft, MessageRole
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
 
 pytestmark = pytest.mark.e2e
 
@@ -57,7 +57,7 @@ async def _listed_ids(authenticated_client, pod_id: str, *, archived: bool) -> s
 async def _say_something(conversation_id: str, text: str) -> None:
     """A message arriving by any path -- the repository is what they all share."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).append_message(
+        await Messages(uow).append_message(
             conversation_id=UUID(conversation_id),
             agent_run_id=None,
             draft=MessageDraft.of_text(text, role=MessageRole.USER),

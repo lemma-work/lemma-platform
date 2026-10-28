@@ -11,13 +11,14 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.agent_host_permissions import AGENT_HOST_PERMISSION_KEY
+from app.modules.agent.agent_host.domain.permissions import AGENT_HOST_PERMISSION_KEY
 from app.modules.agent.domain.approval_message import (
     APPROVAL_MESSAGE_KEY,
     with_approval_message,
 )
 from app.modules.agent.domain.run_budget import BudgetDimension, BudgetExhausted
-from app.modules.agent.domain.run_budget_pause import budget_pause_tool_args
+from app.modules.agent.domain.run_budget_pause import budget_pause_events
+from app.modules.agent.domain.state_kinds import AnswerKind
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -44,10 +45,8 @@ def test_the_agents_message_is_stored_before_the_card():
     message, card = with_approval_message(_approval(title="Send invoice", message=said))
 
     assert (message.kind, message.text) == (MessageKind.TEXT, said)
-    assert message.metadata == {
-        "is_final_answer": False,
-        APPROVAL_MESSAGE_KEY: "call_1",
-    }
+    assert message.metadata == {APPROVAL_MESSAGE_KEY: "call_1"}
+    assert message.state.answer is AnswerKind.NOT_FINAL
     assert card.kind is MessageKind.TOOL_CALL
 
 
@@ -57,21 +56,32 @@ def test_a_call_with_no_message_still_ends_on_a_whole_sentence():
     assert message.text == "I need your approval before I go on: Send invoice."
 
 
+def _budget_card() -> MessageDraft:
+    [event] = budget_pause_events(
+        agent_run_id=uuid4(),
+        tool_call_id="x",
+        exhausted=BudgetExhausted(dimension=BudgetDimension.MODEL_REQUESTS, spent=200),
+        sequence=1,
+    )
+    return event.data
+
+
 @pytest.mark.parametrize(
     "raised_by_lemma",
     [
-        budget_pause_tool_args(
-            BudgetExhausted(dimension=BudgetDimension.MODEL_REQUESTS, spent=200)
+        _budget_card(),
+        MessageDraft.of_tool_call(
+            tool_name="request_approval",
+            tool_call_id="x",
+            tool_args={
+                "title": "Run a command",
+                AGENT_HOST_PERMISSION_KEY: {"request_id": "r"},
+            },
         ),
-        {"title": "Run a command", AGENT_HOST_PERMISSION_KEY: {"request_id": "r"}},
     ],
 )
 def test_a_card_lemma_raised_gets_no_words_put_in_the_agents_mouth(raised_by_lemma):
-    draft = MessageDraft.of_tool_call(
-        tool_name="request_approval", tool_call_id="x", tool_args=raised_by_lemma
-    )
-
-    assert with_approval_message(draft) == [draft]
+    assert with_approval_message(raised_by_lemma) == [raised_by_lemma]
 
 
 def test_every_reader_of_the_run_sees_the_message_before_the_card():

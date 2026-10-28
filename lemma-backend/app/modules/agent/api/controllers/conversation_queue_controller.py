@@ -17,7 +17,7 @@ from app.core.api.dependencies import CurrentUser
 from app.modules.agent.api.controllers.conversation_controller import (
     CONVERSATION_MEMBERSHIP,
 )
-from app.modules.agent.api.dependencies import ConversationServiceDep
+from app.modules.agent.api.dependencies import WithdrawQueuedMessageDep
 
 router = APIRouter(
     prefix="/pods/{pod_id}/conversations",
@@ -47,9 +47,9 @@ async def withdraw_queued_message(
     conversation_id: UUID,
     message_id: UUID,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    withdraw: WithdrawQueuedMessageDep,
 ) -> None:
-    await service.withdraw_queued_message(
+    await withdraw.withdraw(
         conversation_id=conversation_id,
         message_id=message_id,
         user_id=user.id,

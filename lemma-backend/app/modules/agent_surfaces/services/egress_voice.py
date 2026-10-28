@@ -12,7 +12,10 @@ from uuid import UUID
 from app.core.file_types import is_untyped_mime
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
+from app.modules.agent.contracts.tools import (
+    DisplayResourceRequest,
+    DisplayResourceType,
+)
 from app.modules.agent_surfaces.domain.envelope import EnvelopeVoice, SurfaceEnvelope
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.display_resource_content import (

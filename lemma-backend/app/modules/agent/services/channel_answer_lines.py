@@ -22,7 +22,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.redaction import redact_text
 from app.core.text.thinking_tags import strip_context_echo, strip_thinking_tokens
 from app.modules.agent.contracts.run_failures import user_safe_stored_reason
-from app.modules.agent.contracts.run_replies import (
+from app.modules.agent.contracts.channel_replies import (
     RunReplyMaterial,
     answer_line_client_id,
 )

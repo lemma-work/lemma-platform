@@ -14,7 +14,7 @@ import base64
 import json
 
 from app.core.server_limits import WS_MAX_BYTES
-from app.modules.agent.services.agent_host_link_ops import (
+from app.modules.agent.agent_host.link.ops import (
     OLD_HOST_OUTPUT_LIMIT_BYTES,
     old_host_params,
 )

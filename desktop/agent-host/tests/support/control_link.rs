@@ -1,7 +1,7 @@
 //! The control plane's end of the link.
 //!
 //! One WebSocket per host at `/agent-host/link`, as
-//! `app/modules/agent/domain/agent_host_link.py` serves it: `pair` or an
+//! `app/modules/agent/agent_host/domain/link.py` serves it: `pair` or an
 //! authenticated `hello` first, then `control`, `events`, `harnesses`, `mcp`
 //! and `interaction_wait` requests, each answered by a frame whose `re` names
 //! it, and `commands` pushed whenever there is work.

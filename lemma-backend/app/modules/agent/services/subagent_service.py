@@ -23,38 +23,39 @@ from uuid import UUID
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.tools.authority import tool_authorization_context
+from app.modules.agent.infrastructure.tools.authority import tool_authorization_context
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     AgentRunStatus,
     AgentRuntimeConfig,
+    ConversationOrigin,
     ConversationStatus,
     JsonObject,
 )
-from app.modules.agent.domain.pausing_tools import USER_PAUSING_TOOL_NAMES
+from app.modules.agent.domain.pauses import PERSON_KINDS
 from app.modules.agent.domain.subagent_results import (
-    COLLECTED_BY_AWAIT,
-    COLLECTED_BY_STATUS,
     DELIVERED_STATUSES,
-    PARENT_RUN_KEY,
-    REPORTS_TO_PARENT_KEY,
-    SUBAGENTS_OUT_KEY,
 )
-from app.modules.agent.domain.subagent_spawn import SPAWN_KEY, spawn_key
+from app.modules.agent.domain.subagent_spawn import spawn_key
+from app.modules.agent.infrastructure.db.calls import Calls
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
-from app.modules.agent.services.call_marks import call_of_parent, worker_canvas_note
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.domain.calls import worker_canvas_note
+from app.modules.agent.application.conversations.start import StartConversation
+from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.application.turns.stop import StopConversation
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.agent.services.subagent_result_delivery import mark_collected
-from app.modules.usage.contracts.execution import build_usage_service
 
 if TYPE_CHECKING:
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
 
 class SubAgentError(RuntimeError):
@@ -77,6 +78,8 @@ _AWAIT_POLL_SECONDS = 1.0
 class _RunReader(Protocol):
     async def get_agent_run(self, agent_run_id: UUID) -> AgentRun | None: ...
 
+
+class _ConversationReader(Protocol):
     async def get_conversation(self, conversation_id: UUID) -> Conversation | None: ...
 
 
@@ -90,7 +93,7 @@ class ParentRuntimeLookup(Protocol):
     async def __call__(
         self,
         uow: SqlAlchemyUnitOfWork,
-        deps: BaseAgentContext,
+        deps: ToolContext,
         *,
         is_self: bool,
         target_name: str | None,
@@ -100,8 +103,9 @@ class ParentRuntimeLookup(Protocol):
 async def inherited_runtime(
     *,
     runs: _RunReader,
+    conversations: _ConversationReader,
     agents: _AgentReader,
-    deps: BaseAgentContext,
+    deps: ToolContext,
     is_self: bool,
     target_name: str | None,
 ) -> AgentRuntimeConfig | None:
@@ -123,19 +127,20 @@ async def inherited_runtime(
         run = await runs.get_agent_run(deps.agent_run_id)
         if run is not None and run.agent_runtime is not None:
             return run.agent_runtime
-    parent = await runs.get_conversation(deps.conversation_id)
+    parent = await conversations.get_conversation(deps.conversation_id)
     return parent.agent_runtime if parent is not None else None
 
 
 async def _parent_runtime_from(
     uow: SqlAlchemyUnitOfWork,
-    deps: BaseAgentContext,
+    deps: ToolContext,
     *,
     is_self: bool,
     target_name: str | None,
 ) -> AgentRuntimeConfig | None:
     return await inherited_runtime(
-        runs=ConversationRepository(uow),
+        runs=Runs(uow),
+        conversations=Conversations(uow),
         agents=AgentRepository(uow),
         deps=deps,
         is_self=is_self,
@@ -154,14 +159,6 @@ class SubAgentService:
         self._parent_runtime = parent_runtime or _parent_runtime_from
 
     # -- context helpers ----------------------------------------------------
-
-    def _conversation_service(self, uow) -> ConversationService:
-        return ConversationService(
-            uow=uow,
-            conversation_repository=ConversationRepository(uow),
-            agent_repository=AgentRepository(uow),
-            usage_service=build_usage_service(uow),
-        )
 
     async def _agent_ctx(self, uow, deps):
         """Parent agent's authorization context (honors its agent.execute grant)."""
@@ -215,9 +212,10 @@ class SubAgentService:
                 )
                 if earlier is not None:
                     return earlier
-                service = self._conversation_service(uow)
-                in_call = await call_of_parent(uow, deps.conversation_id)
-                conversation = await service.create_conversation(
+                # A sub-agent spawned from a live call draws on that call's
+                # canvas; one spawned after the call ended is ordinary.
+                in_call = await Calls(uow).inherited_by_child(deps.conversation_id)
+                conversation = await StartConversation.build(uow).start(
                     pod_id=deps.pod_id,
                     agent_name=target_name,
                     user_id=deps.user_id,
@@ -226,29 +224,19 @@ class SubAgentService:
                         uow, deps, is_self=is_self, target_name=target_name
                     ),
                     require_execute_grant=not is_self,
-                    metadata={
-                        # Source of truth for depth=1 gating (RunToolAssembler):
-                        # this child IS a sub-agent, so its run gets no spawn tools.
-                        "is_sub_agent": True,
-                        "spawned_by_agent": deps.agent_name,
-                        PARENT_RUN_KEY: str(deps.agent_run_id)
-                        if deps.agent_run_id
-                        else None,
-                        "self_spawned": is_self,
-                        SPAWN_KEY: key,
-                        REPORTS_TO_PARENT_KEY: True,
-                        **in_call,
-                    },
+                    # The source of truth for depth=1 gating (`tool_catalog.specs_for`):
+                    # this child IS a sub-agent, so its run gets no spawn tools.
+                    origin=ConversationOrigin.SUBAGENT,
+                    parent_run_id=deps.agent_run_id,
+                    spawn_key=key,
+                    reports_to_parent=True,
+                    call=in_call,
                     instructions=worker_canvas_note() if in_call else None,
                 )
                 if spawn_call is not None:
-                    await ConversationRepository(uow).set_spawn_call(
-                        conversation.id, spawn_call
-                    )
-                await ConversationRepository(uow).set_conversation_metadata_key(
-                    deps.conversation_id, SUBAGENTS_OUT_KEY, True
-                )
-                result = await service.add_user_message_and_start_run(
+                    await Conversations(uow).set_spawn_call(conversation.id, spawn_call)
+                await Conversations(uow).mark_delegations_out(deps.conversation_id)
+                result = await SendMessage.build(uow).send(
                     conversation_id=conversation.id,
                     user_id=deps.user_id,
                     content=task,
@@ -269,7 +257,7 @@ class SubAgentService:
     async def _already_spawned(
         self,
         uow: SqlAlchemyUnitOfWork,
-        deps: BaseAgentContext,
+        deps: ToolContext,
         key: str,
         *,
         spawn_call: str | None = None,
@@ -282,22 +270,23 @@ class SubAgentService:
         """
         if deps.agent_run_id is None:
             return None
-        repository = ConversationRepository(uow)
-        await repository.lock_conversation(deps.conversation_id)
+        conversations = Conversations(uow)
+        runs = Runs(uow)
+        await conversations.lock_conversation(deps.conversation_id)
         child = (
-            await repository.find_child_by_spawn_call(
+            await conversations.find_child_by_spawn_call(
                 parent_id=deps.conversation_id, spawn_call=spawn_call
             )
             if spawn_call is not None
             else None
-        ) or await repository.find_spawned_child(
+        ) or await conversations.find_spawned_child(
             parent_id=deps.conversation_id,
             parent_run_id=deps.agent_run_id,
             spawn_key=key,
         )
         if child is None:
             return None
-        latest = await repository.get_latest_agent_run_for_conversation(child.id)
+        latest = await runs.get_latest_agent_run_for_conversation(child.id)
         await uow.commit()
         return SubAgentHandle(
             conversation_id=child.id,
@@ -306,7 +295,7 @@ class SubAgentService:
         )
 
     async def _owned_child(self, uow, deps, conversation_id: UUID) -> Conversation:
-        conversation = await ConversationRepository(uow).get_conversation(
+        conversation = await Conversations(uow).get_conversation(
             conversation_id,
             include_runs=True,
         )
@@ -329,7 +318,7 @@ class SubAgentService:
     ) -> list[dict[str, object]]:
         """List child conversations spawned from the current conversation."""
         async with self.uow_factory() as uow:
-            children = await ConversationRepository(uow).list_children(
+            children = await Conversations(uow).list_child_conversations(
                 parent_id=deps.conversation_id,
                 user_id=deps.user_id,
                 limit=limit,
@@ -376,7 +365,7 @@ class SubAgentService:
     ) -> list[Message]:
         async with self.uow_factory() as uow:
             await self._owned_child(uow, deps, conversation_id)
-            messages, _ = await ConversationRepository(uow).list_messages(
+            messages, _ = await Messages(uow).list_messages(
                 conversation_id=conversation_id,
                 after_sequence=after_sequence,
                 limit=limit,
@@ -399,7 +388,7 @@ class SubAgentService:
             if report["status"] == _NEEDS_INPUT:
                 report.update(await _open_question(uow, conversation_id))
             elif latest.status in DELIVERED_STATUSES:
-                await mark_collected(uow, latest.id, by=COLLECTED_BY_STATUS)
+                await mark_collected(uow, latest.id)
                 await uow.commit()
             return report
 
@@ -414,7 +403,6 @@ class SubAgentService:
             child = await self._owned_child(uow, deps, conversation_id)
             token = set_current_context(await self._agent_ctx(uow, deps))
             try:
-                service = self._conversation_service(uow)
                 agent = (
                     await AgentRepository(uow).get(child.agent_id)
                     if child.agent_id
@@ -422,12 +410,10 @@ class SubAgentService:
                 )
                 # This run gave the child its work now, so this run is the one
                 # that may collect the result (`domain/subagent_results`).
-                await ConversationRepository(uow).set_conversation_metadata_key(
-                    conversation_id,
-                    PARENT_RUN_KEY,
-                    str(deps.agent_run_id) if deps.agent_run_id else None,
+                await Conversations(uow).set_parent_run(
+                    conversation_id, deps.agent_run_id
                 )
-                result = await service.add_user_message_and_start_run(
+                result = await SendMessage.build(uow).send(
                     conversation_id=conversation_id,
                     user_id=deps.user_id,
                     content=content,
@@ -453,13 +439,12 @@ class SubAgentService:
             child = await self._owned_child(uow, deps, conversation_id)
             token = set_current_context(await self._agent_ctx(uow, deps))
             try:
-                service = self._conversation_service(uow)
                 agent = (
                     await AgentRepository(uow).get(child.agent_id)
                     if child.agent_id
                     else None
                 )
-                conversation = await service.stop_conversation(
+                conversation = await StopConversation.build(uow).stop(
                     conversation_id=conversation_id,
                     user_id=deps.user_id,
                     pod_id=deps.pod_id,
@@ -496,8 +481,8 @@ class SubAgentService:
         while True:
             async with self.uow_factory() as uow:
                 await self._owned_child(uow, deps, conversation_id)
-                repository = ConversationRepository(uow)
-                run = await repository.get_agent_run(run_id)
+                runs = Runs(uow)
+                run = await runs.get_agent_run(run_id)
                 if run is None or run.conversation_id != conversation_id:
                     raise SubAgentError(
                         "Sub-agent run not found in this sub-conversation."
@@ -507,7 +492,7 @@ class SubAgentService:
                     if report["status"] != _NEEDS_INPUT and (
                         run.status in DELIVERED_STATUSES
                     ):
-                        await mark_collected(uow, run.id, by=COLLECTED_BY_AWAIT)
+                        await mark_collected(uow, run.id)
                         await uow.commit()
                     return report
             if loop.time() >= deadline:
@@ -554,16 +539,12 @@ async def _open_question(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> dict[str, object]:
     """What a waiting child asked, for the parent to answer or pass on."""
-    pending = await ConversationRepository(uow).pausing_calls_awaiting_a_decision(
-        conversation_id=conversation_id,
-        pausing_tool_names=USER_PAUSING_TOOL_NAMES,
-        limit=1,
-    )
+    pending = await Pauses(uow).pending(conversation_id, kinds=PERSON_KINDS, limit=1)
     asked = pending[0] if pending else None
     return {
         "needs_input": True,
         "waiting_on": (
-            {"kind": asked.tool_name, "asked": asked.tool_args}
+            {"kind": asked.tool_name, "asked": asked.call_args}
             if asked is not None
             else None
         ),
@@ -587,9 +568,7 @@ async def _finished_or_asking(
     }
     # Read fresh rather than off the child loaded above: the run and its
     # conversation are written together, and the copy may predate both.
-    status = await ConversationRepository(uow).get_conversation_status(
-        run.conversation_id
-    )
+    status = await Conversations(uow).get_conversation_status(run.conversation_id)
     if status == ConversationStatus.WAITING:
         report["status"] = _NEEDS_INPUT
         report.update(await _open_question(uow, run.conversation_id))

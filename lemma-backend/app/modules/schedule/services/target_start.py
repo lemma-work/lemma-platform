@@ -234,7 +234,7 @@ async def _start_agent(
     schedule: ScheduleEntity,
     owner_ctx: Context | None,
 ) -> None:
-    from app.modules.agent.contracts.workflow_control import (
+    from app.modules.agent.contracts.automation import (
         build_agent_control_adapter,
     )
 
@@ -318,7 +318,8 @@ def conversation_metadata(
 ) -> dict[str, JsonValue]:
     """What the started conversation knows about where it came from.
 
-    ``started_by`` is how a run tells that nobody is waiting on it, so it does
+    That a schedule opened it is the conversation's ``origin``, set by the
+    agent module, and how a run tells that nobody is waiting on it, so it does
     not reach for ``ask_user`` at six in the morning. ``schedule_id`` is what
     a list of a pod's runs groups them by, since the name can be edited and
     the title is derived from it. A webhook source's repository context, when
@@ -326,7 +327,6 @@ def conversation_metadata(
     connector.
     """
     started: dict[str, JsonValue] = {
-        "started_by": "SCHEDULE",
         "schedule_id": str(schedule.id),
         "schedule_type": schedule.schedule_type.value,
     }

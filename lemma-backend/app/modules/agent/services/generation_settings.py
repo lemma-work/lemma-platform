@@ -43,7 +43,7 @@ from app.modules.agent.services.run_input_settings import (
     COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
     with_light_reasoning,
 )
-from app.modules.agent.services.runtime_resolution import ResolvedAgentRuntime
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 
 PORTABLE_KEYS = frozenset(GenerationSettings.model_fields)
 
@@ -87,7 +87,7 @@ def validated_stored_settings(stored: Mapping[str, object] | None) -> JsonObject
     """
     # Imported here: this module is on the API's import path (profile edits),
     # and the factory brings the provider SDKs with it.
-    from app.modules.agent.services.runtime_model_factory import (
+    from app.modules.agent.infrastructure.providers.model_factory import (
         provider_model_settings,
     )
 

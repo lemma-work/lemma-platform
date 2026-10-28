@@ -52,11 +52,13 @@ from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
     ConversationModel,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.services.runtime_history import MAX_HISTORY_AGENT_RUNS
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.db.history_reads import HistoryReads
+from app.modules.agent.domain.runtime_history import MAX_HISTORY_AGENT_RUNS
 from app.modules.agent.services.channel_answers import (
     COULD_NOT_ANSWER,
     STOPPED_BEFORE_ANSWERING,
@@ -66,21 +68,21 @@ from app.modules.agent.services.channel_background import (
     with_channel_background,
 )
 from app.modules.agent.services.contact_run_failures import RUN_FAILED_REASON
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services import channel_answers
 from app.modules.agent.services.message_reply_service import REPLY_SOURCE
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.domain.runtime_history import (
     STOPPED_BY_MEMBER,
     assemble_runtime_history,
 )
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
-    conversation_service,
     messages,
     owner_uow,
     running_run,
     runs,
     seeded_conversation,
+    stop_conversation,
 )
 from app.modules.channels.contracts import (
     AgentAnswers,
@@ -198,7 +200,7 @@ async def _end(
             select(AgentRunModel.conversation_id).where(AgentRunModel.id == run_id)
         )
         assert conversation_id is not None
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=status,
             conversation_status=ConversationStatus(status.value),
@@ -418,12 +420,12 @@ async def test_a_run_that_did_not_answer_says_so_where_it_was_asked(
 async def test_a_line_refused_before_its_run_starts_says_why(
     pod: Pod, monkeypatch: pytest.MonkeyPatch
 ):
-    async def refuse(self, **_):
+    async def refuse(_agent_repository, **_):
         raise DomainError(
             "You don't have access to this agent.", code="FORBIDDEN", status_code=403
         )
 
-    monkeypatch.setattr(ConversationService, "authorize_opening", refuse)
+    monkeypatch.setattr(channel_answers, "authorize_opening", refuse)
     pod_id, owner = UUID(pod.id), UUID(pod.owner["id"])
     direct = await _direct(pod_id, owner)
     asked = await _says(direct, owner, "What is on today?")
@@ -514,10 +516,10 @@ async def test_the_model_reads_a_members_line_as_it_says_now(pod: Pod):
 
     # As the runner builds the run's history (``AgentRunnerService``).
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
+        history_reads = HistoryReads(uow)
         read = await assemble_runtime_history(
-            repo,
-            await repo.load_runtime_history_digests_by_run_id(
+            history_reads,
+            await history_reads.load_runtime_history_digests_by_run_id(
                 third, limit=MAX_HISTORY_AGENT_RUNS
             ),
             conversation_id=conversation_id,
@@ -558,10 +560,10 @@ async def _model_reads(conversation_id: UUID, run_id: UUID):
     """The history and prompt ``run_id``'s model is sent, built as the runner
     builds them."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
+        history_reads = HistoryReads(uow)
         read = await assemble_runtime_history(
-            repo,
-            await repo.load_runtime_history_digests_by_run_id(
+            history_reads,
+            await history_reads.load_runtime_history_digests_by_run_id(
                 run_id, limit=MAX_HISTORY_AGENT_RUNS
             ),
             conversation_id=conversation_id,
@@ -596,7 +598,7 @@ async def test_a_line_after_a_stopped_request_is_answered_for_itself(pod: Pod):
 
     # Half way: the file write is in flight when the member presses Stop.
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).append_message(
+        await Messages(uow).append_message(
             conversation_id=conversation_id,
             agent_run_id=essay_run,
             draft=MessageDraft.of_tool_call(
@@ -620,7 +622,7 @@ async def test_a_line_after_a_stopped_request_is_answered_for_itself(pod: Pod):
         conversation_id=conversation_id,
     )
     async with owner_uow(stopper) as uow:
-        await conversation_service(uow).stop_conversation(
+        await stop_conversation(uow).stop(
             conversation_id=conversation_id, user_id=owner, pod_id=pod_id
         )
     await _drain(WorkClass.EVENTS)

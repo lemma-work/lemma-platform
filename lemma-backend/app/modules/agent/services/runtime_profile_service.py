@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from uuid import UUID
 
 
-from pydantic import HttpUrl
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,14 +15,13 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.errors import RuntimeUnavailableError
 from app.core.log.log import get_logger
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.api import (
     AgentHostHarnessHealth,
     AgentHostStatus,
     effective_agent_host_status,
 )
 from app.modules.agent.domain.runtime_profiles import (
-    DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
-    RuntimeProfileScope,
+    RuntimeModelCatalogEntry,
     AgentRuntimeProfile,
     RuntimeProfileKind,
     RuntimeProfileAvailability,
@@ -31,10 +29,9 @@ from app.modules.agent.domain.runtime_profiles import (
     reveal_credentials,
 )
 from app.modules.agent.domain.value_objects import (
-    JsonObject,
     AgentRuntimeConfig,
 )
-from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
+from app.modules.agent.agent_host.api import AgentHostRepository
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostHarnessModel,
     AgentHostModel,
@@ -43,11 +40,6 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
 
-# Imported as a module, not by name: tests patch the discovery functions, and a
-# `from ... import f` binding here would keep calling the unpatched original.
-from app.modules.agent.services.runtime_profile_creation import (
-    RuntimeProfileCreation,
-)
 from app.modules.agent.services.runtime_system_profiles import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID as DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     SERVER_NO_MODEL_OPERATOR_HINT,
@@ -56,11 +48,12 @@ from app.modules.agent.services.runtime_system_profiles import (
     system_lemma_profile,
     system_profile_by_id,
 )
-from app.modules.agent.services.runtime_resolution import (
-    ResolvedAgentRuntime as ResolvedAgentRuntime,
-    selected_model,
+from app.modules.agent.domain.resolved_runtime import (
+    ResolvedAgentRuntime,
+    RuntimeHolder,
+    model_unavailable_error,
 )
-from app.modules.agent.services.runtime_capabilities import (
+from app.modules.agent.domain.runtime_capabilities import (
     unselected_capabilities,
     with_harness_vision,
 )
@@ -85,7 +78,6 @@ class AgentRuntimeProfileService:
     ) -> None:
         self.repository = repository
         self.host_repository = host_repository
-        self.creation = RuntimeProfileCreation(repository, host_repository)
 
     def _session(self) -> AsyncSession | None:
         """The session behind the repository, so the connection can be released.
@@ -167,108 +159,6 @@ class AgentRuntimeProfileService:
             (profile, _profile_availability(profile, harnesses, hosts))
             for profile in profiles
         ]
-
-    async def create_agent_host_profile(
-        self,
-        *,
-        organization_id: UUID,
-        user_id: UUID,
-        harness_id: UUID,
-        name: str,
-        scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL,
-        description: str | None = None,
-        default_model_name: str | None = None,
-        config_selections: JsonObject | None = None,
-        host_wait_timeout_seconds: int = DEFAULT_HOST_WAIT_TIMEOUT_SECONDS,
-    ) -> AgentRuntimeProfile:
-        """Bind a runtime profile to one harness on one paired Agent Host."""
-        return await self.creation.create_agent_host_profile(
-            organization_id=organization_id,
-            user_id=user_id,
-            harness_id=harness_id,
-            name=name,
-            scope=scope,
-            description=description,
-            default_model_name=default_model_name,
-            config_selections=config_selections,
-            host_wait_timeout_seconds=host_wait_timeout_seconds,
-        )
-
-    async def create_openai_compatible_profile(
-        self,
-        *,
-        organization_id: UUID,
-        name: str,
-        base_url: str | HttpUrl,
-        api_key: str | None = None,
-        description: str | None = None,
-        default_model_name: str | None = None,
-        model_names: list[str] | None = None,
-        vision_model_names: list[str] | None = None,
-        reasoning_model_names: list[str] | None = None,
-        headers: dict[str, str] | None = None,
-        model_settings: dict[str, object] | None = None,
-    ) -> AgentRuntimeProfile:
-        """See `RuntimeProfileCreation.create_openai_compatible_profile`."""
-        return await self.creation.create_openai_compatible_profile(
-            organization_id=organization_id,
-            name=name,
-            base_url=base_url,
-            api_key=api_key,
-            description=description,
-            default_model_name=default_model_name,
-            model_names=model_names,
-            vision_model_names=vision_model_names,
-            reasoning_model_names=reasoning_model_names,
-            headers=headers,
-            model_settings=model_settings,
-        )
-
-    async def create_anthropic_compatible_profile(
-        self,
-        *,
-        organization_id: UUID,
-        name: str,
-        api_key: str,
-        base_url: str | HttpUrl | None = None,
-        description: str | None = None,
-        default_model_name: str | None = None,
-        model_names: list[str] | None = None,
-        reasoning_model_names: list[str] | None = None,
-        headers: dict[str, str] | None = None,
-        model_settings: dict[str, object] | None = None,
-    ) -> AgentRuntimeProfile:
-        """See `RuntimeProfileCreation.create_anthropic_compatible_profile`."""
-        return await self.creation.create_anthropic_compatible_profile(
-            organization_id=organization_id,
-            name=name,
-            api_key=api_key,
-            base_url=base_url,
-            description=description,
-            default_model_name=default_model_name,
-            model_names=model_names,
-            reasoning_model_names=reasoning_model_names,
-            headers=headers,
-            model_settings=model_settings,
-        )
-
-    async def require_ready_harness(
-        self,
-        *,
-        harness_id: UUID,
-        organization_id: UUID,
-        user_id: UUID,
-        scope: RuntimeProfileScope,
-        require_owner: bool = True,
-    ) -> AgentHostHarnessModel:
-        """See `RuntimeProfileCreation.require_ready_harness`."""
-        return await self.creation.require_ready_harness(
-            harness_id=harness_id,
-            organization_id=organization_id,
-            user_id=user_id,
-            scope=scope,
-            require_owner=require_owner,
-        )
 
     async def resolve(
         self,
@@ -463,6 +353,44 @@ class AgentRuntimeProfileService:
             organization_id=organization_id,
             user_id=user_id,
         )
+
+
+def selected_model(
+    profile: AgentRuntimeProfile,
+    requested_model_name: str | None,
+    *,
+    saving_for: RuntimeHolder | None = None,
+) -> RuntimeModelCatalogEntry | None:
+    """The catalog entry a run uses, or ``None`` when nothing is pinned.
+
+    Never a substitute. A model the profile no longer offers used to be
+    swapped for its default, or its first entry, with only a log line: a
+    teammate pinned to one model ran -- and was billed -- on another, with
+    different behaviour, indefinitely and invisibly. Now the run is refused
+    with the reason, and the person picks the model.
+
+    The one ``None`` that is not a refusal: a coding agent whose catalog is
+    empty publishes no list to check against, and an unpinned profile there
+    means "the agent's own default".
+
+    ``saving_for`` names what the runtime is being saved on, when it is. A
+    save may name a model the profile never offered at all, so only a turn --
+    on a pin a save already accepted -- can say the model went away.
+    """
+    model_name = requested_model_name or profile.default_model_name
+    if not model_name:
+        return None
+    for model in profile.model_catalog:
+        if model_name == model.name:
+            return model
+    if profile.harness_id is not None and not profile.model_catalog:
+        return None
+    logger.warning(
+        "agent.runtime_profile.model_unavailable.refused",
+        profile_id=profile.id,
+        requested_model_name=model_name,
+    )
+    raise model_unavailable_error(profile.name, model_name, saving_for=saving_for)
 
 
 def runtime_profile_service_for(

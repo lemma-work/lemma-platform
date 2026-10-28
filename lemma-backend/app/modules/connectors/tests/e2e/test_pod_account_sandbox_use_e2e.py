@@ -22,8 +22,10 @@ from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli import github_credential_bridge as bridge
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    github_credential_bridge as bridge,
+)
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 from app.modules.connectors.infrastructure.repositories.account_repository import (
@@ -69,7 +71,7 @@ class _Markers:
         del key, time
 
 
-async def _as_person(uow, ctx: BaseAgentContext):
+async def _as_person(uow, ctx: ToolContext):
     return await AuthorizationDataService(uow.session).build_user_context(
         user_id=ctx.user_id, pod_id=ctx.pod_id
     )
@@ -78,11 +80,11 @@ async def _as_person(uow, ctx: BaseAgentContext):
 async def _bridge_as(world: World, user: dict) -> tuple[_Sandbox, str | None]:
     """Run the bridge for ``user`` acting in the pod, as git would trigger it."""
     sandbox = _Sandbox()
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(user["id"]), pod_id=UUID(world.pod_id), conversation_id=uuid4()
     )
 
-    async def _resolve(agent_ctx: BaseAgentContext):
+    async def _resolve(agent_ctx: ToolContext):
         return await bridge._resolve_github_credential(
             agent_ctx,
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
@@ -273,13 +275,13 @@ class _Sessions:
         self.markers = markers
 
     async def git(self, sandbox: _Sandbox) -> str | None:
-        ctx = BaseAgentContext(
+        ctx = ToolContext(
             user_id=UUID(self.user["id"]),
             pod_id=UUID(self.world.pod_id),
             conversation_id=uuid4(),
         )
 
-        async def _resolve(agent_ctx: BaseAgentContext):
+        async def _resolve(agent_ctx: ToolContext):
             return await bridge._resolve_github_credential(
                 agent_ctx,
                 uow_factory=SessionUnitOfWorkFactory(async_session_maker),

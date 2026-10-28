@@ -1,8 +1,8 @@
 """Request-scoped tool resolution for the ``pod/{id}`` MCP surface.
 
-Mirrors `ConversationMCPService` but is scoped to a pod instead of a
-conversation: the pod id is injected from the URL and the pod toolset is exposed
-with ``lemma_``-prefixed names. The caller's token determines the authorization
+Scoped to a pod rather than a run: the pod id comes from the URL and the pod
+toolset is served through the shared MCP adapter (``mcp/toolspec_adapter``),
+annotated for outside clients. The caller's token determines the authorization
 principal; the pod tools then enforce per-resource grants.
 
 Two kinds of token arrive here. A Lemma session -- the Agent Host's, optionally
@@ -37,10 +37,15 @@ from app.core.security import (
 )
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.services.mcp_content import (
-    tool_call_error,
-    tool_call_result,
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import ToolAccess
+from app.modules.agent.infrastructure.mcp import normalize_local_mcp_tool_name
+from app.modules.agent.infrastructure.mcp.content import tool_call_error
+from app.modules.agent.infrastructure.mcp.toolspec_adapter import (
+    call_mcp_tool,
+    mcp_tools,
 )
+from app.modules.agent.infrastructure.tools.pod import tools as pod_tools
 from app.modules.agent.services.pod_mcp_apps import (
     app_tools,
     call_app_tool,
@@ -48,23 +53,8 @@ from app.modules.agent.services.pod_mcp_apps import (
     offers_apps,
     openable_apps,
 )
-from app.modules.agent.services.pod_mcp_tool_policy import (
-    policy_for,
-    scope_for_call,
-    without_approval_envelope,
-)
-from app.modules.agent.domain.vision import AgentVisionMode
-from app.modules.agent.infrastructure.mcp import (
-    exported_tool_name,
-    normalize_local_mcp_tool_name,
-)
-from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.dispatcher import AgentToolDispatcher, ToolInfo
-from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
-from app.modules.agent.tools.tool_errors import (
-    is_control_flow_exception,
-)
+from app.modules.agent.services.pod_mcp_views import TABLE_VIEW
+from app.modules.agent.services.tool_runtime import ToolRuntime
 from app.modules.mcp_access.contracts import (
     McpPrincipal,
     Scope,
@@ -73,12 +63,19 @@ from app.modules.mcp_access.contracts import (
 
 logger = get_logger(__name__)
 
-_NIL_CONVERSATION_ID = UUID(int=0)
+#: The pod's tools, the same for every caller: a scoped client is shown only
+#: those its scopes cover.
+POD_TOOLS = ToolRuntime(pod_tools.SPECS)
+_VIEWS = {"table": TABLE_VIEW}
+_SCOPES = {ToolAccess.READ: Scope.READ, ToolAccess.WRITE: Scope.WRITE}
+#: How a denied write hands off to ``request_approval``, a tool only Lemma's
+#: own agents have.
+APPROVAL_KEYS = ("needs_approval", "approval")
 
 
 @dataclass(frozen=True, slots=True)
 class _Caller:
-    ctx: BaseAgentContext
+    ctx: ToolContext
     scopes: frozenset[Scope] | None
     """What an outside client was granted; ``None`` for a Lemma session, which
     is not scoped."""
@@ -143,7 +140,6 @@ class PodMCPService:
         principal_lookups: PrincipalLookups | None = None,
     ) -> None:
         self.uow_factory = SessionUnitOfWorkFactory(async_session_maker)
-        self.dispatcher = AgentToolDispatcher(self.uow_factory)
         self._verify_session = verify_session
         self._principal_lookups = principal_lookups
 
@@ -151,7 +147,7 @@ class PodMCPService:
         caller = await self._caller_from_token(pod_id=pod_id, token=token)
         return caller is not None
 
-    async def context_for(self, *, pod_id: UUID, token: str) -> BaseAgentContext | None:
+    async def context_for(self, *, pod_id: UUID, token: str) -> ToolContext | None:
         """The tool context a Lemma session token gets on this pod, if any."""
         caller = await self._caller_from_token(pod_id=pod_id, token=token)
         return caller.ctx if caller is not None else None
@@ -162,8 +158,11 @@ class PodMCPService:
         caller = await self._require_caller(
             pod_id=pod_id, token=token, principal=principal
         )
-        tools = await self.dispatcher.list_tools(ctx=caller.ctx, toolsets=[pod_toolset])
-        listed = [as_mcp_tool(tool) for tool in tools if caller.may_call(tool.name)]
+        listed = [
+            tool
+            for tool in await pod_mcp_tools(caller.ctx)
+            if caller.may_call(normalize_local_mcp_tool_name(tool.name))
+        ]
         if caller.principal is not None and offers_apps(caller.principal):
             apps = await openable_apps(
                 self.uow_factory, pod_id=pod_id, user_id=caller.principal.user_id
@@ -196,27 +195,17 @@ class PodMCPService:
                     "it and allow that access to use this."
                 ),
             )
-        try:
-            result = await self.dispatcher.call_tool(
-                ctx=caller.ctx,
-                toolsets=[pod_toolset],
-                name=tool_name,
-                arguments=arguments,
-            )
-        except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
-            if is_control_flow_exception(exc):
-                raise
-            logger.warning(
-                "agent.pod_mcp_service.pod_mcp_tool_r_returning.degraded",
-                exc_info=True,
-            )
-            _audit(caller, tool_name, outcome="failed")
-            return tool_call_error(tool_name, exc)
-        if caller.scopes is not None:
-            result = without_approval_envelope(result)
-        answer = tool_call_result(result)
-        _audit(caller, tool_name, outcome="failed" if answer.is_error else "ok")
-        return answer
+        call = await call_mcp_tool(
+            POD_TOOLS,
+            tool_name,
+            arguments,
+            caller.ctx,
+            # An outside client acts as the person, so a denial is the answer
+            # rather than a question to escalate.
+            shape=without_approval_envelope if caller.scopes is not None else None,
+        )
+        _audit(caller, tool_name, outcome="failed" if call.result.is_error else "ok")
+        return call.result
 
     async def _call_app_tool(
         self,
@@ -274,7 +263,7 @@ class PodMCPService:
         *,
         pod_id: UUID,
         token: str,
-    ) -> BaseAgentContext | None:
+    ) -> ToolContext | None:
         session = await self._verify_session(token)
         if session is None:
             return None
@@ -297,24 +286,29 @@ class PodMCPService:
         return _pod_context_for(session.user_id, pod_id=pod_id, claims=claims)
 
 
-def as_mcp_tool(tool: ToolInfo) -> Tool:
-    """A pod tool as an MCP client is shown it: annotated, and linked to its view."""
-    policy = policy_for(tool.name)
-    meta: dict[str, object] = {"lemma_tool_name": tool.name}
-    if policy.view is not None:
-        # Named for every caller, not only those that said they render MCP
-        # Apps: this server is stateless, so a client's `initialize`
-        # capabilities are gone by the time it lists tools. A host that cannot
-        # draw the view ignores the key, and the text result is whole without it.
-        meta.update(policy.view.tool_meta())
-    return Tool(
-        name=exported_tool_name(tool.name),
-        title=policy.title,
-        description=tool.description,
-        input_schema=inline_tool_schema_refs(tool.input_schema),
-        annotations=policy.annotations(),
-        _meta=meta,
+async def pod_mcp_tools(ctx: ToolContext) -> list[Tool]:
+    """The pod's tools as an outside client is shown them: annotated, and
+    linked to the MCP Apps view that renders their result."""
+    return await mcp_tools(
+        POD_TOOLS, ctx, view_meta=lambda view: _VIEWS[view].tool_meta()
     )
+
+
+def scope_for_call(tool_name: str, arguments: Mapping[str, object] | None) -> Scope:
+    """The scope this call needs; an unknown tool needs the widest."""
+    spec = POD_TOOLS.get(tool_name)
+    if spec is None:
+        return Scope.WRITE
+    return _SCOPES[pod_tools.access_for_call(spec, arguments)]
+
+
+def without_approval_envelope(payload: object) -> object:
+    """A pod tool result without its ``request_approval`` hand-off."""
+    if not isinstance(payload, dict) or not any(
+        key in payload for key in APPROVAL_KEYS
+    ):
+        return payload
+    return {key: value for key, value in payload.items() if key not in APPROVAL_KEYS}
 
 
 def _external_caller(principal: McpPrincipal, *, pod_id: UUID) -> _Caller:
@@ -356,7 +350,7 @@ def _audit(
 
 def _pod_context_for(
     user_id: UUID, *, pod_id: UUID, claims: DelegationClaims | None
-) -> BaseAgentContext:
+) -> ToolContext:
     """Every delegated token is held to its own workload's authority.
 
     Only the pod's own assistant acts with the person's roles. A named agent
@@ -385,38 +379,12 @@ def _pod_context_for(
     )
 
 
-def _pod_context(
-    *,
-    user_id: UUID,
-    pod_id: UUID,
-    workload_type: str | None = None,
-    workload_id: UUID | None = None,
-    agent_name: str | None = None,
-    is_pod_default_agent: bool = True,
-    delegation_scope: frozenset[str] = frozenset(),
-) -> BaseAgentContext:
-    return BaseAgentContext(
-        user_id=user_id,
-        pod_id=pod_id,
-        conversation_id=_NIL_CONVERSATION_ID,
-        workload_type=workload_type,
-        workload_id=workload_id,
-        agent_name=agent_name,
-        is_pod_default_agent=is_pod_default_agent,
-        delegation_scope=delegation_scope,
-        # There is no run here, and so no runtime profile to ask -- this
-        # bridge serves an MCP client holding a pod token, not a Lemma agent
-        # run. DIRECT rather than the UNAVAILABLE default, because MCP has a
-        # first-class image content type and `_mcp_result` already attaches
-        # images: the client decides what to do with them, and one that
-        # cannot read them still gets the same JSON answer beside them.
-        #
-        # Left as the default, every image tool told every MCP client that
-        # its model could not read images -- including the ones that can --
-        # and `_mcp_result`'s image handling could never fire, because no
-        # image was ever produced to attach.
-        vision_mode=AgentVisionMode.DIRECT,
-    )
+def _pod_context(**fields: Any) -> ToolContext:
+    """The run session's pod-scoped variant; imported on first use, so the run
+    session's graph stays out of the API's startup imports."""
+    from app.modules.agent.services.run_session import pod_tool_context
+
+    return pod_tool_context(**fields)
 
 
 pod_mcp_service = PodMCPService()

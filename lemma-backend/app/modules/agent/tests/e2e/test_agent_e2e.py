@@ -3,22 +3,20 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
 
+from sqlalchemy import select
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.api.controllers.shared import (
-    conversation_channel,
-)
+from app.modules.agent.infrastructure.live import conversation_channel
 from app.modules.agent.domain.entities import Agent
-from app.modules.agent.contracts.turns import AgentTurnStart, stage_agent_turn
+from app.modules.agent.services.turn_staging import AgentTurnStart, stage_agent_turn
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -33,24 +31,30 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.tests.e2e.lifecycle_helpers import opening_for
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.conversation_resume_return import (
     ResumeToolReturnBuilder,
 )
 from app.modules.agent.services.run_event_pump import RunOutcome
 from app.modules.agent.services.run_identity import RunIdentity
-from app.modules.agent.tools.approval.executor import ApprovalExecutor
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.final_answer.final_answer_toolset import (
-    FINAL_ANSWER_TOOL_NAME,
-    build_final_answer_toolset,
+from app.modules.agent.services.approval_executor import ApprovalExecutor
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.final_answer.tools import (
+    final_answer_spec,
 )
-from app.modules.agent.infrastructure.agent_host.final_answer import (
+from app.modules.agent.agent_host.control.final_answer import (
     read_final_answer,
 )
-from app.modules.agent.tools.tool_errors import AgentInputRequired
-from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+from app.modules.agent.domain.tools import AgentInputRequired
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
+    RequestApprovalArguments,
+)
+from app.modules.agent.infrastructure.tools.user_interaction.tools import (
     request_approval as request_approval_tool,
 )
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
@@ -65,6 +69,8 @@ from app.modules.test_support.e2e_authz import (
     item_names,
 )
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.value_objects import AnswerKind
 
 pytestmark = pytest.mark.e2e
 
@@ -129,14 +135,14 @@ async def _seed_paused_interaction(
     approval_id = f"functions.{tool_name}:e2e"
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        paused_run = await repo.create_agent_run(
+        messages = Messages(uow)
+        runs = Runs(uow)
+        paused_run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=UUID(agent["id"]),
             agent_runtime=AgentRuntimeConfig(**resolved_agent_runtime),
-            metadata={"source": "approval_e2e"},
         )
-        await repo.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=paused_run.id,
             draft=MessageDraft.of_tool_call(
@@ -145,10 +151,11 @@ async def _seed_paused_interaction(
                 tool_args=tool_args,
                 role=MessageRole.ASSISTANT,
                 metadata={"tool_name": tool_name},
+                pause=opening_for(tool_name, tool_args),
             ),
         )
         # The pause shape: COMPLETED run, WAITING conversation.
-        await repo.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=paused_run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.WAITING,
@@ -162,9 +169,16 @@ async def _resume_run_and_tool_return(
 ):
     """Return (resume_run, tool_return_message) created by resolving the pause."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        runs = await repo.list_agent_runs_with_messages(conversation_id)
-        messages, _ = await repo.list_messages(
+        messages_repo = Messages(uow)
+        runs = [
+            row.to_entity()
+            for row in await uow.session.scalars(
+                select(AgentRunModel)
+                .where(AgentRunModel.conversation_id == conversation_id)
+                .order_by(AgentRunModel.created_at, AgentRunModel.id)
+            )
+        ]
+        messages, _ = await messages_repo.list_messages(
             conversation_id=conversation_id, limit=500
         )
     resume_runs = [run for run in runs if run.id != paused_run_id]
@@ -207,17 +221,17 @@ async def _seed_paused_interactions(
 
     approval_ids: list[str] = []
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        paused_run = await repo.create_agent_run(
+        messages = Messages(uow)
+        runs = Runs(uow)
+        paused_run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=UUID(agent["id"]),
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "approval_e2e"},
         )
         for idx, (tool_name, tool_args) in enumerate(interactions):
             approval_id = f"functions.{tool_name}:e2e-{idx}"
             approval_ids.append(approval_id)
-            await repo.append_message(
+            await messages.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=paused_run.id,
                 draft=MessageDraft.of_tool_call(
@@ -226,9 +240,10 @@ async def _seed_paused_interactions(
                     tool_args=tool_args,
                     role=MessageRole.ASSISTANT,
                     metadata={"tool_name": tool_name},
+                    pause=opening_for(tool_name, tool_args),
                 ),
             )
-        await repo.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=paused_run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.WAITING,
@@ -398,11 +413,10 @@ async def _create_active_run(
     agent_id: UUID | None,
 ) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        run = await ConversationRepository(uow).create_agent_run(
+        run = await Runs(uow).create_agent_run(
             conversation_id=conversation_id,
             agent_id=agent_id,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "e2e_stop"},
         )
         return run.id
 
@@ -416,14 +430,14 @@ async def _start_real_agent_run(
     content: str,
 ) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
-        run = await repo.create_agent_run(
+        messages = Messages(uow)
+        runs = Runs(uow)
+        run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=agent_id,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-            metadata={"source": "e2e_stop_running"},
         )
-        await repo.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text(content, role=MessageRole.USER),
@@ -443,7 +457,7 @@ async def _start_real_agent_run(
 
 async def _finish_agent_run(run_id: UUID, status: AgentRunStatus) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=status,
         )
@@ -455,9 +469,9 @@ async def _append_messages(
     messages: list[tuple[str, str]],
 ) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repo = ConversationRepository(uow)
+        messages_repo = Messages(uow)
         for role, content in messages:
-            await repo.append_message(
+            await messages_repo.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=None,
                 draft=MessageDraft.of_text(content, role=MessageRole(role)),
@@ -800,11 +814,10 @@ class TestPodAgentLifecycle:
         conversation_id = UUID(create_conversation.json()["id"])
 
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            run = await ConversationRepository(uow).create_agent_run(
+            run = await Runs(uow).create_agent_run(
                 conversation_id=conversation_id,
                 agent_id=UUID(agent["id"]),
                 agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-                metadata={"source": "harness_message_persistence_test"},
             )
             await uow.commit()
         agent_run_id = run.id
@@ -820,7 +833,8 @@ class TestPodAgentLifecycle:
                 agent_run_id=agent_run_id,
                 data=MessageDraft.of_text(
                     "Checking before tool.",
-                    metadata={"is_final_answer": False, "harness_kind": "CODEX"},
+                    metadata={"harness_kind": "CODEX"},
+                    state=MessageState(answer=AnswerKind.NOT_FINAL),
                 ),
             ),
             run=RunIdentity(conversation_id=conversation_id, agent_run_id=agent_run_id),
@@ -1157,16 +1171,17 @@ class TestPodAgentLifecycle:
 
         # Simulate the wedge: decision committed, resume never finished.
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            recorded = await ConversationRepository(uow).record_approval_decision(
-                conversation_id=conversation_id,
-                approval_id=approval_id,
-                agent_run_id=paused_run.id,
-                tool_name="ask_user",
-                decision=AgentRunApprovalDecision.APPROVE_ONCE,
-                response={"answers": {"Auth": "OAuth"}},
-                resolved_by_user_id=UUID(fixed_test_user["id"]),
+            pauses = Pauses(uow)
+            pause = await pauses.get(
+                conversation_id=conversation_id, tool_call_id=approval_id
             )
-            assert recorded is True
+            assert pause is not None
+            pause.resolve(
+                AgentRunApprovalDecision.APPROVE_ONCE,
+                {"answers": {"Auth": "OAuth"}},
+                by=UUID(fixed_test_user["id"]),
+            )
+            assert await pauses.save(pause) is True
             await uow.commit()
 
         # Precondition: genuinely stuck — no synthesized return, no resume run.
@@ -1667,16 +1682,12 @@ class TestPodAgentLifecycle:
         # The initial approval already ran the command once, for real (mocked).
         assert executed_calls == [{"tool_name": "exec_command", "args": approved_args}]
 
-        from app.modules.agent.api.controllers.conversation_controller import (
-            _build_conversation_service,
-        )
+        from app.modules.agent.infrastructure.repositories import AgentRepository
 
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            conversation = await ConversationRepository(uow).get_conversation(
-                conversation_id
-            )
-            service = _build_conversation_service(uow)
-            live_deps = await service.resume_returns._build_resume_context(
+            conversation = await Conversations(uow).get_conversation(conversation_id)
+            builder = ResumeToolReturnBuilder(uow, AgentRepository(uow))
+            live_deps = await builder._build_resume_context(
                 conversation=conversation,
                 user_id=UUID(fixed_test_user["id"]),
                 agent_run_id=paused_run.id,
@@ -1688,12 +1699,22 @@ class TestPodAgentLifecycle:
 
         # A later request_approval call with the EXACT same tool_name+args
         # auto-executes — no pause, no new pending approval.
-        repeat_ctx = SimpleNamespace(deps=live_deps, tool_call_id="repeat-call-1")
+        # It runs through the run's own tools, as a live run's context carries them.
+        class _RunTools:
+            async def call(self, name, arguments, ctx):
+                del ctx
+                executed_calls.append(
+                    {"tool_name": name, "args": dict(arguments or {})}
+                )
+                return {"stdout": "ok", "success": True}
+
+        live_deps = live_deps.model_copy(update={"tools": _RunTools()})
+        repeat_ctx = live_deps.model_copy(update={"tool_call_id": "repeat-call-1"})
         repeated = await request_approval_tool(
-            repeat_ctx,  # type: ignore[arg-type]
-            tool_name="exec_command",
-            args=approved_args,
-            title="Run echo again?",
+            repeat_ctx,
+            RequestApprovalArguments(
+                tool_name="exec_command", args=approved_args, title="Run echo again?"
+            ),
         )
         assert repeated.success is True
         assert repeated.executed is True
@@ -1710,13 +1731,15 @@ class TestPodAgentLifecycle:
         # A DIFFERENT command (not just a different label) must still pause —
         # exact match only, never a prefix/category match.
         different_args = {"cmd": "echo bye"}
-        different_ctx = SimpleNamespace(deps=live_deps, tool_call_id="repeat-call-2")
+        different_ctx = live_deps.model_copy(update={"tool_call_id": "repeat-call-2"})
         with pytest.raises(AgentInputRequired):
             await request_approval_tool(
-                different_ctx,  # type: ignore[arg-type]
-                tool_name="exec_command",
-                args=different_args,
-                title="Run something else?",
+                different_ctx,
+                RequestApprovalArguments(
+                    tool_name="exec_command",
+                    args=different_args,
+                    title="Run something else?",
+                ),
             )
         # Never ran — the new command genuinely needed a fresh decision.
         assert len(executed_calls) == 2
@@ -2766,7 +2789,7 @@ class TestAgentRuntimeConfigApis:
         fixed_test_user,
         monkeypatch,
     ):
-        from app.modules.agent.services.runtime_provider_discovery import (
+        from app.modules.agent.infrastructure.providers.discovery import (
             DiscoveredModel,
         )
 
@@ -2779,7 +2802,7 @@ class TestAgentRuntimeConfigApis:
             return []
 
         monkeypatch.setattr(
-            "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+            "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
             fake_openai_discovery,
         )
 
@@ -2872,7 +2895,7 @@ class TestAgentRuntimeConfigApis:
         and it is also the answer that matters: the model this pod's owner
         picked.
         """
-        from app.modules.agent.services.workspace_model_fallback import (
+        from app.modules.agent.services.runtime_resolution import (
             resolve_workspace_runtime,
         )
 
@@ -2881,7 +2904,7 @@ class TestAgentRuntimeConfigApis:
 
         # The route is not real; its model list comes from the request.
         monkeypatch.setattr(
-            "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+            "app.modules.agent.infrastructure.providers.discovery._discover_openai_compatible_models",
             nothing_discovered,
         )
 
@@ -2939,7 +2962,7 @@ class TestAgentRuntimeConfigApis:
         model; on a deployment without one, every message then failed with
         "no model is set up" beside a provider that was.
         """
-        from app.modules.agent.services.pod_runtime_defaults import (
+        from app.modules.agent.services.runtime_resolution import (
             default_agent_runtime_for_pod,
         )
 
@@ -3141,14 +3164,14 @@ class TestAgentRuntimeConfigApis:
 class TestFinalAnswerToolset:
     """The Agent Host ``final_answer`` MCP tool, called directly.
 
-    ``build_final_answer_toolset`` backs the structured-output contract for
+    ``final_answer_spec`` backs the structured-output contract for
     remote (Agent Host) runs only -- the in-process LEMMA harness gets its
     final answer through pydantic-ai's ``output_type`` instead, a completely
     different mechanism covered elsewhere. Nothing drives this tool through a
     real Agent Host wire-protocol run in this suite, and standing one up just
     to reach one validation branch would be a lot of ACP scaffolding for what
     is fundamentally a schema-validation-and-persistence question. So this
-    calls the tool function the toolset actually builds -- the same object an
+    calls the function the spec runs -- the same one an
     MCP call would invoke -- against a real agent run row, exercising the real
     jsonschema validator and the real ``agent_runs.run_metadata`` write.
     """
@@ -3188,12 +3211,11 @@ class TestFinalAnswerToolset:
 
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            repo = ConversationRepository(uow)
-            run = await repo.create_agent_run(
+            runs = Runs(uow)
+            run = await runs.create_agent_run(
                 conversation_id=conversation_id,
                 agent_id=agent_id,
                 agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-                metadata={"source": "final_answer_e2e"},
             )
             await uow.commit()
 
@@ -3206,13 +3228,11 @@ class TestFinalAnswerToolset:
             instruction="Answer with the required schema.",
             output_schema=output_schema,
         )
-        ctx = SimpleNamespace(
-            deps=BaseAgentContext(
-                user_id=user_id,
-                pod_id=UUID(pod_id),
-                conversation_id=conversation_id,
-                agent_run_id=run.id,
-            )
+        ctx = ToolContext(
+            user_id=user_id,
+            pod_id=UUID(pod_id),
+            conversation_id=conversation_id,
+            agent_run_id=run.id,
         )
 
         # A fresh toolset for every call, because that is what the MCP bridge
@@ -3220,10 +3240,8 @@ class TestFinalAnswerToolset:
         # used to live on the toolset, so under the bridge it was always one
         # and the cap never tripped; it belongs to the run.
         def _build_tool():
-            toolset = build_final_answer_toolset(
-                agent=domain_agent, uow_factory=uow_factory
-            )
-            return toolset.tools[FINAL_ANSWER_TOOL_NAME].function
+            spec = final_answer_spec(agent=domain_agent, uow_factory=uow_factory)
+            return lambda ctx, **arguments: spec.run(ctx, arguments)
 
         invalid_output = {"wrong_field": "nope"}
 

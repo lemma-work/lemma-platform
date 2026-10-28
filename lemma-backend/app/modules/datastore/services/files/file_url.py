@@ -11,7 +11,7 @@ URLs are cached in Redis (best-effort) so repeat requests don't re-sign.
 
 These URLs are what we persist in agent messages (so a transcript can show a
 page image) — never the image bytes themselves: the model receives bytes inline
-via the tool's ``ToolReturn.content``, while the DB only stores the URL.
+beside the tool's result, while the DB only stores the URL.
 """
 
 from __future__ import annotations

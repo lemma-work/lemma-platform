@@ -42,7 +42,7 @@ logger = get_logger(__name__)
 #: when a provider is swapped out -- an import that no longer happens is one
 #: that no longer needs warming.
 WARM_MODULES: tuple[str, ...] = (
-    "app.modules.agent.services.runtime_model_factory",
+    "app.modules.agent.infrastructure.providers.model_factory",
     "app.modules.usage.infrastructure.metered_model",
 )
 #: A worker's list: the API's, plus the runner a turn starts from, which no
@@ -54,7 +54,7 @@ TURN_WARM_MODULES: tuple[str, ...] = (
     # The Anthropic SDK, which metering no longer pulls in. The API leaves it to
     # the first Anthropic-profile request; a worker pays it here, before it
     # claims a turn, so that turn does not import it on the event loop.
-    "app.modules.agent.services.anthropic_thinking",
+    "app.modules.agent.infrastructure.providers.anthropic_thinking",
 )
 #: How long a stopping worker waits for a tokenizer warm-up it cancelled.
 _TOKENIZER_SHUTDOWN_WAIT_SECONDS = 2.0
@@ -124,7 +124,7 @@ def _build_tokenizer() -> None:
     Through the public counter rather than the private `_encoder`, so this warms
     whatever that function decides the tokenizer is.
     """
-    from app.modules.agent.services.history_tokens import count_text_tokens
+    from app.modules.agent.infrastructure.providers.tokens import count_text_tokens
 
     count_text_tokens("warm")
 

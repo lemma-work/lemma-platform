@@ -30,14 +30,16 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     seeded_conversation,
     uow_factory,
 )
-from app.modules.agent.tools.approval.executor import ApprovalExecutor
-from app.modules.agent.tools.approval_denials import show_card
-from app.modules.agent.tools.authority import workload_actor_id
-from app.modules.agent.tools.connectors.models import RunConnectorOperationRequest
-from app.modules.agent.tools.connectors.pydantic_adapter import (
+from app.modules.agent.services.approval_executor import ApprovalExecutor
+from app.modules.agent.infrastructure.tools.approval.denials import show_card
+from app.modules.agent.infrastructure.tools.authority import workload_actor_id
+from app.modules.agent.infrastructure.tools.connectors.models import (
+    RunConnectorOperationRequest,
+)
+from app.modules.agent.infrastructure.tools.connectors.tools import (
     run_connector_operation,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.connectors.api.dependencies import get_connector_service
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.connector import Connector
@@ -50,13 +52,6 @@ from app.modules.test_support.e2e.waiters import eventually
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
 _SLUG = "mail"
-
-
-def _run_context(deps: BaseAgentContext):
-    from pydantic_ai.tools import RunContext
-    from pydantic_ai.usage import RunUsage
-
-    return RunContext(deps=deps, model=None, usage=RunUsage(), prompt=None)
 
 
 def _send() -> RunConnectorOperationRequest:
@@ -125,8 +120,8 @@ async def asked(scenario: E2EScenario) -> Seeded:
 
 def _deps(
     scenario: E2EScenario, seeded: Seeded, *, user_id: UUID | None = None
-) -> BaseAgentContext:
-    return BaseAgentContext(
+) -> ToolContext:
+    return ToolContext(
         user_id=user_id or seeded.user_id,
         org_id=UUID(scenario.org_id),
         pod_id=seeded.pod_id,
@@ -180,9 +175,7 @@ async def _decide(scenario, seeded: Seeded, approval_id: str, decision) -> None:
 async def test_a_named_agent_without_the_connector_is_given_a_card(
     scenario, asked
 ) -> None:
-    refused = await run_connector_operation(
-        _run_context(_deps(scenario, asked)), _send()
-    )
+    refused = await run_connector_operation(_deps(scenario, asked), _send())
 
     assert refused["needs_approval"] is True, refused
     assert refused["code"] == "MISSING_WORKLOAD_RESOURCE_GRANT"
@@ -195,9 +188,7 @@ async def test_a_named_agent_without_the_connector_is_given_a_card(
 async def test_approving_gives_the_agent_the_connector_and_the_call_goes_on(
     scenario, asked
 ) -> None:
-    refused = await run_connector_operation(
-        _run_context(_deps(scenario, asked)), _send()
-    )
+    refused = await run_connector_operation(_deps(scenario, asked), _send())
     approval_id = await _paused_on_the_card(asked, refused)
 
     await _decide(scenario, asked, approval_id, AgentRunApprovalDecision.APPROVE_ONCE)
@@ -212,21 +203,19 @@ async def test_approving_gives_the_agent_the_connector_and_the_call_goes_on(
     assert granted == ["connector.use"]
     # Standing, not a loan: the next call, unapproved, is past the grant. It
     # stops where any call of the owner's would -- they have no mail account.
-    again = await run_connector_operation(_run_context(_deps(scenario, asked)), _send())
+    again = await run_connector_operation(_deps(scenario, asked), _send())
     assert "needs_approval" not in again, again
     assert again["code"] != "MISSING_WORKLOAD_RESOURCE_GRANT", again
 
 
 async def test_declining_gives_nothing(scenario, asked) -> None:
-    refused = await run_connector_operation(
-        _run_context(_deps(scenario, asked)), _send()
-    )
+    refused = await run_connector_operation(_deps(scenario, asked), _send())
     approval_id = await _paused_on_the_card(asked, refused)
 
     await _decide(scenario, asked, approval_id, AgentRunApprovalDecision.DENY)
 
     assert await _granted(scenario, asked) == []
-    again = await run_connector_operation(_run_context(_deps(scenario, asked)), _send())
+    again = await run_connector_operation(_deps(scenario, asked), _send())
     assert again["needs_approval"] is True, again
 
 
@@ -235,9 +224,7 @@ async def test_an_approver_who_could_not_use_it_cannot_give_it(scenario, asked) 
     use the pod's connectors, cannot hand one to an agent."""
     viewer = await scenario.create_user("grant-card-viewer")
     await scenario.add_user_to_pod(user=viewer, role="POD_VIEWER")
-    refused = await run_connector_operation(
-        _run_context(_deps(scenario, asked)), _send()
-    )
+    refused = await run_connector_operation(_deps(scenario, asked), _send())
     as_the_viewer = _deps(scenario, asked, user_id=UUID(viewer["id"]))
     approval_id = f"call-{uuid4().hex[:12]}"
     await show_card(

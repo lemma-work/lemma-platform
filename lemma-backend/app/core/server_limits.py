@@ -17,7 +17,7 @@ bytes travel over the HTTP API, never a socket -- a socket carries what
 changed, not what was stored. That includes the Agent Host link
 (``/agent-host/link``): file chunks and run-event images cross
 ``/agent-host/transfers/{id}`` and ``/agent-host/runs/{run_id}/blobs/{sha256}``
-(``agent.domain.agent_host_transfer``), and the host bounds what remains on
+(``agent.agent_host.domain.transfer``), and the host bounds what remains on
 the socket. A host that sends a larger message is closed with 1009.
 """
 

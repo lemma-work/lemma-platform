@@ -21,7 +21,7 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent.tools.messaging.people import CALLED_IN_GROUP
+from app.modules.agent.infrastructure.tools.messaging.people import CALLED_IN_GROUP
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory

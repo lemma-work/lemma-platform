@@ -24,13 +24,15 @@ import pytest
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
+from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     MessageDraft,
     MessageRole,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.turn_resume import (
     INTERRUPTED_NOTICE,
     OUTCOME_UNKNOWN,
@@ -84,24 +86,25 @@ async def _interrupted_run(
 ) -> UUID:
     """A run that committed ``calls`` and died before any of them returned."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = ConversationRepository(uow)
-        conversation = await repository.get_conversation(conversation_id)
+        conversations = Conversations(uow)
+        messages = Messages(uow)
+        runs = Runs(uow)
+        conversation = await conversations.get_conversation(conversation_id)
         assert conversation is not None
-        run = await repository.create_agent_run(
+        run = await runs.create_agent_run(
             conversation_id=conversation_id,
             agent_id=conversation.agent_id,
             agent_runtime=AgentRuntimeConfig(
                 profile_id=profile_id, model_name="mock-safe-model"
             ),
-            metadata={},
         )
-        await repository.append_message(
+        await messages.append_message(
             conversation_id=conversation_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text("do the things", role=MessageRole.USER),
         )
         for tool_name, call_id, args in calls:
-            await repository.append_message(
+            await messages.append_message(
                 conversation_id=conversation_id,
                 agent_run_id=run.id,
                 draft=MessageDraft.of_tool_call(
@@ -183,33 +186,29 @@ async def test_a_resumed_turn_settles_each_open_call_by_its_class(
     await datastore.create_record(table, {"id": keyed_id(record_key), "title": "once"})
     child_id = UUID(await pod.conversation([]))
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = ConversationRepository(uow)
+        conversations = Conversations(uow)
         await scalar_update_parent(uow, child_id, conversation)
-        await repository.set_spawn_call(child_id, f"{run_id}:keyed-spawn-1")
+        await conversations.set_spawn_call(child_id, f"{run_id}:keyed-spawn-1")
 
     await drain(turn_registry())
 
     returns = {
-        call_id: (result, metadata)
-        for call_id, result, metadata in await rows(
-            "SELECT tool_call_id, tool_result, message_metadata FROM agent_messages "
+        call_id: (result, None)
+        for call_id, result in await rows(
+            "SELECT tool_call_id, tool_result FROM agent_messages "
             "WHERE agent_run_id = :run AND kind = 'TOOL_RETURN'",
             run=run_id,
         )
     }
     # SAFE: run again, one return.
-    assert returns["safe-1"][1]["replay_class"] == "SAFE"
     assert "error" not in returns["safe-1"][0] or not returns["safe-1"][0]["error"]
     # KEYED record: the row the first attempt wrote, not a second one.
-    assert returns["keyed-record-1"][1]["replay_class"] == "KEYED"
     assert returns["keyed-record-1"][0]["record"]["id"] == keyed_id(record_key)
     listed = await datastore.list_records(table)
     assert len(listed["items"]) == 1
     # UNSAFE update: never replayed over whatever the row holds now.
     assert listed["items"][0]["title"] == "once"
-    assert returns["unsafe-update-1"][1]["replay_class"] == "UNSAFE"
     # KEYED spawn: the child the first attempt spawned.
-    assert returns["keyed-spawn-1"][1]["replay_class"] == "KEYED"
     assert returns["keyed-spawn-1"][0]["conversation_id"] == str(child_id)
     assert (
         await scalar(
@@ -220,8 +219,7 @@ async def test_a_resumed_turn_settles_each_open_call_by_its_class(
     )
     # UNSAFE and unknown: never run, outcome unknown, stored.
     for call_id in ("unsafe-1", "unknown-1", "unsafe-update-1"):
-        result, metadata = returns[call_id]
-        assert metadata["replay_class"] == "UNSAFE"
+        result, _ = returns[call_id]
         assert result == {"success": False, "error": OUTCOME_UNKNOWN}
     # The person reading the conversation is told, once, outside the run (so
     # the resumed model is not handed it as their words).
@@ -257,10 +255,8 @@ async def scalar_update_parent(uow, child_id: UUID, parent_id: UUID) -> None:
 
     await uow.session.execute(
         text(
-            "UPDATE agent_conversations SET parent_id = :p, conversation_metadata = "
-            "coalesce(conversation_metadata, '{}'::jsonb) || "
-            '\'{"is_sub_agent": true, "reports_to_parent": true}\'::jsonb '
-            "WHERE id = :c"
+            "UPDATE agent_conversations SET parent_id = :p, origin = 'SUBAGENT', "
+            "reports_to_parent = true WHERE id = :c"
         ),
         {"p": parent_id, "c": child_id},
     )

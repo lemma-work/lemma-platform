@@ -27,6 +27,12 @@ from app.modules.agent_surfaces.services.progress_observer import (
 pytestmark = pytest.mark.unit
 
 
+def _run_ctx(conversation, **fields):
+    """A run's context, naming the platform its conversation's surface records."""
+    platform = (getattr(conversation, "metadata", None) or {}).get("surface_platform")
+    return SimpleNamespace(surface_platform=platform, **fields)
+
+
 def _refusing_observer(touched: list[str]) -> SurfaceAgentRunProgressObserver:
     def _uow_factory():
         touched.append("unit of work")
@@ -49,7 +55,7 @@ async def test_a_private_notes_run_never_reaches_the_platform():
     conversation = SimpleNamespace(
         contact_id=None, id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
     )
-    ctx = SimpleNamespace(agent_run_id=uuid4(), delivers_to_surface=False)
+    ctx = _run_ctx(conversation, agent_run_id=uuid4(), delivers_to_surface=False)
 
     await observer.on_run_started(conversation, ctx)
     await observer.on_event(

@@ -1,13 +1,12 @@
-"""What the calls module does to a conversation: hold a call in it, and read
-the call's canvas and its earlier connections back.
+"""What the calls module does to a conversation: hold a call in it, speak into
+it, keep its transcript and notes, and read the call's canvas and its earlier
+connections back.
 
-A turn on a call is an ordinary inbound message (``conversations_for_surfaces.
-start_surface_turn``), so it steers the coordinator's run when one is going and
-starts one when not. What is new is only that a conversation can hold a call --
-a new one, or the chat the call was started from -- and that a call's canvas
-spans the coordinator's conversation and its sub-agents'.
-
-A submodule rather than ``contracts/__init__``, which is a leaf.
+A turn on a call is an ordinary inbound message, so it steers the
+coordinator's run when one is going and starts one when not. What is new is
+only that a conversation can hold a call -- a new one, or the chat the call
+was started from -- through its ``call`` column, and that a call's canvas spans
+the coordinator's conversation and its sub-agents' (``infrastructure/db/calls``).
 """
 
 from __future__ import annotations
@@ -17,44 +16,31 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import JsonValue
-from sqlalchemy import exists, or_, select, update
-from sqlalchemy.orm import aliased
 
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.calls import (
-    CALL_METADATA_KEY,
-    CANVAS_TOOL_NAMES,
-    CallMark,
-    RELAY_TOOL_NAME,
-    CallRole,
-    call_mark,
-)
+from app.modules.agent.application.conversations.start import StartConversation
+from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.domain.calls import CallMark, CallRole
+from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
     ConversationStateError,
 )
-from app.modules.agent.domain.value_objects import AgentRunStatus, MessageKind
-from app.modules.agent.infrastructure.models import (
-    AgentRunModel,
-    ConversationModel,
-    MessageModel,
+from app.modules.agent.domain.value_objects import (
+    ConversationOrigin,
+    MessageDraft,
+    MessageKind,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.infrastructure.repositories.agent_repository import (
-    AgentRepository,
-)
+from app.modules.agent.infrastructure.db.calls import CALL_TRANSCRIPT_KEY, Calls
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.conversation_access import resolve_agent
 from app.modules.agent.services.runtime_availability import (
     ensure_turn_runtime_available,
     turn_runtime,
 )
-from app.modules.agent.services.service_factories import build_conversation_service
-
-
-#: Sub-agents one call may draw from. A coordinator spawns one per distinct
-#: ask; a call that has spawned more than this has stopped being a call.
-MAX_CALL_CONVERSATIONS = 200
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,19 +85,24 @@ async def open_call(
     to the first turn, the voice took call after call while every request
     behind it failed, and it could only ask the person to say it again.
 
+    The coordinator's brief is not written into the conversation: it rides in
+    each run's context while the call is live (``context_brief.lines``), so
+    the chat reads as itself again once the call ends.
+
     The caller sets the authorization context.
     """
-    repository = ConversationRepository(uow)
+    conversations = Conversations(uow)
     if conversation_id is None:
-        conversation = await build_conversation_service(uow).create_conversation(
+        conversation = await StartConversation.build(uow).start(
             pod_id=pod_id,
             agent_name=agent_name,
             user_id=user_id,
             title=title,
             agent_runtime=runtime,
+            origin=ConversationOrigin.CALL,
         )
     else:
-        conversation = await repository.get_conversation(conversation_id)
+        conversation = await conversations.get_conversation(conversation_id)
         if (
             conversation is None
             or conversation.user_id != user_id
@@ -135,30 +126,27 @@ async def open_call(
         organization_id=conversation.organization_id,
         user_id=user_id,
     )
-    existing = call_mark(conversation.metadata)
+    existing = conversation.call
     if existing is not None and existing.role is not CallRole.COORDINATOR:
         raise ConversationStateError("A sub-agent's conversation cannot hold a call.")
     if existing is None:
         # Only a new mark is written. One already there was read before the
         # awaits above, and a hang-up in between may have updated it since:
         # writing it back would mark the call live again and lose its time.
-        mark = CallMark(
-            call_id=conversation.id, role=CallRole.COORDINATOR, since=datetime.now(UTC)
-        )
-        await repository.set_conversation_metadata_key(
-            conversation.id, CALL_METADATA_KEY, mark.as_metadata()
+        await conversations.set_call(
+            conversation.id,
+            CallMark(
+                call_id=conversation.id,
+                role=CallRole.COORDINATOR,
+                since=datetime.now(UTC),
+            ),
         )
     return OpenedCall(conversation_id=conversation.id, title=conversation.title)
 
 
 async def held_call(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> CallMark | None:
     """The call's mark as it stands."""
-    metadata = await uow.session.scalar(
-        select(ConversationModel.conversation_metadata).where(
-            ConversationModel.id == call_id
-        )
-    )
-    return call_mark(metadata)
+    return await Conversations(uow).get_call(call_id)
 
 
 async def set_call_live(
@@ -167,43 +155,23 @@ async def set_call_live(
     """Mark the call held (a socket has it) or not, adding ``held_for`` seconds
     to its running total. While live the coordinator gets the call's brief
     and its voice tool; once not, the chat reads as itself again."""
-    mark = await held_call(uow, call_id)
+    conversations = Conversations(uow)
+    mark = await conversations.get_call(call_id)
     if mark is None:
         return
-    await ConversationRepository(uow).set_conversation_metadata_key(
+    await conversations.set_call(
         call_id,
-        CALL_METADATA_KEY,
-        replace(
-            mark, live=live, held_seconds=mark.held_seconds + max(held_for, 0.0)
-        ).as_metadata(),
+        replace(mark, live=live, held_seconds=mark.held_seconds + max(held_for, 0.0)),
     )
-
-
-#: Earlier connections a resumed call reads back, newest kept. The voice is
-#: given only the tail of them anyway.
-MAX_RESUMED_TRANSCRIPTS = 10
-
-#: The metadata key a connection's transcript is recorded under.
-CALL_TRANSCRIPT_KEY = "call_transcript"
 
 
 async def owned_call(
     uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, user_id: UUID, pod_id: UUID
 ) -> bool:
     """Whether this is a call's own conversation, in this pod, owned by this person."""
-    row = (
-        await uow.session.execute(
-            select(
-                ConversationModel.user_id,
-                ConversationModel.pod_id,
-                ConversationModel.conversation_metadata,
-            ).where(ConversationModel.id == conversation_id)
-        )
-    ).one_or_none()
-    if row is None or row.user_id != user_id or row.pod_id != pod_id:
-        return False
-    mark = call_mark(row.conversation_metadata)
-    return mark is not None and mark.role is CallRole.COORDINATOR
+    return await Calls(uow).owned(
+        conversation_id=conversation_id, user_id=user_id, pod_id=pod_id
+    )
 
 
 async def retire_empty_call(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> bool:
@@ -214,95 +182,30 @@ async def retire_empty_call(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> bool:
     another "Call with ..." to open and find empty. Only one with no message
     and no sub-agent at all, so a call anything happened in is never hidden.
     """
-    child = aliased(ConversationModel)
-    result = await uow.session.execute(
-        update(ConversationModel)
-        .where(
-            ConversationModel.id == call_id,
-            ~exists().where(MessageModel.conversation_id == call_id),
-            ~exists().where(child.parent_id == call_id),
-        )
-        .values(is_archived=True)
-    )
-    return bool(result.rowcount)  # type: ignore[attr-defined]
+    return await Calls(uow).retire_if_empty(call_id)
 
 
 async def call_transcripts(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[str]:
     """What was said on the call's earlier connections, oldest first.
 
     Each connection records its transcript in the call's conversation as it
-    ends, marked ``call_transcript``; a call resumed after a drop or a hang-up
+    goes, marked ``call_transcript``; a call resumed after a drop or a hang-up
     reads them back so the voice knows what it already said.
     """
-    rows = await uow.session.execute(
-        select(MessageModel.text)
-        .where(
-            MessageModel.conversation_id == call_id,
-            MessageModel.kind == MessageKind.NOTIFICATION.value,
-            MessageModel.message_metadata.has_key(CALL_TRANSCRIPT_KEY),
-        )
-        .order_by(MessageModel.created_at.desc(), MessageModel.sequence.desc())
-        .limit(MAX_RESUMED_TRANSCRIPTS)
-    )
-    return [text for text in reversed(rows.scalars().all()) if text]
-
-
-async def _pod_of(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> UUID | None:
-    return await uow.session.scalar(
-        select(ConversationModel.pod_id).where(ConversationModel.id == call_id)
-    )
+    return await Calls(uow).transcripts(call_id)
 
 
 async def call_conversations(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[UUID]:
     """The call's own conversation and every sub-agent's at any depth, oldest
-    first.
-
-    By the mark each one carries rather than by parent: a sub-agent's own
-    sub-agents are in the call too, and were missed after a reconnect when
-    only direct children were read. The newest are kept when there are more.
-    """
-    pod_id = await _pod_of(uow, call_id)
-    rows = await uow.session.execute(
-        select(ConversationModel.id)
-        .where(
-            ConversationModel.pod_id == pod_id,
-            or_(
-                ConversationModel.id == call_id,
-                ConversationModel.conversation_metadata[CALL_METADATA_KEY][
-                    "call_id"
-                ].astext
-                == str(call_id),
-            ),
-        )
-        .order_by(ConversationModel.created_at.desc())
-        .limit(MAX_CALL_CONVERSATIONS)
-    )
-    return list(reversed(rows.scalars().all()))
+    first."""
+    return await Calls(uow).conversations(call_id)
 
 
 async def call_working(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> bool:
     """Whether anyone in the call -- the coordinator or a sub-agent -- has a
     run going, read when the voice cannot have been told."""
-    conversations = await call_conversations(uow, call_id)
-    return bool(
-        await uow.session.scalar(
-            select(
-                exists().where(
-                    AgentRunModel.conversation_id.in_(conversations),
-                    AgentRunModel.status.in_(
-                        [
-                            AgentRunStatus.RUNNING.value,
-                            AgentRunStatus.STOP_REQUESTED.value,
-                        ]
-                    ),
-                )
-            )
-        )
-    )
-
-
-#: Relays a resumed call reads back, at most.
-MAX_MISSED_RELAYS = 20
+    calls = Calls(uow)
+    return await calls.working(await calls.conversations(call_id))
 
 
 async def missed_relays(
@@ -314,76 +217,67 @@ async def missed_relays(
     connection ended: ``(text, urgency)``, oldest first. A relay goes out over
     live events only, so one sent while the line was down was never heard.
     """
-    last = await uow.session.scalar(
-        select(MessageModel.created_at)
-        .where(
-            MessageModel.conversation_id == call_id,
-            MessageModel.kind == MessageKind.NOTIFICATION.value,
-            MessageModel.message_metadata.has_key(CALL_TRANSCRIPT_KEY),
-        )
-        .order_by(MessageModel.created_at.desc())
-        .limit(1)
+    return await Calls(uow).relays_since_last_transcript(call_id)
+
+
+async def speak_into_call(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    call_id: UUID,
+    user_id: UUID,
+    pod_id: UUID,
+    content: str,
+) -> None:
+    """What the caller said, as a turn of the call's conversation."""
+    await SendMessage.build(uow).send(
+        conversation_id=call_id,
+        user_id=user_id,
+        content=content,
+        pod_id=pod_id,
+        message_metadata={"source": "call"},
     )
-    if last is None:
-        return []
-    rows = await uow.session.execute(
-        select(MessageModel.tool_args)
-        .where(
-            MessageModel.conversation_id == call_id,
-            MessageModel.kind == MessageKind.TOOL_CALL.value,
-            MessageModel.tool_name == RELAY_TOOL_NAME,
-            MessageModel.created_at > last,
-        )
-        .order_by(MessageModel.created_at)
-        .limit(MAX_MISSED_RELAYS)
+
+
+async def keep_in_call(
+    uow: SqlAlchemyUnitOfWork, *, call_id: UUID, text: str, metadata: dict[str, str]
+) -> None:
+    """A line kept in the call's conversation, in no run: part of its
+    transcript (``call_transcript``) or a note about something that went wrong."""
+    await Messages(uow).append_message(
+        conversation_id=call_id,
+        agent_run_id=None,
+        draft=MessageDraft.of_notification(text, metadata=metadata),
     )
-    relays: list[tuple[str, str]] = []
-    for args in rows.scalars():
-        if isinstance(args, dict) and isinstance(args.get("text"), str):
-            relays.append((args["text"], str(args.get("urgency") or "when_idle")))
-    return relays
 
 
 async def call_canvas(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[CanvasItem]:
     """Everything shown on the call's canvas so far, in the order it was shown:
     since the conversation became a call, so a chat's own earlier displays,
     never on a call's screen, are not put there now."""
-    conversations = await call_conversations(uow, call_id)
+    calls = Calls(uow)
     mark = await held_call(uow, call_id)
-    since = mark.since if mark is not None else None
-    rows = (
-        await uow.session.execute(
-            select(MessageModel)
-            .where(
-                MessageModel.conversation_id.in_(conversations),
-                MessageModel.tool_name.in_(CANVAS_TOOL_NAMES),
-                MessageModel.kind.in_(
-                    [MessageKind.TOOL_CALL.value, MessageKind.TOOL_RETURN.value]
-                ),
-                *([MessageModel.created_at >= since] if since is not None else []),
-            )
-            .order_by(MessageModel.created_at, MessageModel.sequence)
-        )
-    ).scalars()
-    calls: dict[str, MessageModel] = {}
+    shown_calls: dict[str, Message] = {}
     results: dict[str, JsonValue] = {}
-    for row in rows:
-        if not row.tool_call_id:
+    for message in await calls.canvas_messages(
+        await calls.conversations(call_id),
+        since=mark.since if mark is not None else None,
+    ):
+        if not message.tool_call_id:
             continue
-        if row.kind == MessageKind.TOOL_CALL.value:
-            calls.setdefault(row.tool_call_id, row)
+        if message.kind is MessageKind.TOOL_CALL:
+            shown_calls.setdefault(message.tool_call_id, message)
         else:
-            results[row.tool_call_id] = row.tool_result
+            results[message.tool_call_id] = message.tool_result
     return [
         CanvasItem(
-            conversation_id=row.conversation_id,
+            conversation_id=message.conversation_id,
             tool_call_id=tool_call_id,
-            tool_name=row.tool_name or "",
-            args=row.tool_args,
+            tool_name=message.tool_name or "",
+            args=message.tool_args,
             result=results.get(tool_call_id),
-            shown_at=row.created_at,
+            shown_at=message.created_at,
         )
-        for tool_call_id, row in calls.items()
+        for tool_call_id, message in shown_calls.items()
         if _shown(results.get(tool_call_id))
     ]
 
@@ -394,14 +288,19 @@ def _shown(result: JsonValue) -> bool:
 
 
 __all__ = [
+    "CALL_TRANSCRIPT_KEY",
     "CanvasItem",
     "OpenedCall",
     "call_canvas",
     "call_conversations",
+    "call_transcripts",
     "call_working",
     "held_call",
+    "keep_in_call",
     "missed_relays",
     "open_call",
     "owned_call",
+    "retire_empty_call",
     "set_call_live",
+    "speak_into_call",
 ]

@@ -27,7 +27,7 @@ from app.modules.agent.events.turn_work import (
     FencedTerminal,
     dead_error,
 )
-from app.modules.agent.services.run_interruptions import run_is_not_over
+from app.modules.agent.services.run_metrics import run_is_not_over
 from app.modules.agent.services.run_event_pump import StepBoundary, TurnYielded
 
 pytestmark = pytest.mark.unit

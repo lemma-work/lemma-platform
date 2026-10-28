@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from app.modules.agent.domain.errors import RuntimeProfileValidationError
-from app.modules.agent.domain.agent_host_selections import (
+from app.modules.agent.agent_host.domain.selections import (
     carry_agent_host_model,
     carry_agent_host_selections,
     options_for_model,

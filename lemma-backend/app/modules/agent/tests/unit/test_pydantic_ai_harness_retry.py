@@ -17,14 +17,19 @@ import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
-from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.tools import FlatArguments, NoArguments, ToolGroup, tool
 from app.modules.agent.domain.value_objects import AgentEventType
-from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
 
 pytestmark = pytest.mark.unit
+
+
+class _Charge(FlatArguments):
+    amount: int
 
 
 def _drop_then_succeed(drop_after: str, final: str, attempts: list[int]):
@@ -96,7 +101,7 @@ def _stream_tool_call(tool_name: str):
     return stream_fn
 
 
-async def _run_harness(model, *, monkeypatch, should_stop=None, toolsets=None):
+async def _run_harness(model, *, monkeypatch, should_stop=None, tools=None):
     monkeypatch.setattr(harness_module, "_runtime_profile_model", lambda options: model)
     pod_id = uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=uuid4())
@@ -111,7 +116,7 @@ async def _run_harness(model, *, monkeypatch, should_stop=None, toolsets=None):
             ),
             conversation=conversation,
             messages=[],
-            ctx=AgentContext(
+            ctx=ToolContext(
                 user_id=conversation.user_id,
                 pod_id=pod_id,
                 conversation_id=conversation.id,
@@ -119,7 +124,7 @@ async def _run_harness(model, *, monkeypatch, should_stop=None, toolsets=None):
             options=HarnessOptions(
                 model_name="test-model",
                 history_summarization_enabled=False,
-                toolsets=toolsets or [],
+                tools=tools or [],
             ),
             agent_run_id=uuid4(),
             should_stop=should_stop,
@@ -127,7 +132,7 @@ async def _run_harness(model, *, monkeypatch, should_stop=None, toolsets=None):
     ]
 
 
-async def _run_harness_until_it_dies(model, *, monkeypatch, toolsets=None):
+async def _run_harness_until_it_dies(model, *, monkeypatch, tools=None):
     """Events queued before `_execute` raised, plus the exception.
 
     `_execute` does not turn a pause or a fatal error into an event -- `run()`
@@ -136,7 +141,7 @@ async def _run_harness_until_it_dies(model, *, monkeypatch, toolsets=None):
     """
     events = []
     try:
-        async for event in _execute_events(model, monkeypatch, toolsets):
+        async for event in _execute_events(model, monkeypatch, tools):
             events.append(event)
     except Exception as exc:  # noqa: BLE001 - returned for assertion
         # Deliberately not `BaseException`: the two endings under test
@@ -147,7 +152,7 @@ async def _run_harness_until_it_dies(model, *, monkeypatch, toolsets=None):
     return events, None
 
 
-def _execute_events(model, monkeypatch, toolsets):
+def _execute_events(model, monkeypatch, tools):
     monkeypatch.setattr(harness_module, "_runtime_profile_model", lambda options: model)
     pod_id = uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=uuid4())
@@ -160,7 +165,7 @@ def _execute_events(model, monkeypatch, toolsets):
         ),
         conversation=conversation,
         messages=[],
-        ctx=AgentContext(
+        ctx=ToolContext(
             user_id=conversation.user_id,
             pod_id=pod_id,
             conversation_id=conversation.id,
@@ -168,7 +173,7 @@ def _execute_events(model, monkeypatch, toolsets):
         options=HarnessOptions(
             model_name="test-model",
             history_summarization_enabled=False,
-            toolsets=toolsets or [],
+            tools=tools or [],
         ),
         agent_run_id=uuid4(),
         should_stop=None,
@@ -309,13 +314,12 @@ async def test_a_retry_never_re_executes_a_completed_tool(monkeypatch) -> None:
     never double-charge a payment, double-send an email, or double-write a file.
     """
     from pydantic_ai.models.function import DeltaToolCall
-    from pydantic_ai.toolsets import FunctionToolset
 
     side_effects: list[str] = []
     attempts: list[int] = []
 
-    async def charge_card(amount: int) -> str:
-        side_effects.append(f"charged {amount}")
+    async def charge_card(ctx: ToolContext, request: _Charge) -> str:
+        side_effects.append(f"charged {request.amount}")
         return "receipt-1"
 
     async def stream_fn(messages, info: AgentInfo):
@@ -353,7 +357,7 @@ async def test_a_retry_never_re_executes_a_completed_tool(monkeypatch) -> None:
             ),
             conversation=conversation,
             messages=[],
-            ctx=AgentContext(
+            ctx=ToolContext(
                 user_id=conversation.user_id,
                 pod_id=pod_id,
                 conversation_id=conversation.id,
@@ -361,7 +365,7 @@ async def test_a_retry_never_re_executes_a_completed_tool(monkeypatch) -> None:
             options=HarnessOptions(
                 model_name="test-model",
                 history_summarization_enabled=False,
-                toolsets=[FunctionToolset(tools=[charge_card])],
+                tools=[tool(charge_card, ToolGroup.CALLABLES)],
             ),
             agent_run_id=uuid4(),
             should_stop=None,
@@ -400,7 +404,7 @@ async def test_a_non_retryable_provider_error_fails_fast(monkeypatch) -> None:
             ),
             conversation=conversation,
             messages=[],
-            ctx=AgentContext(
+            ctx=ToolContext(
                 user_id=conversation.user_id,
                 pod_id=pod_id,
                 conversation_id=conversation.id,
@@ -530,17 +534,15 @@ class TestTheHarnessDoesNotBill:
 
     @pytest.mark.asyncio
     async def test_a_paused_run_reports_no_usage_event(self, monkeypatch) -> None:
-        from pydantic_ai.toolsets import FunctionToolset
+        from app.modules.agent.domain.tools import AgentInputRequired
 
-        from app.modules.agent.tools.tool_errors import AgentInputRequired
-
-        async def request_approval() -> str:
+        async def request_approval(ctx: ToolContext, request: NoArguments) -> str:
             raise AgentInputRequired("call-1", "request_approval")
 
         events, exc = await _run_harness_until_it_dies(
             FunctionModel(stream_function=_stream_tool_call("request_approval")),
             monkeypatch=monkeypatch,
-            toolsets=[FunctionToolset(tools=[request_approval])],
+            tools=[tool(request_approval, ToolGroup.USER_INTERACTION)],
         )
 
         assert isinstance(exc, AgentInputRequired), "the run should have paused"

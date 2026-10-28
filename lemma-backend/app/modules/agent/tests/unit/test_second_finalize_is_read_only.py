@@ -16,7 +16,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 
 
 class _Run:
@@ -94,7 +94,7 @@ def _rows(
 
 async def _finish(run: _Run, conversation: _Conversation):
     session = _Session(run, conversation)
-    result = await ConversationRepository(_Uow(session)).finish_agent_run(
+    result = await Runs(_Uow(session)).finish_agent_run(
         agent_run_id=run.id,
         status=AgentRunStatus.COMPLETED,
     )

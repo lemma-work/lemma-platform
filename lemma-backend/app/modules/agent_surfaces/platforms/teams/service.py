@@ -6,9 +6,8 @@ import mimetypes
 from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 
-from pydantic_ai.tools import RunContext
 
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts.tools import ToolContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TeamsSurfaceEventMetadata,
@@ -67,7 +66,7 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
         event: ParsedInboundSurfaceEvent,
         attachment: dict[str, Any],
     ) -> tuple[bytes, str, str] | None:
-        """Download a single inbound Teams attachment (no RunContext)."""
+        """Download a single inbound Teams attachment."""
         del event
         download_url = str(attachment.get("download_url") or "").strip()
         if not download_url:
@@ -105,9 +104,9 @@ class TeamsPlatformService(TeamsChannelHistoryMixin):
 
     def _teams_metadata(
         self,
-        ctx: RunContext[ConversationContext],
+        ctx: ToolContext,
     ) -> TeamsSurfaceEventMetadata | None:
-        metadata = ctx.deps.surface_metadata
+        metadata = ctx.surface_metadata
         if isinstance(metadata, TeamsSurfaceEventMetadata):
             return metadata
         return None

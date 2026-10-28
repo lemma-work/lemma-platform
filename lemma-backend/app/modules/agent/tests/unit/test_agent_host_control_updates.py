@@ -20,7 +20,7 @@ from uuid import UUID, uuid7
 
 import pytest
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostCommandRejection,
     AgentHostCommandState,
@@ -28,10 +28,10 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunCheckpoint,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host.control_updates import (
+from app.modules.agent.agent_host.control.control_updates import (
     apply_rejection,
 )
-from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
+from app.modules.agent.agent_host.control.dispatch_repository import (
     AgentHostDispatchRepository,
 )
 

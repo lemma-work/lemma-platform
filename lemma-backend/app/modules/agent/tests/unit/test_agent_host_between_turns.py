@@ -13,7 +13,7 @@ goes again.
 
 Held messages (``held_turns``) are not here: they are written only into a
 conversation that answers somebody outside the pod, and every run there runs in
-this process (``outsider_runtime``), never on an Agent Host.
+this process (``runtime_resolution``), never on an Agent Host.
 """
 
 from __future__ import annotations
@@ -34,13 +34,13 @@ from app.modules.agent.domain.folded_turns import (
     FOLDED_CHAT_OPENS,
 )
 from app.modules.agent.domain.value_objects import ConversationStatus, ConversationType
-from app.modules.agent.infrastructure.harnesses.remote_payload import run_start_payload
-from app.modules.agent.services.runtime_history import (
+from app.modules.agent.agent_host.harness.remote_payload import run_start_payload
+from app.modules.agent.domain.runtime_history import (
     MAX_FOLDED_MESSAGES,
     MAX_UNATTACHED_MESSAGES,
 )
 from app.modules.agent.tests.unit.runtime_history_fakes import StoredConversation
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = pytest.mark.unit
 
@@ -70,7 +70,7 @@ async def _prompt(
             status=ConversationStatus.RUNNING,
         ),
         messages=await chat.history_for(run),
-        ctx=BaseAgentContext(user_id=uuid7(), pod_id=POD_ID, conversation_id=chat.id),
+        ctx=ToolContext(user_id=uuid7(), pod_id=POD_ID, conversation_id=chat.id),
         agent_run_id=run.id,
         runtime_instructions="",
         carries_history=carries_history,

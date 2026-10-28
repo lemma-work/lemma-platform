@@ -23,13 +23,9 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
-from app.modules.agent.contracts.channel_conversations import (
-    conversation_in_channel_query,
-)
-from app.modules.agent.contracts.contact_conversations import (
-    append_follow_up,
-    visible_messages,
-)
+from app.modules.agent.infrastructure.db.channel_conversations import in_channel_query
+from app.modules.agent.contracts.channels import append_follow_up
+from app.modules.agent.contracts.channel_replies import visible_messages
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
@@ -37,10 +33,11 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.events.channel_answer_work import register_channel_answer_work
-from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+from app.modules.agent.domain.prompt.user_turn_text import (
     user_prompt_text,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.queued_messages import QueuedMessages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.channel_answers import answer_line
 from app.modules.agent.services.channel_background import with_channel_background
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
@@ -137,14 +134,14 @@ async def test_a_line_said_while_the_agent_works_is_answered_where_the_first_was
     assert joined.agent_run_id == run.id, "the second line joined the run"
     async with create_uow_from_session_maker(async_session_maker) as uow:
         # The run reads it mid-flight, as the steering capability claims it.
-        steered = await ConversationRepository(uow).claim_queued_user_messages(
+        steered = await QueuedMessages(uow).claim_queued_user_messages(
             run.id, as_run=True
         )
         await uow.commit()
     assert [message.text for message in steered] == ["And the weather?"]
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,
@@ -292,7 +289,7 @@ async def test_finding_a_persons_conversation_in_a_channel_uses_its_unique_index
     not which index an empty table happens to make cheapest."""
     await scenario.create_org_with_pod(name_prefix="Plan")
     pod_id, owner = UUID(scenario.pod_id), UUID(scenario.owner_user["id"])
-    query = conversation_in_channel_query(
+    query = in_channel_query(
         channel_id=uuid4(), pod_id=pod_id, agent_id=None, person_id=owner
     )
     sql = str(

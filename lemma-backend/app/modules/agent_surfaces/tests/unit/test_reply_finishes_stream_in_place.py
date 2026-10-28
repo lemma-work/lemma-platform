@@ -20,7 +20,7 @@ import pytest
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
-from app.modules.agent.contracts import run_replies
+from app.modules.agent.contracts import channel_replies
 from app.modules.agent_surfaces.caches import LIVE_DISPLAYS, surface_caches
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt, PartDelivery
 from app.modules.agent_surfaces.domain.models import (
@@ -46,6 +46,12 @@ pytestmark = pytest.mark.asyncio
 STREAM = ProgressHandle(
     kind=ProgressHandleKind.STREAM, message_id="1700000001.000001", channel_id="D1"
 )
+
+
+def _run_ctx(conversation, **fields):
+    """A run's context, naming the platform its conversation's surface records."""
+    platform = (getattr(conversation, "metadata", None) or {}).get("surface_platform")
+    return SimpleNamespace(surface_platform=platform, **fields)
 
 
 @pytest.fixture(autouse=True)
@@ -279,7 +285,7 @@ def _observer(egress: _Egress) -> SurfaceAgentRunProgressObserver:
 def _material(status: str, answer: str | None):
     async def read(uow, run_id):
         del uow, run_id
-        return run_replies.RunReplyMaterial(
+        return channel_replies.RunReplyMaterial(
             status=status, answer=answer, error=None, private=False
         )
 
@@ -291,7 +297,7 @@ async def _streamed_run(egress: _Egress, run_id) -> tuple:
     conversation = SimpleNamespace(
         id=uuid4(), contact_id=None, metadata={"surface_platform": "SLACK"}
     )
-    ctx = SimpleNamespace(agent_run_id=run_id)
+    ctx = _run_ctx(conversation, agent_run_id=run_id)
     await observer.on_run_started(conversation, ctx)
     observer._token_buffer = "Here is the answer."  # noqa: SLF001 - unflushed tail
     return observer, conversation, ctx
@@ -301,7 +307,7 @@ async def test_a_completed_run_leaves_its_stream_sealed_for_the_reply(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        run_replies, "run_reply_material", _material("COMPLETED", "Here is it.")
+        channel_replies, "run_reply_material", _material("COMPLETED", "Here is it.")
     )
     egress, run_id = _Egress(), uuid4()
     observer, conversation, ctx = await _streamed_run(egress, run_id)
@@ -318,7 +324,9 @@ async def test_a_completed_run_leaves_its_stream_sealed_for_the_reply(
 async def test_a_run_with_no_answer_to_close_it_takes_the_stream_down(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(run_replies, "run_reply_material", _material("STOPPED", None))
+    monkeypatch.setattr(
+        channel_replies, "run_reply_material", _material("STOPPED", None)
+    )
     egress, run_id = _Egress(), uuid4()
     observer, conversation, ctx = await _streamed_run(egress, run_id)
 

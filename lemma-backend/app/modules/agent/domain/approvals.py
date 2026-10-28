@@ -40,3 +40,8 @@ EXPIRED_UNANSWERED = "expired_unanswered"
 
 def expired_unanswered(response: dict[str, object]) -> bool:
     return response.get(EXPIRED_UNANSWERED) is True
+
+
+#: On the DENY recorded for a pause somebody moved past: nobody decided it
+#: (``application/pauses/supersede``).
+SUPERSEDED_KEY = "superseded_by_new_message"

@@ -39,10 +39,10 @@ from app.modules.agent.services.run_input_settings import (
     shorter_answer_settings,
     with_reply_budget,
 )
-from app.modules.agent.services.runtime_profile_creation import (
+from app.modules.agent.application.agents.manage_runtime_profiles import (
     normalize_model_settings,
 )
-from app.modules.agent.services.runtime_resolution import ResolvedAgentRuntime
+from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
 
 _REASONS = [RuntimeModelCapability.TEXT, RuntimeModelCapability.REASONING]
 _PLAIN = [RuntimeModelCapability.TEXT]

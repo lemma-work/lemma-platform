@@ -1,42 +1,54 @@
+"""How each pod tool presents itself to an outside MCP client, from its policy."""
+
 from __future__ import annotations
+
+from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.services.pod_mcp_tool_policy import (
-    POD_TOOL_POLICIES,
-    policy_for,
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.mcp.toolspec_adapter import mcp_tools
+from app.modules.agent.infrastructure.tools.pod.tools import SPECS
+from app.modules.agent.services.pod_mcp_service import (
+    POD_TOOLS,
     scope_for_call,
     without_approval_envelope,
 )
-from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.mcp_access.contracts import Scope
 
 pytestmark = pytest.mark.unit
 
 
-def test_every_pod_tool_has_a_policy_row():
-    """A tool added without a row would be offered to outside clients under the
-    cautious default -- a write needing `pod:write` -- which is safe but wrong
-    for a read. Make the author decide."""
-    assert set(pod_toolset.tools) == set(POD_TOOL_POLICIES)
+async def _listed() -> dict:
+    ctx = ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+    tools = await mcp_tools(POD_TOOLS, ctx, view_meta=lambda _view: {})
+    return {tool.name.removeprefix("lemma_"): tool for tool in tools}
 
 
-def test_writing_tools_need_the_write_scope_and_say_they_change_things():
+def test_every_pod_tool_is_titled_for_an_outside_client():
+    """A tool without a title shows its raw name in a client's confirmation."""
+    assert all(spec.policy.title for spec in SPECS)
+
+
+@pytest.mark.anyio
+async def test_writing_tools_need_the_write_scope_and_say_they_change_things():
+    listed = await _listed()
     for name in ("pod_write_record", "pod_write_file", "pod_edit_file"):
-        policy = policy_for(name)
-        assert policy.scope is Scope.WRITE
-        annotations = policy.annotations()
+        assert scope_for_call(name, None) is Scope.WRITE
+        annotations = listed[name].annotations
         assert annotations.read_only_hint is False
         assert annotations.destructive_hint is True
 
 
-def test_reading_tools_are_annotated_read_only():
-    annotations = policy_for("pod_query").annotations()
+@pytest.mark.anyio
+async def test_reading_tools_are_annotated_read_only():
+    annotations = (await _listed())["pod_query"].annotations
     assert annotations.read_only_hint is True
     assert annotations.destructive_hint is False
     assert annotations.open_world_hint is False
 
 
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "arguments",
     [
@@ -44,10 +56,10 @@ def test_reading_tools_are_annotated_read_only():
         {"path": "/a.pdf", "url_type": "public"},
     ],
 )
-def test_a_public_file_link_is_publishing_and_needs_write(arguments):
+async def test_a_public_file_link_is_publishing_and_needs_write(arguments):
     """It outlives the connection and anyone can open it for up to a week."""
     assert scope_for_call("pod_get_file_url", arguments) is Scope.WRITE
-    assert policy_for("pod_get_file_url").annotations().open_world_hint is True
+    assert (await _listed())["pod_get_file_url"].annotations.open_world_hint is True
 
 
 @pytest.mark.parametrize(
@@ -57,8 +69,8 @@ def test_an_in_app_file_link_is_reading(arguments):
     assert scope_for_call("pod_get_file_url", arguments) is Scope.READ
 
 
-def test_an_unknown_tool_gets_the_most_cautious_policy():
-    assert policy_for("pod_something_new").scope is Scope.WRITE
+def test_an_unknown_tool_needs_the_widest_scope():
+    assert scope_for_call("pod_something_new", None) is Scope.WRITE
 
 
 def test_the_approval_hand_off_is_removed_for_outside_clients():

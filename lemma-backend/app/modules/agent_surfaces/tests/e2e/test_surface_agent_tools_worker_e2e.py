@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
+from uuid import UUID
 
 import pytest
 
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+from app.modules.test_support.conversation_surfaces_double import record_place
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     REAL_TEAMS_CHANNEL_ID,
     REAL_TEAMS_TENANT_ID,
@@ -36,14 +40,17 @@ async def _run_public_surface_tool_script(
         json={
             "agent_name": agent_name,
             "metadata": {
-                **metadata,
                 "mock_llm_script": [*script, script_text("Surface tools complete.")],
-                "source": "surface-tool-worker-e2e",
             },
         },
     )
     assert conversation.status_code == 201, conversation.text
     conversation_id = conversation.json()["id"]
+    # The place is the surface's to write, as `conversation_binder` does; a
+    # client sending these keys only tags the conversation.
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        await record_place(uow, UUID(conversation_id), metadata)
+        await uow.commit()
 
     terminal: dict[str, Any] | None = None
     async with client.stream(
@@ -321,7 +328,7 @@ async def test_public_agent_runs_teams_context_tools_through_real_worker(
         and item.get("tool_name") == "teams_get_recent_channel_messages"
     ]
     assert len(teams_results) == 3
-    assert all(result["success"] is True for result in teams_results)
+    assert all(result["success"] is True for result in teams_results), teams_results
     assert any(
         message["text"] == "Earlier customer context"
         for result in teams_results

@@ -172,7 +172,7 @@ async def test_a_vision_model_reads_the_image_and_the_run_carries_on(
 ) -> None:
     """What `view_image` does when the run's own model can see."""
     from app.core.domain.runtime import AgentRuntimeConfig
-    from app.modules.agent.services.runtime_model_factory import (
+    from app.modules.agent.infrastructure.providers.model_factory import (
         pydantic_ai_model_from_runtime_profile,
     )
     from app.modules.agent.services.runtime_profile_service import (

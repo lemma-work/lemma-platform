@@ -45,11 +45,9 @@ from app.modules.agent.contracts.calls import (
     call_conversations,
     call_transcripts,
     call_working,
+    keep_in_call,
     missed_relays,
-)
-from app.modules.agent.contracts.conversations_for_surfaces import (
-    append_delivery_notice,
-    start_surface_turn,
+    speak_into_call,
 )
 
 logger = get_logger(__name__)
@@ -188,13 +186,12 @@ class CallAgents:
 
     async def send_turn(self, content: str) -> None:
         async with as_caller(self._party) as scope:
-            await start_surface_turn(
+            await speak_into_call(
                 scope.uow,
-                conversation_id=self.call_id,
+                call_id=self.call_id,
                 user_id=self._party.user_id,
                 pod_id=self._party.pod_id,
                 content=content,
-                message_metadata={"source": "call"},
             )
 
     async def earlier(self) -> list[str]:
@@ -209,10 +206,10 @@ class CallAgents:
     async def record(self, transcript: str) -> None:
         """Part of the call's transcript, kept in its conversation as it goes."""
         async with as_caller(self._party) as scope:
-            await append_delivery_notice(
+            await keep_in_call(
                 scope.uow,
-                conversation_id=self.call_id,
-                message=transcript,
+                call_id=self.call_id,
+                text=transcript,
                 metadata={CALL_TRANSCRIPT_KEY: str(uuid4())},
             )
 
@@ -224,10 +221,10 @@ class CallAgents:
         and a call with something in it is never archived as empty.
         """
         async with as_caller(self._party) as scope:
-            await append_delivery_notice(
+            await keep_in_call(
                 scope.uow,
-                conversation_id=self.call_id,
-                message=text,
+                call_id=self.call_id,
+                text=text,
                 metadata={CALL_NOTICE_KEY: str(uuid4())},
             )
 

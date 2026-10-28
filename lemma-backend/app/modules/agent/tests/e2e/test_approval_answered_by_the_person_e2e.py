@@ -22,9 +22,8 @@ from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     ConversationStatus,
 )
-from app.modules.agent.infrastructure.models.approval import (
-    AgentApprovalDecisionModel,
-)
+from app.modules.agent.domain.pauses import DECIDED
+from app.modules.agent.infrastructure.models import AgentPauseModel
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     finish,
@@ -67,9 +66,9 @@ async def _decisions(seeded: Seeded, approval_id: str) -> int:
         return (
             await session.execute(
                 select(func.count()).where(
-                    AgentApprovalDecisionModel.conversation_id
-                    == seeded.conversation_id,
-                    AgentApprovalDecisionModel.approval_id == approval_id,
+                    AgentPauseModel.conversation_id == seeded.conversation_id,
+                    AgentPauseModel.tool_call_id == approval_id,
+                    AgentPauseModel.status.in_(DECIDED),
                 )
             )
         ).scalar_one()

@@ -6,12 +6,14 @@ its time runs out -- the channels' sweeper expires it. Until the run hears
 that, it is paused for ever and the approval is still decidable from the
 conversation, which is the one place an expired question must not be decided.
 
-So an expiry is resolved the way every other undecided pause is: a DENY
-recorded for the conversation's member, through the one resolution path the
-conversation's own card uses (``resolve_user_approval_internal``). Never an
-approval -- nothing runs on nobody's say-so. The response says why
+So an expiry is resolved the way every other undecided pause is, through the
+one resolution path the conversation's own card uses: ``Pause.expire``, a DENY
+recorded for the conversation's member. Never an approval -- nothing runs on
+nobody's say-so. The pause ends EXPIRED and its response says why
 (``EXPIRED_UNANSWERED``), so the resumed run reads "nobody answered in time"
-rather than "the person said no". Once the decision is recorded the
+rather than "the person said no". A question waits 72 hours, an approval 7
+days (``domain/pauses``; the question line's ``expires_at`` is the pause's
+deadline). Once the decision is recorded the
 conversation shows the pause decided; a decision that got there first is
 adopted instead.
 
@@ -28,13 +30,10 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.approvals import EXPIRED_UNANSWERED
 from app.modules.agent.domain.errors import UnknownApprovalError
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
-from app.modules.agent.infrastructure.repositories.conversation_repository import (
-    ConversationRepository,
-)
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.application.pauses.resolve import Ending, ResolvePause
 
 logger = get_logger(__name__)
 
@@ -49,7 +48,7 @@ async def expire_pause(
     """Resolve the pause on ``tool_call_id`` in the conversation as nobody
     answering it. False when there is nothing to resolve."""
     async with uow_factory() as uow:
-        conversation = await ConversationRepository(uow).get_conversation(
+        conversation = await Conversations(uow).get_conversation(
             conversation_id, include_runs=False
         )
         if conversation is None or conversation.pod_id != pod_id:
@@ -59,13 +58,13 @@ async def expire_pause(
         )
         token = set_current_context(context)
         try:
-            await build_conversation_service(uow).resolve_user_approval_internal(
+            await ResolvePause.build(uow).resolve(
                 conversation=conversation,
                 approval_id=tool_call_id,
                 user_id=conversation.user_id,
                 pod_id=pod_id,
                 decision=AgentRunApprovalDecision.DENY,
-                response={EXPIRED_UNANSWERED: True},
+                ending=Ending.EXPIRY,
             )
             await uow.commit()
         except UnknownApprovalError:

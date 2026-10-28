@@ -13,10 +13,10 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.tools.contact_tools import (
+from app.modules.agent.infrastructure.tools.contact import (
     ContactFunctionRequest,
     ContactRecordsRequest,
-    build_contact_toolset,
+    contact_specs,
 )
 from app.modules.datastore.contracts.contact_rows import ContactRowsUnavailable
 from app.modules.function.contracts.contact_functions import ContactFunctionOutcome
@@ -37,9 +37,9 @@ def _ctx(*, contact_id=CONTACT):
         else Audience.pod(uuid4())
     )
     return SimpleNamespace(
-        deps=SimpleNamespace(
-            audience=audience, pod_id=POD, conversation_id=CONVERSATION
-        ),
+        audience=audience,
+        pod_id=POD,
+        conversation_id=CONVERSATION,
         tool_call_id="call-1",
     )
 
@@ -70,12 +70,12 @@ class _Calls:
 
 
 def _tools(calls: _Calls):
-    toolset = build_contact_toolset(
+    specs = contact_specs(
         uow_factory=lambda: None,
         read_rows=calls.read_rows,
         run_function=calls.run_function,
     )
-    return {name: tool.function for name, tool in toolset.tools.items()}
+    return {spec.name: spec.run for spec in specs}
 
 
 async def test_records_are_read_for_the_runs_contact():

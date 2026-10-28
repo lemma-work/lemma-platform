@@ -1,4 +1,9 @@
-"""Stable agent DTOs shared with delivery surfaces."""
+"""The agent's types other modules name: its entities' public shapes and errors.
+
+A leaf: nothing here reaches the service or repository layers. Operations are
+the submodules, one per consumer's purpose (``channels``, ``automation``,
+``calls``, ``contacts``, ``provisioning``, ...); a tool's types are ``tools``.
+"""
 
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.errors import AgentNotFoundError, RuntimeUnavailableError
@@ -17,12 +22,6 @@ from app.modules.agent.domain.value_objects import (
     AgentToolset,
 )
 from app.modules.agent.contracts.agent_response import AgentResponse
-from app.modules.agent.tools.context import ConversationContext
-from app.modules.agent.tools.user_interaction.models import (
-    AskUserRequest,
-    DisplayResourceRequest,
-    DisplayResourceType,
-)
 
 __all__ = [
     # Same reason as `DatastoreTableNotFoundError` next door: the only error
@@ -41,11 +40,7 @@ __all__ = [
     "AgentKind",
     "AgentResponse",
     "AgentToolset",
-    "AskUserRequest",
     "Conversation",
-    "ConversationContext",
-    "DisplayResourceRequest",
-    "DisplayResourceType",
     "MessageDraft",
     "MessageKind",
     "MessageRole",

@@ -18,10 +18,8 @@ from websockets.exceptions import ConnectionClosed
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.live.config import live_settings
 from app.core.server_limits import WS_MAX_BYTES
-from app.modules.agent.services.realtime import (
-    publish_conversation_event,
-    token_payload,
-)
+from app.modules.agent.infrastructure.live import publish_conversation_event
+from app.modules.agent.domain.live_events import token_payload
 from app.modules.channels.contracts import (
     NewLine,
     NewQuestion,

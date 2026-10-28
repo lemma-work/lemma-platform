@@ -13,17 +13,14 @@ from datetime import datetime, timezone
 import pytest
 
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
+from app.modules.agent.agent_host.mcp import ConversationMCPService
 
 pytestmark = [pytest.mark.e2e]
 
 
-@pytest.mark.parametrize(
-    ("run_metadata", "delivers"),
-    [({"private_note": True}, False), ({"source": "user_message"}, True)],
-)
+@pytest.mark.parametrize(("private_note", "delivers"), [(True, False), (False, True)])
 async def test_the_tool_bridge_knows_a_notes_answer_stays_in_lemma(
-    db_session, scenario, run_metadata, delivers
+    db_session, scenario, private_note, delivers
 ):
     await scenario.create_org_with_pod(name_prefix="Note bridge")
     created = await scenario.owner_client.post(
@@ -34,7 +31,7 @@ async def test_the_tool_bridge_knows_a_notes_answer_stays_in_lemma(
         conversation_id=created.json()["id"],
         status="RUNNING",
         agent_runtime={"profile_id": "system:lemma"},
-        run_metadata=run_metadata,
+        private_note=private_note,
         started_at=datetime.now(timezone.utc),
     )
     db_session.add(run)

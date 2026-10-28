@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -27,12 +26,12 @@ from aiohttp import web
 from fastapi import status
 
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
-from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.workspace_cli.models import (
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.tools.workspace_cli.models import (
     ExecCommandRequest,
     WriteStdinRequest,
 )
-from app.modules.agent.tools.workspace_cli.workspace_cli import (
+from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
     exec_command_internal,
     list_processes_internal,
     write_stdin_internal,
@@ -114,7 +113,7 @@ async def _agent_context(authenticated_client, fixed_test_org, fixed_test_user):
     # its `agents` row id, which is its pod's. These tests are about the
     # workspace and research tools, and the assistant is the agent a person
     # actually reaches them through.
-    ctx = BaseAgentContext(
+    ctx = ToolContext(
         user_id=UUID(fixed_test_user["id"]),
         org_id=UUID(fixed_test_org["id"]),
         pod_id=UUID(pod["id"]),
@@ -342,8 +341,8 @@ async def test_web_fetch_captures_a_real_page_into_the_workspace(
     a shell pipeline inside the container.
     """
     del configure_workspace_api_url
-    from app.modules.agent.tools.web.models import WebFetchRequest
-    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+    from app.modules.agent.infrastructure.tools.web.models import WebFetchRequest
+    from app.modules.agent.infrastructure.tools.web.web_fetch import web_fetch_internal
 
     ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
 
@@ -398,10 +397,10 @@ async def test_a_research_batch_saves_pages_larger_than_a_shell_can_carry(
     the size on disk — is real.
     """
     del configure_workspace_api_url
-    from app.modules.agent.tools.web import web_fetch as web_fetch_module
-    from app.modules.agent.tools.web.models import WebFetchRequest
-    from app.modules.agent.tools.web.page_extract import ExtractedPage
-    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+    from app.modules.agent.infrastructure.tools.web import web_fetch as web_fetch_module
+    from app.modules.agent.infrastructure.tools.web.models import WebFetchRequest
+    from app.modules.agent.infrastructure.tools.web.page_extract import ExtractedPage
+    from app.modules.agent.infrastructure.tools.web.web_fetch import web_fetch_internal
 
     ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
 
@@ -466,8 +465,8 @@ async def test_web_fetch_forces_the_browser_and_captures_a_rendered_page(
     exercised by any other test, which only drove the cheap http path.
     """
     del configure_workspace_api_url
-    from app.modules.agent.tools.web.models import WebFetchRequest
-    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+    from app.modules.agent.infrastructure.tools.web.models import WebFetchRequest
+    from app.modules.agent.infrastructure.tools.web.web_fetch import web_fetch_internal
 
     ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
 
@@ -529,8 +528,8 @@ async def test_web_fetch_rejects_malformed_and_unsafe_urls_before_fetching(
     """
     del configure_workspace_api_url
     from app.core.config import settings
-    from app.modules.agent.tools.web.models import WebFetchRequest
-    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+    from app.modules.agent.infrastructure.tools.web.models import WebFetchRequest
+    from app.modules.agent.infrastructure.tools.web.web_fetch import web_fetch_internal
 
     monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
 
@@ -583,9 +582,9 @@ async def test_web_fetch_reports_a_clear_error_when_the_workspace_is_unreachable
     tests above, so only the acquisition failure needs injecting here.
     """
     del configure_workspace_api_url
-    from app.modules.agent.tools.web import web_fetch as web_fetch_module
-    from app.modules.agent.tools.web.models import WebFetchRequest
-    from app.modules.agent.tools.web.web_fetch import web_fetch_internal
+    from app.modules.agent.infrastructure.tools.web import web_fetch as web_fetch_module
+    from app.modules.agent.infrastructure.tools.web.models import WebFetchRequest
+    from app.modules.agent.infrastructure.tools.web.web_fetch import web_fetch_internal
 
     ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
 
@@ -640,26 +639,30 @@ async def test_pdf_pages_render_to_real_images_for_a_vision_model(
     """
     del configure_workspace_api_url
     from app.modules.agent.domain.vision import AgentVisionMode
-    from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
-    from app.modules.agent.tools.pod.pydantic_adapter import pod_view_document_pages
-    from pydantic_ai import BinaryContent, ToolReturn
+    from app.modules.agent.infrastructure.tools.pod.models import (
+        ViewDocumentPagesRequest,
+    )
+    from app.modules.agent.infrastructure.tools.pod.tools import (
+        pod_view_document_pages,
+    )
+    from app.modules.agent.domain.tools import WithImages
 
     ctx, path = await _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DIRECT
 
     result = await pod_view_document_pages(
-        SimpleNamespace(deps=ctx),
+        ctx,
         ViewDocumentPagesRequest(path=path, page_start=1, instructions="read it"),
     )
 
-    assert isinstance(result, ToolReturn), result
-    images = [c for c in result.content if isinstance(c, BinaryContent)]
+    assert isinstance(result, WithImages), result
+    images = list(result.images)
     assert images, "a vision model must receive the rendered page"
     # A real JPEG, not a placeholder.
     assert images[0].media_type == "image/jpeg"
     assert images[0].data.startswith(b"\xff\xd8"), "not JPEG magic bytes"
     assert len(images[0].data) > 2000, "suspiciously small render"
-    assert result.return_value["success"] is True
+    assert result.value["success"] is True
 
 
 async def test_pdf_pages_reach_a_text_only_model_as_words(
@@ -677,10 +680,14 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
     """
     del configure_workspace_api_url
     from app.modules.agent.domain.vision import AgentVisionMode
-    from app.modules.agent.tools import vision_delegation
-    from app.modules.agent.tools.pod import pydantic_adapter as pod_adapter
-    from app.modules.agent.tools.pod.models import ViewDocumentPagesRequest
-    from pydantic_ai import ToolReturn
+    from app.modules.agent.infrastructure.tools import vision_delegation
+    from app.modules.agent.infrastructure.tools.pod import (
+        tools as pod_adapter,
+    )
+    from app.modules.agent.infrastructure.tools.pod.models import (
+        ViewDocumentPagesRequest,
+    )
+    from app.modules.agent.domain.tools import WithImages
 
     ctx, path = await _pdf_in_pod(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DELEGATED
@@ -701,14 +708,14 @@ async def test_pdf_pages_reach_a_text_only_model_as_words(
     monkeypatch.setattr(vision_delegation, "describe_images", fake_describe)
 
     result = await pod_adapter.pod_view_document_pages(
-        SimpleNamespace(deps=ctx),
+        ctx,
         ViewDocumentPagesRequest(
             path=path, page_start=1, instructions="describe the pipeline"
         ),
     )
 
-    assert not isinstance(result, ToolReturn), (
-        "a ToolReturn carries BinaryContent, which is what breaks a text-only model"
+    assert not isinstance(result, WithImages), (
+        "a result with images is what breaks a text-only model"
     )
     assert result["success"] is True
     assert result["viewed_by"] == "vision_model"
@@ -735,11 +742,13 @@ async def test_view_image_direct_mode_returns_binary_content_for_a_real_workspac
     """
     del configure_workspace_api_url
     from app.modules.agent.domain.vision import AgentVisionMode
-    from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
-    from app.modules.agent.tools.workspace_cli.workspace_cli import (
+    from app.modules.agent.infrastructure.tools.workspace_cli.models import (
+        ViewImageRequest,
+    )
+    from app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli import (
         view_image_internal,
     )
-    from pydantic_ai import BinaryContent, ToolReturn
+    from app.modules.agent.domain.tools import WithImages
 
     ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
     ctx.vision_mode = AgentVisionMode.DIRECT
@@ -762,13 +771,13 @@ async def test_view_image_direct_mode_returns_binary_content_for_a_real_workspac
         ctx, ViewImageRequest(workspace_file_path="pixel.png")
     )
 
-    assert isinstance(result, ToolReturn), result
-    images = [c for c in result.content if isinstance(c, BinaryContent)]
+    assert isinstance(result, WithImages), result
+    images = list(result.images)
     assert images, "a DIRECT-mode vision model must receive the rendered bytes"
     assert images[0].media_type == "image/png"
-    assert result.return_value.success is True
-    assert result.return_value.source == "workspace"
-    assert result.return_value.file_path == "pixel.png"
+    assert result.value.success is True
+    assert result.value.source == "workspace"
+    assert result.value.file_path == "pixel.png"
 
 
 async def test_compaction_bounds_a_history_built_from_real_tool_output(
@@ -795,10 +804,12 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
     )
 
     from app.modules.agent.domain.harness_options import HarnessOptions
-    from app.modules.agent.infrastructure.harnesses.history import (
+    from app.modules.agent.infrastructure.harness.lemma.history import (
         build_history_processors,
     )
-    from app.modules.agent.services.history_tokens import count_model_message_tokens
+    from app.modules.agent.infrastructure.providers.tokens import (
+        count_model_message_tokens,
+    )
 
     ctx = await _agent_context(authenticated_client, fixed_test_org, fixed_test_user)
 

@@ -16,13 +16,11 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.contracts import (
+from app.modules.agent.contracts.tools import (
     DisplayResourceRequest,
     DisplayResourceType,
 )
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -852,7 +850,7 @@ async def test_a_prompt_that_landed_only_as_text_is_still_delivered():
     )
 
 
-async def test_a_lost_question_can_be_asked_again_in_plain_words():
+async def test_a_lost_question_can_be_asked_again_in_plain_words(surface_rows):
     adapter = _delivering_adapter()
     egress, conversation_id = await _approval_egress(adapter)
     agent_conversations.pending_question.return_value = _pending(
@@ -869,11 +867,7 @@ async def test_a_lost_question_can_be_asked_again_in_plain_words():
     assert "couldn't show the buttons" in message
     assert "Pick a color" in message
     # The typed reply is what answers it, so it has to be recorded as such.
-    agent_conversations.set_conversation_metadata_value.assert_awaited_once()
-    assert (
-        agent_conversations.set_conversation_metadata_value.await_args.args[-1]
-        == "tool-1"
-    )
+    assert surface_rows.free_text == {conversation_id: "tool-1"}
 
 
 async def test_a_lost_approval_can_be_asked_again_in_plain_words():

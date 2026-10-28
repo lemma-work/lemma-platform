@@ -21,11 +21,11 @@ from uuid import UUID, uuid4
 from asgiref.testing import ApplicationCommunicator
 from fastapi import status
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AGENT_HOST_PROTOCOL_VERSION,
     AgentHostRunState,
 )
-from app.modules.agent.domain.agent_host_link import AGENT_HOST_LINK_PATH
+from app.modules.agent.agent_host.domain.link import AGENT_HOST_LINK_PATH
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 

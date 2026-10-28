@@ -17,15 +17,16 @@ from uuid import UUID
 import pytest
 from fastapi import status
 
+from app.modules.test_support.e2e.scripted_model import tag_conversation
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
+from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
 from app.modules.agent.domain.pod_asks import ANSWER_SOURCE, AskMode
 from app.modules.agent.domain.value_objects import ConversationStatus, MessageKind
-from app.modules.agent.infrastructure.harnesses.mock_model import (
+from app.modules.agent.infrastructure.harness.lemma.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.pod_link_helpers import (
     add_rows,
@@ -110,10 +111,8 @@ async def _start_scripted(conversation_id: UUID, script: list[dict[str, object]]
     have written.
     """
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversations = ConversationRepository(uow)
-        await conversations.set_conversation_metadata_key(
-            conversation_id, MOCK_SCRIPT_METADATA_KEY, script
-        )
+        conversations = Conversations(uow)
+        await tag_conversation(uow, conversation_id, MOCK_SCRIPT_METADATA_KEY, script)
         found = await conversations.get_conversation(conversation_id, include_runs=True)
         assert found is not None
         run = found.agent_runs[-1]

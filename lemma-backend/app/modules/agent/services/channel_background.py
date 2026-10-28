@@ -29,7 +29,7 @@ from pydantic import ValidationError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.contact_conversations import FOLLOW_UP_LINE_KEY
+from app.modules.agent.domain.contact_history import FOLLOW_UP_LINE_KEY
 from app.modules.agent.domain.entities import Message, MessageKind, MessageRole
 from app.modules.agent.domain.private_notes import LEMMA_CHANNEL
 from app.modules.channels.contracts.backgrounds import (

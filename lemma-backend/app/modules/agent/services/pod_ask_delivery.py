@@ -7,7 +7,7 @@ take one. Both are ``settle``.
 
 Delivery waits while the asking conversation is paused on a person. A message
 arriving then would deny the approval or question they have not answered yet
-(``TurnCoordinator.start`` supersedes them), and an answer from another pod is
+(``AdmitMessage`` supersedes them), and an answer from another pod is
 not theirs to overrule. Whatever run ends that pause collects the answer.
 """
 
@@ -23,7 +23,6 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.pod_asks import (
-    ASKS_OUT_KEY,
     AnswerOutcome,
     AskMode,
     DeliveredAnswer,
@@ -41,13 +40,10 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.pod_ask_queries import PodAskQueries
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
-from app.modules.agent.infrastructure.repositories import (
-    AgentRepository,
-    ConversationRepository,
-)
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.application.turns.admit import AdmitMessage
 from app.modules.pod.contracts.members import pod_name
-from app.modules.usage.contracts.execution import build_usage_service
 
 logger = get_logger(__name__)
 
@@ -87,7 +83,7 @@ async def settled_answer(
     ):
         return delivered_answer(pod_name=pod_name, outcome=AnswerOutcome.DISCONNECTED)
     if latest.status is AgentRunStatus.COMPLETED:
-        messages, _ = await ConversationRepository(uow).list_messages(
+        messages, _ = await Messages(uow).list_messages(
             conversation_id=thread.id, limit=ANSWER_WINDOW
         )
         return delivered_answer(
@@ -125,9 +121,7 @@ class PodAskDelivery:
         asked, so answers that arrived while it was paused come in now.
         """
         async with self.uow_factory() as uow:
-            conversation = await ConversationRepository(uow).get_conversation(
-                conversation_id
-            )
+            conversation = await Conversations(uow).get_conversation(conversation_id)
         if conversation is None:
             return 0
         delivered = 0
@@ -136,17 +130,14 @@ class PodAskDelivery:
             delivered += await self.deliver_owed(
                 asking_conversation_id=ask.from_conversation_id
             )
-        metadata = (
-            conversation.metadata if isinstance(conversation.metadata, dict) else {}
-        )
-        if metadata.get(ASKS_OUT_KEY) is True:
+        if conversation.delegations_out:
             delivered += await self.deliver_owed(asking_conversation_id=conversation.id)
         return delivered
 
     async def deliver_owed(self, *, asking_conversation_id: UUID) -> int:
         """Deliver every answer this conversation is owed and has not been given."""
         async with self.uow_factory() as uow:
-            asking = await ConversationRepository(uow).get_conversation(
+            asking = await Conversations(uow).get_conversation(
                 asking_conversation_id, include_runs=True
             )
             if asking is None or asking.status is ConversationStatus.WAITING:
@@ -160,17 +151,11 @@ class PodAskDelivery:
                 )
             )
             try:
-                turns = ConversationService(
-                    uow=uow,
-                    conversation_repository=ConversationRepository(uow),
-                    agent_repository=AgentRepository(uow),
-                    usage_service=build_usage_service(uow),
-                ).turns
+                admit = AdmitMessage.build(uow)
                 for content, metadata in deliveries:
-                    await turns.start(
+                    await admit.admit(
                         asking,
                         user_id=asking.user_id,
-                        pod_id=asking.pod_id,
                         content=content,
                         agent_name=None,
                         message_metadata=metadata,
@@ -189,7 +174,7 @@ class PodAskDelivery:
         self, uow: SqlAlchemyUnitOfWork, asking: Conversation
     ) -> list[tuple[str, JsonObject]]:
         """Claim each settled, undelivered answer, and say what each delivery reads."""
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
         queries = PodAskQueries(uow)
         deliveries: list[tuple[str, JsonObject]] = []
         for thread_id in await queries.list_threads(from_conversation_id=asking.id):

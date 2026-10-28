@@ -22,11 +22,11 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.errors import RuntimeProfileConflictError
 from app.modules.agent.domain.runtime_profiles import AgentRuntimeProfile
-from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
+from app.modules.agent.agent_host.control.repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
-from app.modules.agent.services.runtime_profile_editor import (
+from app.modules.agent.application.agents.edit_runtime_profile import (
     AgentRuntimeProfileEditor,
 )
 from app.modules.agent.services.runtime_profile_service import (

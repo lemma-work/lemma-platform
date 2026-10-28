@@ -19,16 +19,18 @@ the card, and the agent said nothing about them.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.pausing_tools import PausingKind
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.pauses import CALL_NAMES
+from app.modules.agent.domain.state_kinds import AnswerKind, PauseKind
 from app.modules.agent.domain.value_objects import MessageDraft, MessageKind
 
 #: The ``request_approval`` argument holding the agent's message.
 APPROVAL_MESSAGE_ARG = "message"
 #: On the stored message: the approval call it was written for.
 APPROVAL_MESSAGE_KEY = "approval_message_for"
-#: Arguments only a card Lemma raised carries (``run_budget_pause``,
-#: ``agent_host_permissions``); kept as literals so the domain does not reach
-#: into either.
+#: Arguments a card Lemma raised carried before its pause had a kind of its
+#: own (``PauseOpening``); kept as literals so the domain does not reach into
+#: either.
 _RAISED_BY_LEMMA = ("run_budget_pause", "agent_host_permission")
 _MESSAGE_MAX_CHARS = 4000
 
@@ -52,7 +54,9 @@ def with_approval_message(draft: MessageDraft) -> list[MessageDraft]:
     """An approval call, preceded by what the person is told about it."""
     if (
         draft.kind is not MessageKind.TOOL_CALL
-        or draft.tool_name != PausingKind.REQUEST_APPROVAL.value
+        or draft.tool_name != CALL_NAMES[PauseKind.APPROVAL]
+        # A budget pause or an Agent Host permission prompt: Lemma's card.
+        or (draft.pause is not None and draft.pause.kind is not PauseKind.APPROVAL)
     ):
         return [draft]
     text = approval_message_text(draft.tool_args)
@@ -61,11 +65,9 @@ def with_approval_message(draft: MessageDraft) -> list[MessageDraft]:
     message = MessageDraft.of_text(
         text,
         role=draft.role,
-        metadata={
-            # Words on the way to the card, never the run's answer.
-            "is_final_answer": False,
-            APPROVAL_MESSAGE_KEY: draft.tool_call_id,
-        },
+        metadata={APPROVAL_MESSAGE_KEY: draft.tool_call_id},
+        # Words on the way to the card, never the run's answer.
+        state=MessageState(answer=AnswerKind.NOT_FINAL),
     )
     return [message, draft]
 

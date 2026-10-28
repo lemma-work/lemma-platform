@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.tools.web.blocked import (
+from app.modules.agent.infrastructure.tools.web.blocked import (
     classify,
     should_try_browser,
     title_of,

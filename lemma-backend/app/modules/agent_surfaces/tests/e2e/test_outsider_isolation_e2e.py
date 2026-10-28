@@ -100,7 +100,7 @@ def _no_sandbox(monkeypatch) -> list[str]:
             raise AssertionError("a host session was opened for a stranger's run")
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.workspace_cli.workspace_cli.get_workspace_tool_runtime",
+        "app.modules.agent.infrastructure.tools.workspace_cli.workspace_cli.get_workspace_tool_runtime",
         lambda: _Runtime(),
     )
     return opened

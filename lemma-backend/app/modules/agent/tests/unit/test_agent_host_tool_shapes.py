@@ -18,14 +18,14 @@ from uuid import uuid7
 
 import pytest
 
-from app.modules.agent.domain.agent_host import AgentHostEventType
+from app.modules.agent.agent_host.domain.host import AgentHostEventType
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
-from app.modules.agent.infrastructure.harnesses.agent_host.events import (
+from app.modules.agent.agent_host.harness.events import (
     TOOL_OUTPUT_TOKEN_KIND,
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.tool_payload import (
+from app.modules.agent.agent_host.harness.tool_payload import (
     _MAX_TOOL_STRING_CHARACTERS,
 )
 

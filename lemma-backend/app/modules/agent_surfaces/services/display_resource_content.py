@@ -41,10 +41,8 @@ from app.modules.datastore.contracts.surfaces import (
     render_pod_file_page,
     run_readonly_query,
 )
-from app.modules.agent.contracts import DisplayResourceRequest
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts.tools import DisplayResourceRequest
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.envelope import EnvelopeFile
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
 from app.modules.agent_surfaces.platforms.attachment_limits import fits_inline

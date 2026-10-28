@@ -44,7 +44,7 @@ Native rendering is **first, with a formatted-text fallback**: a platform with n
 support — or a native render that fails — gets a formatted prompt rather than nothing.
 
 Ground truth: `agent_surfaces/platforms/platform_capabilities.py` (per-platform
-capabilities) and `agent/tools/user_interaction/pydantic_adapter.py`
+capabilities) and `agent/infrastructure/tools/user_interaction/tools.py`
 (`_maybe_deliver_to_surface`).
 
 **Email delivers exactly one message per turn** (`DeliveryCardinality.ONE`). Everything

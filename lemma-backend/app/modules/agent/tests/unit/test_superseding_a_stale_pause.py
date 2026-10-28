@@ -1,16 +1,10 @@
-"""A pause left open by a finished run is denied, or else it is reported.
+"""A pause left open by a finished run is denied on the person's behalf.
 
-Before a new message starts a run, `supersede_stale_pending_interactions`
-auto-denies any `ask_user`/`request_approval` still unanswered from an earlier
-pause: the person moved on without answering, and a history that still shows an
-open question makes the next run ask it again.
-
-Rebuilding that denial needs three things off the original call, and the
-caller's filter only proves two of them -- the tool call id and the tool name.
-The run id it does not, and a call without one is skipped. That skip is correct
-(a return synthesized against no run cannot be replayed into one) and it is
-also invisible: the pause simply stays open, and the next run inherits it. So
-it warns, and this file holds it to that.
+Before a new message starts a run, `SupersedeStalePauses` denies every pause a
+person still had to decide: they moved on without answering, and a history
+that still shows an open question makes the next run ask it again. A pause
+somebody decided in the meantime is theirs: the fenced write loses, and its own
+resolution writes the return.
 """
 
 from __future__ import annotations
@@ -21,73 +15,65 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.domain.value_objects import MessageKind
-from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
+from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.state_kinds import PauseKind, PauseStatus
+from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 
 pytestmark = pytest.mark.unit
 
 
-def _pausing_call(*, agent_run_id):
-    return SimpleNamespace(
-        id=uuid4(),
-        kind=MessageKind.TOOL_CALL,
-        tool_name="ask_user",
+def _open_question() -> Pause:
+    return Pause(
+        conversation_id=uuid4(),
+        run_id=uuid4(),
+        pod_id=uuid4(),
         tool_call_id="call-1",
-        tool_args={},
-        agent_run_id=agent_run_id,
+        tool_name="ask_user",
+        kind=PauseKind.QUESTION,
     )
 
 
-def _coordinator(message):
-    repository = AsyncMock()
-    repository.pausing_calls_awaiting_a_decision.return_value = [message]
-    repository.get_tool_return.return_value = None
-    repository.record_approval_decision.return_value = True
+def _coordinator(pause: Pause, *, wins: bool):
+    pauses = AsyncMock()
+    pauses.pending.return_value = [pause]
+    pauses.save.return_value = wins
     resume_returns = AsyncMock()
     resume_returns.build.return_value = ("ask_user", {"denied": True})
-    coordinator = ApprovalCoordinator(
-        AsyncMock(), repository, resume_returns, AsyncMock()
-    )
-    # No wait_for to cancel here; that half is SQL (the e2e covers it).
+    coordinator = SupersedeStalePauses(AsyncMock(), resume_returns=resume_returns)
+    coordinator.pauses, coordinator.messages = pauses, AsyncMock()
+    # No wait_for to cancel here; that half is in test_wait_for and the e2e.
     coordinator._cancel_superseded_wait = AsyncMock(return_value=[])  # type: ignore[method-assign]
-    return coordinator, repository
+    return coordinator
 
 
 @pytest.mark.asyncio
-async def test_a_pausing_call_with_no_run_is_skipped_and_said_out_loud(
-    caplog,
-) -> None:
-    conversation = SimpleNamespace(id=uuid4())
-    coordinator, repository = _coordinator(_pausing_call(agent_run_id=None))
+async def test_an_open_pause_is_denied_and_given_its_return() -> None:
+    pause = _open_question()
+    coordinator = _coordinator(pause, wins=True)
 
-    with caplog.at_level("WARNING"):
-        synthesized = await coordinator.supersede_stale_pending_interactions(
-            conversation=conversation,
-            user_id=uuid4(),
-        )
+    written = await coordinator.supersede(
+        conversation=SimpleNamespace(id=pause.conversation_id), user_id=uuid4()
+    )
 
-    assert synthesized == []
-    repository.record_approval_decision.assert_not_awaited()
-    assert "pause_without_run_skipped" in caplog.text
-    assert "call-1" in caplog.text, (
-        "the warning has to name the call, or it says only that something "
-        "somewhere was dropped"
+    assert len(written) == 1
+    assert pause.status is PauseStatus.SUPERSEDED
+    assert pause.decision is AgentRunApprovalDecision.DENY
+    coordinator.messages.append_message.assert_awaited_once()
+    assert coordinator.messages.append_message.await_args.kwargs["agent_run_id"] == (
+        pause.run_id
     )
 
 
 @pytest.mark.asyncio
-async def test_a_pausing_call_with_a_run_is_denied_rather_than_skipped(
-    caplog,
-) -> None:
-    """The ordinary path, so the guard above is not silently swallowing it."""
-    conversation = SimpleNamespace(id=uuid4())
-    coordinator, repository = _coordinator(_pausing_call(agent_run_id=uuid4()))
+async def test_a_pause_somebody_decided_first_is_left_to_them() -> None:
+    pause = _open_question()
+    coordinator = _coordinator(pause, wins=False)
 
-    with caplog.at_level("WARNING"):
-        await coordinator.supersede_stale_pending_interactions(
-            conversation=conversation,
-            user_id=uuid4(),
-        )
+    written = await coordinator.supersede(
+        conversation=SimpleNamespace(id=pause.conversation_id), user_id=uuid4()
+    )
 
-    repository.record_approval_decision.assert_awaited_once()
-    assert "pause_without_run_skipped" not in caplog.text
+    assert written == []
+    coordinator.resume_returns.build.assert_not_awaited()
+    coordinator.messages.append_message.assert_not_awaited()

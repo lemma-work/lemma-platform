@@ -14,6 +14,7 @@ module's table layout leaks into `agent`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import select
@@ -21,6 +22,7 @@ from sqlalchemy import select
 from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.resource_names import resolve_resource_names_by_ids
+from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.infrastructure.pod_ask_queries import Teammate, askable_pods
 from app.modules.pod.contracts.agent_access import pod_organization_id
@@ -157,3 +159,15 @@ class AgentContextBriefRepository:
         return await resolve_resource_names_by_ids(
             self._session, pod_id=pod_id, refs=refs
         )
+
+
+class RepositoryFactory(Protocol):
+    """Builds the brief's repository over a unit of work (a constructor seam)."""
+
+    def __call__(self, uow: SqlAlchemyUnitOfWork) -> AgentContextBriefRepository: ...
+
+
+class AuthorizationFactory(Protocol):
+    """Builds the authorization reads a brief section makes (a constructor seam)."""
+
+    def __call__(self, uow: SqlAlchemyUnitOfWork) -> AuthorizationDataService: ...

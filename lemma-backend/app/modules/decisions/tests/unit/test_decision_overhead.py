@@ -27,10 +27,10 @@ from pydantic_ai.models import Model
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.settings import ModelSettings
 
-from app.modules.agent.services.anthropic_thinking import (
+from app.modules.agent.infrastructure.providers.anthropic_thinking import (
     AdaptiveThinkingAnthropicModel,
 )
-from app.modules.agent.services.runtime_model_factory import usage_limits_for
+from app.modules.agent.infrastructure.providers.model_factory import usage_limits_for
 from app.modules.decisions.config import DecisionsSettings
 from app.modules.decisions.domain.request import DecisionCaller, DecisionRequest
 from app.modules.decisions.infrastructure.providers.model_provider import (

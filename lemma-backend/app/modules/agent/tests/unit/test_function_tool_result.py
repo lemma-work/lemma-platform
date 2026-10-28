@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.tools.callable_tool_factory import function_tool_result
+from app.modules.agent.infrastructure.tools.callables import function_tool_result
 from app.modules.function.contracts import FunctionRunEntity, FunctionRunStatus
 
 pytestmark = pytest.mark.unit

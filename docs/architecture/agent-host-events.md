@@ -27,8 +27,8 @@ with one contract.
 |---|---|
 | Host: wire types | `desktop/agent-host/src/protocol.rs` (`EventType`, `ToolRef`, `ToolStatus`) |
 | Host: ACP to events | `desktop/agent-host/src/normalize/` (one module per adapter) |
-| Backend: wire types | `lemma-backend/app/modules/agent/domain/agent_host.py` (`AgentHostEventType`) |
-| Backend: events to messages | `lemma-backend/app/modules/agent/infrastructure/harnesses/agent_host/events.py` |
+| Backend: wire types | `lemma-backend/app/modules/agent/agent_host/domain/host.py` (`AgentHostEventType`) |
+| Backend: events to messages | `lemma-backend/app/modules/agent/agent_host/harness/events.py` |
 | Shared fixture | `desktop/agent-host/tests/fixtures/wire_contract.json` |
 | Ground truth | `desktop/agent-host/tests/fixtures/acp/<adapter>@<version>/*.jsonl` |
 

@@ -19,7 +19,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.contracts.conversations import ConversationScope
+from app.modules.agent.contracts.analytics import ConversationScope
 from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.analytics.events.agent import _run_scope

@@ -20,7 +20,7 @@ from app.modules.agent.services.run_observer_delivery import (
     notify_run_finished,
     notify_run_started,
 )
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = pytest.mark.asyncio
 
@@ -29,17 +29,17 @@ class _BrokenSurface:
     """Every delivery raises, the way a bug in a platform adapter would."""
 
     async def on_run_started(
-        self, conversation: Conversation, ctx: ConversationContext
+        self, conversation: Conversation, ctx: ToolContext
     ) -> None:
         raise RuntimeError("start blew up")
 
     async def on_event(
-        self, event: AgentEvent, conversation: Conversation, ctx: ConversationContext
+        self, event: AgentEvent, conversation: Conversation, ctx: ToolContext
     ) -> None:
         raise RuntimeError("event blew up")
 
     async def on_run_finished(
-        self, conversation: Conversation, ctx: ConversationContext
+        self, conversation: Conversation, ctx: ToolContext
     ) -> None:
         raise RuntimeError("finish blew up")
 
@@ -51,8 +51,8 @@ def _surface() -> RunObserver:
     return _BrokenSurface()
 
 
-def _context(conversation: Conversation) -> ConversationContext:
-    return ConversationContext(
+def _context(conversation: Conversation) -> ToolContext:
+    return ToolContext(
         user_id=conversation.user_id,
         org_id=conversation.organization_id,
         pod_id=conversation.pod_id,

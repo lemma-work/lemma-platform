@@ -22,7 +22,7 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.services.service_factories import build_agent_service
+from app.modules.agent.services.agent_service import AgentService
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.errors import AgentNotFoundError
 from app.modules.agent.domain.value_objects import AgentToolset, JsonObject
@@ -76,7 +76,7 @@ async def list_agents(uow, *, pod_id: UUID, user_id: UUID, ctx: Context) -> list
     Entities rather than names: a caller choosing which agents to copy needs
     `kind` to tell the pod's own assistant from the ones somebody made.
     """
-    agents, _ = await build_agent_service(uow).list_agents(
+    agents, _ = await AgentService.build(uow).list_agents(
         pod_id=pod_id, limit=1000, requester_user_id=user_id, ctx=ctx
     )
     return list(agents)
@@ -85,7 +85,7 @@ async def list_agents(uow, *, pod_id: UUID, user_id: UUID, ctx: Context) -> list
 async def get_agent(uow, *, pod_id: UUID, name: str, ctx: Context) -> Agent | None:
     """The named agent, or ``None`` when the pod does not have one."""
     try:
-        return await build_agent_service(uow).get_agent_by_name(
+        return await AgentService.build(uow).get_agent_by_name(
             pod_id=pod_id, name=name, ctx=ctx
         )
     except AgentNotFoundError:
@@ -96,7 +96,7 @@ async def require_agent(
     uow, *, pod_id: UUID, name: str, user_id: UUID, ctx: Context
 ) -> Agent:
     """The named agent, raising ``AgentNotFoundError`` when the pod has none."""
-    return await build_agent_service(uow).get_agent_by_name(
+    return await AgentService.build(uow).get_agent_by_name(
         pod_id=pod_id, name=name, requester_user_id=user_id, ctx=ctx
     )
 
@@ -119,7 +119,7 @@ async def create_agent(
     ctx: Context,
 ) -> Agent:
     """Create an agent, with the folder and grant its toolsets imply."""
-    return await build_agent_service(uow).create_agent(
+    return await AgentService.build(uow).create_agent(
         pod_id=pod_id,
         user_id=user_id,
         name=name,
@@ -153,7 +153,7 @@ async def update_agent(
     ctx: Context,
 ) -> Agent:
     """Overwrite an existing agent's definition."""
-    return await build_agent_service(uow).update_agent(
+    return await AgentService.build(uow).update_agent(
         pod_id=pod_id,
         name=name,
         instruction=instruction,

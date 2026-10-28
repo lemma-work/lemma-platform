@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
@@ -39,23 +39,26 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import channel_conversations
-from app.modules.agent.contracts.run_replies import (
+from app.modules.agent.infrastructure.db.channel_conversations import (
+    ChannelConversations,
+)
+from app.modules.agent.contracts.channel_replies import (
     answer_line_client_id,
     run_reply_material,
 )
 from app.modules.agent.domain.pod_asks import HANDED_BACK_SOURCES
-from app.modules.agent.domain.private_notes import LEMMA_CHANNEL, PRIVATE_NOTE_KEY
-from app.modules.agent.domain.queued_messages import (
-    DURING_ACTIVE_RUN,
-    STEERED_INTO_RUN,
+from app.modules.agent.domain.private_notes import (
+    LEMMA_CHANNEL,
+    PRIVATE_NOTE_REQUEST_KEY,
 )
+from app.modules.agent.domain.value_objects import ConversationOrigin, QueueState
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent.infrastructure.models.conversation import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.channel_answer_lines import (
     COULD_NOT_ANSWER,
     STOPPED_BEFORE_ANSWERING,
@@ -64,7 +67,12 @@ from app.modules.agent.services.channel_answer_lines import (
     say_refused,
 )
 from app.modules.agent.services.live_conversation import CONVERSATION_STREAM
-from app.modules.agent.services.service_factories import build_conversation_service
+from app.modules.agent.application.conversations.start import (
+    StartConversation,
+    authorize_opening,
+)
+from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.infrastructure import repositories
 from app.modules.channels.contracts import (
     ChannelKind,
     Channel,
@@ -179,12 +187,14 @@ async def _answer_as(
         user_id=user_id, pod_id=pod_id
     )
     token = set_current_context(context)
-    service = build_conversation_service(uow)
     try:
         # Authorized first, since that commits; then locked, looked for again,
         # and opened -- as a surface opens one.
-        await service.authorize_opening(
-            pod_id=pod_id, agent_name=agent_name, user_id=user_id
+        await authorize_opening(
+            repositories.AgentRepository(uow),
+            pod_id=pod_id,
+            agent_name=agent_name,
+            user_id=user_id,
         )
         conversation_id = await _members_conversation(
             uow,
@@ -203,7 +213,7 @@ async def _answer_as(
             conversation_id=conversation_id,
         )
         background = await member_background(uow, line=line, limit=IN_APP_CONTEXT_LINES)
-        started = await service.add_user_message_and_start_run(
+        started = await SendMessage.build(uow).send(
             conversation_id=conversation_id,
             user_id=user_id,
             content=line.text,
@@ -270,9 +280,10 @@ async def _answering_another_thread(
     """
     if channel.kind is not ChannelKind.GROUP:
         return False
-    conversations = ConversationRepository(uow)
+    conversations = Conversations(uow)
+    runs = Runs(uow)
     await conversations.lock_conversation(conversation_id)
-    running = await conversations.get_active_agent_run_for_update(conversation_id)
+    running = await runs.get_active_agent_run_for_update(conversation_id)
     if running is None:
         return False
     answering = [
@@ -297,29 +308,28 @@ async def _members_conversation(
     agent_id: UUID,
     agent_name: str,
 ) -> UUID:
-    await channel_conversations.lock_person_in_channel(
-        uow,
+    seats = ChannelConversations(uow)
+    await seats.lock_person(
         channel_id=channel.id,
         pod_id=channel.pod_id,
         agent_id=agent_id,
         person_id=user_id,
     )
-    found = await channel_conversations.conversation_in_channel(
-        uow,
+    found = await seats.in_channel(
         channel_id=channel.id,
         pod_id=channel.pod_id,
         agent_id=agent_id,
-        user_id=user_id,
-        contact_id=None,
+        person_id=user_id,
     )
     if found is not None:
         return found
-    opened = await build_conversation_service(uow).create_conversation(
+    opened = await StartConversation.build(uow).start(
         pod_id=channel.pod_id,
         agent_name=agent_name,
         user_id=user_id,
         title=(channel.title or "Lemma")[:255],
-        metadata={"source": LEMMA_CHANNEL, "channel_kind": channel.kind.value},
+        metadata={"channel_kind": channel.kind.value},
+        origin=ConversationOrigin.CHANNEL,
         require_execute_grant=False,
         channel_id=channel.id,
     )
@@ -337,7 +347,7 @@ def turn_metadata(
     if line.members_only:
         # A note among members: its answer is one too, and nothing said for
         # it is repeated anywhere it would be carried.
-        metadata[PRIVATE_NOTE_KEY] = True
+        metadata[PRIVATE_NOTE_REQUEST_KEY] = True
     if channel.title:
         metadata["channel_name"] = channel.title
     if line.sender.display_name:
@@ -440,11 +450,11 @@ async def _lines_read_by(
     answers to what its conversation asked of somebody else.
 
     Not a message that joined it and was never read: the run that delivers it
-    answers it (``conversation_turns.start_queued_followup``).
+    answers it (``StartQueuedFollowUp``).
     """
     metadata = MessageModel.message_metadata
     started_it = (MessageModel.agent_run_id == run_id) & (
-        func.coalesce(metadata[DURING_ACTIVE_RUN].astext, "false") != "true"
+        MessageModel.queue_state == QueueState.NONE
     )
     rows = (
         await uow.session.execute(
@@ -456,7 +466,7 @@ async def _lines_read_by(
             .where(
                 MessageModel.conversation_id == conversation_id,
                 MessageModel.role == "user",
-                started_it | (metadata[STEERED_INTO_RUN].astext == str(run_id)),
+                started_it | (MessageModel.steered_into_run_id == run_id),
             )
             .order_by(MessageModel.sequence)
             .limit(MAX_LINES_A_RUN_READS)

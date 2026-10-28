@@ -51,7 +51,7 @@ from app.modules.agent.events.work_kinds import (
     pod_ask_key,
     subagent_result_key,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
 
 logger = get_logger(__name__)
 
@@ -68,11 +68,7 @@ def run_finished_fact(
     started_at: datetime | None = None,
 ) -> AgentRunFinished:
     """The fact a finished run announces, read off its conversation."""
-    origin = run_origin(
-        metadata=conversation.metadata,
-        parent_id=conversation.parent_id,
-        conversation_id=conversation.id,
-    )
+    origin = run_origin(conversation)
     status = finish.status
     if status not in (
         AgentRunStatus.COMPLETED,
@@ -92,7 +88,6 @@ def run_finished_fact(
         parent_kind=origin.parent_kind,
         parent_ref=origin.parent_ref,
         origin=origin.origin,
-        has_reply_target=origin.has_reply_target,
         started_at=started_at,
     )
 
@@ -118,7 +113,7 @@ async def stage_run_followups(
     """
     if not finish.updated:
         return None
-    conversation = await ConversationRepository(uow).get_conversation(conversation_id)
+    conversation = await Conversations(uow).get_conversation(conversation_id)
     if conversation is None:
         return None
     _registered()
@@ -127,11 +122,7 @@ async def stage_run_followups(
     )
     work = WorkWriter.of(uow)
     subscribers = await facts.emit(uow, fact, writer=work)
-    origin = run_origin(
-        metadata=conversation.metadata,
-        parent_id=conversation.parent_id,
-        conversation_id=conversation.id,
-    )
+    origin = run_origin(conversation)
     ns = pod_namespace(conversation.pod_id)
     payload = ConversationWork(conversation_id=conversation.id, run_id=run_id)
     # Every finish: what was said while it ran, or a pause answered before it

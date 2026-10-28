@@ -31,7 +31,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.run_replies import run_reply_material
+from app.modules.agent.contracts.channel_replies import run_reply_material
 from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError

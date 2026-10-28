@@ -19,10 +19,11 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.delegation import agent_display_name
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
+from app.modules.agent_surfaces.domain.conversation_surface import (
+    ConversationSurface,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -31,6 +32,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositoryPort
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_surface_repository import (
+    ConversationSurfaces,
 )
 from app.modules.agent_surfaces.services.channel_places import (
     ChannelSeats,
@@ -68,10 +72,12 @@ class ConversationBinder:
         uow: SqlAlchemyUnitOfWork,
         surface_repository: SurfaceInstallationRepositoryPort,
         seats: ChannelSeats | None = None,
+        conversation_surfaces: ConversationSurfaces | None = None,
     ) -> None:
         self.uow = uow
         self.surface_repository = surface_repository
         self.seats = seats or ChannelSeatsInDatabase(uow)
+        self.conversation_surfaces = conversation_surfaces or ConversationSurfaces(uow)
 
     async def bind_conversation(
         self,
@@ -186,7 +192,7 @@ class ConversationBinder:
                 title=_title(
                     parsed, fallback=f"{surface.surface_type.value} Conversation"
                 ),
-                metadata=_surface_metadata(surface, parsed, resolved_user, route),
+                started_on=surface.surface_type.value,
                 # Checked above, so nothing between the lock and the insert
                 # releases the connection.
                 require_execute_grant=False,
@@ -233,42 +239,41 @@ class ConversationBinder:
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
     ) -> None:
-        """Where the conversation was last written to, on its own metadata."""
-        await self.surface_repository.merge_conversation_metadata(
-            conversation_id, _surface_metadata(surface, parsed, resolved_user, route)
+        """Where the conversation was last written to from."""
+        await self.conversation_surfaces.record_place(
+            conversation_id, surface_place(surface, parsed, resolved_user, route)
         )
 
 
-def _surface_metadata(
+def surface_place(
     surface: AgentSurfaceEntity,
     parsed: ParsedInboundSurfaceEvent,
     resolved_user: ResolvedSurfaceUser,
     route: ResolvedSurfaceRoute,
-) -> dict[str, object]:
+) -> ConversationSurface:
     surface_event_metadata = build_surface_event_metadata(
         surface.surface_type.value, parsed.metadata
     )
-    return {
-        "source": "agent_surfaces",
-        "surface_id": str(surface.id),
-        "surface_platform": surface.surface_type.value,
-        "external_channel_id": parsed.external_channel_id,
-        "channel_name": configured_channel_name(surface, parsed),
-        "external_thread_id": parsed.external_thread_id,
-        "external_user_id": resolved_user.external_user_id,
-        "external_message_id": parsed.external_message_id,
-        "route_key": route.route_key,
-        "conversation_kind": route.conversation_kind,
-        "routed_agent_id": str(route.agent_id) if route.agent_id else None,
+    return ConversationSurface(
+        surface_id=surface.id,
+        surface_platform=surface.surface_type.value,
+        external_channel_id=parsed.external_channel_id,
+        channel_name=configured_channel_name(surface, parsed),
+        external_thread_id=parsed.external_thread_id,
+        external_user_id=resolved_user.external_user_id,
+        external_message_id=parsed.external_message_id,
+        route_key=route.route_key,
+        conversation_kind=route.conversation_kind,
+        routed_agent_id=route.agent_id,
         # From the route, which names the agent that is answering, not the
         # surface, which only says whose installation it is.
-        "agent_display_name": agent_display_name(route.agent_name),
-        "surface_event_metadata": (
+        agent_display_name=agent_display_name(route.agent_name),
+        surface_event_metadata=(
             surface_event_metadata.model_dump(mode="json")
             if surface_event_metadata
             else None
         ),
-    }
+    )
 
 
 def _title(parsed: ParsedInboundSurfaceEvent, *, fallback: str) -> str:

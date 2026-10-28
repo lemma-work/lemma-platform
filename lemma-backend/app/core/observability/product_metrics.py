@@ -42,8 +42,9 @@ SURFACES: Final = frozenset(
 )
 ACTIVE_USER_WINDOWS: Final = {"5m": 300, "1h": 3600, "24h": 86400}
 
-# SurfacePlatform values (agent_surfaces) and the conversation ``source``
-# metadata both map onto the surface vocabulary here.
+# SurfacePlatform values (agent_surfaces) and the labels a conversation's
+# ``origin`` is counted under (``conversation_metadata.surface_of``) both map
+# onto the surface vocabulary here.
 _SURFACE_ALIASES: Final = {"resend": "email", "agent_surfaces": "other"}
 
 

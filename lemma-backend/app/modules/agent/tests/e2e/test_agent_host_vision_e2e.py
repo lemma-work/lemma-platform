@@ -25,6 +25,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
+from app.modules.agent.application.agents.manage_runtime_profiles import (
+    RuntimeProfileCreation,
+)
 import pytest
 from sqlalchemy import select, update
 
@@ -32,7 +35,7 @@ from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileScope
 from app.modules.agent.domain.vision import AgentVisionMode
-from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
+from app.modules.agent.agent_host.control.repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
@@ -41,7 +44,7 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
 )
 from app.modules.agent.infrastructure.runtime_models import AgentHostModel
-from app.modules.agent.services.conversation_mcp_service import ConversationMCPService
+from app.modules.agent.agent_host.mcp import ConversationMCPService
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
@@ -102,7 +105,9 @@ async def _profile_for_a_host_that(db_session, scenario, *, reports_images: bool
         AgentRuntimeProfileRepository(uow, encryption=get_secret_cipher()),
         AgentHostRepository(uow),
     )
-    profile = await service.create_agent_host_profile(
+    profile = await RuntimeProfileCreation(
+        service.repository, service.host_repository
+    ).create_agent_host_profile(
         harness_id=machine["harness_id"],
         organization_id=UUID(scenario.org_id),
         user_id=UUID(scenario.owner_user["id"]),
@@ -301,17 +306,17 @@ async def test_a_repo_backed_conversation_reaches_a_remote_harness(
     )
 
     created = await scenario.owner_client.post(
-        f"/pods/{scenario.pod_id}/conversations",
-        json={
-            "title": "on a project",
-            # The shape `parse_project_repo` accepts. A bare
-            # "owner/name" string is dropped, which is the point of
-            # parsing untrusted metadata at all.
-            "metadata": {"repo": {"owner": "lemma-work", "repo": "lemma-platform"}},
-        },
+        f"/pods/{scenario.pod_id}/conversations", json={"title": "on a project"}
     )
     assert created.status_code in {200, 201}, created.text
     conversation_id = created.json()["id"]
+    # A conversation on a project is the server's to open: the repo is a
+    # column no request reaches. Stamped as opening it against one would.
+    await db_session.execute(
+        update(ConversationModel)
+        .where(ConversationModel.id == UUID(conversation_id))
+        .values(repo={"owner": "lemma-work", "repo": "lemma-platform"}, cwd=None)
+    )
 
     run = AgentRunModel(
         conversation_id=conversation_id,
@@ -342,7 +347,7 @@ async def test_a_repo_backed_conversation_reaches_a_remote_harness(
 async def test_a_conversation_without_a_recorded_cwd_gets_one_written_down(
     db_session, scenario
 ):
-    """Metadata is the source of truth, so it has to actually hold the answer.
+    """The row is the source of truth, so it has to actually hold the answer.
 
     Creation stamps the cwd, but a row that predates that stamping -- or one
     written by a path that skipped it -- resolved through a deterministic
@@ -364,7 +369,7 @@ async def test_a_conversation_without_a_recorded_cwd_gets_one_written_down(
     await db_session.execute(
         update(ConversationModel)
         .where(ConversationModel.id == conversation_id)
-        .values(conversation_metadata={})
+        .values(cwd=None)
     )
     run = AgentRunModel(
         conversation_id=conversation_id,
@@ -386,9 +391,7 @@ async def test_a_conversation_without_a_recorded_cwd_gets_one_written_down(
     )
 
     stored = await db_session.scalar(
-        select(ConversationModel.conversation_metadata).where(
-            ConversationModel.id == conversation_id
-        )
+        select(ConversationModel.cwd).where(ConversationModel.id == conversation_id)
     )
-    assert stored.get("cwd") == ctx.get_workspace_cwd(), stored
-    assert stored["cwd"].startswith(f"{WORKSPACE_ROOT}/c/"), stored
+    assert stored == ctx.get_workspace_cwd(), stored
+    assert stored.startswith(f"{WORKSPACE_ROOT}/c/"), stored

@@ -12,7 +12,6 @@ stranger's question, no sub-agent, and no turn an answer coming back started.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -24,17 +23,15 @@ from app.modules.agent.domain.pod_asks import (
     AskRefused,
     ask_of,
 )
-from app.modules.agent.domain.value_objects import ConversationType
+from app.modules.agent.domain.value_objects import (
+    ConversationOrigin,
+    ConversationType,
+)
 
 #: Surfaces whose thread is read by one person. Anything else -- a channel, an
 #: email thread that can carry a Cc -- has readers the asker's access was not
 #: granted to.
 _PRIVATE_SURFACE_KINDS = frozenset({"DM"})
-
-#: The conversation key a schedule stamps when it opens a conversation.
-_STARTED_BY_KEY = "started_by"
-#: The conversation key a sub-agent's conversation carries.
-_SUB_AGENT_KEY = "is_sub_agent"
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,8 +169,7 @@ def _audience_refusal(run: AskingRun) -> AskRefused | None:
             "back here where they can read it. Ask from a direct message or "
             "from Lemma instead."
         )
-    metadata = _metadata(run.conversation)
-    if metadata.get(_SUB_AGENT_KEY) is True:
+    if run.conversation.origin is ConversationOrigin.SUBAGENT:
         return AskRefused(
             "A sub-agent can't ask other pods. Return what you found, and let "
             "the conversation that started you ask."
@@ -204,11 +200,11 @@ def _person_refusal(run: AskingRun) -> AskRefused | None:
     if refusal is not None:
         return refusal
     conversation = run.conversation
-    metadata = _metadata(conversation)
     if conversation.user_id != run.user_id:
         return AskRefused("Only the person this conversation belongs to can ask.")
-    if conversation.type is ConversationType.TASK or (
-        str(metadata.get(_STARTED_BY_KEY) or "").upper() == "SCHEDULE"
+    if (
+        conversation.type is ConversationType.TASK
+        or conversation.origin is ConversationOrigin.SCHEDULE
     ):
         return AskRefused(
             "Nobody started this conversation by hand, so there is no person "
@@ -229,8 +225,3 @@ def _link_refusal(run: AskingRun) -> AskRefused | None:
             "with what you have."
         )
     return None
-
-
-def _metadata(conversation: Conversation) -> Mapping[str, object]:
-    metadata = conversation.metadata
-    return metadata if isinstance(metadata, dict) else {}

@@ -118,15 +118,16 @@ def _conversation_metadata(
     the person, so the work an agent pushes is attributed to whoever owns the
     repository rather than to a bot nobody recognises.
 
-    ``started_by`` is always set, and it is the only way a run can tell that
-    nobody is waiting for it. A schedule-started run used to be indistinguishable
-    from somebody typing -- same conversation shape, same prompt -- so the agent
-    would reach for ``ask_user`` at six in the morning and hang until the run
-    timed out, and would hold a finding back for a reply nobody was going to
-    read. ``agent_context_brief`` renders this into the run's own brief.
+    That a schedule started it is the conversation's ``origin`` -- the agent
+    module sets it from ``source="SCHEDULE"`` -- and it is the only way a run
+    can tell that nobody is waiting for it. A schedule-started run used to be
+    indistinguishable from somebody typing -- same conversation shape, same
+    prompt -- so the agent would reach for ``ask_user`` at six in the morning
+    and hang until the run timed out, and would hold a finding back for a reply
+    nobody was going to read. ``agent_context_brief`` renders this into the
+    run's own brief.
     """
     started: FiringMetadata = {
-        "started_by": "SCHEDULE",
         "schedule_id": str(schedule.id),
         "schedule_type": getattr(
             schedule.schedule_type, "value", str(schedule.schedule_type)

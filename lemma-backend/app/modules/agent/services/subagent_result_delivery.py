@@ -25,12 +25,7 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.subagent_results import (
-    COLLECTED_BY_DELIVERY,
-    COLLECTED_KEY,
     DELIVERED_STATUSES,
-    SUBAGENTS_OUT_KEY,
-    collector_run_id,
-    reports_to_parent,
     result_message,
     result_metadata,
 )
@@ -38,18 +33,14 @@ from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     ConversationStatus,
 )
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
-    ConversationRepository,
 )
-from app.modules.agent.infrastructure.run_execution_record import (
-    claim_run_metadata_key,
-)
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
-from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.usage.contracts.execution import build_usage_service
+from app.modules.agent.infrastructure.db.runs import Runs
+from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.application.turns.admit import AdmitMessage
 
 logger = get_logger(__name__)
 
@@ -64,9 +55,10 @@ class _Owed:
     metadata: dict[str, object]
 
 
-async def mark_collected(uow: SqlAlchemyUnitOfWork, run_id: UUID, *, by: str) -> bool:
-    """Record that a child run's result reached its parent. True if first."""
-    return await claim_run_metadata_key(uow, run_id, key=COLLECTED_KEY, value=by)
+async def mark_collected(uow: SqlAlchemyUnitOfWork, run_id: UUID) -> bool:
+    """Record that a child run's result reached its parent -- by delivery, an
+    await, a status check or a wait. True if first."""
+    return await Runs(uow).claim_delivered_to_parent(run_id)
 
 
 class SubagentResultDelivery:
@@ -80,30 +72,24 @@ class SubagentResultDelivery:
         may have children whose results it left uncollected.
         """
         async with self.uow_factory() as uow:
-            conversation = await ConversationRepository(uow).get_conversation(
-                conversation_id
-            )
+            conversation = await Conversations(uow).get_conversation(conversation_id)
         if conversation is None:
             return 0
         delivered = 0
-        if conversation.parent_id is not None and reports_to_parent(
-            conversation.metadata
-        ):
+        if conversation.parent_id is not None and conversation.reports_to_parent:
             delivered += await self.deliver_owed(parent_id=conversation.parent_id)
-        if (conversation.metadata or {}).get(SUBAGENTS_OUT_KEY) is True:
+        if conversation.delegations_out:
             delivered += await self.deliver_owed(parent_id=conversation.id)
         return delivered
 
     async def deliver_owed(self, *, parent_id: UUID) -> int:
         """Deliver every finished child result this parent has not collected."""
         async with self.uow_factory() as uow:
-            conversations = ConversationRepository(uow)
+            conversations = Conversations(uow)
             parent = await conversations.get_conversation(parent_id, include_runs=True)
             if parent is None or parent.status is ConversationStatus.STOPPED:
                 return 0
-            if await AgentConversationWaitRepository(uow).find_active_for_conversation(
-                parent_id
-            ):
+            if await Pauses(uow).pending(parent_id, kinds=(PauseKind.WAIT,)):
                 return 0
             owed = await self._claim_owed(uow, parent)
             if not owed:
@@ -114,17 +100,11 @@ class SubagentResultDelivery:
                 )
             )
             try:
-                turns = ConversationService(
-                    uow=uow,
-                    conversation_repository=conversations,
-                    agent_repository=AgentRepository(uow),
-                    usage_service=build_usage_service(uow),
-                ).turns
+                admit = AdmitMessage.build(uow)
                 for result in owed:
-                    await turns.start(
+                    await admit.admit(
                         parent,
                         user_id=parent.user_id,
-                        pod_id=parent.pod_id,
                         content=result.content,
                         agent_name=None,
                         message_metadata=result.metadata,
@@ -151,7 +131,7 @@ class SubagentResultDelivery:
             and parent_latest.status in ACTIVE_AGENT_RUN_STATUSES
             else None
         )
-        children = await ConversationRepository(uow).list_children(
+        children = await Conversations(uow).list_child_conversations(
             parent_id=parent.id, user_id=parent.user_id, limit=CHILDREN_WINDOW
         )
         agents = await AgentRepository(uow).get_many(
@@ -163,7 +143,7 @@ class SubagentResultDelivery:
             if not _finished_and_owed(child, latest, busy_run=busy_run):
                 continue
             assert latest is not None
-            if not await mark_collected(uow, latest.id, by=COLLECTED_BY_DELIVERY):
+            if not await mark_collected(uow, latest.id):
                 continue
             agent = agents.get(child.agent_id) if child.agent_id else None
             owed.append(
@@ -193,13 +173,13 @@ def _finished_and_owed(
     child waits on a question either: that is not a result, and the parent
     reads it from the child's status when it looks.
     """
-    if not reports_to_parent(child.metadata) or latest is None:
+    if not child.reports_to_parent or latest is None:
         return False
     if latest.status not in DELIVERED_STATUSES:
         return False
     if child.status is ConversationStatus.WAITING:
         return False
-    if (latest.metadata or {}).get(COLLECTED_KEY) is not None:
+    if latest.state.delivered_to_parent_at is not None:
         return False
-    collector = collector_run_id(child.metadata)
+    collector = str(child.parent_run_id) if child.parent_run_id else None
     return busy_run is None or collector != busy_run

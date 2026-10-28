@@ -13,12 +13,10 @@ import pytest
 from app.core.domain.generation import ReasoningEffort
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.runtime_profiles import (
-    RuntimeModelCapability,
     RuntimeModelCatalogEntry,
 )
 from app.modules.agent.services import runtime_system_profiles as system_profiles
 from app.modules.agent.services.runtime_system_profiles import (
-    register_system_openai_catalog_customizer,
     system_lemma_profile,
 )
 
@@ -32,9 +30,7 @@ def openai_env(monkeypatch):
     monkeypatch.setenv("LEMMA_DEFAULT_MODEL_TYPE", "openai_compat")
     monkeypatch.setattr(agent_settings, "lemma_openai_reasoning_effort", None)
     monkeypatch.setattr(agent_settings, "lemma_openai_reasoning_model_names", "")
-    register_system_openai_catalog_customizer(None)
     yield
-    register_system_openai_catalog_customizer(None)
 
 
 def _catalog() -> dict[str, RuntimeModelCatalogEntry]:
@@ -74,26 +70,6 @@ def test_named_reasoning_models_narrow_who_gets_it(monkeypatch):
     assert catalog["thinker"].default_model_settings == {"reasoning_effort": "low"}
     assert not catalog["talker"].reasons
     assert catalog["talker"].default_model_settings == {}
-
-
-def test_a_customizer_that_rebuilds_entries_cannot_drop_the_declaration(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        agent_settings, "lemma_openai_reasoning_effort", ReasoningEffort.MEDIUM
-    )
-    register_system_openai_catalog_customizer(
-        lambda entries: [
-            RuntimeModelCatalogEntry(
-                name=entry.name,
-                provider_model_name=f"vendor/{entry.name}",
-                capabilities=[RuntimeModelCapability.TEXT],
-            )
-            for entry in entries
-        ]
-    )
-
-    assert all(entry.reasons for entry in _catalog().values())
 
 
 def test_building_the_profile_reads_no_env_file_after_the_first_time(monkeypatch):

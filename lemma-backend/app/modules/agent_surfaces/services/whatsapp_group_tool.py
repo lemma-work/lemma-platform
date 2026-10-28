@@ -2,7 +2,7 @@
 
 Offered only there. In a group it would let whoever is talking open more groups
 in a member's name, and a run answering somebody outside the pod gets no
-platform tools at all (see ``agent/tools/tool_assembler``).
+platform tools at all (see ``agent/services/tool_catalog``).
 """
 
 from __future__ import annotations
@@ -10,11 +10,8 @@ from __future__ import annotations
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
-
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.contracts import ConversationContext
+from app.modules.agent.contracts.tools import ToolContext, ToolGroup, ToolSpec, tool
 from app.modules.agent_surfaces.platforms.tool_guard import guarded_tool_result
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     GROUP_SUBJECT_MAX_CHARS,
@@ -49,13 +46,13 @@ class OpenWhatsAppGroupResult(BaseModel):
     error: str | None = None
 
 
-def build_whatsapp_group_toolset(
+def whatsapp_group_tools(
     *, uow_factory: UnitOfWorkFactory, surface_id: UUID
-) -> FunctionToolset[ConversationContext]:
+) -> tuple[ToolSpec, ...]:
     opener = WhatsAppGroupOpener(uow_factory)
 
     async def whatsapp_open_group(
-        ctx: RunContext[ConversationContext],
+        ctx: ToolContext,
         request: OpenWhatsAppGroupParams,
     ) -> OpenWhatsAppGroupResult:
         """Open a WhatsApp group with this bot in it, for the person you are talking to.
@@ -80,20 +77,20 @@ def build_whatsapp_group_toolset(
             ),
         )
 
-    return FunctionToolset[ConversationContext](tools=[whatsapp_open_group])
+    return (tool(whatsapp_open_group, ToolGroup.SURFACE),)
 
 
 async def _open(
     opener: WhatsAppGroupOpener,
     *,
-    ctx: RunContext[ConversationContext],
+    ctx: ToolContext,
     surface_id: UUID,
     title: str,
 ) -> OpenWhatsAppGroupResult:
     async with opener.uow_factory() as uow:
         surface = await SurfaceRepository(uow).get(surface_id)
         allowed = surface is not None and await may_configure_bot(
-            uow, user_id=ctx.deps.user_id, surface=surface
+            uow, user_id=ctx.user_id, surface=surface
         )
     if not allowed:
         return OpenWhatsAppGroupResult(
@@ -105,7 +102,7 @@ async def _open(
         )
     try:
         group = await opener.open(
-            surface_id=surface_id, owner_user_id=ctx.deps.user_id, title=title
+            surface_id=surface_id, owner_user_id=ctx.user_id, title=title
         )
     except (GroupOpenLimitReached, GroupsNotAvailable) as refused:
         return OpenWhatsAppGroupResult(success=False, error=str(refused))

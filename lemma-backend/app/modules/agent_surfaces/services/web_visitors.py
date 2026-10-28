@@ -36,9 +36,7 @@ from app.core.email.transactional import render_transactional_email
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.contact_conversations import (
-    name_contact_on_conversation,
-)
+from app.modules.agent.contracts.channels import name_contact_on_conversation
 from app.modules.agent_surfaces.domain.web_widgets import (
     WebWidget,
     WidgetAnswer,

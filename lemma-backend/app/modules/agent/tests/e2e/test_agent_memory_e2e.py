@@ -25,8 +25,11 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.infrastructure.repositories import AgentRepository
-from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
-from app.modules.agent.services import agent_memory_brief as memory_mod
+from app.modules.agent.services.context_brief.agent_brief import (
+    AgentContextBriefBuilder,
+)
+from app.modules.agent.services.context_brief import memory as memory_mod
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 pytestmark = pytest.mark.e2e
 
@@ -90,7 +93,9 @@ async def _brief(*, agent_name: str, pod_id: str, user_id: str) -> str:
     # A conversation that has never run before -- the case that matters, since
     # most runs are the first of their conversation.
     conversation = type(
-        "_Conversation", (), {"id": uuid4(), "is_pod_assistant": False}
+        "_Conversation",
+        (),
+        {"id": uuid4(), "is_pod_assistant": False, "origin": ConversationOrigin.CHAT},
     )()
     brief = await AgentContextBriefBuilder(uow_factory).build(
         agent=agent,

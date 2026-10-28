@@ -13,13 +13,9 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.subagent_results import (
-    PARENT_RUN_KEY,
-    REPORTS_TO_PARENT_KEY,
-    SUBAGENTS_OUT_KEY,
-)
 from app.modules.agent.domain.value_objects import (
     AgentRunFinishResult,
     AgentRunStatus,
@@ -27,28 +23,30 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     MessageDraft,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.run_followups import stage_run_followups
 from app.modules.agent.tests.e2e.turn_work_support import TurnPod
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 _RUNTIME = AgentRuntimeConfig(profile_id="system:lemma")
 
 
 async def _finished_run(
-    repository: ConversationRepository, conversation: Conversation, answer: str
+    uow: SqlAlchemyUnitOfWork, conversation: Conversation, answer: str
 ) -> UUID:
-    run = await repository.create_agent_run(
+    run = await Runs(uow).create_agent_run(
         conversation_id=conversation.id,
         agent_id=conversation.agent_id,
         agent_runtime=_RUNTIME,
-        metadata={},
     )
-    await repository.append_message(
+    await Messages(uow).append_message(
         conversation_id=conversation.id,
         agent_run_id=run.id,
         draft=MessageDraft.of_text(answer),
     )
-    await repository.finish_agent_run(
+    await Runs(uow).finish_agent_run(
         agent_run_id=run.id,
         status=AgentRunStatus.COMPLETED,
         output_data={"answer": answer},
@@ -62,15 +60,13 @@ async def finished_children(pod: TurnPod, *, count: int) -> tuple[str, list[str]
     finishes: list[tuple[UUID, UUID]] = []
     children: list[str] = []
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = ConversationRepository(uow)
-        parent = await repository.get_conversation(parent_id)
+        conversations = Conversations(uow)
+        parent = await conversations.get_conversation(parent_id)
         assert parent is not None
-        parent_run = await _finished_run(repository, parent, "spawned them all")
-        await repository.set_conversation_metadata_key(
-            parent.id, SUBAGENTS_OUT_KEY, True
-        )
+        parent_run = await _finished_run(uow, parent, "spawned them all")
+        await conversations.mark_delegations_out(parent.id)
         for n in range(count):
-            child = await repository.create_conversation(
+            child = await conversations.create_conversation(
                 Conversation(
                     user_id=parent.user_id,
                     pod_id=parent.pod_id,
@@ -78,16 +74,12 @@ async def finished_children(pod: TurnPod, *, count: int) -> tuple[str, list[str]
                     agent_id=parent.agent_id,
                     parent_id=parent.id,
                     title=f"child {n}",
-                    metadata={
-                        "is_sub_agent": True,
-                        REPORTS_TO_PARENT_KEY: True,
-                        PARENT_RUN_KEY: str(parent_run),
-                    },
+                    origin=ConversationOrigin.SUBAGENT,
+                    reports_to_parent=True,
+                    parent_run_id=parent_run,
                 )
             )
-            finishes.append(
-                (child.id, await _finished_run(repository, child, f"result {n}"))
-            )
+            finishes.append((child.id, await _finished_run(uow, child, f"result {n}")))
             children.append(str(child.id))
         finishes.append((parent.id, parent_run))
     finished = AgentRunFinishResult(

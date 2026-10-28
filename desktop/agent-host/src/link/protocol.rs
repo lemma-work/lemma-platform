@@ -4,7 +4,7 @@
 //! a request that expects an answer, `re` on the answer points back at it, and
 //! a push carries neither. The table of frames, the close codes and what each
 //! side does with them are in docs/architecture/agent-host.md#the-link; the
-//! backend's copy is `app/modules/agent/domain/agent_host_link.py`, and both
+//! backend's copy is `app/modules/agent/agent_host/domain/link.py`, and both
 //! are held to `tests/fixtures/wire_contract.json`.
 
 use serde::{Deserialize, Serialize};

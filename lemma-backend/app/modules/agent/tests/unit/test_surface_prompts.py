@@ -1,6 +1,6 @@
 """What the agent is told about the third-party platform it is conversing on.
 
-The text is the agent's own (`app/modules/agent/domain/surface_prompts.py`); the
+The text is the agent's own (`app/modules/agent/domain/prompt/surface.py`); the
 surface contributes typed facts only (`PlatformFacts`). Every claim the prompt
 makes about a platform -- files as attachments, buttons, a voice bubble, a
 channel-history tool -- is pinned here against the fact that justifies it.
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.domain.surface_prompts import (
+from app.modules.agent.domain.prompt.surface import (
     attachment_listing_block,
     background_channel_context_note,
     surface_platform_guidance,
@@ -260,14 +260,31 @@ def test_the_surface_module_no_longer_carries_the_prose():
 
 def test_the_capability_and_the_remote_prompt_inject_the_same_text():
     """Two harnesses, one builder: the in-process capability and remote prompt agree."""
-    from app.modules.agent.capabilities.surface_platform import (
-        SurfacePlatformCapability,
+    from uuid import uuid4
+
+    from app.modules.agent.domain.context import ToolContext
+    from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+        Instructions,
+        harness_capabilities,
     )
+    from app.modules.agent.services.tool_runtime import ToolRuntime
 
     for platform in (*_CHAT_PLATFORMS, "RESEND"):
-        assert SurfacePlatformCapability(platform).get_instructions() == (
-            surface_platform_guidance(platform)
+        ctx = ToolContext(
+            user_id=uuid4(),
+            pod_id=uuid4(),
+            conversation_id=uuid4(),
+            surface_platform=platform,
         )
+        capabilities = harness_capabilities(
+            ctx=ctx, specs=[], runtime=ToolRuntime([]), enable_prompt_caching=False
+        )
+        texts = [
+            capability.get_instructions()
+            for capability in capabilities
+            if isinstance(capability, Instructions)
+        ]
+        assert surface_platform_guidance(platform) in texts
 
 
 # --- P2: attachments no longer name tools that do not exist ----------------
@@ -324,7 +341,7 @@ def test_channel_context_note_frames_history_as_background():
 
 
 def test_channel_context_note_is_published_through_the_agent_contract():
-    from app.modules.agent.contracts.surface_prompts import (
+    from app.modules.agent.contracts.channel_words import (
         background_channel_context_note as published,
     )
 

@@ -28,14 +28,14 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import Tool
 
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.infrastructure.harnesses.history import (
+from app.modules.agent.infrastructure.harness.lemma.history import (
     drop_orphan_tool_results,
     enforce_token_ceiling,
     find_safe_cutoff,
     history_capabilities,
 )
 from app.modules.agent.services.context_budget import context_budget_for
-from app.modules.agent.services.history_tokens import (
+from app.modules.agent.infrastructure.providers.tokens import (
     MessageTokenCounter,
     count_model_message_tokens,
     count_text_tokens,
@@ -299,7 +299,7 @@ async def test_compaction_never_leaves_a_tool_result_without_its_call(
 ) -> None:
     from types import SimpleNamespace
 
-    from app.modules.agent.infrastructure.harnesses.history_compaction import (
+    from app.modules.agent.infrastructure.harness.lemma.history_compaction import (
         HistoryCompactor,
     )
 

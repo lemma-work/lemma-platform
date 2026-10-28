@@ -155,9 +155,7 @@ async def mark_outcome_unknown(
     not have reached its platform, the miss is counted for alerting, and it
     is logged -- all in the transaction that marks it.
     """
-    from app.modules.agent.contracts import (
-        conversations_for_surfaces as agent_conversations,
-    )
+    from app.modules.agent.contracts import channels as agent_conversations
 
     marked = await DeliveryRepository(uow.session).set_delivery_status(
         row.id,

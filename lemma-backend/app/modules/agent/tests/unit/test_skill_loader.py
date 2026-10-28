@@ -7,20 +7,22 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.tools.skills import skill_loader
-from app.modules.agent.tools.skills.skill_loader import (
+from app.modules.agent.infrastructure.tools.skills import skill_loader
+from app.modules.agent.infrastructure.tools.skills.skill_loader import (
     list_workspace_skill_resources,
     list_workspace_skills,
     read_workspace_skill,
     read_workspace_skill_resource,
 )
-from app.modules.agent.tools.skills import pydantic_adapter as skills_adapter
-from app.modules.agent.tools.skills.models import (
+from app.modules.agent.infrastructure.tools.skills import (
+    tools as skills_adapter,
+)
+from app.modules.agent.infrastructure.tools.skills.models import (
     SkillLookupRequest,
     SkillResourceSummary,
     SkillSummary,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 from app.modules.datastore.domain.errors import DatastoreFileNotFoundError
 
 
@@ -259,12 +261,10 @@ async def test_load_skill_appends_local_workspace_override(
         "read_workspace_skill",
         fake_read_workspace_skill,
     )
-    ctx = SimpleNamespace(
-        deps=BaseAgentContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-        )
+    ctx = ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
     )
 
     result = await skills_adapter.load_skill(
@@ -298,7 +298,7 @@ def test_the_skill_override_names_the_tools_this_run_has(
 ) -> None:
     from app.modules.workspace.contracts.host_execution import HostWorkspace
 
-    deps = BaseAgentContext(
+    deps = ToolContext(
         user_id=uuid4(),
         pod_id=uuid4(),
         conversation_id=uuid4(),

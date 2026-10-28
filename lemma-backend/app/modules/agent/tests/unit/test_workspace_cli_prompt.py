@@ -9,7 +9,7 @@ converted at upload.
 
 from __future__ import annotations
 
-from app.modules.agent.domain.prompts import load_workspace_cli_prompt
+from app.modules.agent.domain.prompt.templates import load_workspace_cli_prompt
 
 
 def test_prompt_documents_in_place_pod_document_reading():

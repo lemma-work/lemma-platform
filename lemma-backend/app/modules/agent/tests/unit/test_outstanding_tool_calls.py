@@ -27,8 +27,8 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
-from app.modules.agent.infrastructure.harnesses.tool_returns import (
+from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
+from app.modules.agent.infrastructure.harness.lemma.tool_returns import (
     OutstandingToolCalls,
 )
 

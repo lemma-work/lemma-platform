@@ -20,10 +20,10 @@ from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalButton,
     SurfaceApprovalRenderPlan,
 )
-from app.modules.agent.contracts.interaction_replies import (
+from app.modules.agent.contracts.channel_words import (
     classify_approval_reply as _classify_approval_reply,
 )
-from app.modules.agent.services.interaction_reply import (
+from app.modules.agent.domain.interaction_reply import (
     _APPROVE_ONCE_REPLIES,
     _APPROVE_SESSION_REPLIES,
     _DENY_REPLIES,
@@ -100,7 +100,7 @@ _ONE_QUESTION = {
 
 
 #: Where `agent` publishes the operations this path calls.
-_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_OPERATIONS = "app.modules.agent.contracts.channels"
 
 
 async def _resume(
@@ -141,9 +141,6 @@ async def _resume(
             ),
             side_effect=lookup_raises,
         ),
-        # `_is_an_answer` asks this when the words do not plainly answer.
-        "conversation_metadata_value": AsyncMock(return_value=None),
-        "set_conversation_metadata_value": AsyncMock(),
         "resolve_pending_interaction": resolve,
     }
     context = SimpleNamespace(conversation_id=uuid4(), user_id=uuid4(), pod_id=uuid4())
@@ -297,9 +294,7 @@ async def test_an_approval_typed_by_someone_else_is_just_a_message() -> None:
     approve it (the rule the buttons apply too). Somebody else in a shared
     thread typing "approve" records nothing and goes on as an ordinary message
     -- not as a failure the person is told about."""
-    from app.modules.agent.contracts.conversations_for_surfaces import (
-        ApprovalNotOwnedError,
-    )
+    from app.modules.agent.contracts.channels import ApprovalNotOwnedError
 
     outcome, resolve = await _resume("approve", resolve_raises=ApprovalNotOwnedError())
 

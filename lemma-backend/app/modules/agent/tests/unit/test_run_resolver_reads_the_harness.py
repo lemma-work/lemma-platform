@@ -24,8 +24,8 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileScope,
 )
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-from app.modules.agent.infrastructure.agent_host.repository import AgentHostRepository
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
+from app.modules.agent.agent_host.control.repository import AgentHostRepository
+from app.modules.agent.infrastructure.harness.registry import HarnessRegistry
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,

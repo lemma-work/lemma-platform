@@ -19,18 +19,19 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.text.thinking_tags import has_thinking_tokens, split_thinking_segments
 from app.modules.agent.domain.entities import Message
-from app.modules.agent.domain.pausing_tools import (
-    USER_PAUSING_TOOL_NAMES,
-    WAIT_TOOL_NAME,
-)
+from app.modules.agent.domain.pauses import CALL_NAMES
+from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.tool_call_ids import call_signature
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
+    FINAL_ANSWER_KINDS,
+    AnswerKind,
     ConversationStatus,
     JsonObject,
     JsonValue,
@@ -38,7 +39,8 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.infrastructure.repositories.run_last_words import (
     last_text,
     tool_result_after,
@@ -79,16 +81,14 @@ def split_reasoning_drafts(draft: MessageDraft) -> list[MessageDraft]:
                     chunk.strip(),
                     role=draft.role,
                     metadata={
-                        # Never the answer, whatever the original claimed, and
-                        # marked so the row says why it is not a TEXT message.
-                        **{
-                            key: value
-                            for key, value in metadata.items()
-                            if key not in _ANSWER_ONLY_METADATA
-                        },
-                        "is_final_answer": False,
-                        "reclassified_inline_reasoning": True,
+                        key: value
+                        for key, value in metadata.items()
+                        if key not in _ANSWER_ONLY_METADATA
                     },
+                    # Never the answer, whatever the original claimed.
+                    state=draft.state.model_copy(
+                        update={"answer": AnswerKind.NOT_FINAL}
+                    ),
                 )
             )
         else:
@@ -98,10 +98,7 @@ def split_reasoning_drafts(draft: MessageDraft) -> list[MessageDraft]:
         drafts.append(draft.model_copy(update={"text": answer.strip()}))
 
     # Debug, not warning: on a model that always writes reasoning inline this
-    # fires every turn, and a warning per message is noise nobody reads. The
-    # durable signal is `reclassified_inline_reasoning` on the row above --
-    # queryable, permanent, and countable per model, which is what actually
-    # answers "has a provider started doing this to us".
+    # fires every turn, and a warning per message is noise nobody reads.
     logger.debug(
         "agent.run.inline_reasoning_reclassified.diagnostic",
         thought_count=sum(1 for one in drafts if one.kind is MessageKind.THINKING),
@@ -122,6 +119,22 @@ _ANSWER_ONLY_METADATA = frozenset(
 )
 
 
+def _opens_with_its_call(draft: MessageDraft) -> bool:
+    """A person's pause, written with its call. A wait's row is the tool's to
+    write, beside its timer."""
+    return (
+        draft.kind is MessageKind.TOOL_CALL
+        and draft.pause is not None
+        and draft.pause.kind is not PauseKind.WAIT
+    )
+
+
+def _is_wait(draft: MessageDraft) -> bool:
+    return draft.tool_name == CALL_NAMES[PauseKind.WAIT] or (
+        draft.pause is not None and draft.pause.kind is PauseKind.WAIT
+    )
+
+
 def _restates(earlier: Message, draft: MessageDraft, agent_run_id: UUID) -> bool:
     """Whether ``earlier`` is this same call, stored before by this same run.
 
@@ -130,7 +143,7 @@ def _restates(earlier: Message, draft: MessageDraft, agent_run_id: UUID) -> bool
     """
     if earlier.agent_run_id != agent_run_id:
         return False
-    if draft.tool_name in USER_PAUSING_TOOL_NAMES:
+    if _opens_with_its_call(draft):
         return True
     return earlier.tool_name == draft.tool_name and call_signature(
         earlier.tool_name, earlier.tool_args
@@ -156,34 +169,42 @@ class RunMessageWriter:
         metadata: JsonObject = dict(draft.metadata or {})
         metadata.pop("author_user_id", None)
         metadata.pop("agent_run_id", None)
+        state = draft.state
         if (
             draft.role == MessageRole.ASSISTANT
             and draft.kind == MessageKind.TEXT
-            and "is_final_answer" not in metadata
+            and state.answer is None
         ):
-            metadata["is_final_answer"] = True
-        draft = draft.model_copy(update={"metadata": metadata})
+            # Nobody said it was not: assistant text is the answer.
+            state = state.model_copy(update={"answer": AnswerKind.FINAL})
+        draft = draft.model_copy(update={"metadata": metadata, "state": state})
 
         async with self.uow_factory() as uow:
-            repository = ConversationRepository(uow)
+            pauses = Pauses(uow)
             existing = await self._answered_already(
-                repository,
+                pauses,
                 conversation_id=conversation_id,
                 draft=draft,
             )
             if existing is not None:
                 return existing
             draft = await self._unique_call_id(
-                repository,
+                uow,
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
             )
-            return await repository.append_message(
+            saved = await Messages(uow).append_message(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
             )
+            if draft.kind is MessageKind.TOOL_RETURN and draft.tool_call_id:
+                # The call's own return: a pause it opened never paused.
+                await pauses.close_by_return(
+                    conversation_id=conversation_id, tool_call_id=draft.tool_call_id
+                )
+            return saved
 
     async def notice(
         self, *, conversation_id: UUID, text: str, metadata: JsonObject
@@ -195,7 +216,7 @@ class RunMessageWriter:
         turn's first message), and later turns read it as context.
         """
         async with self.uow_factory() as uow:
-            return await ConversationRepository(uow).append_message(
+            return await Messages(uow).append_message(
                 conversation_id=conversation_id,
                 agent_run_id=None,
                 draft=MessageDraft.of_notification(text, metadata=metadata),
@@ -203,7 +224,7 @@ class RunMessageWriter:
 
     @staticmethod
     async def _unique_call_id(
-        repository: ConversationRepository,
+        uow: SqlAlchemyUnitOfWork,
         *,
         conversation_id: UUID,
         agent_run_id: UUID,
@@ -229,17 +250,28 @@ class RunMessageWriter:
         """
         if (
             draft.kind is not MessageKind.TOOL_CALL
-            or draft.tool_name == WAIT_TOOL_NAME
+            or _is_wait(draft)
             or not draft.tool_call_id
         ):
             return draft
-        earlier = await repository.get_tool_call(
+        messages = Messages(uow)
+        earlier = await messages.tool_call(
             conversation_id=conversation_id, tool_call_id=draft.tool_call_id
         )
-        if earlier is None or _restates(earlier, draft, agent_run_id):
+        # A pause answered already under this id is never reopened under it,
+        # even by the run that raised it.
+        answered = _opens_with_its_call(draft) and (
+            await Pauses(uow).tool_return(
+                conversation_id=conversation_id, tool_call_id=draft.tool_call_id
+            )
+            is not None
+        )
+        if not answered and (
+            earlier is None or _restates(earlier, draft, agent_run_id)
+        ):
             return draft
         renamed = f"{draft.tool_call_id}-{agent_run_id.hex[-12:]}"
-        if await repository.get_tool_call(
+        if await messages.tool_call(
             conversation_id=conversation_id, tool_call_id=renamed
         ):
             # The provider reused the id more than once in this run.
@@ -254,7 +286,7 @@ class RunMessageWriter:
 
     @staticmethod
     async def _answered_already(
-        repository: ConversationRepository,
+        repository: Pauses,
         *,
         conversation_id: UUID,
         draft: MessageDraft,
@@ -269,9 +301,9 @@ class RunMessageWriter:
         """
         if draft.kind != MessageKind.TOOL_RETURN or not draft.tool_call_id:
             return None
-        if not (draft.metadata or {}).get("synthetic_tool_return"):
+        if not draft.state.synthetic_tool_return:
             return None
-        return await repository.get_tool_return(
+        return await repository.tool_return(
             conversation_id=conversation_id,
             tool_call_id=draft.tool_call_id,
         )
@@ -305,7 +337,8 @@ class RunMessageWriter:
         """What a run answered by ``answer`` hands back, by the rule for any answer."""
         draft = MessageDraft.of_text(
             answer.text or "",
-            metadata={**(answer.metadata or {}), "is_final_answer": True},
+            metadata=answer.metadata,
+            state=answer.state.model_copy(update={"answer": AnswerKind.FINAL}),
         )
         return self.output_data_from_event(
             AgentEvent(
@@ -323,16 +356,18 @@ class RunMessageWriter:
             return None
 
         metadata = data.metadata or {}
-        if metadata.get("is_final_answer") is False:
+        answer = data.state.answer
+        if answer is not None and answer not in FINAL_ANSWER_KINDS:
             return None
         is_assistant_text = (
             data.role == MessageRole.ASSISTANT and data.kind == MessageKind.TEXT
         )
-        if not metadata.get("is_final_answer") and not is_assistant_text:
+        is_final = answer in FINAL_ANSWER_KINDS
+        if not is_final and not is_assistant_text:
             return None
 
         structured_output = metadata.get("structured_output")
-        if metadata.get("is_final_answer") and structured_output is not None:
+        if is_final and structured_output is not None:
             return structured_output
         if structured_output is not None:
             if isinstance(structured_output, dict):

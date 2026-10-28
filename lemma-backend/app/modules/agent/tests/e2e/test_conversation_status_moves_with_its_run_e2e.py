@@ -22,7 +22,8 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     ConversationStatus,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 
 pytestmark = [pytest.mark.e2e]
 
@@ -58,7 +59,7 @@ async def conversation_id(authenticated_client, fixed_test_org) -> UUID:
 
 async def _start_run(conversation_id: UUID) -> UUID:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        run = await ConversationRepository(uow).create_agent_run(
+        run = await Runs(uow).create_agent_run(
             conversation_id=conversation_id,
             agent_id=None,
             agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
@@ -69,7 +70,7 @@ async def _start_run(conversation_id: UUID) -> UUID:
 
 async def _finish(run_id: UUID):
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        result = await ConversationRepository(uow).finish_agent_run(
+        result = await Runs(uow).finish_agent_run(
             agent_run_id=run_id, status=AgentRunStatus.COMPLETED
         )
         await uow.commit()
@@ -78,9 +79,7 @@ async def _finish(run_id: UUID):
 
 async def _stored_status(conversation_id: UUID) -> ConversationStatus | None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversation = await ConversationRepository(uow).get_conversation(
-            conversation_id
-        )
+        conversation = await Conversations(uow).get_conversation(conversation_id)
     assert conversation is not None
     return conversation.status
 
@@ -90,7 +89,7 @@ async def test_saving_an_entity_read_mid_run_does_not_reopen_the_conversation(
 ) -> None:
     run_id = await _start_run(conversation_id)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        stale = await ConversationRepository(uow).get_conversation(conversation_id)
+        stale = await Conversations(uow).get_conversation(conversation_id)
     assert stale is not None and stale.status is ConversationStatus.RUNNING
 
     # The run ends while the rename is still holding what it read.
@@ -98,7 +97,7 @@ async def test_saving_an_entity_read_mid_run_does_not_reopen_the_conversation(
 
     stale.title = "Renamed while it ran"
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).update_conversation(stale)
+        await Conversations(uow).update_conversation(stale)
         await uow.commit()
 
     assert await _stored_status(conversation_id) is ConversationStatus.COMPLETED

@@ -24,8 +24,8 @@ def test_the_conversation_carries_the_schedules_id_name_and_type():
 
     metadata = conversation_metadata(schedule, {})
 
+    # That a schedule started it is the conversation's origin, not a key.
     assert metadata == {
-        "started_by": "SCHEDULE",
         "schedule_id": str(schedule.id),
         "schedule_name": "daily-invoices",
         "schedule_type": "TIME",

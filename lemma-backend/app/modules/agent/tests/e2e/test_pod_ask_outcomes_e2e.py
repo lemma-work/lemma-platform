@@ -9,8 +9,9 @@ with the enqueue suppressed and finished by hand, which is all delivery reads.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.tools import NoArguments
+
 import asyncio
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -28,7 +29,9 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.pod_ask_queries import PodAskQueries
 from app.modules.agent.infrastructure.pod_link_queries import PodLinkQueries
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.pod_link_helpers import (
     ask_service,
@@ -41,7 +44,7 @@ from app.modules.agent.tests.e2e.pod_link_helpers import (
     teammate,
 )
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
-from app.modules.agent.tools.messaging.teammates import (
+from app.modules.agent.infrastructure.tools.messaging.teammates import (
     AskTeammateRequest,
     ask_teammate,
     list_teammates,
@@ -101,16 +104,18 @@ async def _the_thread_once_opened(asking: UUID) -> UUID:
 async def _finish(thread_id: UUID, words: str, *, disconnect: tuple[str, str] | None):
     """Finish the thread's run -- and, in the same commit, take the link away."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversations = ConversationRepository(uow)
+        conversations = Conversations(uow)
+        messages = Messages(uow)
+        runs = Runs(uow)
         found = await conversations.get_conversation(thread_id, include_runs=True)
         assert found is not None
         run = found.agent_runs[-1]
-        await conversations.append_message(
+        await messages.append_message(
             conversation_id=thread_id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text(words, role=MessageRole.ASSISTANT),
         )
-        await conversations.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,
@@ -245,7 +250,7 @@ async def test_disconnecting_stops_a_link_thread_still_running(
     )
     asked = await _ask(deps, billing)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        running = await ConversationRepository(uow).get_conversation(
+        running = await Conversations(uow).get_conversation(
             asked.conversation_id, include_runs=True
         )
     assert running is not None and running.status is ConversationStatus.RUNNING
@@ -254,7 +259,7 @@ async def test_disconnecting_stops_a_link_thread_still_running(
     assert gone.status_code == status.HTTP_204_NO_CONTENT, gone.text
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        stopped = await ConversationRepository(uow).get_conversation(
+        stopped = await Conversations(uow).get_conversation(
             asked.conversation_id, include_runs=True
         )
     assert stopped is not None
@@ -300,14 +305,12 @@ async def _three_pods(client, org) -> tuple[str, str, str]:
 
 
 def _ctx(user, org, support: str, conversation_id: UUID, **extra):
-    return SimpleNamespace(
-        deps=asking_deps(
-            user_id=UUID(user["id"]),
-            org_id=UUID(org["id"]),
-            pod_id=support,
-            conversation_id=conversation_id,
-            **extra,
-        )
+    return asking_deps(
+        user_id=UUID(user["id"]),
+        org_id=UUID(org["id"]),
+        pod_id=support,
+        conversation_id=conversation_id,
+        **extra,
     )
 
 
@@ -326,14 +329,18 @@ async def test_list_teammates_offers_only_what_this_conversation_could_ask(
     def reach(listed) -> dict[str, list[str]]:
         return {one.teammate: one.reach for one in listed.teammates}
 
-    own = await list_teammates(_ctx(fixed_test_user, fixed_test_org, support, chat_id))
+    own = await list_teammates(
+        _ctx(fixed_test_user, fixed_test_org, support, chat_id), NoArguments()
+    )
     assert reach(own) == {
         billing: ["through the person", "connected"],
         legal: ["through the person"],
     }
 
     task = await task_conversation(client, support)
-    nobody = await list_teammates(_ctx(fixed_test_user, fixed_test_org, support, task))
+    nobody = await list_teammates(
+        _ctx(fixed_test_user, fixed_test_org, support, task), NoArguments()
+    )
     assert reach(nobody) == {billing: ["connected"]}
 
     channel = await list_teammates(
@@ -343,7 +350,8 @@ async def test_list_teammates_offers_only_what_this_conversation_could_ask(
             support,
             chat_id,
             surface_conversation_kind="CHANNEL",
-        )
+        ),
+        NoArguments(),
     )
     assert channel.teammates == []
 

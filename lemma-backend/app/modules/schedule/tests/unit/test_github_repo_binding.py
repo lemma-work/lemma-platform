@@ -86,21 +86,20 @@ class TestWhatTheScheduleAdds:
         assert metadata["repo"] == {"owner": "octo", "repo": "api", "ref": "topic"}
 
     def test_a_firing_that_names_no_repository_binds_no_repository(self):
-        """No repo key at all -- but the metadata itself is no longer empty.
-
-        Every schedule-started run is stamped with where it came from, because
-        that is the only way the agent can tell that nobody is waiting on it.
-        """
+        """No repo key at all -- but the metadata itself is not empty: it says
+        which schedule fired, and of which kind."""
         for value in ({}, None, {"repo": {}}, {"repo": "octo/api"}):
             metadata = _conversation_metadata(
                 _schedule(pod_connector_slug="github"), value
             )
             assert "repo" not in metadata
 
-    def test_every_schedule_started_run_says_a_schedule_started_it(self):
+    def test_every_schedule_started_run_says_which_schedule_started_it(self):
+        """That a schedule started it is the conversation's origin, which the
+        agent module sets from ``source="SCHEDULE"``; this says which."""
         schedule = _schedule(name="daily-invoices")
         metadata = _conversation_metadata(schedule, None)
-        assert metadata["started_by"] == "SCHEDULE"
+        assert "started_by" not in metadata
         assert metadata["schedule_id"] == str(schedule.id)
         assert metadata["schedule_name"] == "daily-invoices"
         assert metadata["schedule_type"] == "TIME"

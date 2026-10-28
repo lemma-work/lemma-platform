@@ -70,7 +70,7 @@ def test_only_the_agent_tool_path_asks_to_be_the_app():
     call. Pod publish and pod import must never appear.
     """
     assert _callers_asking_to_be_the_app() == {
-        "app/modules/agent/tools/connectors/pydantic_adapter.py"
+        "app/modules/agent/infrastructure/tools/connectors/tools.py"
     }
 
 

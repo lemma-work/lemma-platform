@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import select
 
+from app.modules.agent.services.surface_context import conversation_surface
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
@@ -31,14 +32,11 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
-from app.modules.agent.contracts.conversations import merge_conversation_metadata
+from app.modules.test_support.conversation_surfaces_double import record_place
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.domain.asked_questions import batch_of, message_ref
-from app.modules.agent.domain.private_notes import (
-    asked_in_lemma,
-    run_delivers_to_surface,
-)
-from app.modules.agent.domain.surface_prompts import surface_platform_guidance
+from app.modules.agent.domain.private_notes import run_delivers_to_surface
+from app.modules.agent.domain.prompt.surface import surface_platform_guidance
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
@@ -49,10 +47,10 @@ from app.modules.agent.events.channel_question_work import (
 )
 from app.modules.agent.events.run_followup_work import register_run_followup_work
 from app.modules.agent.infrastructure.models.conversation import AgentRunModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.services.surface_context import surface_context_for_run
-from app.modules.agent.tests.e2e.lifecycle_helpers import conversation, runs
+from app.modules.agent.tests.e2e.lifecycle_helpers import runs
 from app.modules.channels.contracts import (
     Asker,
     ChannelMessage,
@@ -128,7 +126,7 @@ async def _end(run_id: UUID, *, pod_id: UUID, user_id: UUID, answer: str) -> Non
             select(AgentRunModel.conversation_id).where(AgentRunModel.id == run_id)
         )
         assert conversation_id is not None
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,
@@ -154,11 +152,10 @@ async def _heard_on_whatsapp(conversation_id: UUID) -> None:
     """The member writes to the pod's WhatsApp number: the surface writes what
     it heard onto their conversation, as ``conversation_binder`` does."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await merge_conversation_metadata(
+        await record_place(
             uow,
             conversation_id,
             {
-                "source": "agent_surfaces",
                 "surface_id": str(uuid4()),
                 "surface_platform": "WHATSAPP",
                 "external_channel_id": "15556295168",
@@ -184,14 +181,15 @@ async def test_a_line_in_lemma_is_not_asked_on_whatsapp(pod: Pod):
 
     assert same_conversation == conversation_id, "one conversation per person"
     [run] = [run for run in await runs(conversation_id) if run.id == asked_here]
-    assert asked_in_lemma(run.run_metadata)
-    assert not run_delivers_to_surface(run.run_metadata)
-    loaded = await conversation(conversation_id)
-    context = surface_context_for_run(loaded, run.run_metadata)
+    assert run.state().asked_in_lemma
+    assert not run_delivers_to_surface(run.state())
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        loaded = await conversation_surface(uow, conversation_id)
+    context = surface_context_for_run(loaded, run.state())
     assert context["surface_platform"] is None
     assert context["external_channel_id"] is None
     assert surface_platform_guidance(context["surface_platform"]) == ""
-    # The conversation itself still says WhatsApp: that is where a reply to
+    # The surface's record still says WhatsApp: that is where a reply to
     # the member's next WhatsApp message goes.
     assert surface_context_for_run(loaded, None)["surface_platform"] == "WHATSAPP"
 

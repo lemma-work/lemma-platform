@@ -104,7 +104,6 @@ async def _finished(run_id: UUID, conversation_id: UUID, pod_id: UUID) -> None:
                 status="COMPLETED",
                 conversation_status="COMPLETED",
                 origin="surface",
-                has_reply_target=True,
             ),
         )
         await uow.commit()

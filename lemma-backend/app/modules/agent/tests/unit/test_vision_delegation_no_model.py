@@ -13,7 +13,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.domain.errors import DomainError
-from app.modules.agent.tools import vision_delegation
+from app.modules.agent.infrastructure.tools import vision_delegation
 
 pytestmark = pytest.mark.unit
 

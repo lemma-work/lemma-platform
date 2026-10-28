@@ -5,10 +5,12 @@ import httpx2
 import pytest
 from pydantic_ai.exceptions import ModelHTTPError
 
-from app.modules.agent.infrastructure.harnesses.provider_error_log import (
-    user_facing_error_message,
+from app.modules.agent.infrastructure.harness.lemma.run_failure_classification import (
+    classify_run_failure,
 )
-from app.modules.agent.infrastructure.transport_errors import is_retryable_stream_error
+from app.modules.agent.infrastructure.providers.transport_errors import (
+    is_retryable_stream_error,
+)
 from app.modules.agent.services.run_finalizer import (
     is_usage_limit_error,
     run_failure_message,
@@ -24,7 +26,7 @@ from app.modules.usage.domain.errors import (
 
 def test_accounting_conflict_exposes_safe_reason_and_is_not_retried() -> None:
     error = AccountingConflictError("internal-allocation-identifier")
-    assert user_facing_error_message(error) == error.message
+    assert classify_run_failure(error).message == error.message
     assert "internal-allocation-identifier" not in error.message
     assert error.status_code == 409
     assert not is_retryable_stream_error(error)
@@ -35,7 +37,7 @@ def test_exhausted_provider_attempts_preserve_safe_http_guidance(status: int) ->
     provider = ModelHTTPError(status, "private-model", body="secret-provider-body")
     error = ProviderAttemptsExhaustedError()
     error.__cause__ = provider
-    message = user_facing_error_message(error)
+    message = classify_run_failure(error).message
     assert f"HTTP {status}" in message
     assert "secret-provider-body" not in message
     assert "private-model" not in message

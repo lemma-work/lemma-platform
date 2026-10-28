@@ -4,7 +4,7 @@ Each platform defines what per-message context is available to the agent's
 tools at runtime (file attachments, thread state, channel identifiers, etc.).
 
 These are created from the raw ParsedInboundSurfaceEvent.metadata dict in the
-ingress service and injected directly into ConversationContext via chat_stream().
+ingress service and injected directly into ToolContext via chat_stream().
 They are NEVER stored in the DB — they are per-invocation runtime context only.
 """
 

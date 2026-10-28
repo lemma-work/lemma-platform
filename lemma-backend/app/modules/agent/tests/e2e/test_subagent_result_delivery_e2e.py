@@ -24,7 +24,7 @@ from app.core.infrastructure.db.uow_factory import (
 from app.modules.agent.domain.subagent_results import RESULT_SOURCE
 from app.modules.agent.domain.value_objects import AgentRunStatus, MessageRole
 from app.modules.agent.services.subagent_result_delivery import SubagentResultDelivery
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.services.subagent_service import SubAgentService
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
@@ -36,7 +36,7 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     seeded_conversation,
     uow_factory,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = [pytest.mark.e2e]
 
@@ -45,8 +45,8 @@ def _service() -> SubAgentService:
     return SubAgentService(SessionUnitOfWorkFactory(async_session_maker))
 
 
-def _as_parent(parent: Seeded, run_id: UUID) -> BaseAgentContext:
-    return BaseAgentContext(
+def _as_parent(parent: Seeded, run_id: UUID) -> ToolContext:
+    return ToolContext(
         user_id=parent.user_id,
         pod_id=parent.pod_id,
         conversation_id=parent.conversation_id,
@@ -65,7 +65,7 @@ async def _spawn(parent: Seeded, parent_run: UUID, task: str) -> tuple[UUID, UUI
 
 async def _child_answers(run_id: UUID, answer: str) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run_id,
             status=AgentRunStatus.COMPLETED,
             output_data={"answer": answer},

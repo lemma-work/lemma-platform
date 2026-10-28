@@ -15,16 +15,18 @@ from uuid import uuid4
 
 from pydantic_ai.tools import Tool
 
-from app.modules.agent.capabilities.assembler import _visible_capability
-from app.modules.agent.capabilities.todo import build_todo_toolset
+from app.modules.agent.infrastructure.harness.lemma.run_options import (
+    final_answer_output,
+)
+from app.modules.agent.infrastructure.tools.todo import todo_specs
+from app.modules.agent.services.tool_catalog import STATIC_SPECS
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.value_objects import ConversationType
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
-from app.modules.agent.tools.final_answer import get_final_answer_tool
-from app.modules.agent.tools.registry import (
-    POD_DEFAULT_AGENT_TOOLSETS,
-    _TOOLSET_BY_NAME,
+from app.modules.agent.infrastructure.harness.lemma.final_answer_output import (
+    get_final_answer_tool,
 )
+from app.modules.agent.domain.toolsets import POD_DEFAULT_AGENT_TOOLSETS
 
 _TYPE_KEYS = {
     "type",
@@ -54,46 +56,15 @@ def _typeless_default_nodes(node: object, path: str = "$") -> list[tuple[str, di
     return bad
 
 
-def _tool_schema(tool: object) -> dict | None:
-    function_schema = getattr(tool, "function_schema", None)
-    if function_schema is not None and getattr(function_schema, "json_schema", None):
-        return function_schema.json_schema
-    tool_def = getattr(tool, "tool_def", None)
-    if tool_def is not None:
-        return tool_def.parameters_json_schema
-    return None
-
-
-def _toolset_schemas(label: str, toolset: object) -> list[tuple[str, dict]]:
-    schemas: list[tuple[str, dict]] = []
-    tools = getattr(toolset, "tools", None) or {}
-    for tool_name, tool in tools.items():
-        schema = _tool_schema(tool)
-        if schema is not None:
-            schemas.append((f"{label}/{tool_name}", schema))
-    return schemas
-
-
 def _pod_default_tool_schemas() -> list[tuple[str, dict]]:
-    schemas: list[tuple[str, dict]] = []
-    for toolset_name in POD_DEFAULT_AGENT_TOOLSETS:
-        # Capability-only toolsets (e.g. TODO) aren't static singletons; their
-        # schemas are validated separately below.
-        toolset = _TOOLSET_BY_NAME.get(toolset_name)
-        if toolset is None:
-            continue
-        schemas += _toolset_schemas(toolset_name.value, toolset)
-    # The TODO capability's tools are part of the pod-default surface too, so they
-    # must also be free of typeless-default nodes that strict providers reject.
-
-    todo_toolset = _visible_capability(
-        build_todo_toolset(
-            uow_factory=lambda: None,  # not invoked during schema extraction
-            conversation_id=uuid4(),
-        )
-    ).get_toolset()
-    schemas += _toolset_schemas("TODO", todo_toolset)
-    return schemas
+    specs = [
+        spec
+        for name in POD_DEFAULT_AGENT_TOOLSETS
+        for spec in STATIC_SPECS.get(name, ())
+    ]
+    # TODO is built per run; its schema is part of the pod-default surface too.
+    specs += todo_specs(uow_factory=lambda: None)
+    return [(f"{spec.toolset}/{spec.name}", spec.json_schema) for spec in specs]
 
 
 def test_pod_default_tool_schemas_have_no_typeless_default_nodes():
@@ -130,7 +101,7 @@ def test_openai_compatible_transformer_inlines_all_defs():
     no provider-side resolution is needed. Guards the whole pod-default surface
     against "Error resolving schema reference '#/$defs/...'".
     """
-    from app.modules.agent.services.openai_schema_compat import (
+    from app.modules.agent.infrastructure.providers.openai_schema_compat import (
         InlineDefsOpenAIJsonSchemaTransformer,
     )
 
@@ -159,13 +130,12 @@ def test_pod_write_record_data_advertises_object_or_json_string():
     lets those models write data, so the transformed tool schema must keep both
     branches (and never collapse `data` to a strict, closed empty object).
     """
-    from app.modules.agent.services.openai_schema_compat import (
+    from app.modules.agent.infrastructure.providers.openai_schema_compat import (
         InlineDefsOpenAIJsonSchemaTransformer,
     )
-    from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
+    from app.modules.agent.infrastructure.tools.pod.tools import SPECS
 
-    raw = _tool_schema(pod_toolset.tools["pod_write_record"])
-    assert raw is not None
+    raw = next(spec for spec in SPECS if spec.name == "pod_write_record").json_schema
     transformed = InlineDefsOpenAIJsonSchemaTransformer(raw, strict=None).walk()
     data_schema = transformed["properties"]["data"]
     branch_types = {branch.get("type") for branch in data_schema.get("anyOf", [])}
@@ -173,7 +143,7 @@ def test_pod_write_record_data_advertises_object_or_json_string():
 
 
 def test_record_filter_value_is_typed_not_bare_any():
-    from app.modules.agent.tools.pod.models import RecordFilter
+    from app.modules.agent.infrastructure.tools.pod.models import RecordFilter
 
     value_schema = RecordFilter.model_json_schema()["properties"]["value"]
     # The value must carry a type-defining key (anyOf of scalars/list), not be a
@@ -200,7 +170,6 @@ def test_task_always_gets_final_answer_tool_chat_never_does():
     # The final_answer tool drives the TASK lifecycle (status WAITING/COMPLETED),
     # so every TASK conversation gets it regardless of output schema. CHAT never
     # does (plain text). The output *schema* is only applied when configured.
-    runner = _runner()
     pod_id, user_id = uuid4(), uuid4()
     task = Conversation(pod_id=pod_id, user_id=user_id, type=ConversationType.TASK)
     chat = Conversation(pod_id=pod_id, user_id=user_id, type=ConversationType.CHAT)
@@ -217,10 +186,10 @@ def test_task_always_gets_final_answer_tool_chat_never_does():
         output_schema={"type": "object", "properties": {"answer": {"type": "string"}}},
     )
 
-    assert runner._resolve_output_type(plain_agent, task) is not None
-    assert runner._resolve_output_type(schema_agent, task) is not None
-    assert runner._resolve_output_type(plain_agent, chat) is None
-    assert runner._resolve_output_type(schema_agent, chat) is None
+    assert final_answer_output(plain_agent, task) is not None
+    assert final_answer_output(schema_agent, task) is not None
+    assert final_answer_output(plain_agent, chat) is None
+    assert final_answer_output(schema_agent, chat) is None
 
 
 def test_final_answer_tool_schema_clean_with_output_schema():
@@ -241,7 +210,9 @@ def test_final_answer_tool_schema_clean_with_output_schema():
 
 
 def test_inline_tool_schema_refs_removes_defs_and_refs():
-    from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
+    from app.modules.agent.infrastructure.providers.tool_schemas import (
+        inline_tool_schema_refs,
+    )
 
     # MCP tool schemas are served to remote harnesses (OpenCode/Cursor/...) whose
     # providers (e.g. Fireworks GLM) can't resolve $ref server-side, so they must

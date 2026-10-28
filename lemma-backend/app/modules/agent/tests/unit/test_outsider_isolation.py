@@ -28,20 +28,20 @@ from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.server_metadata import client_metadata
-from app.modules.agent.domain.private_notes import PRIVATE_NOTE_KEY
-from app.modules.agent.domain.surface_prompts import audience_notice
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.prompt.surface import audience_notice
 from app.modules.agent.domain.value_objects import MessageKind
-from app.modules.agent.infrastructure.harnesses.channel_context import (
+from app.modules.agent.domain.prompt.channel_context import (
     channel_context_block as _channel_context_block,
 )
-from app.modules.agent.infrastructure.harnesses.channel_context import (
+from app.modules.agent.domain.prompt.channel_context import (
     participants_block as _participants_block,
 )
-from app.modules.agent.infrastructure.harnesses.user_turn_text import (
+from app.modules.agent.domain.prompt.user_turn_text import (
     user_prompt_text,
 )
-from app.modules.agent.services.runtime_history import without_private_runs
+from app.modules.agent.domain.runtime_history import without_private_runs
 
 pytestmark = pytest.mark.unit
 
@@ -71,7 +71,7 @@ def test_a_members_conversation_stays_theirs_whatever_its_metadata_claims():
 
 def test_a_client_cannot_create_a_contacts_conversation():
     """No key a client sends names a contact: the column is the server's."""
-    sent = client_metadata({"audience": "contact", "contact_id": str(uuid4())})
+    sent = {"audience": "contact", "contact_id": str(uuid4())}
 
     assert Audience.of(_conversation(sent)) == Audience.member()
 
@@ -90,7 +90,7 @@ def _run(*, private: bool) -> AgentRun:
         conversation_id=uuid4(),
         started_at=datetime.now(timezone.utc),
         agent_runtime=_SYSTEM_RUNTIME,
-        metadata={PRIVATE_NOTE_KEY: True} if private else {"source": "user_message"},
+        state=RunState(private_note=private),
     )
 
 
@@ -102,7 +102,7 @@ def _message(run: AgentRun, text: str, *, note: bool = False) -> Message:
         role="user",
         kind=MessageKind.TEXT,
         text=text,
-        metadata={PRIVATE_NOTE_KEY: True} if note else {},
+        state=MessageState(private_note=note),
     )
 
 
@@ -157,7 +157,7 @@ def test_a_private_run_reads_its_own_note():
 
 def test_the_strangers_brief_carries_no_email_and_no_id():
     """The brief is read by a model a stranger can talk to."""
-    from app.modules.agent.services.outsider_brief import render_outsider_brief
+    from app.modules.agent.services.context_brief.outsider import render_outsider_brief
 
     named = render_outsider_brief(pod_name="Sales", owner_display_name="Priya")
     unnamed = render_outsider_brief(pod_name="Sales", owner_display_name=None)
@@ -173,7 +173,7 @@ def test_the_strangers_brief_names_the_member_where_it_means_to():
     """Every placeholder in the brief is filled: a literal `{owner_name}` reads
     to the model as a name nobody has, at the one line telling it whom it is
     calling in."""
-    from app.modules.agent.services.outsider_brief import (
+    from app.modules.agent.services.context_brief.outsider import (
         render_contact_brief,
         render_outsider_brief,
     )

@@ -10,7 +10,7 @@ worker.
 This is a `ContextVar` rather than an injected collaborator on purpose, and the
 purpose is worth writing down because the injected version looks tidier. The
 caller that needs to suppress is a *surface* event handler, which constructs its
-own `ConversationService` several layers down; injecting would mean threading a
+own use cases several layers down; injecting would mean threading a
 parameter from `agent_surfaces` through the handler and into `agent`, across a
 module boundary, to carry a flag that exists for one test file. Dynamic scoping
 is what this actually is.

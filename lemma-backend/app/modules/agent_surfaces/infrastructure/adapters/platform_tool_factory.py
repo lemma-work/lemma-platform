@@ -1,28 +1,20 @@
 from __future__ import annotations
 
 from uuid import UUID
-from pydantic_ai.toolsets import AbstractToolset
-from app.modules.agent.contracts import ConversationContext
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.contracts import Conversation
+from app.modules.agent.contracts.tools import ToolSpec
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
-from app.modules.agent_surfaces.platforms.slack.tools import (
-    build_slack_surface_toolset,
-)
-from app.modules.agent_surfaces.platforms.teams.tools import (
-    build_teams_surface_toolset,
-)
+from app.modules.agent_surfaces.platforms.slack.tools import slack_surface_tools
+from app.modules.agent_surfaces.platforms.teams.tools import teams_surface_tools
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
-from app.modules.agent_surfaces.services.surface_send_tools import (
-    build_surface_send_toolset,
-)
+from app.modules.agent_surfaces.services.surface_send_tools import surface_send_tools
 from app.modules.agent_surfaces.services.whatsapp_group_tool import (
-    build_whatsapp_group_toolset,
+    whatsapp_group_tools,
 )
 from app.modules.agent_surfaces.platforms.credential_checks import can_deliver
 from app.modules.agent_surfaces.services.credential_resolver import (
@@ -39,24 +31,26 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 # WhatsApp's one tool, opening a group, is added below and only in a private
 # chat, because it needs the surface and a unit of work rather than credentials.
 _TOOLSET_BUILDERS = {
-    "SLACK": build_slack_surface_toolset,
-    "TEAMS": build_teams_surface_toolset,
+    "SLACK": slack_surface_tools,
+    "TEAMS": teams_surface_tools,
 }
 
 
 class SurfacePlatformToolFactory:
-    """Build platform-scoped toolsets for external agent conversations."""
+    """The tools a conversation's chat platform adds to its runs."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self.uow_factory = uow_factory
 
-    async def build_toolsets(
+    async def build_tools(
         self,
         *,
-        conversation: Conversation,
-    ) -> list[AbstractToolset[ConversationContext]]:
-        metadata = conversation.metadata or {}
-        surface_type = str(metadata.get("surface_platform") or "")
+        platform: str,
+        surface_id: UUID | None,
+        conversation_kind: str | None,
+    ) -> list[ToolSpec]:
+        """The tools of the place a run talks over, as its context names it."""
+        surface_type = platform
         # Chat surfaces only: email's reply is sent by the observer, and an
         # unknown platform has nothing to build. A chat platform with no builder
         # of its own (WhatsApp, Telegram) still gets `surface_send_message` below.
@@ -65,15 +59,14 @@ class SurfacePlatformToolFactory:
             return []
         builder = _TOOLSET_BUILDERS.get(caps.platform)
 
-        surface_id = metadata.get("surface_id")
         if surface_id is None:
             # Conversations on system credentials carry no surface row.
             if builder is None or not has_native_credentials(surface_type):
                 return []
-            return [builder(credentials=native_credentials(surface_type))]
+            return list(builder(credentials=native_credentials(surface_type)))
 
         async with self.uow_factory() as uow:
-            surface = await SurfaceRepository(uow).get(UUID(str(surface_id)))
+            surface = await SurfaceRepository(uow).get(surface_id)
             if surface is None:
                 return []
             # One path, through the resolver, and ``prefer_native`` is the fast
@@ -92,18 +85,18 @@ class SurfacePlatformToolFactory:
                 return []
             allow_send = surface.config.send_policy.allow_send
 
-        toolsets: list[AbstractToolset[ConversationContext]] = []
+        tools: list[ToolSpec] = []
         if builder is not None:
-            toolsets.append(builder(credentials=credentials))
-        if caps.bot_creates_groups and metadata.get("conversation_kind") == "DM":
+            tools.extend(builder(credentials=credentials))
+        if caps.bot_creates_groups and conversation_kind == "DM":
             # Only in a member's own chat: see `services/whatsapp_group_tool`.
-            toolsets.append(
-                build_whatsapp_group_toolset(
+            tools.extend(
+                whatsapp_group_tools(
                     uow_factory=self.uow_factory, surface_id=surface.id
                 )
             )
         # The current-user surface_send_message tool, opt-in per surface and only
         # on chat surfaces (the observer sends an email surface's one reply).
         if allow_send:
-            toolsets.append(build_surface_send_toolset())
-        return toolsets
+            tools.extend(surface_send_tools())
+        return tools

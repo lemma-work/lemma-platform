@@ -33,7 +33,7 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
 )
 from app.modules.agent.events.channel_answer_work import register_channel_answer_work
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent.tests.e2e.lifecycle_helpers import runs
 from app.modules.channels.contracts import (
@@ -270,7 +270,7 @@ async def test_an_agent_answer_to_a_carried_group_line_follows_it_to_the_place(
     assert conversation_id is not None, "no agent answers a line written in Lemma"
     [run] = await runs(conversation_id)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await ConversationRepository(uow).finish_agent_run(
+        await Runs(uow).finish_agent_run(
             agent_run_id=run.id,
             status=AgentRunStatus.COMPLETED,
             conversation_status=ConversationStatus.COMPLETED,

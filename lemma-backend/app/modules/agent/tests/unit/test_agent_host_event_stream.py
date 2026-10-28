@@ -13,7 +13,7 @@ from uuid import uuid7
 import pytest
 from fakeredis.aioredis import FakeRedis
 
-from app.modules.agent.infrastructure.agent_host.event_stream import (
+from app.modules.agent.agent_host.control.event_stream import (
     AgentHostEventStream,
     run_events_stream_key,
 )

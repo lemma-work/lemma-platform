@@ -17,7 +17,9 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.services.run_followups import run_finished_fact
 from app.modules.agent.infrastructure.models import ConversationModel
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.messages import Messages
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.function.domain.entities import FunctionRunStatus
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import run_until_idle
@@ -342,9 +344,10 @@ async def _drive_agent_event(conversation_id: str, *, status: AgentRunStatus) ->
     subscriber resumes only an ACTIVE AGENT wait, so a late or stale finish is
     a no-op."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        repository = ConversationRepository(uow)
-        conversation = await repository.get_conversation(UUID(conversation_id))
-        agent_run = await repository.get_latest_agent_run_for_conversation(
+        conversations = Conversations(uow)
+        runs = Runs(uow)
+        conversation = await conversations.get_conversation(UUID(conversation_id))
+        agent_run = await runs.get_latest_agent_run_for_conversation(
             UUID(conversation_id),
         )
         assert conversation is not None and agent_run is not None
@@ -368,19 +371,20 @@ async def _drive_agent_event(conversation_id: str, *, status: AgentRunStatus) ->
 
 async def _complete_agent_conversation(conversation_id: str, output_data: dict) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversation_repo = ConversationRepository(uow)
-        conversation = await conversation_repo.get_conversation(
+        conversations = Conversations(uow)
+        runs = Runs(uow)
+        conversation = await conversations.get_conversation(
             UUID(conversation_id),
         )
         assert conversation is not None
         conversation.status = ConversationStatus.COMPLETED
         conversation.output = output_data
-        await conversation_repo.update_conversation(conversation)
-        agent_run = await conversation_repo.get_latest_agent_run_for_conversation(
+        await conversations.update_conversation(conversation)
+        agent_run = await runs.get_latest_agent_run_for_conversation(
             UUID(conversation_id),
         )
         assert agent_run is not None
-        await conversation_repo.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=agent_run.id,
             status=AgentRunStatus.COMPLETED,
             output_data=output_data,
@@ -391,12 +395,12 @@ async def _complete_agent_conversation(conversation_id: str, output_data: dict) 
 
 async def _fail_agent_conversation(conversation_id: str, error: str) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversation_repo = ConversationRepository(uow)
-        agent_run = await conversation_repo.get_latest_agent_run_for_conversation(
+        runs = Runs(uow)
+        agent_run = await runs.get_latest_agent_run_for_conversation(
             UUID(conversation_id),
         )
         assert agent_run is not None
-        await conversation_repo.finish_agent_run(
+        await runs.finish_agent_run(
             agent_run_id=agent_run.id,
             status=AgentRunStatus.FAILED,
             conversation_status=ConversationStatus.FAILED,
@@ -712,7 +716,7 @@ async def test_user_assigned_manual_workflow_runs_through_all_node_types(
     )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        messages, _ = await ConversationRepository(uow).list_messages(
+        messages, _ = await Messages(uow).list_messages(
             conversation_id=UUID(conversation_id),
         )
     assert len(messages) == 1
@@ -1560,8 +1564,8 @@ async def test_reconciliation_recovers_lost_agent_completion(
 
     # Complete the conversation WITHOUT notifying the workflow (lost event).
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        conversation_repo = ConversationRepository(uow)
-        await conversation_repo.set_conversation_status(
+        conversations = Conversations(uow)
+        await conversations.set_conversation_status(
             conversation_id=UUID(conversation_id),
             status=ConversationStatus.COMPLETED,
         )

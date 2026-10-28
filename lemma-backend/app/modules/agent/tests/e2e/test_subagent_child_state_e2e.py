@@ -10,7 +10,7 @@ a retry started a second child doing the same work.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 
@@ -24,13 +24,10 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
 )
 from app.modules.agent.domain.wait import (
-    AgentConversationWaitEntity,
     AgentWaitType,
     AgentWaitWakeReason,
 )
-from app.modules.agent.infrastructure.wait_repository import (
-    AgentConversationWaitRepository,
-)
+from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.subagent_service import SubAgentError, SubAgentService
 from app.modules.agent.services.wait_targets import read_target
 from app.modules.agent.services.wait_wake_service import AgentWaitService
@@ -38,12 +35,13 @@ from app.modules.agent.tests.e2e.lifecycle_helpers import (
     Seeded,
     finish,
     messages,
+    wait_pause,
     pausing_call,
     running_run,
     seeded_conversation,
     uow_factory,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = [pytest.mark.e2e]
 
@@ -52,8 +50,8 @@ def _service() -> SubAgentService:
     return SubAgentService(SessionUnitOfWorkFactory(async_session_maker))
 
 
-def _as_parent(parent: Seeded, *, run_id: UUID | None = None) -> BaseAgentContext:
-    return BaseAgentContext(
+def _as_parent(parent: Seeded, *, run_id: UUID | None = None) -> ToolContext:
+    return ToolContext(
         user_id=parent.user_id,
         pod_id=parent.pod_id,
         conversation_id=parent.conversation_id,
@@ -141,15 +139,14 @@ async def test_a_waiting_parent_is_woken_to_the_question_not_a_result(scenario) 
     await finish(parent_run, conversation_status=ConversationStatus.WAITING)
     now = datetime.now(timezone.utc)
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await AgentConversationWaitRepository(uow).create(
-            AgentConversationWaitEntity(
+        await Pauses(uow).open(
+            wait_pause(
                 conversation_id=parent.conversation_id,
-                agent_run_id=parent_run,
+                run_id=parent_run,
                 pod_id=parent.pod_id,
                 tool_call_id=waiting_call,
                 wait_type=AgentWaitType.SUBAGENT,
-                external_ref=str(uuid4()),
-                scheduled_at=now + timedelta(hours=1),
+                wake_at=now + timedelta(hours=1),
                 spec={
                     "started_at": now.isoformat(),
                     "deadline_at": (now + timedelta(hours=1)).isoformat(),

@@ -19,8 +19,8 @@ from typing import Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts import channel_conversations
-from app.modules.agent.contracts.audience import Audience
+from app.modules.agent.contracts import channels as agent_channels
+from app.modules.agent.contracts.channels import Audience
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.line_markup import Bot, LineMarkup
@@ -241,7 +241,7 @@ async def note_heard_on_web(
         place=web_place(widget_id=widget_id, session_id=session_id),
         home=ContactsHome(contact_id=contact_id),
     )
-    await channel_conversations.place_in_channel(
+    await agent_channels.place_in_channel(
         uow, conversation_id=conversation_id, channel_id=source.channel_id
     )
     await post(

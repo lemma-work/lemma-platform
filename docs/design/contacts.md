@@ -115,7 +115,7 @@ passes the pod-membership check.
    model sent. Identity strength is not passed yet (see Step-up).
 
 Everything else is withheld by the same allowlist and harness gate outsiders use
-(`outsider_tools.py`, `outsider_gate.py`): no sandbox, no browser, no connector
+(`ToolPolicy.outsider_allowed`, enforced in `services/tool_runtime.py`): no sandbox, no browser, no connector
 accounts, no memory, no sub-agents, no member directory. New tools are refused
 until someone classifies them.
 

@@ -24,12 +24,12 @@ from app.modules.agent_surfaces.caches import (
     surface_caches,
 )
 
-from app.modules.agent.tools.user_interaction.models import (
+from app.modules.agent.infrastructure.tools.user_interaction.models import (
     DisplayResourceRequest,
     DisplayResourceResponse,
     DisplayResourceType,
 )
-from app.modules.agent.tools.user_interaction.pydantic_adapter import (
+from app.modules.agent.infrastructure.tools.user_interaction.tools import (
     _maybe_deliver_to_surface,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
@@ -189,12 +189,10 @@ async def test_redis_being_down_declines_the_file_and_does_not_raise(
 async def _display(request: DisplayResourceRequest, *, platform: str, conversation):
     response = DisplayResourceResponse(success=True, message="ready")
     ctx = SimpleNamespace(
-        deps=SimpleNamespace(
-            surface_platform=platform,
-            conversation_id=conversation,
-            pod_id=uuid4(),
-            agent_run_id=RUN.agent_run_id,
-        ),
+        surface_platform=platform,
+        conversation_id=conversation,
+        pod_id=uuid4(),
+        agent_run_id=RUN.agent_run_id,
         tool_call_id="tool-1",
     )
     await _maybe_deliver_to_surface(ctx, request, response)

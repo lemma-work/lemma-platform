@@ -20,7 +20,9 @@ from sqlalchemy import exists, select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import channel_conversations
+from app.modules.agent.infrastructure.db.channel_conversations import (
+    ChannelConversations,
+)
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
@@ -45,9 +47,7 @@ async def after_contact_run(
     conversation = await uow.session.get(ConversationModel, conversation_id)
     if conversation is None or conversation.contact_id is None:
         return
-    channel_id = await channel_conversations.channel_of_conversation(
-        uow, conversation_id
-    )
+    channel_id = await ChannelConversations(uow).channel_of(conversation_id)
     called = (
         await call_for_person(uow, channel_id=channel_id, reason=RUN_FAILED_REASON)
         if channel_id is not None

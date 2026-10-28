@@ -130,7 +130,7 @@ usual translation (`.` → `_`, counters gain `_total`).
 
 | Metric | Labels | Recorded at |
 |---|---|---|
-| `lemma.conversations.started` | `surface` = app, slack, telegram, whatsapp, teams, email, web_widget, api, workflow, other | Root conversation insert (`conversation_repository.create_conversation`). The app and the public API write the same rows and both count as `app` |
+| `lemma.conversations.started` | `surface` = app, slack, telegram, whatsapp, teams, email, web_widget, api, workflow, other | Root conversation insert (`Conversations.create_conversation`, `infrastructure/db/conversations.py`). The app and the public API write the same rows and both count as `app` |
 | `lemma.surface.messages` | `surface`, `direction` = in/out, `outcome` = success/failure/retry | In: `InboundAcceptor.accept`, for events classified as a message (success once stored or handled, failure if that raises). Out: every agent reply send (`reply_work`) and every Channels delivery. `retry` is a transient failure the row will try again, so `success + failure` is messages and `retry` is extra attempts |
 | `lemma.surface.delivery_seconds` | `surface` | Same outbound sends, platform call start to answer |
 | `lemma.workflow.runs`, `lemma.workflow.run_duration_seconds` | `outcome` = completed/failed/cancelled (counter only) | `RunPublication._record_transition`. A run cancelled before it started is counted and not timed |

@@ -49,11 +49,11 @@ from pydantic import BaseModel, JsonValue, SecretStr
 from sqlalchemy import select
 
 from app.core.infrastructure.db.session import async_session_maker
-from app.modules.agent.api.agent_host_schemas import (
+from app.modules.agent.agent_host.controllers.schemas import (
     AgentHostHarnessListResponse,
     AgentHostListResponse,
 )
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     TERMINAL_AGENT_HOST_RUN_STATES,
     AgentHostEventAck,
     AgentHostEventBatch,
@@ -63,10 +63,10 @@ from app.modules.agent.domain.agent_host import (
 from app.modules.agent.domain.value_objects import AgentRunStatus, JsonObject
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
-from app.modules.agent.services.agent_host_link_registry import link_registry
-from app.modules.agent.services.agent_host_link_session import AgentHostLinkSession
-from app.modules.agent.services.agent_host_link_store import AgentHostLinkStore
-from app.modules.agent.services.agent_host_link_wire import INTERNAL_ERROR_CLOSE
+from app.modules.agent.agent_host.link.registry import link_registry
+from app.modules.agent.agent_host.link.session import AgentHostLinkSession
+from app.modules.agent.agent_host.link.store import AgentHostLinkStore
+from app.modules.agent.agent_host.link.wire import INTERNAL_ERROR_CLOSE
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e.agent_host_binary import agent_host_binary

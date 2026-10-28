@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from app.core.infrastructure.work import WorkClass
 from app.modules.agent.contracts.run_facts import AgentRunFinished
-from app.modules.agent.contracts.turns import (
+from app.modules.agent.services.turn_staging import (
     AgentTurnStart,
     stage_agent_turn,
     turn_class_for,

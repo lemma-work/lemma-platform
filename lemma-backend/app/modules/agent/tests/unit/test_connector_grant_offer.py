@@ -13,17 +13,19 @@ from uuid import uuid4
 import pytest
 
 from app.core.domain.errors import DomainError
-from app.modules.agent.tools.approval.grant_outcome import confer_offered_grant
-from app.modules.agent.tools.connectors.grant_offer import (
+from app.modules.agent.infrastructure.tools.approval.grant_outcome import (
+    confer_offered_grant,
+)
+from app.modules.agent.infrastructure.tools.connectors.grant_offer import (
     connector_grant_offer,
     grant_card_title,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.domain.context import ToolContext
 
 pytestmark = pytest.mark.unit
 
 
-def _deps(**overrides) -> BaseAgentContext:
+def _deps(**overrides) -> ToolContext:
     fields = {
         "user_id": uuid4(),
         "pod_id": uuid4(),
@@ -32,7 +34,7 @@ def _deps(**overrides) -> BaseAgentContext:
         "workload_id": uuid4(),
     }
     fields.update(overrides)
-    return BaseAgentContext(**fields)
+    return ToolContext(**fields)
 
 
 def _refusal(code="MISSING_WORKLOAD_RESOURCE_GRANT", **details) -> DomainError:

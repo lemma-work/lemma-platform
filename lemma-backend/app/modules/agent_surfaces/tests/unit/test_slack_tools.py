@@ -6,24 +6,28 @@ from uuid import uuid4
 import pytest
 from slack_sdk.web.async_client import AsyncWebClient
 
-from app.modules.agent.tools.context import ConversationContext
-from app.modules.agent_surfaces.platforms.slack.tools import build_slack_surface_toolset
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent_surfaces.platforms.slack.tools import slack_surface_tools
+
+
+def _by_name(specs):
+    return {spec.name: spec for spec in specs}
 
 
 def test_slack_toolset_generates_tool_descriptions():
-    toolset = build_slack_surface_toolset(credentials={})
+    toolset = _by_name(slack_surface_tools(credentials={}))
 
-    recent_messages_tool = toolset.tools["slack_get_recent_channel_messages"]
-    search_tool = toolset.tools["slack_search_current_channel"]
+    recent_messages_tool = toolset["slack_get_recent_channel_messages"]
+    search_tool = toolset["slack_search_current_channel"]
 
     assert recent_messages_tool.description
-    assert recent_messages_tool.function_schema.description
+    assert recent_messages_tool.description
     assert search_tool.description
-    assert search_tool.function_schema.description
+    assert search_tool.description
     # File upload/download tools were removed; files flow via auto-ingest +
     # display_resource now.
-    assert "slack_upload_file" not in toolset.tools
-    assert "slack_download_file" not in toolset.tools
+    assert "slack_upload_file" not in toolset
+    assert "slack_download_file" not in toolset
 
 
 @pytest.mark.asyncio
@@ -60,8 +64,8 @@ async def test_slack_list_channels_paginates(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_slack_recent_channel_messages_excludes_active_thread(monkeypatch):
-    toolset = build_slack_surface_toolset(credentials={"access_token": "xoxb-test"})
-    tool = toolset.tools["slack_get_recent_channel_messages"]
+    toolset = _by_name(slack_surface_tools(credentials={"access_token": "xoxb-test"}))
+    tool = toolset["slack_get_recent_channel_messages"]
 
     async def fake_history(self, **kwargs):
         assert kwargs["channel"] == "C123"
@@ -81,19 +85,17 @@ async def test_slack_recent_channel_messages_excludes_active_thread(monkeypatch)
 
     monkeypatch.setattr(AsyncWebClient, "conversations_history", fake_history)
 
-    ctx = SimpleNamespace(
-        deps=ConversationContext(
-            user_id=uuid4(),
-            pod_id=uuid4(),
-            conversation_id=uuid4(),
-            surface_platform="SLACK",
-            external_channel_id="C123",
-            external_thread_id="1700.1",
-        )
+    ctx = ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        surface_platform="SLACK",
+        external_channel_id="C123",
+        external_thread_id="1700.1",
     )
     request = SimpleNamespace(limit=10, include_current_thread=False)
 
-    response = await tool.function(ctx, request)
+    response = await tool.run(ctx, request)
 
     assert response.success is True
     assert [item.text for item in response.messages] == ["Earlier channel message"]

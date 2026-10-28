@@ -42,14 +42,15 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_thinking import (
+from app.modules.agent.infrastructure.harness.lemma.thinking import (
     replays_prior_run_reasoning,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_message_writer import split_reasoning_drafts
+from app.modules.agent.domain.value_objects import AnswerKind
 
 # Built from ordinals so the tags survive tooling that reads source as markup.
 OPEN = chr(60) + "think" + chr(62)
@@ -279,7 +280,7 @@ def test_reasoning_written_into_the_answer_becomes_a_thought_and_an_answer():
         MessageKind.TEXT,
     ], "the thought comes first because that is the order it happened in"
     assert drafts[0].text == "General knowledge. Answer directly."
-    assert drafts[0].metadata["is_final_answer"] is False
+    assert drafts[0].state.answer is AnswerKind.NOT_FINAL
     assert drafts[1].text == "Paris."
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
+from app.modules.agent.infrastructure.harness.lemma.usage import (
     _IMPLAUSIBLE_TOKEN_COUNT,
     warn_if_implausible_usage,
 )

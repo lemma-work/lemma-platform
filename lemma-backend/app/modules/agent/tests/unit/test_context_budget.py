@@ -225,7 +225,7 @@ class TestWindowsRecordedWhenModelsAreRegistered:
 
 class TestDiscoveryReadsTheWindowFromTheProvider:
     def _parse(self, payload: dict):
-        from app.modules.agent.services.runtime_provider_discovery import (
+        from app.modules.agent.infrastructure.providers.discovery import (
             _parse_openai_compatible_models,
         )
 

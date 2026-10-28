@@ -1,5 +1,9 @@
 """A tool call's ``extra_content`` goes back to the endpoint that sent it.
 
+pydantic-ai carries it (2.57+): read into the call's ``provider_details`` and
+sent back unchanged. These hold that through Lemma's own model and its stored
+rows.
+
 Gemini 3's OpenAI-compatible endpoint puts a ``thought_signature`` in a tool
 call's ``extra_content`` and refuses a request that sends the call back
 without it. The gateway below is a stand-in for any endpoint that
@@ -21,13 +25,13 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.modules.agent.domain.entities import Message
 from app.modules.agent.domain.value_objects import JsonObject, MessageKind, MessageRole
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
+from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
 )
-from app.modules.agent.infrastructure.harnesses.pydantic_ai_stream_parts import (
+from app.modules.agent.infrastructure.harness.lemma.stream_parts import (
     StreamingParts,
 )
-from app.modules.agent.services.runtime_model_factory import (
+from app.modules.agent.infrastructure.providers.model_factory import (
     _UsageOnlyStreamOptionsChatModel,
 )
 
@@ -162,30 +166,10 @@ async def test_extra_content_is_sent_back_on_the_call_that_carried_it(
     assert "extra_content" not in calls["call_2"]
 
 
-def test_a_call_from_another_endpoint_goes_without_its_extra_content() -> None:
-    """An agent's model can change mid-conversation; a different endpoint never
-    sent the field, and a strict one would refuse it."""
-    part = ToolCallPart(
-        "add",
-        {"a": 1},
-        tool_call_id="call_1",
-        provider_name="openai",
-        provider_details={"extra_content": _EXTRA, "origin": _BASE_URL},
-    )
-
-    here = _model(_Gateway(stream=False))._map_tool_call(part)
-    elsewhere = _model(
-        _Gateway(stream=False), base_url="https://other.example.test/v1/"
-    )._map_tool_call(part)
-
-    assert here.get("extra_content") == _EXTRA
-    assert "extra_content" not in elsewhere
-
-
 def test_a_stored_call_rebuilds_with_what_it_arrived_with() -> None:
     """A run that resumes -- after an approval, say -- rebuilds its tool calls
     from their message rows, and the endpoint checks them all again."""
-    details = {"extra_content": _EXTRA, "origin": _BASE_URL}
+    details = {"extra_content": _EXTRA}
     part = ToolCallPart(
         "add",
         {"a": 1},

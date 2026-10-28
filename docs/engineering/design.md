@@ -214,9 +214,8 @@ State that must live for the process lifetime is built in a lifespan hook and
 handed to the things that need it; where a global is genuinely unavoidable it
 ships a `reset_*()` and the tests use it.
 
-`app/modules/usage/services/usage_limit_provider.py:24` and
-`agent/services/subscription_models_provider.py:17` are the pattern to stop
-copying.
+`app/modules/usage/services/usage_limit_provider.py:24` is the pattern to stop
+copying (agent's `subscription_models_provider`, the same shape, was deleted).
 
 *Check:*
 ```bash

@@ -14,6 +14,8 @@ decision as the HTTP route, since they share one implementation.
 
 from __future__ import annotations
 
+from app.modules.agent.domain.tools import NoArguments
+
 import asyncio
 import contextlib
 import socket
@@ -96,13 +98,6 @@ def allow_private_targets(monkeypatch):
     monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
 
 
-def _run_context(deps):
-    from pydantic_ai.tools import RunContext
-    from pydantic_ai.usage import RunUsage
-
-    return RunContext(deps=deps, model=None, usage=RunUsage(), prompt=None)
-
-
 #: The pod connector every test here runs through.
 SLUG = "fx"
 
@@ -176,11 +171,11 @@ def agent_deps(installed_connector, connector_test_pod):
     flag every builder of this context sets. The named-agent cases below build
     their own context with a real agent id instead.
     """
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.domain.context import ToolContext
 
     _install, org_id, user_id = installed_connector
     pod_id = UUID(str(connector_test_pod["id"]))
-    return BaseAgentContext(
+    return ToolContext(
         user_id=user_id,
         org_id=org_id,
         pod_id=pod_id,
@@ -195,10 +190,12 @@ class TestTheAgentCanUseATenantConnector:
     async def test_list_shows_the_pod_connector_and_whose_account_it_uses(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.pydantic_adapter import list_connectors
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
+            list_connectors,
+        )
 
         install, _org, _user = installed_connector
-        result = await list_connectors(_run_context(agent_deps))
+        result = await list_connectors(agent_deps, NoArguments())
         entry = next(i for i in result["items"] if i["connector"] == SLUG)
         assert entry["connector_id"] == install.connector_id
         # The agent is told whose account a call uses.
@@ -207,16 +204,16 @@ class TestTheAgentCanUseATenantConnector:
     async def test_search_finds_the_servers_own_tool(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             SearchConnectorOperationsRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
             search_connector_operations,
         )
 
         install, _org, _user = installed_connector
         result = await search_connector_operations(
-            _run_context(agent_deps),
+            agent_deps,
             SearchConnectorOperationsRequest(
                 connector=SLUG, query="currency", limit=10
             ),
@@ -228,16 +225,16 @@ class TestTheAgentCanUseATenantConnector:
     async def test_describe_returns_the_schema_the_server_published(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             DescribeConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
             describe_connector_operation,
         )
 
         install, _org, _user = installed_connector
         result = await describe_connector_operation(
-            _run_context(agent_deps),
+            agent_deps,
             DescribeConnectorOperationRequest(
                 connector=SLUG, operation="convert_currency"
             ),
@@ -248,16 +245,16 @@ class TestTheAgentCanUseATenantConnector:
     async def test_running_it_returns_the_servers_answer(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
             run_connector_operation,
         )
 
         install, _org, _user = installed_connector
         result = await run_connector_operation(
-            _run_context(agent_deps),
+            agent_deps,
             RunConnectorOperationRequest(
                 connector=SLUG,
                 operation="convert_currency",
@@ -274,16 +271,16 @@ class TestTheAgentCanUseATenantConnector:
         # Not an exception: an exception ends the run, whereas a structured
         # result lets the model correct itself on the next turn. The schema is
         # returned with it so it can do that without another round trip.
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
             run_connector_operation,
         )
 
         install, _org, _user = installed_connector
         result = await run_connector_operation(
-            _run_context(agent_deps),
+            agent_deps,
             RunConnectorOperationRequest(
                 connector=SLUG,
                 operation="convert_currency",
@@ -301,17 +298,17 @@ class TestTheAgentCanUseATenantConnector:
         "Connector rejected the operation request" and nothing else: not which
         install, not which tool, not the server's reason. And with no
         `success: false` the failure counted as a successful tool call."""
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
             run_connector_operation,
         )
-        from app.modules.agent.tools.tool_errors import result_is_failure
+        from app.modules.agent.infrastructure.tools.tool_errors import result_is_failure
 
         install, _org, _user = installed_connector
         result = await run_connector_operation(
-            _run_context(agent_deps),
+            agent_deps,
             RunConnectorOperationRequest(
                 connector=SLUG,
                 operation="refuse_transfer",
@@ -330,16 +327,16 @@ class TestTheAgentCanUseATenantConnector:
     async def test_an_unknown_operation_is_reported_not_raised(
         self, installed_connector, agent_deps
     ):
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
             run_connector_operation,
         )
 
         install, _org, _user = installed_connector
         result = await run_connector_operation(
-            _run_context(agent_deps),
+            agent_deps,
             RunConnectorOperationRequest(
                 connector=SLUG,
                 operation="no_such_tool",
@@ -356,12 +353,14 @@ class TestTheAgentCanUseATenantConnector:
         # arrives as data rather than an exception: the other three tools
         # already behave that way, and raising would end the agent's run over
         # something it can simply report.
-        from app.modules.agent.tools.context import BaseAgentContext
-        from app.modules.agent.tools.connectors.pydantic_adapter import list_connectors
+        from app.modules.agent.domain.context import ToolContext
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
+            list_connectors,
+        )
 
         install, _org, user_id = installed_connector
         elsewhere = uuid4()
-        stranger = BaseAgentContext(
+        stranger = ToolContext(
             user_id=user_id,
             org_id=agent_deps.org_id,
             pod_id=elsewhere,
@@ -370,7 +369,7 @@ class TestTheAgentCanUseATenantConnector:
             agent_name=DEFAULT_POD_AGENT_NAME,
             is_pod_default_agent=True,
         )
-        result = await list_connectors(_run_context(stranger))
+        result = await list_connectors(stranger, NoArguments())
         names = {item["connector"] for item in result.get("items", [])}
         assert SLUG not in names, result
 
@@ -395,10 +394,10 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
 
     @staticmethod
     def _named_agent_context(installed_connector, pod_id, *, agent_id, agent_name):
-        from app.modules.agent.tools.context import BaseAgentContext
+        from app.modules.agent.domain.context import ToolContext
 
         _install, org_id, user_id = installed_connector
-        return BaseAgentContext(
+        return ToolContext(
             user_id=user_id,
             org_id=org_id,
             pod_id=pod_id,
@@ -412,10 +411,10 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
     ):
         """Refused as data, not as an exception: the toolset reports it so the
         model can say so, rather than ending the run."""
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
             run_connector_operation,
         )
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
 
@@ -429,7 +428,7 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
         )
 
         result = await run_connector_operation(
-            _run_context(deps),
+            deps,
             RunConnectorOperationRequest(
                 connector=SLUG,
                 operation="convert_currency",
@@ -450,10 +449,10 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
         sees what it may run and nothing else, so a search across connectors
         comes back empty rather than full of operations it would be refused.
         """
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
             search_connector_operations,
         )
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             SearchConnectorOperationsRequest,
         )
 
@@ -467,11 +466,11 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
         )
 
         across = await search_connector_operations(
-            _run_context(deps), SearchConnectorOperationsRequest()
+            deps, SearchConnectorOperationsRequest()
         )
         assert across["items"] == [], across
         named = await search_connector_operations(
-            _run_context(deps),
+            deps,
             SearchConnectorOperationsRequest(connector=SLUG),
         )
         assert named["success"] is False, named
@@ -479,10 +478,10 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
     async def test_a_granted_named_agent_reaches_the_real_server(
         self, installed_connector, connector_test_pod, authenticated_client
     ):
-        from app.modules.agent.tools.connectors.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.connectors.tools import (
             run_connector_operation,
         )
-        from app.modules.agent.tools.connectors.models import (
+        from app.modules.agent.infrastructure.tools.connectors.models import (
             RunConnectorOperationRequest,
         )
 
@@ -503,7 +502,7 @@ class TestAnMcpConnectorReachesANamedAgentOnlyWhenGranted:
             agent_name=agent["name"],
         )
         result = await run_connector_operation(
-            _run_context(deps),
+            deps,
             RunConnectorOperationRequest(
                 connector=SLUG,
                 operation="convert_currency",

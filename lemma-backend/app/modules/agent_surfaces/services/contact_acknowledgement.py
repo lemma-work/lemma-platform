@@ -23,12 +23,8 @@ from uuid import UUID
 from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent.contracts.channel_conversations import (
-    channel_of_conversation,
-)
+from app.modules.agent.contracts import channels as agent_conversations
+from app.modules.agent.contracts.channels import channel_of_conversation
 from app.modules.agent_surfaces.services.channel_lines import WEB, shown_on_web
 from app.modules.agent_surfaces.services.contact_reach import reach_for
 from app.modules.channels.contracts import (

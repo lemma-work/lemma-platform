@@ -7,8 +7,7 @@ when its holder dies: an approval nothing can finish, because the tool return is
 the only record the resumed run replays.
 
 Left alone, the next reconcile skipped the execution (the claim is gone),
-`unresolved_pausing_call_ids` reported nothing outstanding (it counts a decision
-as an answer), and the resume run rebuilt a history with the pausing call
+nothing was outstanding (a decided pause counts as answered), and the resume run rebuilt a history with the pausing call
 dropped. The agent carried on as though it had never asked, and the person
 believed their approval had been carried out -- PS-AGENT-020 says an approval
 means the described action is performed.
@@ -26,18 +25,22 @@ from uuid import uuid4, uuid7
 
 import pytest
 
-from app.modules.agent.domain.entities import Agent, Message
+from app.modules.agent.tests.unit.repository_fakes import (
+    pause_for_call,
+    wire_repositories,
+)
+from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     AgentRuntimeConfig,
     MessageKind,
     MessageRole,
+    RunTrigger,
 )
-from app.modules.agent.services.conversation_approvals import ApprovalCoordinator
-from app.modules.agent.services.conversation_resume_return import (
-    ResumeToolReturnBuilder,
+from app.modules.agent.application.pauses.resume import ResumeRun
+from app.modules.agent.services.approval_reconciliation import (
+    unconfirmed_execution_return,
 )
-from app.modules.agent.services.pause_resume import PauseResume
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.test_support.fakes import EmptyResultSession
 
@@ -80,17 +83,10 @@ class _Repository:
         self.appended: list[Message] = []
         self.created_runs = 0
 
-    # The claim is already held by the attempt that died, and it is one-shot.
-    async def claim_approval_execution(self, **_kwargs) -> bool:
-        return False
+        self.pause = pause_for_call(self.call)
+        self.pause.resolve(AgentRunApprovalDecision.APPROVE_ONCE, by=uuid4())
 
-    async def get_approval_decision(self, **_kwargs):
-        return (AgentRunApprovalDecision.APPROVE_ONCE, {})
-
-    async def get_tool_call(self, **_kwargs):
-        return self.call
-
-    async def get_tool_return(self, **_kwargs):
+    async def tool_return(self, **_kwargs):
         return next(
             (m for m in self.appended if m.kind == MessageKind.TOOL_RETURN), None
         )
@@ -117,9 +113,9 @@ class _Repository:
     async def lock_conversation(self, _conversation_id) -> None:
         return None
 
-    async def unresolved_pausing_call_ids(self, **_kwargs) -> list[str]:
-        # The real query counts a call with a decision row as answered, which is
-        # exactly why the resume used to start with this pause unrecorded.
+    async def pending(self, *_args, **_kwargs) -> list:
+        # A decided pause counts as answered, which is exactly why the resume
+        # used to start with this pause unrecorded.
         return []
 
     async def get_active_agent_run_for_update(self, _conversation_id):
@@ -156,63 +152,51 @@ class _AgentRepository:
         return self.agent
 
 
-def _coordinator(monkeypatch: pytest.MonkeyPatch):
+def _resume_run(monkeypatch: pytest.MonkeyPatch):
     repository = _Repository()
     uow = _Uow()
     monkeypatch.setattr(
         "app.modules.agent.services.pause_resume.publish_conversation_event",
         _noop,
     )
-    coordinator = ApprovalCoordinator(
-        uow,
+    resume = wire_repositories(
+        ResumeRun(uow, agent_repository=_AgentRepository(_POD_ID)),
         repository,
-        ResumeToolReturnBuilder(uow, None),
-        PauseResume(uow, repository, _AgentRepository(_POD_ID)),
     )
-    return coordinator, repository
+    return resume, repository
 
 
 async def _noop(*_args, **_kwargs) -> None:
     return None
 
 
-def _conversation(repository: _Repository):
-    return SimpleNamespace(
+def _conversation(repository: _Repository) -> Conversation:
+    return Conversation(
         id=repository.conversation_id,
         agent_id=None,
         pod_id=_POD_ID,
+        user_id=uuid7(),
         organization_id=None,
         agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
         metadata={},
-        parent_id=None,
     )
 
 
-async def _record_and_resume(coordinator, repository, *, claimed: bool) -> None:
-    paused = await coordinator.paused_call(
-        conversation_id=repository.conversation_id, approval_id=_APPROVAL_ID
-    )
-    assert paused is not None
+async def _record_and_resume(resume, repository, *, claimed: bool) -> None:
+    paused = repository.pause
     conversation = _conversation(repository)
-    await coordinator.record_unconfirmed_execution(
-        conversation=conversation,
-        approval_id=_APPROVAL_ID,
-        paused=paused,
-        decision=AgentRunApprovalDecision.APPROVE_ONCE,
-        response={},
-        claimed=claimed,
-    )
+    tool_return = unconfirmed_execution_return(paused, claimed=claimed)
     # The resume run is counted where it is created; staging its turn needs a
     # database this fake does not have.
     with suppress_agent_run_enqueue():
-        await coordinator.resume_after_return(
+        await resume.resume(
             conversation=conversation,
-            approval_id=_APPROVAL_ID,
-            paused_run_id=paused.agent_run_id,
-            tool_args=paused.tool_args,
+            paused_run_id=paused.run_id,
+            tool_call_id=_APPROVAL_ID,
             user_id=uuid4(),
-            pod_id=_POD_ID,
-            agent_name=None,
+            trigger=RunTrigger.RESUME,
+            tool_return=tool_return,
+            decided=paused,
         )
 
 
@@ -233,9 +217,9 @@ async def test_an_abandoned_execution_is_written_down_not_dropped(
     """The claim was taken and its holder lost its lease: the tool may have
     run. The approval gets a terminal return saying so, which is what the
     resumed run replays -- rather than resuming with the request missing."""
-    coordinator, repository = _coordinator(monkeypatch)
+    resume, repository = _resume_run(monkeypatch)
 
-    await _record_and_resume(coordinator, repository, claimed=True)
+    await _record_and_resume(resume, repository, claimed=True)
 
     assert "cannot re-run" in str(_the_return(repository)["error"])
     # And the turn is unblocked rather than left waiting forever.
@@ -247,9 +231,9 @@ async def test_an_execution_that_never_started_says_nothing_ran(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Its item went dead before the claim: nothing ran, and it says so."""
-    coordinator, repository = _coordinator(monkeypatch)
+    resume, repository = _resume_run(monkeypatch)
 
-    await _record_and_resume(coordinator, repository, claimed=False)
+    await _record_and_resume(resume, repository, claimed=False)
 
     assert "did not run" in str(_the_return(repository)["error"])
     assert repository.created_runs == 1

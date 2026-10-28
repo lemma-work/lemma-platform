@@ -17,13 +17,13 @@ from pathlib import Path
 
 import pytest
 
-_TOOLS = Path(__file__).resolve().parents[2] / "tools"
+_TOOLS = Path(__file__).resolve().parents[2] / "infrastructure" / "tools"
 _PROMPTS = Path(__file__).resolve().parents[2] / "prompts"
 
 _MODEL_FACING = [
     _PROMPTS / "workspace_cli.md",
     _TOOLS / "workspace_cli" / "workspace_cli.py",
-    _TOOLS / "workspace_cli" / "pydantic_adapter.py",
+    _TOOLS / "workspace_cli" / "tools.py",
     _TOOLS / "workspace_cli" / "models.py",
 ]
 
@@ -106,7 +106,7 @@ def test_the_agent_host_prompt_teaches_both_ways_of_waiting():
     describing the old refusal is worse than one saying nothing: an agent that
     believes asking is unavailable will not ask.
     """
-    from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
+    from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
 
     prompt = load_agent_host_runtime_prompt()
 

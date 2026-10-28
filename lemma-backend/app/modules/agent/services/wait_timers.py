@@ -14,7 +14,8 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.core.infrastructure.work import WorkWriter, pod_namespace
-from app.modules.agent.domain.wait import AgentConversationWaitEntity, AgentWaitType
+from app.modules.agent.domain.pauses import Pause
+from app.modules.agent.domain.wait import AgentWaitType
 from app.modules.agent.events.work_kinds import (
     AGENT_WAIT_FIRE,
     AGENT_WAIT_POLL,
@@ -28,14 +29,12 @@ class WaitTimer(BaseModel):
     wait_id: UUID
 
 
-def timer_kind(wait_type: AgentWaitType) -> str:
+def timer_kind(wait_type: AgentWaitType | None) -> str:
     """The kind of item a wait of ``wait_type`` is driven by."""
     return AGENT_WAIT_POLL if wait_type is AgentWaitType.PROCESS else AGENT_WAIT_FIRE
 
 
-async def arm_wait(
-    work: WorkWriter, wait: AgentConversationWaitEntity, at: datetime | None
-) -> None:
+async def arm_wait(work: WorkWriter, wait: Pause, at: datetime | None) -> None:
     """Write the wait's item, due ``at`` (now when None). Coalesces a queued one."""
     await work.add(
         timer_kind(wait.wait_type),
@@ -46,7 +45,7 @@ async def arm_wait(
     )
 
 
-async def disarm_wait(work: WorkWriter, wait: AgentConversationWaitEntity) -> None:
+async def disarm_wait(work: WorkWriter, wait: Pause) -> None:
     """Drop the wait's queued item, in the caller's transaction.
 
     Both kinds: the key is the wait's, whichever kind drives it. A running item

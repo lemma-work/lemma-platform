@@ -1,12 +1,13 @@
-"""Unit tests for the LEMMA-harness capability layer.
+"""Unit tests for the in-process harness's capabilities.
 
-Covers: core/extra partitioning, where the run's context part sits, prompt-cache
-session affinity, and that deferred extra tools stay out of the initial request
-(discoverable via tool search) — all without a live stack.
+Covers: what is visible and what is deferred, the guidance each toolset carries,
+where the run's context part sits, prompt-cache levers and affinity, the todo
+tool, and the deferred-tools hint -- all without a live stack.
 """
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -23,38 +24,135 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.capabilities.assembler import (
-    _agent_has_toolset,
-    _partition_core_extra,
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.entities import Agent as AgentEntity
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.prompt.deferred_tools import deferred_tools_hint
+from app.modules.agent.domain.prompt.templates import (
+    FRAGMENT_BY_TOOLSET,
+    load_memory_prompt,
+    toolset_instructions,
 )
-from types import SimpleNamespace
-
-from app.modules.agent.capabilities.prompt_caching import PromptCachingCapability
-from app.modules.agent.capabilities.run_context import RunContextCapability
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
+from app.modules.agent.domain.tools import ToolGroup, ToolSpec
 from app.modules.agent.domain.value_objects import AgentToolset
-from app.modules.agent.tools.registry import (
-    pod_toolset,
-    web_search_toolset,
-    workspace_cli_toolset,
+from app.modules.agent.infrastructure.harness.lemma.capabilities import (
+    InstructedToolset,
+    Instructions,
+    PromptCaching,
+    harness_capabilities,
 )
+from app.modules.agent.infrastructure.harness.lemma.history_parts import (
+    RunContextCapability,
+)
+from app.modules.agent.infrastructure.harness.lemma.toolset_adapter import (
+    function_toolset,
+)
+from app.modules.agent.services.tool_catalog import (
+    STATIC_SPECS,
+    ToolSurface,
+    specs_for,
+)
+from app.modules.agent.services.tool_runtime import ToolRuntime
 
 
 def _deferring_model(model_fn) -> FunctionModel:
     """A stand-in model that honours deferred tools like a real provider does.
 
     pydantic-ai only puts `defer_loading` on the wire when the model profile
-    declares a deferral mode; a bare ``FunctionModel`` has none, so every
-    deferred tool is dropped before the request and the assembler looks broken.
-    Both models Lemma actually runs resolve to ``'with_tool_search'`` — the
-    OpenAI-compatible profile via `openai_compatible_model_profile`, Anthropic
-    natively — so that is what these tests assert against.
+    declares a deferral mode; both models Lemma runs resolve to
+    ``'with_tool_search'``, so that is what these tests assert against.
     """
     return FunctionModel(
         model_fn, profile=ModelProfile(tool_deferral_mode="with_tool_search")
     )
 
 
-def test_the_pod_tools_are_visible_rather_than_deferred():
+def _deps(*, is_pod_default_agent: bool = True, **fields: object) -> ToolContext:
+    return ToolContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        is_pod_default_agent=is_pod_default_agent,
+        **fields,
+    )
+
+
+def _capabilities(
+    deps: ToolContext, specs: list[ToolSpec], **options: object
+) -> list[object]:
+    return harness_capabilities(
+        ctx=deps,
+        specs=specs,
+        runtime=ToolRuntime(specs),
+        enable_prompt_caching=bool(options.pop("caching", False)),
+        **options,
+    )
+
+
+async def _pod_default_specs(deps: ToolContext) -> list[ToolSpec]:
+    """The pod default assistant's tools, through the real catalog."""
+    return await specs_for(
+        agent=None,
+        conversation=Conversation(
+            id=deps.conversation_id, user_id=deps.user_id, pod_id=deps.pod_id
+        ),
+        ctx=deps,
+        surface=ToolSurface.IN_PROCESS,
+        uow_factory=_FakeUoW,
+    )
+
+
+async def _offered(
+    capabilities: list[object], deps: ToolContext
+) -> tuple[set[str], set[str]]:
+    """``(visible, deferred)`` tool names, as the model's first request has them."""
+    seen: dict[str, set[str]] = {}
+
+    def model_fn(messages, info: AgentInfo):
+        seen["visible"] = {t.name for t in info.function_tools if not t.defer_loading}
+        seen["deferred"] = {t.name for t in info.function_tools if t.defer_loading}
+        return ModelResponse(parts=[TextPart("done")])
+
+    await Agent(_deferring_model(model_fn), capabilities=capabilities).run(
+        "hi", deps=deps
+    )
+    return seen["visible"], seen["deferred"]
+
+
+def _guidance_carrying(capabilities: list[object], tool_name: str) -> list[str]:
+    """The guidance of each capability whose toolset holds ``tool_name``."""
+    found = []
+    for capability in capabilities:
+        if not isinstance(capability, InstructedToolset):
+            continue
+        toolset = capability.get_toolset()
+        tools = getattr(getattr(toolset, "wrapped", toolset), "tools", {})
+        if tool_name in tools:
+            found.append(capability.get_instructions())
+    return found
+
+
+def _hint(capabilities: list[object]) -> list[str]:
+    return [
+        c.get_instructions()
+        for c in capabilities
+        if type(c) is Instructions
+        and c.get_instructions().startswith("# Tools available on demand")
+    ]
+
+
+def _deferrable_groups() -> list[list[ToolSpec]]:
+    groups: dict[ToolGroup, list[ToolSpec]] = {}
+    for specs in STATIC_SPECS.values():
+        for spec in specs:
+            if spec.policy.deferrable:
+                groups.setdefault(spec.toolset, []).append(spec)
+    return list(groups.values())
+
+
+@pytest.mark.anyio
+async def test_the_pod_tools_are_visible_rather_than_deferred():
     """The pod's own data is not an "extra" the agent should have to find.
 
     They were deferred, and then went almost unused while the shell rebuilt the
@@ -62,109 +160,69 @@ def test_the_pod_tools_are_visible_rather_than_deferred():
     large (connectors), niche (browser) or deliberately harder to reach
     (messaging) — not for the thing the pod is.
     """
-    core, extra = _partition_core_extra(
-        [workspace_cli_toolset, pod_toolset, web_search_toolset],
-        is_pod_default=True,
-    )
-    assert pod_toolset in core
-    assert pod_toolset not in extra
-    assert workspace_cli_toolset in core
-    assert web_search_toolset in core
+    deps = _deps()
+    specs = [
+        *STATIC_SPECS[AgentToolset.WORKSPACE_CLI],
+        *STATIC_SPECS[AgentToolset.POD],
+        *STATIC_SPECS[AgentToolset.WEB_SEARCH],
+    ]
+    visible, deferred = await _offered(_capabilities(deps, specs), deps)
+    assert {"pod_tables", "exec_command", "web_search"} <= visible
+    assert not deferred
 
 
-def test_partition_core_extra_keeps_everything_core_for_user_created_agent():
+@pytest.mark.anyio
+async def test_a_user_created_agent_keeps_everything_visible():
     """User-created agents that configured POD/SUBAGENTS get them injected
     directly (no ToolSearch round-trip) — only the pod-default agent defers."""
-    core, extra = _partition_core_extra(
-        [workspace_cli_toolset, pod_toolset, web_search_toolset],
-        is_pod_default=False,
-    )
-    assert extra == []
-    assert pod_toolset in core
-    assert workspace_cli_toolset in core
-    assert web_search_toolset in core
+    deps = _deps(is_pod_default_agent=False)
+    specs = [
+        *STATIC_SPECS[AgentToolset.POD],
+        *STATIC_SPECS[AgentToolset.SUBAGENTS],
+        *STATIC_SPECS[AgentToolset.MESSAGING],
+    ]
+    capabilities = _capabilities(deps, specs)
+    visible, deferred = await _offered(capabilities, deps)
+    assert not deferred
+    assert {"spawn_subagent", "channel_post", "list_pod_members"} <= visible
+    assert not any(isinstance(c, ToolSearch) for c in capabilities)
 
 
 def test_prompt_caching_keys_on_conversation_id():
     conversation_id = uuid4()
-    settings = PromptCachingCapability(
-        conversation_id=conversation_id
-    ).get_model_settings()
-    affinity = str(conversation_id)
-    assert settings["openai_user"] == affinity
-    # `prompt_cache_key` is OpenAI-only and a strict compat shim 400s on it
-    # (Google's rejects the whole request), so the generic path sends only the
-    # baseline `user` lever.
+    settings = PromptCaching(conversation_id=conversation_id).get_model_settings()
+    assert settings["openai_user"] == str(conversation_id)
+    # `prompt_cache_key` is OpenAI-only and a strict compat shim 400s on it, and
+    # the protocol names a wire format, not a vendor: no provider headers.
     assert "openai_prompt_cache_key" not in settings
-    # No provider-specific headers: the protocol names a wire format, not a
-    # vendor, so nothing here may assume who is answering.
     assert "extra_headers" not in settings
 
 
 def test_openai_compatible_settings_stay_inside_the_baseline_schema():
-    """A strict compat shim 400s on a field it does not know.
-
-    `OPENAI_COMPATIBLE` is a claim about a wire format, not about who is
-    answering — Google's OpenAI-compatible endpoint, Fireworks, OpenRouter and
-    OpenAI itself all arrive down this one protocol. Google's parses strictly:
-    an unknown key fails the whole request rather than being ignored, so
-    sending `prompt_cache_key` (an OpenAI-only addition) returned
-
-        400 Invalid JSON payload received.
-        Unknown name "prompt_cache_key": Cannot find field.
-
-    on every turn of every Gemini conversation. Nothing outside the baseline
-    Chat Completions schema is sent on this protocol.
-    """
-    settings = PromptCachingCapability(conversation_id=uuid4()).get_model_settings()
+    """A strict compat shim (Google's) 400s on a field it does not know, so
+    nothing outside the baseline Chat Completions schema is sent."""
+    settings = PromptCaching(conversation_id=uuid4()).get_model_settings()
 
     assert set(settings) == {"openai_user"}
 
 
-def test_agent_has_toolset_detects_todo():
-    assert _agent_has_toolset(
-        SimpleNamespace(toolsets=[AgentToolset.TODO]), AgentToolset.TODO
-    )
-    assert not _agent_has_toolset(
-        SimpleNamespace(toolsets=[AgentToolset.WEB_SEARCH]), AgentToolset.TODO
-    )
-
-
-def test_web_search_capability_bundles_tool_and_prompt():
-    from app.modules.agent.capabilities.assembler import _visible_capability
-    from app.modules.agent.tools.graceful_toolset import GracefulToolset
-
-    # Built the way the assembler builds it. Web search used to have a bespoke
-    # capability class that did exactly what the generic instructed path does.
-    cap = _visible_capability(web_search_toolset)
-    # The toolset is graceful-wrapped so a web-search failure becomes a tool
-    # response rather than aborting the run.
-    toolset = cap.get_toolset()
-    assert isinstance(toolset, GracefulToolset)
-    assert toolset.wrapped is web_search_toolset
-    assert "Web research" in cap.get_instructions()
+def test_web_search_carries_its_guidance_beside_its_tools():
+    deps = _deps(is_pod_default_agent=False)
+    capabilities = _capabilities(deps, list(STATIC_SPECS[AgentToolset.WEB_SEARCH]))
+    [guidance] = _guidance_carrying(capabilities, "web_search")
+    assert "Web research" in guidance
 
 
 def test_showing_your_work_is_taught_on_both_paths():
     """`display_resource` needs prose, not only a tool schema.
 
-    In-process runs get this fragment through a capability and remote harnesses
-    get it through ``FRAGMENT_BY_TOOLSET``; the two lists are maintained
-    separately, and for a long time ``USER_INTERACTION`` was in neither. The
-    tool's own description was the whole of its guidance, which is enough when
-    it is a first-class tool definition and nothing competes with it — and not
-    enough for a coding agent that meets it as one MCP tool underneath its own
-    system prompt. It answered in prose and never displayed anything.
+    A coding agent that meets it as one MCP tool underneath its own system
+    prompt answered in prose and never displayed anything, so both the
+    in-process and the remote-harness paths carry the fragment.
     """
-    from app.modules.agent.capabilities.assembler import _instructions_for
-    from app.modules.agent.domain.prompts import FRAGMENT_BY_TOOLSET
-    from app.modules.agent.tools.user_interaction.pydantic_adapter import (
-        user_interaction_toolset,
-    )
-
-    guidance = _instructions_for(user_interaction_toolset)
-    assert guidance is not None, "the in-process path lost the fragment"
-    assert "display_resource" in guidance[1]()
+    in_process = toolset_instructions(ToolGroup.USER_INTERACTION)
+    assert in_process is not None, "the in-process path lost the fragment"
+    assert "display_resource" in in_process
 
     remote = FRAGMENT_BY_TOOLSET.get(AgentToolset.USER_INTERACTION)
     assert remote is not None, "the remote-harness path lost the fragment"
@@ -172,14 +230,12 @@ def test_showing_your_work_is_taught_on_both_paths():
 
 
 def test_independent_calls_are_invited_into_one_turn_on_both_paths():
-    """Nothing set or forbade parallel calls, and no fragment invited them, so
-    a run made one read per model turn. The reply rules are the one prompt every
-    run gets on both harnesses, so that is where the invitation lives."""
-    from app.modules.agent.domain.entities import Agent, Conversation
-    from app.modules.agent.domain.prompts import build_agent_instructions
+    """The reply rules are the one prompt every run gets on both harnesses, so
+    that is where the invitation to call independent tools in parallel lives."""
+    from app.modules.agent.domain.prompt.templates import build_agent_instructions
 
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
-    agent = Agent(
+    agent = AgentEntity(
         pod_id=conversation.pod_id,
         user_id=conversation.user_id,
         name="reader",
@@ -197,30 +253,17 @@ def test_independent_calls_are_invited_into_one_turn_on_both_paths():
 
 def test_the_workspace_contract_follows_the_machine_the_commands_run_on():
     """A run whose `exec_command` is on the user's Mac is told about the Mac."""
-    from app.modules.agent.capabilities.assembler import _instructions_for
-    from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
-        workspace_cli_toolset,
-    )
-
-    vm = _instructions_for(workspace_cli_toolset)
-    mac = _instructions_for(workspace_cli_toolset, host_execution=True)
+    vm = toolset_instructions(ToolGroup.WORKSPACE_CLI)
+    mac = toolset_instructions(ToolGroup.WORKSPACE_CLI, host_execution=True)
     assert vm is not None and mac is not None
-    assert "whole home directory persists" in vm[1]()
-    assert "on the user's own Mac" in mac[1]()
+    assert "whole home directory persists" in vm
+    assert "on the user's own Mac" in mac
 
 
 def test_the_memory_contract_is_taught_on_both_paths():
-    """Memory is the one capability with no toolset to hang its fragment on.
-
-    Every other fragment reaches the in-process harness by matching a toolset
-    object in ``_instructions_for``. MEMORY carries no tools, so it has to be
-    appended from ``ctx.memory_enabled`` instead — and this is the test that
-    notices if only one of the two paths keeps it.
-    """
-    from app.modules.agent.capabilities.memory import MemoryCapability
-    from app.modules.agent.domain.prompts import FRAGMENT_BY_TOOLSET
-
-    in_process = MemoryCapability().get_instructions()
+    """Memory has no toolset to hang its fragment on, so it rides on its own
+    in process -- and this notices if only one of the two paths keeps it."""
+    in_process = load_memory_prompt()
     assert "/memory" in in_process and "AGENTS.md" in in_process
 
     remote = FRAGMENT_BY_TOOLSET.get(AgentToolset.MEMORY)
@@ -230,145 +273,95 @@ def test_the_memory_contract_is_taught_on_both_paths():
 
 def test_the_memory_contract_is_written_down_exactly_once():
     """It used to be three hand-synced copies: this fragment, and paragraphs in
-    the `pod_write_file` and `pod_read_file` docstrings. Two of those could
-    drift from the truth without anything failing."""
-    from app.modules.agent.domain.prompts import load_workspace_cli_prompt
-    from app.modules.agent.tools.pod.pod_file_tools import pod_read_file, pod_write_file
+    the `pod_write_file` and `pod_read_file` docstrings."""
+    from app.modules.agent.domain.prompt.templates import load_workspace_cli_prompt
+    from app.modules.agent.infrastructure.tools.pod.pod_file_tools import (
+        pod_read_file,
+        pod_write_file,
+    )
 
     for docstring in (pod_write_file.__doc__ or "", pod_read_file.__doc__ or ""):
         assert "AGENTS.md" not in docstring
         assert "/memory" not in docstring
-    # The workspace CLI prompt still names `/memory` as a path shape, but no
-    # longer restates the contract.
     assert "## Memory" not in load_workspace_cli_prompt()
 
 
-@pytest.mark.anyio
-async def test_the_memory_capability_is_appended_only_when_memory_is_enabled():
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.capabilities.memory import MemoryCapability
-
-    def _ctx(memory_enabled: bool):
-        return SimpleNamespace(
-            conversation_id=uuid4(),
-            is_pod_default_agent=False,
-            memory_enabled=memory_enabled,
+def test_the_memory_contract_is_appended_only_when_memory_is_enabled():
+    def has_memory(capabilities: list[object]) -> bool:
+        return any(
+            type(c) is Instructions and c.get_instructions() == load_memory_prompt()
+            for c in capabilities
         )
 
-    def _has_memory(capabilities):
-        return any(isinstance(cap, MemoryCapability) for cap in capabilities)
-
-    assert not _has_memory(
-        await build_lemma_harness_tooling(
-            ctx=_ctx(False), full_toolsets=[], enable_prompt_caching=False
-        )
-    )
-    assert _has_memory(
-        await build_lemma_harness_tooling(
-            ctx=_ctx(True), full_toolsets=[], enable_prompt_caching=False
-        )
-    )
+    assert not has_memory(_capabilities(_deps(memory_enabled=False), []))
+    assert has_memory(_capabilities(_deps(memory_enabled=True), []))
 
 
-@pytest.mark.anyio
-async def test_assembler_returns_capabilities_for_every_visible_toolset():
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.capabilities.prompt_caching import (
-        PromptCachingCapability as _PC,
-    )
-    from app.modules.agent.capabilities.instructed_toolset import (
-        InstructedToolsetCapability,
-    )
+def test_every_visible_toolset_is_a_capability_with_its_guidance():
+    deps = _deps()
+    specs = [
+        *STATIC_SPECS[AgentToolset.WEB_SEARCH],
+        *STATIC_SPECS[AgentToolset.WORKSPACE_CLI],
+    ]
+    capabilities = _capabilities(deps, specs, caching=True)
 
-    # No extra (pod/image/audio) toolsets → no MCP/token path, no network.
-    capabilities = await build_lemma_harness_tooling(
-        ctx=SimpleNamespace(conversation_id=uuid4(), is_pod_default_agent=True),
-        full_toolsets=[web_search_toolset, workspace_cli_toolset],
-        enable_prompt_caching=True,
-    )
-    assert any(
-        isinstance(c, InstructedToolsetCapability) and c.name == "web_search"
-        for c in capabilities
-    )
-    # The workspace CLI toolset is wrapped as an instructed capability that carries
-    # its usage fragment.
-    assert any(
-        isinstance(c, InstructedToolsetCapability) and c.name == "workspace_cli"
-        for c in capabilities
-    )
+    assert _guidance_carrying(capabilities, "web_search")
+    assert _guidance_carrying(capabilities, "exec_command")
     assert any(isinstance(c, RunContextCapability) for c in capabilities)
-    assert any(isinstance(c, _PC) for c in capabilities)
-    # No extra tools → no ToolSearch capability.
-    assert not any(type(c).__name__ == "ToolSearch" for c in capabilities)
+    assert any(isinstance(c, PromptCaching) for c in capabilities)
+    # Nothing deferrable → no tool search.
+    assert not any(isinstance(c, ToolSearch) for c in capabilities)
 
 
-@pytest.mark.anyio
-async def test_caching_capability_uses_the_lever_its_protocol_understands():
-    """OpenAI gets session affinity; Anthropic gets an explicit cache breakpoint.
+def test_caching_uses_the_lever_its_protocol_understands():
+    """OpenAI gets session affinity; Anthropic gets explicit cache breakpoints,
+    since it caches nothing without one."""
 
-    Anthropic caches nothing without a breakpoint, so an OpenAI-shaped setting
-    would leave every Anthropic run paying full price for the whole prefix.
-    """
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.capabilities.prompt_caching import (
-        PromptCachingCapability as _PC,
-    )
-    from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
-
-    async def settings_for(protocol: RuntimeProfileProtocol) -> dict[str, object]:
-        capabilities = await build_lemma_harness_tooling(
-            ctx=SimpleNamespace(conversation_id=uuid4(), is_pod_default_agent=True),
-            full_toolsets=[web_search_toolset],
-            enable_prompt_caching=True,
+    def settings_for(protocol: RuntimeProfileProtocol) -> dict[str, object]:
+        capabilities = _capabilities(
+            _deps(),
+            list(STATIC_SPECS[AgentToolset.WEB_SEARCH]),
+            caching=True,
             protocol=protocol,
         )
-        caching = next(c for c in capabilities if isinstance(c, _PC))
+        caching = next(c for c in capabilities if isinstance(c, PromptCaching))
         return caching.get_model_settings()
 
-    openai_settings = await settings_for(RuntimeProfileProtocol.OPENAI_COMPATIBLE)
+    openai_settings = settings_for(RuntimeProfileProtocol.OPENAI_COMPATIBLE)
     assert "openai_user" in openai_settings
     assert "anthropic_cache_instructions" not in openai_settings
 
-    anthropic_settings = await settings_for(RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE)
+    anthropic_settings = settings_for(RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE)
     assert anthropic_settings["anthropic_cache_instructions"] == "5m"
-    # The history too, not only the prefix in front of it: without a
-    # message-level breakpoint every step of a run re-reads every message.
+    # The history too: without a message-level breakpoint every step of a run
+    # re-reads every message.
     assert anthropic_settings["anthropic_cache_messages"] == "5m"
     assert "openai_user" not in anthropic_settings
 
 
-@pytest.mark.anyio
-async def test_affinity_is_keyed_on_the_pod_and_agent_a_real_run_carries():
-    """The production key, not the fallback: a real run context has a pod and
-    an agent name, and every conversation with that agent in that pod shares
-    the long start of its prompt."""
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.tools.context import ConversationContext
-
-    pod_id, conversation_id = uuid4(), uuid4()
-    ctx = ConversationContext(
-        user_id=uuid4(),
-        pod_id=pod_id,
-        conversation_id=conversation_id,
-        agent_name="researcher",
+def test_affinity_is_keyed_on_the_pod_and_agent_a_real_run_carries():
+    """Every conversation with one agent in one pod shares the long start of
+    its prompt, so that is the key, not the conversation."""
+    deps = _deps(agent_name="researcher")
+    capabilities = _capabilities(
+        deps, list(STATIC_SPECS[AgentToolset.WEB_SEARCH]), caching=True
     )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=ctx, full_toolsets=[web_search_toolset], enable_prompt_caching=True
-    )
-    caching = next(c for c in capabilities if isinstance(c, PromptCachingCapability))
+    caching = next(c for c in capabilities if isinstance(c, PromptCaching))
 
-    assert caching.get_model_settings()["openai_user"] == f"{pod_id}:researcher"
+    assert caching.get_model_settings()["openai_user"] == f"{deps.pod_id}:researcher"
 
 
 class _FakeRepo:
+    """The conversation row's ``todos`` column, and one other column beside it."""
+
     def __init__(self, store: dict) -> None:
         self._store = store
 
-    async def get_conversation_metadata_key(self, _cid, key: str):
-        return self._store.get(key)
+    async def get_todos(self, _cid):
+        return list(self._store.get("todos", []))
 
-    async def set_conversation_metadata_key(self, _cid, key: str, value) -> None:
-        self._store[key] = value
+    async def set_todos(self, _cid, todos) -> None:
+        self._store["todos"] = list(todos)
 
 
 class _FakeUoW:
@@ -387,22 +380,17 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     from pydantic_ai.tools import RunContext
     from pydantic_ai.usage import RunUsage
 
-    from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.assembler import _visible_capability
-    from app.modules.agent.capabilities.todo import build_todo_toolset
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.infrastructure.tools import todo as storage_mod
+    from app.modules.agent.infrastructure.tools.todo import todo_specs
+    from app.modules.agent.domain.context import ToolContext
 
-    store: dict = {"is_sub_agent": True}  # a sibling metadata key
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
-    )
+    store: dict = {"cwd": "/w"}  # a sibling column
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
 
-    capability = _visible_capability(
-        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
-    )
-    toolset = capability.get_toolset()
+    specs = todo_specs(uow_factory=_FakeUoW)
+    toolset = function_toolset(specs, ToolRuntime(specs))
     run_ctx = RunContext(
-        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
+        deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -428,8 +416,8 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     result = await call("write_todos", {"todos": ["ship it", "- [ ] test it"]})
     assert result["success"] is True
     assert result["todos"] == ["- [ ] ship it", "- [ ] test it"]
-    # Sibling metadata key is untouched (todos live under their own key).
-    assert store["is_sub_agent"] is True
+    # The sibling column is untouched (todos live in their own).
+    assert store["cwd"] == "/w"
     assert "todos" in store
 
     # A SINGLE line flips just that task (matched by text); the rest is preserved.
@@ -454,7 +442,7 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     # semantics: the line's state is authoritative for the matched task).
     result = await call("write_todos", {"todos": ["ship it"]})
     assert result["todos"][0] == "- [ ] ship it"
-    assert store["is_sub_agent"] is True
+    assert store["cwd"] == "/w"
 
     # Once the current plan is fully complete, new unchecked work starts a
     # fresh plan instead of retaining completed history forever.
@@ -527,21 +515,16 @@ async def test_write_todos_says_what_to_do_next_on_every_call(monkeypatch):
     from pydantic_ai.tools import RunContext
     from pydantic_ai.usage import RunUsage
 
-    from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.assembler import _visible_capability
-    from app.modules.agent.capabilities.todo import build_todo_toolset
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.infrastructure.tools import todo as storage_mod
+    from app.modules.agent.infrastructure.tools.todo import todo_specs
+    from app.modules.agent.domain.context import ToolContext
 
     store: dict = {}
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
-    )
-    capability = _visible_capability(
-        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
-    )
-    toolset = capability.get_toolset()
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
+    specs = todo_specs(uow_factory=_FakeUoW)
+    toolset = function_toolset(specs, ToolRuntime(specs))
     run_ctx = RunContext(
-        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
+        deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -588,21 +571,16 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
     from pydantic_ai.tools import RunContext
     from pydantic_ai.usage import RunUsage
 
-    from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.assembler import _visible_capability
-    from app.modules.agent.capabilities.todo import build_todo_toolset
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.infrastructure.tools import todo as storage_mod
+    from app.modules.agent.infrastructure.tools.todo import todo_specs
+    from app.modules.agent.domain.context import ToolContext
 
     store: dict = {}
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
-    )
-    capability = _visible_capability(
-        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
-    )
-    toolset = capability.get_toolset()
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
+    specs = todo_specs(uow_factory=_FakeUoW)
+    toolset = function_toolset(specs, ToolRuntime(specs))
     run_ctx = RunContext(
-        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
+        deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -639,7 +617,7 @@ async def test_a_reworded_check_off_flips_the_task_instead_of_adding_one(monkeyp
 
 
 def test_normalize_stored_todos_recovers_observed_corrupt_history():
-    from app.modules.agent.capabilities.todo import _normalize_stored
+    from app.modules.agent.infrastructure.tools.todo import _normalize_stored
 
     stored = [
         {
@@ -681,21 +659,16 @@ async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
     from pydantic_ai.tools import RunContext
     from pydantic_ai.usage import RunUsage
 
-    from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.assembler import _visible_capability
-    from app.modules.agent.capabilities.todo import build_todo_toolset
-    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.infrastructure.tools import todo as storage_mod
+    from app.modules.agent.infrastructure.tools.todo import todo_specs
+    from app.modules.agent.domain.context import ToolContext
 
     store: dict = {}
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo(store)
-    )
-    capability = _visible_capability(
-        build_todo_toolset(uow_factory=_FakeUoW, conversation_id=uuid4())
-    )
-    toolset = capability.get_toolset()
+    monkeypatch.setattr(storage_mod, "Conversations", lambda _uow: _FakeRepo(store))
+    specs = todo_specs(uow_factory=_FakeUoW)
+    toolset = function_toolset(specs, ToolRuntime(specs))
     run_ctx = RunContext(
-        deps=BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
+        deps=ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4()),
         model=None,  # type: ignore[arg-type]
         usage=RunUsage(),
         prompt=None,
@@ -767,7 +740,7 @@ async def test_run_context_and_deferral_in_real_run():
         toolsets=[visible, extra.defer_loading()],
         capabilities=[
             RunContextCapability(context),
-            PromptCachingCapability(conversation_id=conversation_id),
+            PromptCaching(conversation_id=conversation_id),
             ToolSearch(),
         ],
     )
@@ -842,12 +815,6 @@ async def test_on_anthropic_the_context_part_marks_the_prefix_before_it():
     assert part.content[1] == context
 
 
-# The 12 user-facing function tools (view_image is a separate, vision-gated
-# toolset appended by the runner, not part of an agent's configured toolsets —
-# see test_pod_default_gains_view_image_toolset_when_vision_supported).
-# ToolSearch adds a 13th tool (`search_tools`) at the discovery layer for the
-# live provider adapter; it isn't reported in FunctionModel's
-# AgentInfo.function_tools, so it's asserted separately below.
 _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "exec_command",
     "manage_process",
@@ -883,378 +850,107 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
 
 
 @pytest.mark.anyio
-async def test_pod_default_visible_toolset_is_slim(monkeypatch):
+async def test_pod_default_visible_toolset_is_slim():
     """The pod-default agent's visible set is exactly this, and no wider.
 
     The set is a budget, not an inventory: everything in it is paid for in
-    every prompt. `_EXPECTED_VISIBLE_POD_DEFAULT_TOOLS` records what each entry
-    bought, and the pod tools are the expensive ones — added deliberately, with
-    the measured bypass that justified them written down beside them. Anything
-    new here should have to make the same argument.
+    every prompt. Anything new here should have to make the argument the pod
+    tools did.
     """
-    from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+    deps = _deps()
+    capabilities = _capabilities(deps, await _pod_default_specs(deps))
+    visible, deferred = await _offered(capabilities, deps)
 
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
-
-    deps = BaseAgentContext(
-        user_id=uuid4(),
-        pod_id=uuid4(),
-        conversation_id=uuid4(),
-        is_pod_default_agent=True,
-    )
-    # Assemble through the real RunToolAssembler so the pod-default toolset
-    # (including the conversation-scoped TODO toolset) is resolved exactly as in a
-    # live run.
-    full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
-        agent=None,
-        conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
-    )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=deps,
-        full_toolsets=full_toolsets,
-        enable_prompt_caching=False,
-    )
-
-    captured: dict = {}
-
-    def model_fn(messages, info: AgentInfo):
-        captured["visible"] = {
-            t.name for t in info.function_tools if not t.defer_loading
-        }
-        captured["deferred"] = {t.name for t in info.function_tools if t.defer_loading}
-        return ModelResponse(parts=[TextPart("done")])
-
-    agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
-    await agent.run("hi", deps=deps)
-
-    assert captured["visible"] == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS
-    # ToolSearch is wired (provides search_tools — the 14th visible tool live).
+    assert visible == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS
     assert any(isinstance(c, ToolSearch) for c in capabilities)
-    # Subagents stay deferred: delegating is a deliberate step, and a sub-agent
-    # run is withheld them entirely anyway.
-    assert {"spawn_subagent", "interact_subagent", "query_subagents"} <= captured[
-        "deferred"
-    ]
-    # The pod tools are not. See `_EXPECTED_VISIBLE_POD_DEFAULT_TOOLS`.
-    assert not any(name.startswith("pod_") for name in captured["deferred"])
-    # The browser is deferred for the same reason: `web_fetch` covers ordinary
-    # research in the prefix, and driving a page is the deliberate step past
-    # it. One tool, not six -- the browsing itself is `agent-browser` through
-    # `exec_command`, so what is deferred here is only the ask for a login.
-    assert "browser_sign_in" in captured["deferred"]
-    # A static awareness hint tells the model the deferred tools exist + how to
-    # reach them — names listed, schemas not (so the model can search for them).
-    from app.modules.agent.capabilities.deferred_hint import (
-        DeferredToolsHintCapability,
-    )
-
-    hint_caps = [c for c in capabilities if isinstance(c, DeferredToolsHintCapability)]
-    assert len(hint_caps) == 1
-    hint = hint_caps[0].get_instructions()
+    # Sub-agents stay deferred: delegating is a deliberate step.
+    assert {"spawn_subagent", "interact_subagent", "query_subagents"} <= deferred
+    assert not any(name.startswith("pod_") for name in deferred)
+    # Asking for a login is the deliberate step past `web_fetch`.
+    assert "browser_sign_in" in deferred
+    # The hint names what is deferred -- with a line each -- and nothing else.
+    [hint] = _hint(capabilities)
     assert "spawn_subagent" in hint
-    # Each name carries a one-line description: a bare name says a tool exists
-    # but not when to reach for it.
     assert "Start a pod agent as a linked child conversation" in hint
-    # The hint advertises what is deferred and nothing else. A visible toolset
-    # listed here would send the model searching for a tool it already has —
-    # which is why this is asserted for both a toolset that was always visible
-    # (speech) and one that just became visible (pod).
-    assert {"say", "listen", "list_voices"} <= captured["deferred"]
+    assert {"say", "listen", "list_voices"} <= deferred
     assert "Speaking and transcribing" in hint
     assert "pod_tables" not in hint
 
 
 @pytest.mark.anyio
-async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
-    """SPEECH is a visible capability whose instructions are the speech.md fragment,
-    so every speech-enabled agent gets the spoken-reply/transcription guidance."""
-    from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.capabilities.instructed_toolset import (
-        InstructedToolsetCapability,
-    )
-    from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+async def test_pod_default_speech_carries_its_prompt():
+    """Speech is deferred on the pod default, and its guidance still rides."""
+    deps = _deps()
+    capabilities = _capabilities(deps, await _pod_default_specs(deps))
 
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
-
-    deps = BaseAgentContext(
-        user_id=uuid4(),
-        pod_id=uuid4(),
-        conversation_id=uuid4(),
-        is_pod_default_agent=True,
-    )
-    full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
-        agent=None,
-        conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
-    )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=deps,
-        full_toolsets=full_toolsets,
-        enable_prompt_caching=False,
-    )
-
-    speech_caps = [
-        c
-        for c in capabilities
-        if isinstance(c, InstructedToolsetCapability) and c.name == "speech"
-    ]
-    assert len(speech_caps) == 1
-    instructions = speech_caps[0].get_instructions()
+    [instructions] = _guidance_carrying(capabilities, "say")
     assert "Spoken replies" in instructions
     assert "add text only for different information" in instructions
     assert "without echoing them" in instructions
 
 
 @pytest.mark.anyio
-async def test_pod_default_gains_view_image_toolset_when_vision_supported():
-    """`view_image` is not part of workspace_cli or any configured toolset — the
-    runner appends the standalone `view_image_toolset` only when the resolved
-    model supports vision (mirroring the vision-gated append in
-    `agent_runner_service.py`)."""
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.capabilities.instructed_toolset import (
-        InstructedToolsetCapability,
+async def test_pod_default_gains_view_image_when_vision_is_supported():
+    """`view_image` is offered whenever the run's model can interpret an image,
+    whatever toolsets were configured."""
+    from app.modules.agent.domain.vision import AgentVisionMode
+
+    blind, seeing = _deps(), _deps(vision_mode=AgentVisionMode.DIRECT)
+
+    no_vision, _ = await _offered(
+        _capabilities(blind, await _pod_default_specs(blind)), blind
     )
-    from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
-    from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
-        view_image_toolset,
-    )
+    assert no_vision == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS
 
-    deps = BaseAgentContext(
-        user_id=uuid4(),
-        pod_id=uuid4(),
-        conversation_id=uuid4(),
-        is_pod_default_agent=True,
-    )
-    full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
-        agent=None,
-        conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
-    )
-
-    async def build_capabilities(*, supports_vision: bool) -> list[object]:
-        toolsets = full_toolsets
-        if supports_vision:
-            toolsets = [*full_toolsets, view_image_toolset]
-        return await build_lemma_harness_tooling(
-            ctx=deps,
-            full_toolsets=toolsets,
-            enable_prompt_caching=False,
-        )
-
-    async def visible_tool_names(capabilities: list[object]) -> set[str]:
-        captured: dict = {}
-
-        def model_fn(messages, info: AgentInfo):
-            captured["visible"] = {
-                t.name for t in info.function_tools if not t.defer_loading
-            }
-            return ModelResponse(parts=[TextPart("done")])
-
-        agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
-        await agent.run("hi", deps=deps)
-        return captured["visible"]
-
-    # No vision → view_image absent; everything else is unaffected.
-    no_vision_caps = await build_capabilities(supports_vision=False)
-    assert (
-        await visible_tool_names(no_vision_caps) == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS
-    )
-
-    # Vision supported → view_image appended as a plain core toolset capability
-    # (no bespoke instructions needed; the tool's own docstring carries guidance).
-    vision_caps = await build_capabilities(supports_vision=True)
-    assert await visible_tool_names(
-        vision_caps
-    ) == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS | {"view_image"}
-    # The workspace_cli usage instructions still ride along, unaffected by
-    # whether view_image is present.
-    assert any(
-        isinstance(c, InstructedToolsetCapability) and c.name == "workspace_cli"
-        for c in vision_caps
-    )
+    vision_caps = _capabilities(seeing, await _pod_default_specs(seeing))
+    vision, _ = await _offered(vision_caps, seeing)
+    assert vision == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS | {"view_image"}
+    assert _guidance_carrying(vision_caps, "exec_command")
 
 
 @pytest.mark.anyio
-async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypatch):
-    """Deferral hides a toolset's schemas. It must not hide what the tool means.
+async def test_pod_default_messaging_is_deferred_but_keeps_its_contract():
+    """Deferral hides a toolset's schemas. It must not hide what the tool means:
+    `channel_post` returns at once and the reply never comes back as its result."""
+    deps = _deps()
+    capabilities = _capabilities(deps, await _pod_default_specs(deps))
+    visible, deferred = await _offered(capabilities, deps)
 
-    `channel_post` returns immediately and the reply never comes back as a tool
-    result, so an agent that only learns the tool exists — from the hint — and
-    not how it behaves will send a message and then wait for something that
-    cannot arrive. Wrapping the deferred toolset in a plain ToolsetCapability
-    drops the messaging fragment and produces exactly that agent.
-    """
-    from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.capabilities.instructed_toolset import (
-        InstructedToolsetCapability,
-    )
-    from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
-
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
-
-    deps = BaseAgentContext(
-        user_id=uuid4(),
-        pod_id=uuid4(),
-        conversation_id=uuid4(),
-        is_pod_default_agent=True,
-    )
-    full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
-        agent=None,
-        conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
-    )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=deps,
-        full_toolsets=full_toolsets,
-        enable_prompt_caching=False,
-    )
-
-    captured: dict = {}
-
-    def model_fn(messages, info: AgentInfo):
-        captured["visible"] = {
-            t.name for t in info.function_tools if not t.defer_loading
-        }
-        captured["deferred"] = {t.name for t in info.function_tools if t.defer_loading}
-        return ModelResponse(parts=[TextPart("done")])
-
-    agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
-    await agent.run("hi", deps=deps)
-
-    # Hidden from the prefix — an interactive assistant should not reach for
-    # "message a colleague" or "go to sleep" without going looking first.
-    assert {
-        "channel_post",
-        "channel_read",
-        "list_pod_members",
-        "wait_for",
-    } <= captured["deferred"]
-    assert not ({"channel_post", "wait_for"} & captured["visible"])
-
-    # ...but the contract still rides in the prefix.
-    messaging = [
-        c
-        for c in capabilities
-        if isinstance(c, InstructedToolsetCapability) and c.name == "messaging"
-    ]
-    assert len(messaging) == 1, "deferring messaging dropped its instructions"
-    instructions = messaging[0].get_instructions()
+    assert {"channel_post", "channel_read", "list_pod_members", "wait_for"} <= deferred
+    assert not ({"channel_post", "wait_for"} & visible)
+    [instructions] = _guidance_carrying(capabilities, "channel_post")
     assert "wait_for" in instructions
     assert "channel_read(asked_by_me=True)" in instructions
 
 
 @pytest.mark.anyio
-async def test_pod_is_visible_and_names_itself_the_default_for_pod_data(monkeypatch):
-    """The pod toolset is in the prefix, and still says it beats the CLI there.
+async def test_pod_is_visible_and_names_itself_the_default_for_pod_data():
+    """The pod toolset is in the prefix, and still says it beats the CLI there:
+    visible schemas say what each tool does, not which of two working paths to
+    prefer."""
+    deps = _deps()
+    capabilities = _capabilities(deps, await _pod_default_specs(deps))
+    visible, deferred = await _offered(capabilities, deps)
 
-    Two separate things, and the second outlives the first. POD is unlike every
-    other optional toolset: if the model never searches for
-    `run_connector_operation` the operation simply does not happen, whereas POD
-    competes with `exec_command`, which is visible and once carried a `lemma`
-    cookbook for the same tables and files. Runs split on nothing but whether
-    the model happened to call `search_tools` first, and the ones that did not
-    put every table and file read through `lemma ... | head`, losing rows to
-    truncation.
+    assert {"pod_query", "pod_read_file", "pod_tables"} <= visible
+    assert not any(name.startswith("pod_") for name in deferred)
 
-    That was first addressed by naming the default in the prefix while leaving
-    the tools deferred. They are now visible as well, for the pod-default agent
-    whose main job is this pod's data -- it should not have to find the tools
-    for its own job first. User-created agents never defer at all
-    (`_partition_core_extra`): a toolset somebody deliberately gave an agent is
-    a statement it will be used.
-
-    The prefix wording stays regardless. Visible tool schemas say what each tool
-    does, not which of two working paths to prefer, and preferring the wrong one
-    is the failure being prevented.
-    """
-    from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.capabilities.instructed_toolset import (
-        InstructedToolsetCapability,
-    )
-    from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.tool_assembler import RunToolAssembler
-
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
-
-    deps = BaseAgentContext(
-        user_id=uuid4(),
-        pod_id=uuid4(),
-        conversation_id=uuid4(),
-        is_pod_default_agent=True,
-    )
-    full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
-        agent=None,
-        conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
-    )
-    capabilities = await build_lemma_harness_tooling(
-        ctx=deps,
-        full_toolsets=full_toolsets,
-        enable_prompt_caching=False,
-    )
-
-    captured: dict = {}
-
-    def model_fn(messages, info: AgentInfo):
-        captured["visible"] = {
-            t.name for t in info.function_tools if not t.defer_loading
-        }
-        captured["deferred"] = {t.name for t in info.function_tools if t.defer_loading}
-        return ModelResponse(parts=[TextPart("done")])
-
-    agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
-    await agent.run("hi", deps=deps)
-
-    # In the prefix, and not behind a search.
-    assert {"pod_query", "pod_read_file", "pod_tables"} <= captured["visible"]
-    assert not any(name.startswith("pod_") for name in captured["deferred"])
-
-    pod = [
-        c
-        for c in capabilities
-        if isinstance(c, InstructedToolsetCapability) and c.name == "pod"
-    ]
-    assert len(pod) == 1, "pod lost its instructions"
-    instructions = pod[0].get_instructions()
-    # The preference has to be stated, not implied by a list of tool names.
+    [instructions] = _guidance_carrying(capabilities, "pod_query")
     assert "not the `lemma` CLI" in instructions
     assert "pod_query" in instructions and "pod_read_file" in instructions
-
-    # ...and the reason to build code in the workspace is the editing loop, not
-    # the destination. `PodWriteFileRequest` is (path, content, overwrite): no
-    # append, no patch, no line range, so a one-line change to a long file costs
-    # the whole file. The workspace applies a diff, which is the whole argument.
+    # The reason to build code in the workspace is the editing loop, not the
+    # destination: a pod write replaces the file, the workspace applies a diff.
     assert "applies a diff" in instructions
     assert "replaces the file" in instructions
     assert "lemma pods import" in instructions
-
-    # An earlier draft of this fragment led with the fact that `text/html` is on
-    # the indexable-document allow-list, which reads as a warning and steered
-    # agents off writing an app's markup to the pod at all. Writing a finished
-    # file there is fine and often the point; only the iteration belongs
-    # elsewhere. Guard the fragment against acquiring a prohibition again.
     assert "not the destination" in instructions
     for scary in ("does not go in pod files", "slips through", "Nothing warns you"):
         assert scary not in instructions, (
             f"fragment discourages a valid write: {scary!r}"
         )
 
-    # And the CLI fragment must not still teach the operations it just lost.
-    from app.modules.agent.domain.prompts import load_workspace_cli_prompt
+    # And the CLI fragment must not still teach the operations it lost.
+    from app.modules.agent.domain.prompt.templates import load_workspace_cli_prompt
 
     cli = load_workspace_cli_prompt()
     for duplicated in (
@@ -1269,17 +965,9 @@ async def test_pod_is_visible_and_names_itself_the_default_for_pod_data(monkeypa
         assert duplicated not in cli, f"{duplicated!r} competes with a pod_* tool"
 
 
-@pytest.mark.anyio
-async def test_every_deferred_group_is_labelled(monkeypatch):
-    """An unlabelled group renders as "Additional tools", which says nothing.
-
-    CONNECTORS shipped that way: deferred, advertised, and described in terms
-    that give the model no reason to search for it.
-    """
-    from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
-
-    hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))
+def test_every_deferred_group_is_labelled():
+    """An unlabelled group renders as "Additional tools", which says nothing."""
+    hint = deferred_tools_hint(_deferrable_groups())
 
     assert hint is not None
     assert "Additional tools" not in hint
@@ -1288,104 +976,43 @@ async def test_every_deferred_group_is_labelled(monkeypatch):
     assert "list_pod_members" in hint
 
 
-@pytest.mark.anyio
-async def test_a_user_created_agent_keeps_messaging_visible(monkeypatch):
-    """Deferral is a pod-default concession, not a change to granted toolsets.
-
-    An agent someone deliberately gave MESSAGING chose a scoped toolset already;
-    hiding it behind a search would just cost that agent a round trip.
-    """
-    from app.modules.agent.capabilities import todo_storage as storage_mod
-    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
-    from app.modules.agent.domain.value_objects import AgentToolset
-    from app.modules.agent.tools.context import BaseAgentContext
-    from app.modules.agent.tools.registry import resolve_agent_toolsets
-
-    monkeypatch.setattr(
-        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
-    )
-
-    deps = BaseAgentContext(
-        user_id=uuid4(),
-        pod_id=uuid4(),
-        conversation_id=uuid4(),
-        is_pod_default_agent=False,
-    )
-    agent_entity = SimpleNamespace(
-        id=uuid4(), pod_id=deps.pod_id, toolsets=[AgentToolset.MESSAGING]
-    )
-    full_toolsets = list(resolve_agent_toolsets(agent_entity.toolsets))
-    capabilities = await build_lemma_harness_tooling(
-        ctx=deps,
-        full_toolsets=full_toolsets,
-        enable_prompt_caching=False,
-    )
-
-    captured: dict = {}
-
-    def model_fn(messages, info: AgentInfo):
-        captured["visible"] = {
-            t.name for t in info.function_tools if not t.defer_loading
-        }
-        return ModelResponse(parts=[TextPart("done")])
-
-    agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
-    await agent.run("hi", deps=deps)
-
-    assert {"channel_post", "list_pod_members"} <= captured["visible"]
-
-
 def test_the_deferred_hint_is_byte_stable_across_builds():
-    """This block rides in the cached prompt prefix.
-
-    A listing whose order came from set iteration would differ between turns and
-    invalidate the prompt cache on every request — which costs far more than the
-    ~300 tokens the descriptions add.
-    """
-    from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
-
-    toolsets = list(EXTRA_TOOLSET_OBJECTS)
-    assert build_deferred_tools_hint(toolsets) == build_deferred_tools_hint(toolsets)
+    """This block rides in the cached prompt prefix: an order that came from set
+    iteration would invalidate the cache on every request."""
+    assert deferred_tools_hint(_deferrable_groups()) == deferred_tools_hint(
+        _deferrable_groups()
+    )
 
 
 def test_tool_names_are_sorted_within_each_group():
     """Group order follows the caller's list; names within a group must not."""
-    from app.modules.agent.capabilities.deferred_hint import _tool_summaries
-    from app.modules.agent.tools.registry import pod_toolset
+    from app.modules.agent.domain.prompt.deferred_tools import _tool_summaries
 
-    names = [name for name, _summary in _tool_summaries(pod_toolset)]
+    names = [name for name, _summary in _tool_summaries(STATIC_SPECS[AgentToolset.POD])]
     assert names == sorted(names)
 
 
 def test_every_deferred_tool_carries_a_description():
     """A name with no summary is the failure mode this replaced."""
-    from app.modules.agent.capabilities.deferred_hint import _tool_summaries
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+    from app.modules.agent.domain.prompt.deferred_tools import _tool_summaries
 
-    for toolset in EXTRA_TOOLSET_OBJECTS:
-        for name, summary in _tool_summaries(toolset):
+    for group in _deferrable_groups():
+        for name, summary in _tool_summaries(group):
             assert summary, f"{name} has no description to show the model"
             assert len(summary) <= 100, f"{name} summary is too long: {summary!r}"
             assert "\n" not in summary
 
 
 def test_the_hint_stays_within_a_token_budget():
-    """It is only worth carrying while it stays a rounding error against the
-    schemas it stands in for."""
-    from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
-    from app.modules.agent.services.history_tokens import count_text_tokens
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
+    """Only worth carrying while it stays a rounding error against the schemas."""
+    from app.modules.agent.infrastructure.providers.tokens import count_text_tokens
 
-    hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))
-    assert count_text_tokens(hint) < 900
+    hint = deferred_tools_hint(_deferrable_groups())
+    assert hint is not None and count_text_tokens(hint) < 900
 
 
 def test_the_hint_does_not_name_a_provider_specific_search_tool():
     """`search_tools` is only the local fallback: on Anthropic and OpenAI the
     reveal is provider-native and no such tool exists to call."""
-    from app.modules.agent.capabilities.deferred_hint import build_deferred_tools_hint
-    from app.modules.agent.tools.registry import EXTRA_TOOLSET_OBJECTS
-
-    hint = build_deferred_tools_hint(list(EXTRA_TOOLSET_OBJECTS))
-    assert "search_tools" not in hint
+    hint = deferred_tools_hint(_deferrable_groups())
+    assert hint is not None and "search_tools" not in hint

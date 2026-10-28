@@ -24,7 +24,7 @@ from app.core.api.dependencies import CurrentUser
 from app.modules.agent.api.controllers.conversation_controller import (
     CONVERSATION_ENUMERATION,
 )
-from app.modules.agent.api.dependencies import ConversationServiceDep
+from app.modules.agent.api.dependencies import ConversationReadsDep
 from app.modules.agent.api.schemas import (
     PendingInteractionListResponse,
     PendingInteractionResponse,
@@ -82,11 +82,11 @@ def parse_pending_page_token(page_token: str | None) -> PendingInteractionCursor
 async def list_pending_interactions(
     pod_id: UUID,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    reads: ConversationReadsDep,
     page_token: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
 ) -> PendingInteractionListResponse:
-    pending, next_cursor = await service.queries.list_pending_interactions(
+    pending, next_cursor = await reads.list_pending_interactions(
         pod_id=pod_id,
         user_id=user.id,
         cursor=parse_pending_page_token(page_token),

@@ -19,8 +19,6 @@ from typing import cast
 from uuid import UUID, uuid7
 
 import pytest
-from pydantic_ai.tools import RunContext
-from pydantic_ai.toolsets import FunctionToolset
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Agent, Conversation, Message
@@ -33,19 +31,22 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
-from app.modules.agent.domain.run_context_prompt import render_run_context
-from app.modules.agent.infrastructure.agent_host.session_memory import (
+from app.modules.agent.domain.prompt.templates import load_agent_host_runtime_prompt
+from app.modules.agent.domain.prompt.run_context import render_run_context
+from app.modules.agent.agent_host.control.session_memory import (
     instructions_digest,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+from app.modules.agent.agent_host.harness.run_config import (
     json_object,
 )
-from app.modules.agent.infrastructure.harnesses.remote_payload import (
-    _exported_tool_names,
+from app.modules.agent.domain.tools import ToolSpec
+from app.modules.agent.agent_host.harness.remote_payload import (
     run_start_payload,
 )
-from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.infrastructure.tools.skills import tools as skills
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.value_objects import QueueState
 
 
 pytestmark = pytest.mark.asyncio
@@ -109,8 +110,8 @@ def _transcript() -> list[Message]:
 CONVERSATION_CWD = f"{WORKSPACE_ROOT}/c/2026-09-19/{CONVERSATION_ID.hex[:8]}"
 
 
-def _ctx() -> BaseAgentContext:
-    return BaseAgentContext(
+def _ctx() -> ToolContext:
+    return ToolContext(
         user_id=uuid7(),
         pod_id=POD_ID,
         conversation_id=CONVERSATION_ID,
@@ -211,7 +212,7 @@ class TestWakingUp:
             MessageRole.USER,
             "Also do the patio booking.",
             paused,
-            {"during_active_run": True, "steered_into_run": str(resume)},
+            _steered_into(resume),
         )
         prompt = _user_prompt(
             carries_history=False,
@@ -241,12 +242,16 @@ def _in_run(
     role: str,
     text: str,
     run_id: UUID,
-    metadata: dict[str, object] | None = None,
+    state: MessageState | None = None,
 ) -> Message:
     message = _message(sequence, role, text)
     message.agent_run_id = run_id
-    message.metadata = metadata or {}
+    message.state = state or MessageState()
     return message
+
+
+def _steered_into(run_id: UUID) -> MessageState:
+    return MessageState(queue_state=QueueState.STEERED, steered_into_run_id=run_id)
 
 
 class TestQueuedMessages:
@@ -261,7 +266,7 @@ class TestQueuedMessages:
         -- whose session never saw the other two -- had no idea they existed.
         """
         working, followup = uuid7(), uuid7()
-        queued = {"during_active_run": True, "steered_into_run": str(followup)}
+        queued = _steered_into(followup)
         messages = [
             _in_run(1, MessageRole.USER, "Refactor the parser.", working),
             _in_run(2, MessageRole.USER, "Keep the old API.", working, queued),
@@ -290,7 +295,7 @@ class TestQueuedMessages:
                 MessageRole.USER,
                 "why does it fail?",
                 run,
-                {"during_active_run": True},
+                MessageState(queue_state=QueueState.QUEUED),
             ),
         ]
 
@@ -325,10 +330,10 @@ class TestCredentials:
         them one level down."""
         from datetime import datetime, timezone
 
-        from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
+        from app.modules.agent.agent_host.harness.dispatch import (
             run_spec_from,
         )
-        from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
+        from app.modules.agent.agent_host.harness.run_config import (
             AgentHostRunConfig,
         )
 
@@ -399,7 +404,7 @@ class TestCredentials:
         sandbox agent already receives, and without it every `lemma` command
         the skills instruct a host agent to run has no credential at all.
         """
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             host_agent_environment,
         )
 
@@ -427,7 +432,7 @@ class TestCredentials:
 
     async def test_a_new_sandbox_variable_does_not_leave_the_sandbox(self):
         """The allowlist is why this is a decision rather than an accident."""
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             host_agent_environment,
         )
 
@@ -452,7 +457,7 @@ class TestCredentials:
         that keeps that file equal to the manifest.
         """
         from app.core.config import settings
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             host_agent_environment,
         )
         from app.modules.workspace.config import workspace_settings
@@ -563,7 +568,7 @@ class TestNativeAndSandboxDirectories:
         told to `cd` to a root nothing mounted for it produces a command that
         simply fails -- which is what a user reported.
         """
-        from app.modules.agent.domain.prompt_directories import _sandbox_root
+        from app.modules.agent.domain.prompt.directories import _sandbox_root
 
         assert (
             _sandbox_root(f"{WORKSPACE_ROOT}/c/2026-09-10/ab12cd34") == WORKSPACE_ROOT
@@ -597,7 +602,7 @@ class TestNativeAndSandboxDirectories:
         directory: the characters become data and the path is still stated
         exactly, rather than silently rewritten into one that does not exist.
         """
-        from app.modules.agent.domain.prompt_directories import _prompt_path
+        from app.modules.agent.domain.prompt.directories import _prompt_path
 
         # The ordinary case is unchanged, so the prompt still reads as prose.
         assert _prompt_path(f"{WORKSPACE_ROOT}/c/2026-09-10/ab12cd34") == (
@@ -638,7 +643,7 @@ class TestNativeAndSandboxDirectories:
         from conversation metadata, and an instruction that reads as something
         else is not a failure worth leaving to chance.
         """
-        from app.modules.agent.domain.prompt_directories import _sandbox_root
+        from app.modules.agent.domain.prompt.directories import _sandbox_root
 
         for hostile in [
             "/work`space/c/x",
@@ -664,79 +669,6 @@ class TestNativeAndSandboxDirectories:
         assert "working files belong in the workspace" in prompt
 
 
-async def ping_tool(ctx: RunContext[BaseAgentContext]) -> str:
-    """Ping."""
-    del ctx
-    return "pong"
-
-
-class TestExportedToolNames:
-    """What an Agent Host run's MCP bridge advertises as callable.
-
-    ``mcp_payload`` reconciles this against ``extra_names`` because the MCP
-    route re-assembles its own tool list independently of ``options.toolsets``
-    -- a name missing here under-reports what the host can actually call, and
-    that under-report used to leave ``lemma_final_answer`` unreachable on every
-    Agent Host run despite the run spec still advertising it.
-    """
-
-    async def test_no_toolsets_returns_only_the_extra_names(self) -> None:
-        names = await _exported_tool_names(
-            agent_run_id=uuid7(),
-            ctx=_ctx(),
-            options=HarnessOptions(model_name="gpt-5.1", toolsets=[]),
-            prompt=None,
-            extra_names=["lemma_final_answer"],
-        )
-
-        assert names == ["lemma_final_answer"]
-
-    async def test_a_real_toolsets_tools_are_exported_with_the_lemma_prefix(
-        self,
-    ) -> None:
-        toolset = FunctionToolset[BaseAgentContext](tools=[ping_tool])
-
-        names = await _exported_tool_names(
-            agent_run_id=uuid7(),
-            ctx=_ctx(),
-            options=HarnessOptions(model_name="gpt-5.1", toolsets=[toolset]),
-            prompt=None,
-        )
-
-        assert names == ["lemma_ping_tool"]
-
-    async def test_an_entry_that_is_not_a_toolset_is_skipped_not_raised(self) -> None:
-        toolset = FunctionToolset[BaseAgentContext](tools=[ping_tool])
-
-        names = await _exported_tool_names(
-            agent_run_id=uuid7(),
-            ctx=_ctx(),
-            options=HarnessOptions(
-                model_name="gpt-5.1", toolsets=["not-a-toolset", toolset]
-            ),
-            prompt=None,
-        )
-
-        assert names == ["lemma_ping_tool"]
-
-    async def test_extra_names_are_appended_without_duplicating_a_toolsets_tool(
-        self,
-    ) -> None:
-        toolset = FunctionToolset[BaseAgentContext](tools=[ping_tool])
-
-        names = await _exported_tool_names(
-            agent_run_id=uuid7(),
-            ctx=_ctx(),
-            options=HarnessOptions(model_name="gpt-5.1", toolsets=[toolset]),
-            prompt=None,
-            extra_names=["lemma_ping_tool", "lemma_final_answer"],
-        )
-
-        # "lemma_ping_tool" is not repeated: it is already in the list from the
-        # toolset itself.
-        assert names == ["lemma_ping_tool", "lemma_final_answer"]
-
-
 class TestReplayedHistory:
     """What a non-resuming turn re-sends, and what it must not."""
 
@@ -750,10 +682,10 @@ class TestReplayedHistory:
         instructions addressed to the reader, arriving inside a user turn on
         every non-resuming turn, reads as something the user typed.
         """
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             _history_tool_result,
         )
-        from app.modules.agent.tools.skills.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.skills.tools import (
             LOCAL_WORKSPACE_SKILL_OVERRIDE,
             LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
         )
@@ -783,10 +715,10 @@ class TestReplayedHistory:
         """
         import json as _json
 
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             _history_tool_result,
         )
-        from app.modules.agent.tools.skills.pydantic_adapter import (
+        from app.modules.agent.infrastructure.tools.skills.tools import (
             LOCAL_WORKSPACE_SKILL_OVERRIDE,
             LOCAL_WORKSPACE_SKILL_OVERRIDE_MARKER,
         )
@@ -808,7 +740,7 @@ class TestReplayedHistory:
         assert "Body." in replayed
 
     def test_an_ordinary_tool_result_is_untouched(self):
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+        from app.modules.agent.agent_host.harness.remote_payload import (
             _history_tool_result,
         )
 
@@ -820,10 +752,18 @@ class TestReplayedHistory:
 
 
 class TestTheAgentsOwnCli:
-    """What a coding agent on the Mac is told about `lemma`."""
+    """What a coding agent on the Mac is told about `lemma`, and its tools."""
 
-    async def _payload(self, cli: str | None):
-        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+    async def test_the_tool_names_are_the_runs_specs_with_the_lemma_prefix(
+        self,
+    ) -> None:
+        """The MCP relay serves the same specs, so the two lists cannot drift."""
+        _, payload = await self._payload(None, tools=list(skills.SPECS))
+
+        assert payload["tool_names"] == ["lemma_list_skills", "lemma_load_skill"]
+
+    async def _payload(self, cli: str | None, tools: list[ToolSpec] | None = None):
+        from app.modules.agent.agent_host.harness.remote_payload import (
             mcp_payload,
         )
         from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
@@ -845,7 +785,7 @@ class TestTheAgentsOwnCli:
             agent_run_id=uuid7(),
             conversation_id=conversation_id,
             ctx=_ctx(),
-            options=HarnessOptions(model_name="gpt-5.1", toolsets=[]),
+            options=HarnessOptions(model_name="gpt-5.1", tools=tools or []),
             workspace_service=cast(WorkspaceSandboxService, Workspace()),
             cli_root=lambda: cli,
         )
@@ -868,7 +808,7 @@ class TestTheAgentsOwnCli:
         assert "lemma_cli" not in payload
 
 
-def _with_run_context(*sections: str) -> BaseAgentContext:
+def _with_run_context(*sections: str) -> ToolContext:
     ctx = _ctx()
     ctx.run_context = render_run_context(sections=sections)
     return ctx

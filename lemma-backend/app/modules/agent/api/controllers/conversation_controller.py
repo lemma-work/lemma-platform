@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
+from functools import partial
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -12,14 +12,12 @@ from fastapi.responses import StreamingResponse
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.authorization.dependencies import (
     PodContextDep,
-    assert_pod_membership,
     require_pod_membership,
 )
 from app.core.authorization.scope import pod_context_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import AgentRun
-from app.modules.agent.domain.server_metadata import client_metadata
 from app.modules.agent.services.runtime_availability import (
     check_conversation_runtime_for_pod,
 )
@@ -31,19 +29,27 @@ from app.modules.agent.api.controllers.conversation_streaming import (
 from app.modules.agent.api.controllers.shared import (
     ChannelServiceDep,
     PERSON_ANSWERS,
-    _build_conversation_service,
     _parse_message_page_token,
     _parse_metadata_filters,
-    conversation_channel,
+    conversation_response,
+    conversation_responses,
+    member_unit_of_work,
     iter_subscription,
     parse_conversation_agent_selection,
     with_keepalive,
 )
+from app.modules.agent.infrastructure.live import conversation_channel
 from app.modules.agent.api.controllers.conversation_page_token import (
     encode_conversation_page_token,
     parse_conversation_page_token,
 )
-from app.modules.agent.api.dependencies import ConversationServiceDep
+from app.modules.agent.api.dependencies import (
+    ConversationReadsDep,
+    DecidePauseDep,
+    StartConversationDep,
+    StopConversationDep,
+    UpdateConversationDep,
+)
 from app.modules.agent.api.schemas import (
     AgentRunStartResponse,
     ApprovalDecisionResponse,
@@ -62,9 +68,12 @@ from app.modules.agent.domain.errors import (
     ConversationNotFoundError,
 )
 from app.modules.agent.domain.value_objects import ConversationStatus, ConversationType
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.application.conversations.read import ConversationReads
+from app.modules.agent.application.turns.retry import RetryFailedRun
+from app.modules.agent.application.turns.send_message import SendMessage
 
 logger = get_logger(__name__)
+
 
 router = APIRouter(
     prefix="/pods/{pod_id}/conversations",
@@ -106,13 +115,13 @@ async def create_conversation(
     pod_id: UUID,
     data: CreateConversationRequest,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    start: StartConversationDep,
 ) -> ConversationResponse:
     # Refused when saved, with the reason, rather than at the first turn.
     await check_conversation_runtime_for_pod(
-        service.uow, data.agent_runtime, pod_id=pod_id, user_id=user.id
+        start.uow, data.agent_runtime, pod_id=pod_id, user_id=user.id
     )
-    conversation = await service.create_conversation(
+    conversation = await start.start(
         pod_id=pod_id,
         agent_name=data.agent_name,
         user_id=user.id,
@@ -121,11 +130,10 @@ async def create_conversation(
         agent_runtime=data.agent_runtime,
         parent_id=data.parent_id,
         type=data.type,
-        # Only the server opens a conversation for people outside the pod, or
-        # one answering another pod; a client cannot make one look like either.
-        metadata=client_metadata(data.metadata),
+        # Only tags: nothing the server decides on (``domain/conversations``).
+        metadata=data.metadata,
     )
-    return ConversationResponse.model_validate(conversation)
+    return await conversation_response(start.uow, conversation)
 
 
 @router.get(
@@ -149,7 +157,7 @@ async def list_conversations(
     pod_id: UUID,
     request: Request,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    reads: ConversationReadsDep,
     agent_name: str | None = Query(default=None, min_length=1),
     run_status: ConversationStatus | None = Query(default=None, alias="status"),
     conversation_type: ConversationType | None = Query(default=None, alias="type"),
@@ -160,7 +168,7 @@ async def list_conversations(
     page_token: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ConversationListResponse:
-    conversations, next_cursor = await service.queries.list_conversations(
+    conversations, next_cursor = await reads.list_conversations(
         pod_id=pod_id,
         agent_selection=parse_conversation_agent_selection(agent_name),
         user_id=user.id,
@@ -177,7 +185,7 @@ async def list_conversations(
         in_channel=in_channel,
     )
     return ConversationListResponse(
-        items=[ConversationResponse.model_validate(item) for item in conversations],
+        items=await conversation_responses(reads.uow, conversations),
         limit=limit,
         next_page_token=(
             encode_conversation_page_token(next_cursor) if next_cursor else None
@@ -197,14 +205,14 @@ async def get_conversation(
     pod_id: UUID,
     conversation_id: UUID,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    reads: ConversationReadsDep,
 ) -> ConversationResponse:
-    conversation = await service.queries.get_conversation(
+    conversation = await reads.get_conversation(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
     )
-    return ConversationResponse.model_validate(conversation)
+    return await conversation_response(reads.uow, conversation)
 
 
 @router.patch(
@@ -224,13 +232,13 @@ async def update_conversation(
     conversation_id: UUID,
     data: UpdateConversationRequest,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    update: UpdateConversationDep,
 ) -> ConversationResponse:
     update_payload = data.model_dump(exclude_unset=True)
     if "agent_runtime" in update_payload:
         update_payload["agent_runtime"] = data.agent_runtime
         await check_conversation_runtime_for_pod(
-            service.uow,
+            update.uow,
             data.agent_runtime,
             pod_id=pod_id,
             user_id=user.id,
@@ -239,13 +247,13 @@ async def update_conversation(
     # omitting it means "leave it alone", and an explicit null means the same.
     if update_payload.get("is_archived") is None:
         update_payload.pop("is_archived", None)
-    conversation = await service.update_conversation(
+    conversation = await update.update(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
         **update_payload,
     )
-    return ConversationResponse.model_validate(conversation)
+    return await conversation_response(update.uow, conversation)
 
 
 @router.get(
@@ -264,14 +272,14 @@ async def list_messages(
     pod_id: UUID,
     conversation_id: UUID,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    reads: ConversationReadsDep,
     page_token: str | None = Query(default=None),
     before_sequence: int | None = Query(default=None, ge=0),
     after_sequence: int | None = Query(default=None, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
 ) -> MessageListResponse:
     token_sequence = _parse_message_page_token(page_token)
-    messages, next_cursor = await service.queries.list_messages(
+    messages, next_cursor = await reads.list_messages(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
@@ -303,10 +311,10 @@ async def list_approvals(
     pod_id: UUID,
     conversation_id: UUID,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    reads: ConversationReadsDep,
     ctx: PodContextDep,
 ) -> UserApprovalListResponse:
-    approvals = await service.queries.list_user_approvals(
+    approvals = await reads.list_user_approvals(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
@@ -335,7 +343,7 @@ async def resolve_approval(
     approval_id: str,
     data: ResolveUserApprovalRequest,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    decide: DecidePauseDep,
     ctx: PodContextDep,
 ) -> ApprovalDecisionResponse:
     # Idempotent + self-healing: resolving an already-recorded approval reconciles
@@ -345,7 +353,7 @@ async def resolve_approval(
     # The browser's timeout stays out of the equation: the decision commits
     # here with an `agent.approval.execute` item, and an approved tool (which
     # may legitimately run for minutes) runs in a worker -- status "queued".
-    resolution = await service.resolve_user_approval(
+    resolution = await decide.decide(
         conversation_id=conversation_id,
         approval_id=approval_id,
         user_id=user.id,
@@ -381,30 +389,27 @@ async def send_message(
     request: Request,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> StreamingResponse:
-    # The auth context is built in the SHORT uow below, not a request-scoped
-    # PodContextDep: a StreamingResponse keeps those (and their pooled
-    # connection) alive for the whole SSE stream. Here the connection is
-    # released the moment send_from_lemma commits, before streaming.
-    @asynccontextmanager
-    async def conversations() -> AsyncIterator[ConversationService]:
-        async with pod_context_scope(
-            uow_factory, request=request, user_id=user.id, pod_id=pod_id
-        ) as scope:
-            assert_pod_membership(scope.ctx, "use conversations in this pod")
-            yield _build_conversation_service(scope.uow)
-
+    # The connection is released the moment the send commits, before streaming
+    # (`member_unit_of_work`).
     return await start_and_stream_run(
         channel_service=channel_service,
-        conversations=conversations,
+        unit_of_work=partial(
+            member_unit_of_work,
+            uow_factory,
+            request=request,
+            user_id=user.id,
+            pod_id=pod_id,
+        ),
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
-        start_run=lambda service: service.send_from_lemma(
+        start_run=lambda uow: SendMessage.build(uow).send(
             conversation_id=conversation_id,
             user_id=user.id,
             content=data.content,
             pod_id=pod_id,
             message_metadata=data.metadata,
+            typed_in_lemma=True,
             client_message_id=data.client_message_id,
         ),
     )
@@ -437,17 +442,16 @@ async def append_message(
     request: Request,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> AgentRunStartResponse:
-    async with pod_context_scope(
+    async with member_unit_of_work(
         uow_factory, request=request, user_id=user.id, pod_id=pod_id
-    ) as scope:
-        assert_pod_membership(scope.ctx, "use conversations in this pod")
-        service = _build_conversation_service(scope.uow)
-        result = await service.send_from_lemma(
+    ) as uow:
+        result = await SendMessage.build(uow).send(
             conversation_id=conversation_id,
             user_id=user.id,
             content=data.content,
             pod_id=pod_id,
             message_metadata=data.metadata,
+            typed_in_lemma=True,
             client_message_id=data.client_message_id,
         )
     return AgentRunStartResponse.model_validate(result)
@@ -477,12 +481,10 @@ async def retry_failed_run(
     request: Request,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> AgentRunStartResponse:
-    async with pod_context_scope(
+    async with member_unit_of_work(
         uow_factory, request=request, user_id=user.id, pod_id=pod_id
-    ) as scope:
-        assert_pod_membership(scope.ctx, "use conversations in this pod")
-        service = _build_conversation_service(scope.uow)
-        result = await service.retry_failed_run(
+    ) as uow:
+        result = await RetryFailedRun.build(uow).retry(
             conversation_id=conversation_id,
             user_id=user.id,
             pod_id=pod_id,
@@ -515,19 +517,18 @@ async def stream_conversation(
     # rather than via a request-scoped PodContextDep, which would pin a pooled
     # connection for the whole StreamingResponse. See send_message for rationale.
     try:
-        async with pod_context_scope(
+        async with member_unit_of_work(
             uow_factory, request=request, user_id=user.id, pod_id=pod_id
-        ) as scope:
-            assert_pod_membership(scope.ctx, "use conversations in this pod")
-            service = _build_conversation_service(scope.uow)
-            await service.queries.get_conversation(
+        ) as uow:
+            reads = ConversationReads.build(uow)
+            await reads.get_conversation(
                 conversation_id=conversation_id,
                 user_id=user.id,
                 pod_id=pod_id,
             )
             if agent_run_id is not None:
                 await load_authorized_agent_run(
-                    service,
+                    reads,
                     conversation_id=conversation_id,
                     agent_run_id=agent_run_id,
                     user_id=user.id,
@@ -540,13 +541,13 @@ async def stream_conversation(
         async with pod_context_scope(
             uow_factory, request=request, user_id=user.id, pod_id=pod_id
         ) as scope:
-            service = _build_conversation_service(scope.uow)
+            reads = ConversationReads.build(scope.uow)
             if run_id is None:
-                return await service.queries.get_active_agent_run(
+                return await reads.get_active_agent_run(
                     conversation_id=conversation_id, user_id=user.id, pod_id=pod_id
                 )
             return await load_authorized_agent_run(
-                service,
+                reads,
                 conversation_id=conversation_id,
                 agent_run_id=run_id,
                 user_id=user.id,
@@ -589,11 +590,11 @@ async def stop_conversation(
     pod_id: UUID,
     conversation_id: UUID,
     user: CurrentUser,
-    service: ConversationServiceDep,
+    stop: StopConversationDep,
 ) -> ConversationResponse:
-    conversation = await service.stop_conversation(
+    conversation = await stop.stop(
         conversation_id=conversation_id,
         user_id=user.id,
         pod_id=pod_id,
     )
-    return ConversationResponse.model_validate(conversation)
+    return await conversation_response(stop.uow, conversation)

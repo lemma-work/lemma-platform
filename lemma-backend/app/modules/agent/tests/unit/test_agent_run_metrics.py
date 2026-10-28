@@ -10,12 +10,12 @@ import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from app.modules.agent.services.run_session import RunSession
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -23,7 +23,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
     ConversationStatus,
 )
-from app.modules.agent.infrastructure.harnesses.registry import HarnessRegistry
+from app.modules.agent.infrastructure.harness.registry import HarnessRegistry
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.run_metrics import (
     AgentRunMetrics,
@@ -32,8 +32,18 @@ from app.modules.agent.services.run_metrics import (
     model_label,
 )
 from app.modules.agent.services.run_phase_spans import observe_first_output
-from app.modules.agent.tools.graceful_toolset import GracefulToolset, tool_kind_of
-from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tools import ToolGroup, ToolKind, ToolPolicy, ToolSpec
+from app.modules.agent.infrastructure.tools.connectors import tools as connectors
+from app.modules.agent.infrastructure.tools.user_interaction import (
+    tools as user_interaction,
+)
+from app.modules.agent.infrastructure.tools.workspace_cli import (
+    tools as workspace_cli,
+)
+from app.modules.agent.services.tool_runtime import ToolRuntime
+from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.domain.value_objects import ConversationOrigin
 
 pytestmark = pytest.mark.unit
 
@@ -145,13 +155,13 @@ class _UnreachableDatabase:
 def _runner(
     run_metrics: AgentRunMetrics, exc: BaseException, monkeypatch
 ) -> AgentRunnerService:
-    conversation = SimpleNamespace(
+    conversation = Conversation(
         id=UUID("00000000-0000-0000-0000-000000000010"),
         organization_id=UUID("00000000-0000-0000-0000-000000000011"),
         pod_id=UUID("00000000-0000-0000-0000-000000000012"),
         agent_id=UUID("00000000-0000-0000-0000-000000000013"),
-        metadata={"source": "SCHEDULE"},
-        parent_id=None,
+        user_id=UUID("00000000-0000-0000-0000-000000000014"),
+        origin=ConversationOrigin.SCHEDULE,
     )
     agent_run = SimpleNamespace(
         started_at=None,
@@ -161,7 +171,7 @@ def _runner(
     )
 
     async def loaded(*_: object, **__: object):
-        return conversation, SimpleNamespace(name="a"), agent_run, []
+        return RunSession.of(conversation, SimpleNamespace(name="a"), agent_run)
 
     # Loading reads four tables through real repositories; what is under test
     # starts after it.
@@ -245,25 +255,36 @@ async def test_the_first_token_is_reported_once_and_a_silent_run_reports_none() 
     assert silent == []
 
 
-class _AnsweringToolset:
-    def __init__(self, result: object) -> None:
-        self._result = result
+def _spec(name: str, kind: ToolKind, result: object) -> ToolSpec:
+    async def run(ctx: object, request: object) -> object:
+        return result
 
-    async def call_tool(self, name, tool_args, ctx, tool):
-        return self._result
+    return ToolSpec(
+        name=name,
+        description="",
+        parameters=None,
+        json_schema={"type": "object"},
+        toolset=ToolGroup.CALLABLES,
+        run=run,
+        policy=ToolPolicy(kind=kind),
+    )
 
 
 @pytest.mark.asyncio
 async def test_each_tool_call_is_counted_with_how_it_ended(
     run_metrics: AgentRunMetrics, reader: InMemoryMetricReader
 ) -> None:
-    succeeding = GracefulToolset(_AnsweringToolset({"ok": 1}), run_metrics=run_metrics)
-    failing = GracefulToolset(
-        _AnsweringToolset({"success": False, "error": "no"}), run_metrics=run_metrics
+    runtime = ToolRuntime(
+        [
+            _spec("function_send_invoice", "function", {"ok": 1}),
+            _spec("agent_researcher", "agent", {"success": False, "error": "no"}),
+        ],
+        metrics=run_metrics,
     )
+    ctx = ToolContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
 
-    await succeeding.call_tool("function_send_invoice", {}, None, None)
-    await failing.call_tool("agent_researcher", {}, None, None)
+    await runtime.call("function_send_invoice", {}, ctx)
+    await runtime.call("agent_researcher", {}, ctx)
 
     calls = {
         (labels["tool_kind"], labels["outcome"]): point.value
@@ -272,11 +293,10 @@ async def test_each_tool_call_is_counted_with_how_it_ended(
     assert calls == {("function", "ok"): 1, ("agent", "error"): 1}
 
 
-def test_tool_kinds_follow_the_toolset_and_the_dynamic_prefixes() -> None:
-    assert tool_kind_of("run_connector_operation", connectors_toolset) == "connector"
-    assert tool_kind_of("function_x", FunctionToolset()) == "function"
-    assert tool_kind_of("agent_x", FunctionToolset()) == "agent"
-    assert tool_kind_of("ask_user", FunctionToolset()) == "builtin"
+def test_a_tool_kind_is_its_policy() -> None:
+    assert {spec.policy.kind for spec in connectors.SPECS} == {"connector"}
+    assert {spec.policy.kind for spec in workspace_cli.SPECS} == {"sandbox"}
+    assert {spec.policy.kind for spec in user_interaction.SPECS} == {"builtin"}
 
 
 class _RecordingFinalizer:

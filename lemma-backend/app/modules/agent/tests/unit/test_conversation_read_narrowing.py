@@ -16,7 +16,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.test_support.mappers import configure_test_mappers
 
 # Compiling a statement configures the mappers, and a partial model graph fails
@@ -104,7 +105,7 @@ def _sql(statement) -> str:
 async def test_conversation_detail_never_joins_the_message_table() -> None:
     uow = _Uow(scalar_one=_conversation_model())
 
-    await ConversationRepository(uow).get_conversation(uuid4(), include_runs=True)
+    await Conversations(uow).get_conversation(uuid4(), include_runs=True)
 
     emitted = [_sql(statement) for statement in uow.session.statements]
     assert emitted, "expected the conversation lookup to run"
@@ -118,7 +119,7 @@ async def test_conversation_detail_never_joins_the_message_table() -> None:
 async def test_conversation_detail_asks_for_one_run_not_the_collection() -> None:
     uow = _Uow(scalar_one=_conversation_model())
 
-    await ConversationRepository(uow).get_conversation(uuid4(), include_runs=True)
+    await Conversations(uow).get_conversation(uuid4(), include_runs=True)
 
     run_queries = [
         sql for sql in map(_sql, uow.session.statements) if "agent_runs" in sql
@@ -132,7 +133,7 @@ async def test_conversation_detail_asks_for_one_run_not_the_collection() -> None
 async def test_omitting_runs_costs_no_extra_query() -> None:
     uow = _Uow(scalar_one=_conversation_model())
 
-    await ConversationRepository(uow).get_conversation(uuid4())
+    await Conversations(uow).get_conversation(uuid4())
 
     assert not any("agent_runs" in _sql(s) for s in uow.session.statements)
 
@@ -149,7 +150,7 @@ async def test_retryability_is_one_aggregate_over_a_single_run() -> None:
 
     uow = _Uow([_CountRow()])
 
-    assert await ConversationRepository(uow).run_is_replay_safe(run_id) is True
+    assert await Runs(uow).run_is_replay_safe(run_id) is True
 
     sql = _sql(uow.session.statements[0])
     assert "count(" in sql
@@ -169,7 +170,7 @@ async def test_a_run_with_a_reply_is_not_replay_safe() -> None:
 
     uow = _Uow([_CountRow()])
 
-    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
+    assert await Runs(uow).run_is_replay_safe(uuid4()) is False
 
 
 @pytest.mark.asyncio
@@ -183,7 +184,7 @@ async def test_a_run_with_no_messages_is_not_replay_safe() -> None:
 
     uow = _Uow([_CountRow()])
 
-    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
+    assert await Runs(uow).run_is_replay_safe(uuid4()) is False
 
 
 @pytest.mark.asyncio
@@ -198,7 +199,7 @@ async def test_a_failed_retry_with_no_messages_of_its_own_is_replay_safe() -> No
 
     uow = _Uow([_CountRow()])
 
-    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is True
+    assert await Runs(uow).run_is_replay_safe(uuid4()) is True
 
 
 @pytest.mark.asyncio
@@ -210,7 +211,7 @@ async def test_a_retry_that_replied_is_not_replay_safe() -> None:
 
     uow = _Uow([_CountRow()])
 
-    assert await ConversationRepository(uow).run_is_replay_safe(uuid4()) is False
+    assert await Runs(uow).run_is_replay_safe(uuid4()) is False
 
 
 @pytest.mark.asyncio
@@ -218,7 +219,7 @@ async def test_child_listing_resolves_latest_runs_in_one_statement() -> None:
     """N children must not become N run lookups, nor one collection-wide load."""
     uow = _Uow()
 
-    await ConversationRepository(uow).list_children(
+    await Conversations(uow).list_child_conversations(
         parent_id=uuid4(), user_id=uuid4(), limit=50
     )
 
@@ -236,7 +237,7 @@ async def test_opening_texts_read_two_bounded_rows_not_the_transcript() -> None:
     """
     uow = _Uow()
 
-    await ConversationRepository(uow).get_conversation_opening_texts(uuid4())
+    await Conversations(uow).get_conversation_opening_texts(uuid4())
 
     assert len(uow.session.statements) == 1, "two roles, still one round trip"
     sql = _sql(uow.session.statements[0])
@@ -252,7 +253,7 @@ async def test_opening_texts_select_only_the_columns_titling_reads() -> None:
     """No tool payloads: a tool_args blob can be megabytes and is never used."""
     uow = _Uow()
 
-    await ConversationRepository(uow).get_conversation_opening_texts(uuid4())
+    await Conversations(uow).get_conversation_opening_texts(uuid4())
 
     sql = _sql(uow.session.statements[0])
     selected = sql.split(" from ")[0]

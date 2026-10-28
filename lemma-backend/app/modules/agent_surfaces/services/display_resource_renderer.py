@@ -6,7 +6,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
-from app.modules.agent.contracts import (
+from app.modules.agent.contracts.tools import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,

@@ -18,13 +18,13 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from app.modules.agent.domain.agent_host import (
+from app.modules.agent.agent_host.domain.host import (
     AgentHostCommandKind,
     AgentHostCommandState,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host import recovery
-from app.modules.agent.infrastructure.agent_host.repository_common import (
+from app.modules.agent.agent_host.control import recovery
+from app.modules.agent.agent_host.control.repository_common import (
     DEFAULT_COMMAND_TTL_SECONDS,
 )
 from app.modules.agent.infrastructure.runtime_models import (

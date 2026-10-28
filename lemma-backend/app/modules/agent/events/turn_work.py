@@ -1,6 +1,6 @@
 """Agent turns on the work runtime: ``agent.turn`` (and its automation twin), ``agent.title``.
 
-A turn is written by ``contracts.turns.stage_agent_turn`` in the transaction
+A turn is written by ``services.turn_staging.stage_agent_turn`` in the transaction
 that creates its run, so a committed run always has the work that executes it.
 What used to carry it -- an outbox row, the ``agent-events`` consumer group, a
 streaq job, a Redis heartbeat per job and a ten-minute sweep for the runs all
@@ -155,13 +155,14 @@ ObserverFactory = Callable[[UnitOfWorkFactory], object | None]
 
 def _deployment_runner(fences: TurnFences) -> TurnRunner:
     from app.modules.agent.services.agent_runner_service import AgentRunnerService
-    from app.modules.agent.services.harness_wiring import (
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.infrastructure.harness.registry import (
         build_harness_registry,
-        worker_uow_factory,
     )
 
     return AgentRunnerService(
-        uow_factory=worker_uow_factory(),
+        uow_factory=SessionUnitOfWorkFactory(async_session_maker),
         harness_registry=build_harness_registry(),
         terminal_units=fences.terminal,
         step_units=fences.steps,
@@ -244,7 +245,8 @@ def pod_of(ns: str) -> UUID:
 def _turn_handler(build_runner: RunnerFactory, build_observer: ObserverFactory):
     async def run_turn(ctx: JobContext, payload: AgentTurnWork) -> None:
         from app.modules.agent.domain.errors import ConversationNotFoundError
-        from app.modules.agent.services.harness_wiring import worker_uow_factory
+        from app.core.infrastructure.db.session import async_session_maker
+        from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
         from app.modules.agent.services.run_event_pump import TurnYielded
 
         ctx.raise_if_stopping()
@@ -255,7 +257,7 @@ def _turn_handler(build_runner: RunnerFactory, build_observer: ObserverFactory):
                 attempt=ctx.item.attempts,
                 lease_losses=ctx.item.lease_losses,
             )
-        uow_factory = worker_uow_factory()
+        uow_factory = SessionUnitOfWorkFactory(async_session_maker)
         runner = build_runner(
             TurnFences(
                 terminal=FencedTerminal(ctx, uow_factory),
@@ -301,12 +303,9 @@ def dead_error(reason: str, last_error: str | None) -> str:
 async def on_turn_dead(ctx: DeadContext) -> None:
     """The turn gave up: its run FAILED, and everything waiting on it hears."""
     from app.modules.agent.domain.value_objects import AgentRunStatus
-    from app.modules.agent.infrastructure.repositories import ConversationRepository
-    from app.modules.agent.services.realtime import (
-        completed_payload,
-        error_payload,
-        publish_conversation_event,
-    )
+    from app.modules.agent.infrastructure.db.runs import Runs
+    from app.modules.agent.infrastructure.live import publish_conversation_event
+    from app.modules.agent.domain.live_events import completed_payload, error_payload
     from app.modules.agent.services.run_followups import stage_run_followups
 
     try:
@@ -314,7 +313,7 @@ async def on_turn_dead(ctx: DeadContext) -> None:
     except ValueError:
         return
     error = dead_error(ctx.reason, ctx.last_error)
-    finish = await ConversationRepository(ctx.uow).finish_agent_run(
+    finish = await Runs(ctx.uow).finish_agent_run(
         agent_run_id=payload.run_id, status=AgentRunStatus.FAILED, error=error
     )
     if finish is None or not finish.updated:
@@ -349,14 +348,15 @@ async def on_turn_dead(ctx: DeadContext) -> None:
 
 
 async def generate_title(ctx: JobContext, payload: ConversationWork) -> None:
-    from app.modules.agent.services.conversation_title_service import (
+    from app.modules.agent.application.background.title import (
         ConversationTitleService,
     )
-    from app.modules.agent.services.harness_wiring import worker_uow_factory
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 
     ctx.raise_if_stopping()
     await ConversationTitleService(
-        uow_factory=worker_uow_factory()
+        uow_factory=SessionUnitOfWorkFactory(async_session_maker)
     ).generate_title_if_absent(payload.conversation_id)
 
 

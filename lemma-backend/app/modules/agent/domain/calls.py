@@ -8,7 +8,7 @@ sub-agents, and decides what the voice says and what the call's canvas shows.
 Its sub-agents are in the call too: they draw on the same canvas, and only the
 coordinator speaks.
 
-The mark is a key in the conversation's metadata, copied to every sub-agent the
+The mark is the conversation's ``call`` column, copied to every sub-agent the
 coordinator spawns, so a run knows it is in a call without a lookup. ``live`` is
 true only while a socket holds the call: the coordinator's brief and its voice
 tool go with it, so a chat a call happened in reads as a chat again once the
@@ -22,8 +22,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
-
-CALL_METADATA_KEY = "call"
 
 #: The tools whose results the call's canvas shows.
 CANVAS_TOOL_NAMES = frozenset({"display_resource"})
@@ -50,16 +48,16 @@ class CallMark:
     #: limit holds across a reconnect.
     held_seconds: float = 0.0
 
-    def as_metadata(self) -> dict[str, object]:
-        metadata: dict[str, object] = {
+    def to_json(self) -> dict[str, object]:
+        stored: dict[str, object] = {
             "call_id": str(self.call_id),
             "role": self.role.value,
             "live": self.live,
             "held_seconds": round(self.held_seconds, 1),
         }
         if self.since is not None:
-            metadata["since"] = self.since.isoformat()
-        return metadata
+            stored["since"] = self.since.isoformat()
+        return stored
 
     def for_worker(self) -> CallMark:
         return replace(self, role=CallRole.WORKER)
@@ -68,25 +66,24 @@ class CallMark:
     def live_coordinator(self) -> bool:
         return self.live and self.role is CallRole.COORDINATOR
 
-
-def call_mark(metadata: Mapping[str, object] | None) -> CallMark | None:
-    """The call a conversation belongs to, from its metadata, if any."""
-    raw = (metadata or {}).get(CALL_METADATA_KEY)
-    if not isinstance(raw, Mapping):
-        return None
-    try:
-        since = raw.get("since")
-        return CallMark(
-            call_id=UUID(str(raw.get("call_id"))),
-            role=CallRole(str(raw.get("role"))),
-            # Absent on a mark written before ``live`` existed: not held. A
-            # call that connects to it again sets it.
-            live=bool(raw.get("live", False)),
-            since=datetime.fromisoformat(since) if isinstance(since, str) else None,
-            held_seconds=float(raw.get("held_seconds") or 0.0),
-        )
-    except ValueError, TypeError:
-        return None
+    @classmethod
+    def from_json(cls, raw: object) -> CallMark | None:
+        """The mark stored as ``raw``, or ``None`` for anything that is not one."""
+        if not isinstance(raw, Mapping):
+            return None
+        try:
+            since = raw.get("since")
+            return cls(
+                call_id=UUID(str(raw.get("call_id"))),
+                role=CallRole(str(raw.get("role"))),
+                # Absent on a mark written before ``live`` existed: not held. A
+                # call that connects to it again sets it.
+                live=bool(raw.get("live", False)),
+                since=datetime.fromisoformat(since) if isinstance(since, str) else None,
+                held_seconds=float(raw.get("held_seconds") or 0.0),
+            )
+        except ValueError, TypeError:
+            return None
 
 
 def coordinator_brief() -> str:
