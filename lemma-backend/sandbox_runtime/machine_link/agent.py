@@ -50,7 +50,7 @@ from sandbox_runtime.machine_link.runtime_process import (
     RuntimeProcess,
 )
 
-logger = logging.getLogger("lemma.machine")
+_log = logging.getLogger("lemma.machine")
 
 REVOKED_OR_MISSING = 4401
 SUPERSEDED = 4409
@@ -133,9 +133,7 @@ class MachineAgent:
             if delay < 0:
                 delay = backoff
                 backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
-            logger.info(
-                "link closed (%s %s); reconnecting in %.1fs", code, reason, delay
-            )
+            _log.info("link closed (%s %s); reconnecting in %.1fs", code, reason, delay)
             await asyncio.sleep(delay + random.uniform(0, delay / 10))
 
     def _after_close(
@@ -187,7 +185,7 @@ class MachineAgent:
                 None,
             )
         except (OSError, InvalidStatus, TimeoutError) as error:
-            logger.warning("could not reach Lemma: %s", error)
+            _log.warning("could not reach Lemma: %s", error)
             return None, type(error).__name__, None
 
     async def revoke(self) -> None:
@@ -273,7 +271,7 @@ class _Link:
         runtime = welcome.get("runtime") or {}
         heartbeat = int(welcome.get("heartbeat_ms") or 20_000) / 1000
         token = str(runtime.get("token") or "")
-        logger.info("connected to Lemma as %s", welcome.get("name"))
+        _log.info("connected to Lemma as %s", welcome.get("name"))
         starting = asyncio.ensure_future(self._start_runtime(token))
         beating = asyncio.ensure_future(self._heartbeat(heartbeat))
         reconnect_after: int | None = None
@@ -288,11 +286,11 @@ class _Link:
                         (frame.get("body") or {}).get("after_ms") or 0
                     )
                 elif frame.get("type") == "error":
-                    logger.warning("Lemma reported: %s", frame.get("body"))
+                    _log.warning("Lemma reported: %s", frame.get("body"))
         except ConnectionClosed:
             pass
         except mux.MuxError as error:
-            logger.warning("a mux frame broke the protocol: %s", error)
+            _log.warning("a mux frame broke the protocol: %s", error)
         finally:
             for task in (starting, beating):
                 task.cancel()
@@ -304,7 +302,7 @@ class _Link:
         try:
             await self._agent.runtime.ensure(token)
         except RuntimeError as error:
-            logger.error("the runtime did not start: %s", error)
+            _log.error("the runtime did not start: %s", error)
             return
         await self._beat()
 
@@ -367,7 +365,7 @@ class _Link:
                 installer=installer,
             )
         except (InstallFailed, httpx.HTTPError, RuntimeError) as error:
-            logger.error("installing the pushed runtime failed: %s", error)
+            _log.error("installing the pushed runtime failed: %s", error)
             outcome = {"installed": False, "error": str(error)[:500]}
         finally:
             archive.unlink(missing_ok=True)
@@ -405,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
         except Stop as stop:
             # Exit 0: stopping on purpose is not a crash, and a service
             # manager restarting a revoked machine would only be refused again.
-            logger.warning("%s", stop)
+            _log.warning("%s", stop)
             return 0
         finally:
             running.cancel()

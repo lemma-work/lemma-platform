@@ -465,6 +465,7 @@ pub mod compute {
         ];
 
         /// One frame's bytes.
+        #[must_use]
         pub fn encode(kind: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
             let mut frame = Vec::with_capacity(HEADER_BYTES + payload.len());
             frame.push(kind);
@@ -474,6 +475,7 @@ pub mod compute {
         }
 
         /// A frame's type, stream and payload, or `None` if it is too short.
+        #[must_use]
         pub fn decode(frame: &[u8]) -> Option<(u8, u32, &[u8])> {
             if frame.len() < HEADER_BYTES {
                 return None;

@@ -9,3 +9,8 @@ COPY lemma-pod-bundle /src/lemma-pod-bundle
 COPY lemma-skills /src/lemma-skills
 COPY lemma-cli /src/lemma-cli
 RUN uv pip install --system /src/lemma-python /src/lemma-pod-bundle /src/lemma-cli
+# An ordinary account, as on a real VM: the agent runs commands as this user,
+# and PR 1's terminal journey waits for its `$ ` prompt, not root's `# `.
+RUN useradd --create-home --shell /bin/bash user
+USER user
+WORKDIR /home/user

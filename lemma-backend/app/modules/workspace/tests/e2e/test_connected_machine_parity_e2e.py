@@ -11,7 +11,9 @@ machine:
   inside a bare ``python:3.14-slim`` container standing in for someone's VM,
   rooted at ``/home/user`` so PR 1's journeys find the paths they name:
   it pairs, builds its uv environment from the server's lockfile, installs the
-  server's runtime over HTTP and serves it as that container's user.
+  server's runtime over HTTP and serves it as that container's ordinary user.
+  It builds its environment from scratch, so it is ``slow``: the scheduled
+  protected lane runs it, not the pull-request lane.
 * **image** -- the real ``lemma machine connect --image`` on this machine,
   running the ``lemma-workspace`` image under Docker; this lane also proves the
   browser's relay answers over the link.
@@ -230,6 +232,8 @@ def laptop_image() -> str:
     return _LAPTOP_IMAGE
 
 
+# Slow: it builds the uv environment from scratch, past the PR lane's budget.
+@pytest.mark.slow
 @pytest.mark.workspace
 @pytest.mark.asyncio
 async def test_host_mode_in_a_throwaway_container_passes_the_machine_journeys(
