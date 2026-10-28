@@ -101,6 +101,8 @@ REPLAY_CLASS: Mapping[str, ReplayClass] = {
     "list_connectors": _SAFE,
     "search_connector_operations": _SAFE,
     "describe_connector_operation": _SAFE,
+    # Hands back a sign-in link; asked twice, the same one.
+    "connect_connector": _SAFE,
     "run_connector_operation": _UNSAFE,
     # Messaging: sends key on the run and call; the rest read.
     "channel_post": _KEYED,

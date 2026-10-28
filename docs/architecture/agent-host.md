@@ -336,7 +336,10 @@ load that same session in the conversation's persistent working directory.
 Control checkpoints retain the binding for older hosts and recovery, but a late
 checkpoint from an older run cannot replace a newer run's session. Changing to
 a different provider session clears the old session's instruction-delivery
-digest; instructions are acknowledged only after a prompt has landed.
+digest; instructions are acknowledged only after a prompt has landed. On the
+same evidence the binding keeps the newest run whose prompt landed
+(`prompted_run_id`), which is where the session's copy of the conversation
+ends; see [what a resumed turn carries](#delivery).
 
 The session binding also records `host_id` and `host_cwd`, reported by the
 leased host at session establishment. `host_cwd` is the exact directory passed
@@ -935,6 +938,22 @@ guarantee:
   [Steering](agent-host-events.md#steering). Nothing about it is required for
   correctness: a lost command or result leaves the message queued in Lemma, and
   the follow-up turn delivers it when the current one ends.
+- **What a resumed turn carries.** A turn that loads its provider session is
+  sent only what that session has not seen (`harnesses/turn_messages.py`): its
+  own messages -- the one that started it, any steered into it, the tool
+  return a resume answers -- and what was written into the conversation in no
+  run since the start of the session's last landed prompt: a reminder or a
+  report delivered to the chat, another chat a contact merge folded in. No turn
+  holds those, so nothing else would send them. They are taken from the history
+  the in-process harness reads (`services/runtime_history.py`), so they keep
+  its bounds (`MAX_UNATTACHED_MESSAGES`, `MAX_FOLDED_MESSAGES`), the notices
+  that frame a folded chat, and nothing a stranger's run may not read. A
+  session with no landed prompt on record, or one older than the history, is
+  sent all of it. A message held for a person never reaches a host: it is
+  written only where somebody outside the pod is answered, and those runs stay
+  in process. `test_agent_host_between_turns.py` holds the selection, and
+  `test_agent_host_process_e2e.py` resumes a scripted agent's session through
+  the real host.
 - **The host's MCP relay** (`mcp_relay.rs`) is a loopback port every account
   on the Mac can reach, so a connection must present the relay token on its
   first line within 5 seconds and in at most 64 KiB, later lines are bounded

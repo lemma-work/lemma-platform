@@ -86,6 +86,26 @@ PER_MODEL_CATALOG = [
 ]
 
 
+# "slow-model-options": six models that each take 2.5s to switch to, as Claude
+# Code's adapter takes about a second each -- more than the probe can wait for.
+SLOW_MODELS = [f"slow-{n}" for n in range(1, 7)]
+SLOW_SWITCH_SECONDS = 2.5
+
+
+def slow_model_options(model):
+    return [
+        {
+            "id": "model",
+            "name": "Model",
+            "category": "model",
+            "type": "select",
+            "currentValue": model,
+            "options": [{"value": name, "name": name} for name in SLOW_MODELS],
+        },
+        effort("low", ["low", "high"]),
+    ]
+
+
 def per_model_options(model):
     current, levels = PER_MODEL_EFFORT[model]
     return [
@@ -182,6 +202,17 @@ for raw_line in sys.stdin:
                 "id": request_id,
                 "error": {"code": -32603, "message": "session not found"},
             }
+        )
+    elif method == "session/new" and MODE == "slow-model-options":
+        result(
+            request_id,
+            {"sessionId": "fake-session", "configOptions": slow_model_options("slow-1")},
+        )
+    elif method == "session/set_config_option" and MODE == "slow-model-options":
+        time.sleep(SLOW_SWITCH_SECONDS)
+        result(
+            request_id,
+            {"configOptions": slow_model_options(message["params"]["value"])},
         )
     elif method == "session/new" and MODE == "per-model-options":
         result(

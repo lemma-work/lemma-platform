@@ -14,6 +14,7 @@ from app.core.observability.readiness import (
     build_readiness_report,
     dependency_state,
     migrations_state,
+    reported_only,
     worker_state,
 )
 
@@ -77,3 +78,20 @@ def test_only_a_stalled_worker_and_a_pending_schema_refuse_work():
     # A question that could not be asked is not an answer: it is reported and
     # does not hold the process out of rotation.
     assert migrations_state("unknown").ready is True
+
+
+def test_a_datastore_role_that_cannot_create_roles_is_named_but_refuses_nothing():
+    """Without CREATEROLE every pod query answers 503, and the only sign was a
+    warning per schema. Named here; never blocking, because the rest of the
+    product works and one feature's missing grant must not become an outage."""
+    report = build_readiness_report(
+        components={
+            "db": dependency_state(True),
+            "datastore_roles": reported_only("missing_createrole"),
+        },
+        instance_id=None,
+    )
+
+    assert report.status_code == 200
+    assert report.payload["components"]["datastore_roles"] == "missing_createrole"
+    assert reported_only(None) is None

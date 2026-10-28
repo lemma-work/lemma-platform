@@ -48,6 +48,11 @@ logger = get_logger(__name__)
 CLOSED_TO_THE_INTERNET = {"allow_public_traffic": False}
 
 
+#: What `build_templates.py` builds the workspace template at by default:
+#: 1 vCPU and 2048 MB. `test_plan_sizing` holds the two to each other.
+DEFAULT_WORKSPACE_TEMPLATE_SIZE = "1x2048"
+
+
 @dataclass(frozen=True, slots=True)
 class E2BProviderConfig:
     api_key: str
@@ -72,6 +77,11 @@ class E2BProviderConfig:
     # the sizes Docker work needs, keyed like the workspace's.
     docker_template: str = "lemma-workspace-docker"
     docker_size_templates: Mapping[str, str] = field(default_factory=dict)
+    # The size `workspace_template` itself was built at. A plan that sells it
+    # needs no template of its own: `build_templates.py` builds the default
+    # template at this size, and building it again under another name would
+    # be a second copy of the same thing to keep promoted.
+    workspace_template_size: str = DEFAULT_WORKSPACE_TEMPLATE_SIZE
 
 
 def lifecycle_for(kind: SandboxKind) -> dict[str, object]:
@@ -109,8 +119,9 @@ def lifecycle_for(kind: SandboxKind) -> dict[str, object]:
 def template_for(config: E2BProviderConfig, spec: ProviderCreateSpec) -> str:
     """The template this sandbox is built from.
 
-    A workspace is built from the template for its plan's size. A size with no
-    template configured is a deployment mistake, and refusing to start the
+    A workspace is built from the template for its plan's size, and the size
+    the default template was built at is the default template. Any other size
+    with no template configured is a deployment mistake, and refusing to start the
     person's workspace over it would punish them for it: it is logged, and the
     workspace is served at the default size.
     """
@@ -125,6 +136,9 @@ def template_for(config: E2BProviderConfig, spec: ProviderCreateSpec) -> str:
         sized = by_size.get(spec.size.label)
         if sized:
             return sized
+        if spec.size.label == config.workspace_template_size:
+            # Both default templates are built at this size.
+            return default
         logger.warning(
             "workspace.e2b.size_template_missing.degraded",
             sandbox_id=str(spec.sandbox_id),

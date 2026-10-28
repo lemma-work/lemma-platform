@@ -1051,13 +1051,35 @@
     }
   },
   {
+    "tool_name": "connect_connector",
+    "toolset": "CONNECTORS",
+    "description": "Get the link your person opens to connect an app (Gmail, Notion, ...).\n\nYou do not need this before running an operation: `run_connector_operation`\nanswers with the same `connect_url` when something is not connected. Use it\nwhen your person asks to connect something. Hand them `connect_url`\nas it is; do not describe menus instead.",
+    "input_schema": {
+      "properties": {
+        "connector": {
+          "description": "What to connect: a pod connector's slug, an installation's name, or a catalog connector id such as `gmail`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "connector"
+      ],
+      "title": "ConnectConnectorRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "describe_connector_operation",
     "toolset": "CONNECTORS",
     "description": "Get one operation's description and input/output schemas.\n\nCall this before running an operation you have not run before -- the input\nschema is what `run_connector_operation` validates `payload` against.",
     "input_schema": {
       "properties": {
         "connector": {
-          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`).",
+          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`). A catalog connector id (`gmail`, `notion`) works too: browsing it needs nothing connected, and running it answers with a `connect_url` until your person has connected it.",
           "type": "string"
         },
         "operation": {
@@ -1650,7 +1672,51 @@
       "title": "ExposePortRequest",
       "type": "object"
     },
-    "output_schema": {}
+    "output_schema": {
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "title": "ExposePortResult",
+      "type": "object"
+    }
   },
   {
     "tool_name": "final_answer",
@@ -1827,7 +1893,78 @@
       "title": "ListMachinesRequest",
       "type": "object"
     },
-    "output_schema": {}
+    "output_schema": {
+      "$defs": {
+        "MachineSummary": {
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "size": {
+              "type": "string"
+            },
+            "template": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "docker": {
+              "type": "boolean"
+            },
+            "yours": {
+              "description": "Whether commands go here when you name no machine.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ref",
+            "name",
+            "kind",
+            "size",
+            "template",
+            "status",
+            "docker",
+            "yours"
+          ],
+          "title": "MachineSummary",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "machines": {
+          "items": {
+            "$ref": "#/$defs/MachineSummary"
+          },
+          "type": "array"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "title": "ListMachinesResult",
+      "type": "object"
+    }
   },
   {
     "tool_name": "list_pod_members",
@@ -3844,6 +3981,18 @@
           "default": null,
           "description": "Why this needs approval."
         },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Your whole reply above the card: what you did, what this does, why."
+        },
         "payload": {
           "anyOf": [
             {
@@ -4023,7 +4172,39 @@
       "title": "ResetMachineRequest",
       "type": "object"
     },
-    "output_schema": {}
+    "output_schema": {
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "freed_bytes": {
+          "default": 0,
+          "type": "integer"
+        },
+        "details": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "title": "ResetMachineResult",
+      "type": "object"
+    }
   },
   {
     "tool_name": "run_connector_operation",
@@ -4033,7 +4214,7 @@
       "description": "No account argument: the connector decides whose account a call runs as.\n\nA per-member connector uses the account of the person you act for; a\nshared one uses the account its owner shared with the pod. An\n``account_id`` here was a free argument a model could fill in to act as a\ncolleague.",
       "properties": {
         "connector": {
-          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`).",
+          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`). A catalog connector id (`gmail`, `notion`) works too: browsing it needs nothing connected, and running it answers with a `connect_url` until your person has connected it.",
           "type": "string"
         },
         "operation": {
@@ -4185,7 +4366,7 @@
             }
           ],
           "default": null,
-          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`). Omit to search every connector you may use in this pod -- prefer that when you know the task but not which connector provides it."
+          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`). A catalog connector id (`gmail`, `notion`) works too: browsing it needs nothing connected, and running it answers with a `connect_url` until your person has connected it. Omit to search every connector you may use in this pod -- prefer that when you know the task but not which connector provides it."
         },
         "query": {
           "anyOf": [
@@ -4308,7 +4489,39 @@
       "title": "SyncFilesRequest",
       "type": "object"
     },
-    "output_schema": {}
+    "output_schema": {
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "bytes": {
+          "default": 0,
+          "type": "integer"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "success"
+      ],
+      "title": "SyncFilesResult",
+      "type": "object"
+    }
   },
   {
     "tool_name": "view_image",

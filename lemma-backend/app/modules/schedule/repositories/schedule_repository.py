@@ -83,6 +83,7 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             visibility=entity.visibility,
             is_active=entity.is_active,
             is_internal=entity.is_internal,
+            created_by_workload_id=entity.created_by_workload_id,
             next_fire_at=cursor_for(
                 entity.config,
                 is_active=entity.is_active,
@@ -575,11 +576,17 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         return int(count or 0)
 
     async def reset_consecutive_failures(self, schedule_id: UUID) -> None:
-        """Reset the durable circuit-breaker counter after success/reactivation."""
+        """Start the failure streak afresh: a person reactivated the schedule.
+
+        Zeroing the counter alone is not a reset. The breaker recounts the
+        streak from the run ledger on every outcome, which still holds the
+        failures that paused it, so the next failure switched it straight off
+        again. ``failures_reset_at`` is where that recount now stops.
+        """
         await self.session.execute(
             update(Schedule)
             .where(Schedule.id == schedule_id)
-            .values(consecutive_failures=0)
+            .values(consecutive_failures=0, failures_reset_at=func.now())
         )
 
     async def set_consecutive_failures(self, schedule_id: UUID, count: int) -> None:

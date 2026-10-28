@@ -1236,7 +1236,21 @@ export const liveSource: PodSource = {
         let installId = authConfigId;
         let madeHere: { id: string; name: string } | null = null;
         if (!installId) {
-            const installs = ((await client.connectors.authConfigs.list(orgId, { limit: 200 })).items ?? []) as Install[];
+            /* Listing installations is an owner's or editor's, and a member
+               following an agent's "connect Gmail" link may hold neither. The
+               connect request then names the app alone, and the server picks
+               the organization's default installation, installs Lemma's own
+               where it may, or says who can. */
+            const listed = await client.connectors.authConfigs.list(orgId, { limit: 200 }).catch(() => null);
+            if (!listed) {
+                const request = (await client.connectors.createConnectRequest(orgId, {
+                    connector_id: connectorId,
+                    return_to: returnTo,
+                    ...(connectionFields ? { connection_fields: connectionFields } : {}),
+                })) as { authorization_url?: string | null; auth_config_id?: string | null };
+                return { authorizeUrl: request.authorization_url ?? "", before, authConfigId: request.auth_config_id ?? undefined };
+            }
+            const installs = (listed.items ?? []) as Install[];
             const held = heldInstall(installs, connectorId, configSource);
             if (held) {
                 installId = held.id;
@@ -1247,7 +1261,7 @@ export const liveSource: PodSource = {
                     /* Said as what is missing. "An organization admin" is
                        the person reading on a local install, and the reach
                        sheet offers the form beside this. */
-                    throw new Error(entry.title + " has no sign-in app here yet. One has to be added under Connectors before anybody can connect it.");
+                    throw new Error(entry.title + " has no sign-in app here yet. One has to be added from the organization menu → Connectors before anybody can connect it.");
                 }
                 const made = await client.connectors.authConfigs.create(orgId, {
                     connector_id: connectorId,

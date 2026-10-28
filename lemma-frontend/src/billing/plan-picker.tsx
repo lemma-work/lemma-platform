@@ -141,7 +141,7 @@ export function PlanPicker({
                     const move = moveTo(current, plan);
                     const here = move === "current";
                     return (
-                        <article className="plan" key={plan.id} data-current={here}>
+                        <article className="plan" key={plan.id} data-current={here} aria-label={plan.name + " plan"}>
                             <h5>{plan.name}</h5>
                             <p className="plan__price">{priceLine(plan)}</p>
                             {plan.description && <p className="plan__blurb">{plan.description}</p>}

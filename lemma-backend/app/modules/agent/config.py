@@ -71,6 +71,16 @@ class AgentSettings(BaseSettings):
             "that is. 0 disables the check."
         ),
     )
+    agent_run_budget_repeated_calls: int = Field(
+        default=10,
+        description=(
+            "The same tool call, with the same arguments and the same result, "
+            "this many times in a row before pausing to ask; the run is told at "
+            "the warning fraction first. Above the few repeats of polling work "
+            "that is still going, far below the request ceiling a loop otherwise "
+            "runs to. 0 disables the check."
+        ),
+    )
     agent_run_budget_unattended_wall_clock_seconds: float = Field(
         default=7200.0,
         description=(
@@ -163,6 +173,17 @@ class AgentSettings(BaseSettings):
             "Whether a run a person is waiting on leaves memory to a pass after "
             "it ends instead of saving it before answering. Off, every run "
             "saves memory in the turn again and no pass is queued."
+        ),
+    )
+    agent_memory_pass_model: str | None = Field(
+        default=None,
+        description=(
+            "Optional model, on the system provider, for the memory pass that "
+            "follows a turn. Defaults to the run's own model, so the turn goes "
+            "to no provider it had not already gone to -- and the pass, which "
+            "reads the whole turn plus the memory brief to usually conclude "
+            "nothing, costs a multiple of a short turn on an expensive model. "
+            "A small model is cheaper; it may also keep less."
         ),
     )
     function_run_poll_interval_seconds: float = Field(

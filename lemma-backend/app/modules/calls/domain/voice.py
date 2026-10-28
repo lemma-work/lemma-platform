@@ -39,7 +39,11 @@ class UserSpeaking:
 
 @dataclass(frozen=True, slots=True)
 class Heard:
-    """What the caller said; ``final`` closes their turn."""
+    """What the caller said.
+
+    Not final, it is a fragment to add to the turn so far; final, it is the
+    whole turn, and replaces the fragments.
+    """
 
     text: str
     final: bool
@@ -47,7 +51,8 @@ class Heard:
 
 @dataclass(frozen=True, slots=True)
 class Said:
-    """What the voice said, as transcribed; ``final`` closes its turn."""
+    """What the voice said, as transcribed: fragments, then the whole line,
+    as for :class:`Heard`."""
 
     text: str
     final: bool

@@ -38,8 +38,9 @@ echo "${TESSDATA_PREFIX:-<unset>}"
 ```
 
 When one is missing, say so and take the other route rather than trying to
-install it: an Office file can go through `lemma files upload` and be read back
-as the pod's converted markdown, and a scanned PDF can be rendered with
+install it: a Word or ODT document can go through `lemma files upload` and be
+read back as the pod's converted markdown (a spreadsheet or presentation cannot:
+the pod does not convert those), and a scanned PDF can be rendered with
 `lit screenshot` and read with the image-viewing capability instead of OCR.
 
 ## Workflow
@@ -99,7 +100,7 @@ lit batch-parse input-directory output-directory --recursive --format json
 
 ## Troubleshooting
 
-- If Office files fail to parse, check `libreoffice --version` (or `soffice`). The machine image does not install it; when it is absent, upload the file and read the pod's converted markdown instead.
+- If Office files fail to parse, check `libreoffice --version` (or `soffice`). The machine image does not install it; when it is absent, a DOC/DOCX/ODT can be uploaded and read back as the pod's converted markdown. PPTX and XLSX are not converted by the pod, so without LibreOffice read them with a script (the workspace Python ships `openpyxl` for XLSX) and say what could not be checked.
 - If image inputs fail, check `magick --version` or `convert --version`. Same story — not installed by the machine image.
 - OCR needs Tesseract and its language data, neither of which the machine image installs. If `tesseract --version` works, pass `--ocr-language <lang>` and make sure the matching `.traineddata` file exists in `$TESSDATA_PREFIX`. If it does not, render pages with `lit screenshot` and read them with the image-viewing capability rather than reaching for OCR.
 - If the document is password protected, use `--password <password>` only when the user has provided the password.

@@ -7,6 +7,8 @@ its queries nor its sweeps can ever see production's, and vice versa.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -17,6 +19,7 @@ from sandbox_runtime.errors import (
 from app.core.log.log import get_logger
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
+    ProviderInstance,
     ProviderFailed,
     ProviderGone,
     ProviderRejected,
@@ -45,6 +48,32 @@ def meta_sandbox_kind(namespace: str) -> str:
 
 def meta_epoch(namespace: str) -> str:
     return f"{namespace}-epoch"
+
+
+def meta_storage_generation(namespace: str) -> str:
+    return f"{namespace}-storage-generation"
+
+
+def generation_stamp(namespace: str, generation: int | None) -> dict[str, str]:
+    """The storage generation, as metadata stamped on a sandbox at create."""
+    if generation is None:
+        return {}
+    return {meta_storage_generation(namespace): str(generation)}
+
+
+def superseded(
+    metadata: dict[str, str], namespace: str, generation: int | None
+) -> bool:
+    """Whether a listed sandbox holds an older disk than the one asked for.
+
+    A fresh home or a new size bumps the storage generation and kills the old
+    sandbox; E2B goes on listing it for a while, and adopting it handed every
+    later call a sandbox that no longer existed. One stamped with another
+    generation is never the disk wanted. Unstamped ones predate the stamp and
+    are adopted as before -- refusing them would strand every existing disk.
+    """
+    stamped = metadata.get(meta_storage_generation(namespace))
+    return generation is not None and stamped is not None and stamped != str(generation)
 
 
 def meta_profile_digest(namespace: str) -> str:
@@ -440,3 +469,34 @@ async def close_browser(sandbox, provider_id: str, **api) -> None:
             provider_id=provider_id,
             detail=str(exc),
         )
+
+
+#: How often a destroy re-checks that E2B has stopped listing what it killed.
+_UNLISTED_POLL_SECONDS = 0.5
+
+
+async def wait_unlisted(
+    inspect: Callable[..., Awaitable[ProviderInstance | None]],
+    name: str,
+    provider_id: str,
+    *,
+    deadline_at: datetime,
+) -> None:
+    """Until the lookup `ensure` adopts through stops finding the sandbox just
+    killed.
+
+    E2B's listing trails a kill. An `ensure` straight after a destroy -- a
+    fresh home, a move to a new size -- looked the workspace up by its
+    metadata, found the killed sandbox still listed, adopted it, and every call
+    after that failed against a sandbox that no longer existed. Seen on real
+    E2B on every move to a new size.
+    """
+    while datetime.now(timezone.utc) < deadline_at:
+        listed = await inspect(name, deadline_at=deadline_at)
+        if listed is None or listed.provider_id != provider_id:
+            return
+        await asyncio.sleep(_UNLISTED_POLL_SECONDS)
+    logger.warning(
+        "workspace.e2b.killed_sandbox_still_listed.degraded",
+        provider_id=provider_id,
+    )

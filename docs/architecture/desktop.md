@@ -855,6 +855,14 @@ Each command is granted to a webview by a capability in
 is granted the same permissions at runtime on its exact origin, port included
 (`local_workspace_capability`), when locald names it: a static file could only
 say `http://app.lemma.localhost:*`, which would also match every alias port.
+A Lemma server the person connected to from the chooser ("Connect to your own
+Lemma server") is granted the same permissions at runtime too
+(`grant_hosted_workspace_capability`), under an identifier of its own per
+origin. It is saved as `hostedServer` in the desktop config only after
+`/site-config.js` answers with `window.__LEMMA_SITE__`, kept as an HTTPS origin
+(plain http only for `localhost`, `127.0.0.1` or `[::1]`, and never `*.localhost` by any scheme), and from
+then on it *is* the hosted site for every rule below: `hosted_url()` returns
+it, so pairing, the sign-in Cancel and navigation all follow it.
 - **settings**: `require_settings_caller` — control, or local workspace.
 - **agent host**: `require_agent_host_caller` — control, the splash, or the
   workspace on the origin this app navigated to: the hosted site in hosted

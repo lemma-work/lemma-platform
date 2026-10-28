@@ -25,7 +25,12 @@ from sqlalchemy import Select, select
 
 from app.core.authorization.context import Context
 from app.modules.pod.api.dependencies import get_pod_service
-from app.modules.pod.domain.pod_entities import PodEntity, PodRecipe, PodUpdateEntity
+from app.modules.pod.domain.pod_entities import (
+    PodCreationSource,
+    PodEntity,
+    PodRecipe,
+    PodUpdateEntity,
+)
 from app.modules.pod.infrastructure.pod_repositories import PodRepository
 
 
@@ -92,6 +97,7 @@ async def create_first_pod(
             name=name,
         ),
         owner_user_id,
+        source=PodCreationSource.PROVISIONED,
     )
 
 

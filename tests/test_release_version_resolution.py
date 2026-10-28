@@ -19,7 +19,9 @@ fourth trigger without extending the expression fails here.
 
 from __future__ import annotations
 
+import importlib.util
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -28,11 +30,25 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = REPO_ROOT / ".github/workflows"
 
-RELEASE_WORKFLOWS = (
-    "release-lemma-python.yml",
-    "release-lemma-terminal.yml",
-    "release-lemma-typescript.yml",
-)
+
+def _load_registry():
+    """`scripts/release_registry.py`, imported by path; `scripts/` is not a package."""
+    path = REPO_ROOT / "scripts" / "release_registry.py"
+    spec = importlib.util.spec_from_file_location("release_registry", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+registry = _load_registry()
+
+#: One workflow per published package, read from the list the release tracker
+#: and the Slack summary use -- so a package added there is held to everything
+#: below without anyone remembering to add it here.
+RELEASE_WORKFLOWS = tuple(package.workflow for package in registry.PACKAGES)
+PACKAGES_BY_WORKFLOW = {package.workflow: package for package in registry.PACKAGES}
 
 #: What each trigger leaves non-empty. `github.ref`/`github.ref_name` are set on
 #: every event, which is the point: on a dispatch from a branch `ref_name` is
@@ -71,6 +87,7 @@ EXPECTED_CHECKOUT_REF = (
 def _operands(expression: str) -> list:
     """The `||` alternatives, in the order GitHub evaluates them."""
     return [operand.strip() for operand in expression.split("||")]
+
 
 EXPRESSION = re.compile(r"\$\{\{([^}]*)\}\}")
 
@@ -195,3 +212,98 @@ def test_the_tag_push_is_a_trigger(name):
     assert "v*" in (section["push"] or {}).get("tags", []), (
         "{}: the push trigger does not watch version tags".format(name)
     )
+
+
+def _steps(document: dict) -> list:
+    jobs = list((document.get("jobs") or {}).values())
+    assert len(jobs) == 1, (
+        "a package release is one job: resolve, check, publish, confirm"
+    )
+    return jobs[0].get("steps") or []
+
+
+@pytest.mark.parametrize("name", RELEASE_WORKFLOWS)
+def test_the_publish_job_runs_on_every_tag_push(name):
+    """No job-level condition: a tag push reaches the publish, always.
+
+    The condition that decides whether to upload is the registry's answer,
+    inside the job, where a skipped upload is a visible step rather than a job
+    that silently never ran.
+    """
+    document = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+    for job_name, job in (document.get("jobs") or {}).items():
+        assert "if" not in job, "{}: job '{}' has a condition: {}".format(
+            name, job_name, job["if"]
+        )
+
+
+@pytest.mark.parametrize("name", RELEASE_WORKFLOWS)
+def test_a_release_is_idempotent_and_confirmed(name):
+    """Resolve, ask the registry, do everything else only if it said no, confirm.
+
+    Re-running a release on a version the registry already has must be a no-op
+    success, and an upload is not done until the registry serves it.
+    """
+    package = PACKAGES_BY_WORKFLOW[name]
+    steps = _steps(yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8")))
+    ids = [step.get("id") for step in steps]
+    assert "release" in ids and "registry" in ids, name
+    resolve = steps[ids.index("release")]
+    check = steps[ids.index("registry")]
+    assert "release_registry.py version" in resolve["run"], name
+    assert (
+        "release_registry.py published {} {} ".format(package.registry, package.name)
+        in check["run"]
+    ), "{}: checks the wrong package or registry".format(name)
+    assert ids.index("release") < ids.index("registry")
+
+    after = steps[ids.index("registry") + 1 :]
+    for step in after:
+        assert step.get("if") == "steps.registry.outputs.published == 'false'", (
+            "{}: step '{}' runs even when {} already has the version, so a "
+            "re-run is not a no-op".format(
+                name, step.get("name"), package.registry_label
+            )
+        )
+
+    names = [step.get("name") for step in after]
+    gate = names.index("Check version consistency across components")
+    publish = names.index("Publish package")
+    assert gate < publish, "{}: the version gate must run before the publish".format(
+        name
+    )
+    assert "--expect" in after[gate]["run"]
+
+    confirm = after[-1]
+    assert (
+        "release_registry.py wait {} {} ".format(package.registry, package.name)
+        in confirm["run"]
+    ), "{}: the last step must confirm the registry serves it".format(name)
+    assert publish < len(after) - 1
+
+
+def _triggers_of(name: str) -> dict:
+    document = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+    return document[True] if True in document else document["on"]
+
+
+def test_the_release_tracker_starts_with_the_tag():
+    """Progress is posted from the tag push, not after the image release ends."""
+    triggers = _triggers_of("release-announce.yml")
+    assert "v*" in (triggers.get("push") or {}).get("tags", [])
+    assert "workflow_run" not in triggers
+    text = (WORKFLOWS / "release-announce.yml").read_text(encoding="utf-8")
+    assert "report_release_to_slack.py" in text
+    assert "--track" in text and "--require-complete" in text
+
+
+def test_the_tracker_watches_every_release_workflow():
+    for workflow in registry.RELEASE_WORKFLOWS:
+        assert (WORKFLOWS / workflow).is_file(), workflow
+    assert set(RELEASE_WORKFLOWS) <= set(registry.RELEASE_WORKFLOWS)
+
+
+def test_a_failed_tracker_on_a_tag_push_is_announced():
+    """The tracker reports the others; something has to report the tracker."""
+    text = (WORKFLOWS / "notify-failure.yml").read_text(encoding="utf-8")
+    assert "github.event.workflow_run.name == 'Announce a release'" in text

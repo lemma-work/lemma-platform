@@ -88,6 +88,10 @@ class ProviderCreateSpec:
     profile_digest: str
     deadline_at: datetime
     volume_name: str | None = None
+    # Which disk this is: bumped when the disk is replaced on purpose (a fresh
+    # home, a new size). Where the sandbox is the disk (E2B) it is stamped on
+    # the sandbox, so an older one is never adopted as this one.
+    storage_generation: int | None = None
     mounts: tuple[SandboxMount, ...] = ()
     env: Mapping[str, str] = field(default_factory=dict)
     # What the owner's plan pays for. None is the provider's configured default.

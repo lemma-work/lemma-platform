@@ -14,6 +14,8 @@ both are claims about I/O that no amount of reading the code can settle.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
+
 from app.core.bounded import BoundedDict
 from pathlib import Path
 from typing import Any
@@ -32,7 +34,13 @@ from app.modules.workspace.services.workspace_runtime_bundle import (
     WorkspaceRuntimeBundleMixin,
 )
 from sandbox_runtime.errors import SandboxUnavailable
-from sandbox_runtime.protocol import ProcessOutputSnapshot, ProcessState
+from sandbox_runtime.protocol import (
+    ProcessOutputChannel,
+    ProcessOutputChunk,
+    ProcessOutputSnapshot,
+    ProcessState,
+    WorkloadKind,
+)
 
 _BUNDLE = RuntimeBundle(
     version="sha256:" + "a" * 64,
@@ -420,3 +428,64 @@ def test_a_bundle_directory_is_read_whole(tmp_path: Path) -> None:
     assert loaded.version == "sha256:cafe"
     assert loaded.archive == b"PK\x03\x04 payload"
     assert loaded.requires == ("lemma_sdk",)
+
+
+class _ErrorThenExit(_Client):
+    """The installer prints its error on one read and exits on the next --
+    the order a real failure arrives in when the exit lands after a poll."""
+
+    def __init__(self) -> None:
+        super().__init__(installed=None, exit_code=1)
+        self.polls = 0
+
+    async def read_process_output(
+        self,
+        kind: WorkloadKind,
+        user_id: UUID,
+        operation_id: UUID,
+        *,
+        deadline_at: datetime,
+        after_sequence: int,
+        wait_seconds: int,
+    ) -> ProcessOutputSnapshot:
+        del kind, user_id, operation_id, deadline_at, after_sequence, wait_seconds
+        self.polls += 1
+        if self.polls == 1:
+            return ProcessOutputSnapshot(
+                chunks=(
+                    ProcessOutputChunk(
+                        sequence=0,
+                        channel=ProcessOutputChannel.STDERR,
+                        data=b"PermissionError: /opt/lemma-runtime/current",
+                    ),
+                ),
+                next_sequence=1,
+                truncated_before_sequence=None,
+                state=ProcessState.RUNNING,
+                exit_code=None,
+            )
+        return ProcessOutputSnapshot(
+            chunks=(),
+            next_sequence=1,
+            truncated_before_sequence=None,
+            state=ProcessState.FAILED,
+            exit_code=1,
+        )
+
+
+async def test_an_installer_failure_says_what_it_printed_before_it_exited(
+    caplog,
+) -> None:
+    """Each read starts after the last, so keeping only the final one reported
+    every failure as "no output" -- the cause of a failed overlay install was
+    invisible, and it was retried on every tool call."""
+    client = _ErrorThenExit()
+
+    await _Service(client)._ensure_runtime_bundle(uuid4(), _info())
+
+    failure = [r for r in caplog.records if "install_failed" in r.getMessage()]
+    assert client.polls == 2
+    assert any(
+        "PermissionError: /opt/lemma-runtime/current" in str(r.__dict__)
+        for r in failure
+    ), [r.__dict__ for r in failure]

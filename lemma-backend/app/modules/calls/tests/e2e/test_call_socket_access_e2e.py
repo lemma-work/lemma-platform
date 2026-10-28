@@ -44,3 +44,35 @@ async def test_another_member_and_no_session_are_refused_the_call(
 
     assert await _closed_with(base_url, socket_path, colleague["token"]) == 4404
     assert await _closed_with(base_url, socket_path, None) == 4401
+
+
+async def test_a_call_nothing_was_said_in_leaves_no_conversation_in_the_list(
+    scenario, backend_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A call that never got going -- here, no valid start -- is archived, so
+    the chat list does not collect empty "Call with ..." conversations."""
+    import websockets
+
+    monkeypatch.setattr(calls_settings, "gemini_api_key", "test-key-unused")
+    await scenario.create_org_with_pod(name_prefix="calls-empty")
+    pod_id = scenario.pod_id
+    opened = await scenario.owner_client.post(
+        f"/pods/{pod_id}/calls", json={"display_name": "Ria"}
+    )
+    assert opened.status_code == 201, opened.text
+    call_id = opened.json()["call_id"]
+    url = (
+        backend_server["host_base_url"].replace("http://", "ws://")
+        + f"/pods/{pod_id}/calls/{call_id}/socket"
+    )
+    headers = {"Authorization": scenario.owner_client.headers["Authorization"]}
+    async with websockets.connect(url, additional_headers=headers) as socket:
+        await socket.send("not a start frame")
+        with pytest.raises(websockets.ConnectionClosed):
+            await socket.recv()
+
+    conversation = await scenario.owner_client.get(
+        f"/pods/{pod_id}/conversations/{call_id}"
+    )
+    assert conversation.status_code == 200, conversation.text
+    assert conversation.json()["is_archived"] is True

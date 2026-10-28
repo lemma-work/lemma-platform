@@ -8,6 +8,8 @@ import { ConnectDialog, RotateDialog } from "@/connect/connect-dialog";
 import { AddConnector, Glyph, LOOKS } from "@/connect/add-connector";
 import { OwnAppPicker } from "@/connect/own-app-picker";
 import { EditInstall } from "@/connect/edit-install";
+import { consentLabel } from "@/connect/consent";
+import { SignInLink } from "@/connect/sign-in-link";
 import {
     completionPath, hereWith, openAuthorization, outcomeNote, useConnectOutcome, type ConnectOutcome,
 } from "@/connect/round-trip";
@@ -435,9 +437,10 @@ function ConnectorCard({
                         ) : (
                             <button className="btn btn--primary"
                                 onClick={() => setLink({ ...link, opened: openAuthorization(link.authorizeUrl, connector.title) })}>
-                                Authorise <ExternalIcon size={13} />
+                                {consentLabel(link.authorizeUrl, connector.title)} <ExternalIcon size={13} />
                             </button>
                         )}
+                        <SignInLink url={link.authorizeUrl} app={connector.title} opened={link.opened} />
                         <button className="linkish" onClick={() => { setLink(null); onChanged(); }}>
                             <RefreshIcon size={13} /> Done?
                         </button>

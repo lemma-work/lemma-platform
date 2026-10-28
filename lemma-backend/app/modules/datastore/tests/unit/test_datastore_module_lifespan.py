@@ -170,3 +170,27 @@ async def test_background_preload_retries_after_a_failed_download(monkeypatch):
 
     assert calls == 2
     assert datastore_module._embedding_capability.status == "ready"
+
+
+@pytest.mark.asyncio
+async def test_a_blocking_preload_proves_one_embedder_once_per_process(monkeypatch):
+    """A second lifespan in the process -- every live-server test enters one --
+    does not embed again to prove the model it already proved."""
+    embedder = SimpleNamespace(embed=AsyncMock(return_value=[0.0, 1.0]))
+    monkeypatch.setattr(settings, "environment", "local")
+    monkeypatch.setattr(settings, "embedding_provider", "local")
+    monkeypatch.setattr(datastore_settings, "local_embedding_preload", True)
+    monkeypatch.setattr(datastore_settings, "local_embedding_startup_mode", "blocking")
+    monkeypatch.setattr(settings, "embedding_dimension", 2)
+    monkeypatch.setattr(datastore_module, "_proven_embedder", None)
+    previous = install_datastore_composition(
+        DatastoreComposition(embedder_provider=lambda: embedder)
+    )
+    try:
+        for _ in range(2):
+            async with _preload_local_embeddings(object()):
+                assert embedding_capability().status == "ready"
+    finally:
+        install_datastore_composition(previous)
+
+    embedder.embed.assert_awaited_once()

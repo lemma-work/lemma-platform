@@ -12,6 +12,9 @@ Two channels carry text in, and which one decides whether the voice talks:
 - ``realtimeInput.text`` is spoken to: the model responds to it at once, in its
   own words, which is what an update the agents want said needs.
 
+The same protocol is served by the Gemini API, with a key, and by Vertex AI,
+with the workload's service account; ``google_auth`` builds either.
+
 A connection lasts about ten minutes. The server warns with ``goAway`` and keeps
 handing out resumption handles; the engine reconnects with the latest one and
 the conversation carries on where it was.
@@ -53,6 +56,8 @@ from app.modules.calls.domain.voice import (
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
 
+    from app.modules.calls.infrastructure.engines.google_auth import Headers
+
 logger = get_logger(__name__)
 
 _ENDPOINT = (
@@ -67,6 +72,8 @@ _SETUP_TIMEOUT_SECONDS = 15.0
 #: Each reconnect replays nothing; more than a few in a row means the provider
 #: is refusing us, not rotating the connection.
 _MAX_RECONNECTS = 3
+#: Text frames kept across one reconnect, the newest.
+_MAX_HELD_TEXT = 20
 
 type Frame = dict[str, JsonValue]
 
@@ -77,14 +84,16 @@ class GeminiLiveEngine:
     def __init__(
         self,
         *,
-        api_key: str,
+        headers: Headers,
         model: str,
         instructions: str,
         voice: str | None = None,
         endpoint: str = _ENDPOINT,
     ) -> None:
-        self._api_key = api_key
-        self._model = model if model.startswith("models/") else f"models/{model}"
+        self._headers = headers
+        self._model = (
+            model if model.startswith(("models/", "projects/")) else f"models/{model}"
+        )
         self._instructions = instructions
         self._voice = voice
         self._endpoint = endpoint
@@ -97,6 +106,10 @@ class GeminiLiveEngine:
         self._said: list[str] = []
         self._voice_turn_open = False
         self._closing_turn: asyncio.TimerHandle | None = None
+        #: Notes and updates for the voice sent while the connection was being
+        #: rotated, to send once it is back. Audio is never kept: late
+        #: microphone audio is worse than none.
+        self._held_text: list[Frame] = []
 
     async def open(self) -> None:
         await self._connect()
@@ -123,10 +136,12 @@ class GeminiLiveEngine:
     async def _connect(self) -> None:
         import websockets
 
+        # Asked on every connect: a service account's token outlives no call.
+        headers = await self._headers()
         try:
             socket = await websockets.connect(
                 self._endpoint,
-                additional_headers={"x-goog-api-key": self._api_key},
+                additional_headers=dict(headers),
                 max_size=MAX_PROVIDER_FRAME_BYTES,
                 open_timeout=_SETUP_TIMEOUT_SECONDS,
             )
@@ -166,9 +181,9 @@ class GeminiLiveEngine:
 
     async def inject(self, text: str, mode: Inject) -> None:
         if mode is Inject.SPEAK:
-            await self._send({"realtimeInput": {"text": text}})
+            await self._send_text({"realtimeInput": {"text": text}})
             return
-        await self._send(
+        await self._send_text(
             {
                 "clientContent": {
                     "turns": [{"role": "user", "parts": [{"text": text}]}],
@@ -176,6 +191,26 @@ class GeminiLiveEngine:
                 }
             }
         )
+
+    async def _send_text(self, frame: Frame) -> None:
+        """Text for the voice is kept, not dropped, across a reconnect: a
+        relay sent while Gemini rotated the connection was never said."""
+        socket = self._socket
+        import websockets
+
+        if socket is not None and socket.state.name == "OPEN":
+            try:
+                await socket.send(encode(frame))
+                return
+            except websockets.ConnectionClosed:
+                pass
+        self._held_text.append(frame)
+        del self._held_text[:-_MAX_HELD_TEXT]
+
+    async def _send_held(self) -> None:
+        held, self._held_text = self._held_text, []
+        for frame in held:
+            await self._send_text(frame)
 
     async def events(self) -> AsyncIterator[VoiceEvent]:
         while True:
@@ -227,6 +262,7 @@ class GeminiLiveEngine:
                 offer(self._events, EngineClosed(str(exc)), essential=True)
                 return
             logger.info("calls.gemini.resumed.observed", attempt=reconnects)
+            await self._send_held()
         offer(self._events, EngineClosed(), essential=True)
 
     def _handle_frame(self, frame: dict[str, JsonValue]) -> None:

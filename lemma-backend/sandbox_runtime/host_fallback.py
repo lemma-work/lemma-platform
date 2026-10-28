@@ -173,6 +173,28 @@ def _connect(host: str, port: int, timeout: float) -> socket.socket | None:
         return None
 
 
+def bad_gateway(host: str, port: int) -> bytes:
+    """A 502 that says why, logged where the sandbox's logs are read.
+
+    The plain 502 this used to send was all Chrome had to go on, and it shows a
+    refused CONNECT as `ERR_TUNNEL_CONNECTION_FAILED` -- which is what a sandbox
+    with no working DNS looked like, with nothing in any log to say so. A name
+    that does not resolve is told apart from a site that does not answer.
+    """
+    reason = f"could not reach {host}:{port}"
+    if not is_loopback(host):
+        try:
+            socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError:
+            reason = f"could not resolve {host}: this sandbox's DNS is not answering"
+    print(f"lemma-host-fallback: 502 {reason}", file=sys.stderr, flush=True)
+    body = reason.encode()
+    return (
+        b"HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\n"
+        b"Content-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(body), body)
+    )
+
+
 def open_upstream(host: str, port: int) -> tuple[socket.socket | None, str]:
     """Where this request should actually go, and which machine answered.
 
@@ -395,7 +417,7 @@ class _Handler(socketserver.BaseRequestHandler):
             host, port = _split_authority(target)
             upstream, where = open_upstream(host, port)
             if upstream is None:
-                client.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                client.sendall(bad_gateway(host, port))
                 return
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             try:
@@ -434,7 +456,7 @@ class _Handler(socketserver.BaseRequestHandler):
         else:
             upstream, where = open_upstream(host, port)
         if upstream is None:
-            client.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            client.sendall(bad_gateway(host, port))
             return
         del where
         try:

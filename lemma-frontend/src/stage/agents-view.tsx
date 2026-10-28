@@ -1,6 +1,6 @@
-import { AgentChannels } from "@/shell/agent-channels";
 "use client";
 
+import { AgentChannels } from "@/shell/agent-channels";
 import { LoadingRows } from "@/ui/loading";
 
 import { useMemo, useState } from "react";

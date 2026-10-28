@@ -17,7 +17,10 @@ import pytest
 from fastapi import status
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.usage.config import usage_settings
+from app.modules.usage.domain.ports import UsageLimitValues
+from app.modules.usage.services.usage_limit_provider import (
+    configure_usage_limit_provider,
+)
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.services import compute_meter
 from sandbox_runtime.paths import BROWSER_PROFILE
@@ -46,19 +49,33 @@ async def metered(
     monkeypatch.setattr(workspace_settings, "compute_billing_enabled", True)
     await _warm(authenticated_client)
     machine = (await authenticated_client.get("/machines/me")).json()
-    return {
-        "client": authenticated_client,
-        "uow_factory": SessionUnitOfWorkFactory(db_manager.session_factory),
-        "machine_id": UUID(machine["id"]),
-    }
+    allowance = _Allowance()
+    configure_usage_limit_provider(lambda uow: allowance)
+    try:
+        yield {
+            "client": authenticated_client,
+            "uow_factory": SessionUnitOfWorkFactory(db_manager.session_factory),
+            "machine_id": UUID(machine["id"]),
+            "allowance": allowance,
+        }
+    finally:
+        configure_usage_limit_provider(None)
 
 
-def _allowance(monkeypatch, units: float | None) -> None:
-    monkeypatch.setattr(usage_settings, "usage_user_monthly_compute_units", units)
+class _Allowance:
+    """The plan's compute allowance, supplied the way a billing provider does."""
+
+    units: float | None = None
+
+    async def resolve_limits(
+        self, *, organization_id: UUID | None, user_id: UUID
+    ) -> UsageLimitValues:
+        del organization_id, user_id
+        return UsageLimitValues(user_monthly_compute_units=self.units)
 
 
 async def test_out_of_compute_refuses_new_work_then_releases_and_keeps_logins(
-    monkeypatch, metered
+    metered,
 ) -> None:
     client = metered["client"]
     sign_in = await _finished(
@@ -73,7 +90,7 @@ async def test_out_of_compute_refuses_new_work_then_releases_and_keeps_logins(
     assert sign_in["exit_code"] == 0
 
     # A minute of a 2x4 machine is 1/60 CU; the month allows a hundredth.
-    _allowance(monkeypatch, 0.01)
+    metered["allowance"].units = 0.01
     now = datetime.now(timezone.utc) + timedelta(minutes=1)
     tick = await compute_meter.meter_running(metered["uow_factory"], now=now)
     assert tick.written >= 1
@@ -98,7 +115,7 @@ async def test_out_of_compute_refuses_new_work_then_releases_and_keeps_logins(
     assert still_refused.status_code == status.HTTP_403_FORBIDDEN
 
     # Next month, or a bigger plan: the machine comes back with its logins.
-    _allowance(monkeypatch, None)
+    metered["allowance"].units = None
     await _warm(client)
     login = await _finished(
         client, (await _start(client, f"cat '{PROFILE}/e2e-login'"))["id"]
@@ -108,7 +125,7 @@ async def test_out_of_compute_refuses_new_work_then_releases_and_keeps_logins(
 
 
 async def test_a_released_machines_session_is_closed_and_not_metered_again(
-    monkeypatch, metered
+    metered,
 ) -> None:
     from sqlalchemy import select
 
@@ -116,7 +133,7 @@ async def test_a_released_machines_session_is_closed_and_not_metered_again(
         MachineSessionModel,
     )
 
-    _allowance(monkeypatch, None)
+    metered["allowance"].units = None
     now = datetime.now(timezone.utc) + timedelta(minutes=1)
     await compute_meter.meter_running(metered["uow_factory"], now=now)
 

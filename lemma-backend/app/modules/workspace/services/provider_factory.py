@@ -148,6 +148,7 @@ def _build_e2b_provider():
             workspace_size_templates=workspace_settings.e2b_workspace_size_templates,
             docker_template=workspace_settings.e2b_docker_template,
             docker_size_templates=workspace_settings.e2b_docker_size_templates,
+            workspace_template_size=workspace_settings.e2b_workspace_template_size,
             domain=workspace_settings.e2b_domain,
             metadata_namespace=resolve_metadata_namespace(),
         )

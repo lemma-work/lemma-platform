@@ -312,3 +312,28 @@ class TestClosingTheBrowserBeforeAPause:
         await close_browser(self._Sandbox(commands), "sbx-1")
 
         assert commands.calls, "it must still have tried"
+
+
+# --- the disk a create may adopt --------------------------------------------
+
+
+def test_a_sandbox_of_an_older_disk_is_never_adopted_as_a_newer_one() -> None:
+    """A fresh home or a new size kills the old sandbox and bumps the
+    generation; E2B lists the killed one for a while after, and adopting it
+    handed every later call a sandbox that no longer existed."""
+    from app.modules.workspace.providers.e2b_common import (
+        generation_stamp,
+        superseded,
+    )
+
+    old = generation_stamp("ns", 1)
+    assert superseded(old, "ns", 2)
+    assert not superseded(generation_stamp("ns", 2), "ns", 2)
+
+
+def test_a_sandbox_from_before_the_stamp_is_still_adopted() -> None:
+    """Refusing unstamped sandboxes would strand every existing disk."""
+    from app.modules.workspace.providers.e2b_common import superseded
+
+    assert not superseded({}, "ns", 3)
+    assert not superseded({"ns-storage-generation": "1"}, "ns", None)

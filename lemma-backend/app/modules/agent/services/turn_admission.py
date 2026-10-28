@@ -83,7 +83,10 @@ def user_message_metadata(
         key: value
         for key, value in (message_metadata or {}).items()
         if key not in SERVER_OWNED_KEYS
-        and key not in {"author_user_id", "agent_run_id", NOTE_IN_DM_KEY}
+        # `synthetic` marks a notice history assembly writes, which is read as
+        # Lemma's own and never defused; it is never stored, so a stored one
+        # could only be a caller imitating it.
+        and key not in {"author_user_id", "agent_run_id", NOTE_IN_DM_KEY, "synthetic"}
     }
     metadata[DURING_ACTIVE_RUN] = joins_a_run
     if client_message_id is not None:

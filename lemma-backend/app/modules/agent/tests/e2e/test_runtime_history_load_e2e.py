@@ -15,6 +15,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.contracts.contact_conversations import hold_outside_turn
+from app.modules.agent.contracts.folded_history import fold_history
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     ConversationModel,
@@ -277,8 +279,12 @@ async def test_a_notification_that_belongs_to_no_run_is_still_loaded(
         )
     await db_session.flush()
 
-    loaded = await _repo(db_session).load_unattached_notifications(
-        conversation_id, after_sequence=None, before_sequence=None, limit=20
+    loaded = await _repo(db_session).load_unattached_messages(
+        conversation_id,
+        after_sequence=None,
+        before_sequence=None,
+        limit=20,
+        folded_limit=20,
     )
 
     assert [message.text for message in loaded] == ["your report is ready"]
@@ -286,17 +292,213 @@ async def test_a_notification_that_belongs_to_no_run_is_still_loaded(
     # Bounded on both sides: older than the history, or arriving after the turn
     # being answered, it stays out.
     assert (
-        await _repo(db_session).load_unattached_notifications(
-            conversation_id, after_sequence=500, before_sequence=None, limit=20
+        await _repo(db_session).load_unattached_messages(
+            conversation_id,
+            after_sequence=500,
+            before_sequence=None,
+            limit=20,
+            folded_limit=20,
         )
         == []
     )
     assert (
-        await _repo(db_session).load_unattached_notifications(
-            conversation_id, after_sequence=None, before_sequence=500, limit=20
+        await _repo(db_session).load_unattached_messages(
+            conversation_id,
+            after_sequence=None,
+            before_sequence=500,
+            limit=20,
+            folded_limit=20,
         )
         == []
     )
+
+
+async def test_what_a_contact_said_while_held_for_a_person_is_loaded_with_its_bounds(
+    db_session, scenario
+):
+    """A contact's turn held for a member, or past the contacts cap, starts no
+    run, so reading by run never finds it: the agent answering them next read
+    their newest message as if there were no earlier thread. Their message and
+    what they were told are carried; a run-less line nothing marked is not."""
+    await scenario.create_org_with_pod(name_prefix="HistoryHeld")
+    run_ids = await _seed(db_session, scenario, runs=2, messages_per_run=3)
+    conversation_id = (await db_session.get(AgentRunModel, run_ids[0])).conversation_id
+    uow = SqlAlchemyUnitOfWork(db_session)
+    await hold_outside_turn(
+        uow,
+        conversation_id=conversation_id,
+        text="Is anybody there?",
+        metadata={"sender_display_name": "Dana"},
+        reply="A person from the shop will reply here.",
+    )
+    db_session.add(
+        MessageModel(
+            id=uuid4(),
+            conversation_id=conversation_id,
+            agent_run_id=None,
+            sequence=1005,
+            role="user",
+            kind="TEXT",
+            text="a line in no run that nothing marks",
+            created_at=_BASE + timedelta(minutes=30),
+        )
+    )
+    await db_session.flush()
+    await hold_outside_turn(
+        uow, conversation_id=conversation_id, text="Hello?", metadata={}, reply=None
+    )
+
+    loaded = await _repo(db_session).load_unattached_messages(
+        conversation_id,
+        after_sequence=None,
+        before_sequence=None,
+        limit=20,
+        folded_limit=20,
+    )
+
+    assert [(message.role.value, message.text) for message in loaded] == [
+        ("user", "Is anybody there?"),
+        ("assistant", "A person from the shop will reply here."),
+        ("user", "Hello?"),
+    ]
+    # The bounds a notification has: older than the history, or after the turn
+    # being answered, stays out.
+    first, told, last = (message.sequence for message in loaded)
+    within = await _repo(db_session).load_unattached_messages(
+        conversation_id,
+        after_sequence=first,
+        before_sequence=last,
+        limit=20,
+        folded_limit=20,
+    )
+    assert [message.sequence for message in within] == [told]
+
+
+async def test_what_a_merge_folded_in_is_loaded_under_a_bound_of_its_own(
+    db_session, scenario
+):
+    """A contact merge copies what the person saw of the conversation that
+    lost its seat into the one that kept it, in no run, so reading by run
+    never finds it. The newest copies are carried, counted apart: a long chat
+    folded in does not crowd out the conversation's notifications."""
+    await scenario.create_org_with_pod(name_prefix="HistoryFolded")
+    [kept_run] = await _seed(db_session, scenario, runs=1, messages_per_run=2)
+    lost_runs = await _seed(db_session, scenario, runs=3, messages_per_run=2)
+    kept = (await db_session.get(AgentRunModel, kept_run)).conversation_id
+    lost = (await db_session.get(AgentRunModel, lost_runs[0])).conversation_id
+    db_session.add(
+        MessageModel(
+            id=uuid4(),
+            conversation_id=kept,
+            agent_run_id=None,
+            sequence=500,
+            role="assistant",
+            kind="NOTIFICATION",
+            text="your report is ready",
+            created_at=_BASE + timedelta(minutes=30),
+        )
+    )
+    await db_session.flush()
+    await fold_history(SqlAlchemyUnitOfWork(db_session), lost, into=kept)
+
+    async def carried(
+        *,
+        limit: int,
+        folded_limit: int,
+        after: int | None = None,
+        before: int | None = None,
+    ) -> list[str | None]:
+        loaded = await _repo(db_session).load_unattached_messages(
+            kept,
+            after_sequence=after,
+            before_sequence=before,
+            limit=limit,
+            folded_limit=folded_limit,
+        )
+        return [message.text for message in loaded]
+
+    assert await carried(limit=1, folded_limit=4) == [
+        "your report is ready",
+        "run 1 message 0",
+        "run 1 message 1",
+        "run 2 message 0",
+        "run 2 message 1",
+    ]
+    assert await carried(limit=1, folded_limit=20) == [
+        "your report is ready",
+        *(f"run {run} message {index}" for run in range(3) for index in range(2)),
+    ]
+    # The bounds every run-less message keeps hold for copies too.
+    assert await carried(after=500, limit=20, folded_limit=1) == ["run 2 message 1"]
+    assert await carried(before=501, limit=20, folded_limit=20) == [
+        "your report is ready"
+    ]
+
+
+async def test_the_run_less_read_stops_at_its_bounds(db_session, scenario):
+    """Each side is walked newest first and stops at its bound. Numbering every
+    run-less row with a window function read and sorted all of them, full text
+    included, on every run of a long-lived conversation."""
+    from sqlalchemy import text, union_all
+
+    from app.modules.agent.infrastructure.runtime_history_queries import (
+        _newest_unattached_ids,
+    )
+
+    await scenario.create_org_with_pod(name_prefix="HistoryPlan")
+    [run_id] = await _seed(db_session, scenario, runs=1, messages_per_run=2)
+    conversation_id = (await db_session.get(AgentRunModel, run_id)).conversation_id
+    for index in range(200):
+        db_session.add(
+            MessageModel(
+                id=uuid4(),
+                conversation_id=conversation_id,
+                agent_run_id=None,
+                sequence=1_000 + index,
+                role="assistant",
+                kind="NOTIFICATION",
+                text=f"daily report {index} " + "x" * 2_000,
+                created_at=_BASE + timedelta(minutes=index),
+            )
+        )
+    await db_session.flush()
+
+    loaded = await _repo(db_session).load_unattached_messages(
+        conversation_id,
+        after_sequence=None,
+        before_sequence=None,
+        limit=21,
+        folded_limit=41,
+    )
+    assert [message.sequence for message in loaded] == list(range(1_179, 1_200))
+
+    union = union_all(
+        *(
+            _newest_unattached_ids(
+                conversation_id,
+                folded=folded,
+                limit=bound,
+                after_sequence=None,
+                before_sequence=None,
+            )
+            for folded, bound in ((False, 21), (True, 41))
+        )
+    )
+    compiled = union.compile(
+        dialect=db_session.bind.dialect, compile_kwargs={"literal_binds": True}
+    )
+    plan = (
+        await db_session.execute(text(f"EXPLAIN (FORMAT JSON) {compiled}"))
+    ).scalar_one()
+
+    def nodes(node):
+        yield node
+        for child in node.get("Plans", []):
+            yield from nodes(child)
+
+    kinds = [node["Node Type"] for node in nodes(plan[0]["Plan"])]
+    assert "WindowAgg" not in kinds
+    assert kinds.count("Limit") == 2
 
 
 async def test_the_first_reply_to_a_notification_is_read_against_it(

@@ -61,11 +61,11 @@ def _emit_pod_created(**properties: object) -> None:
 
 
 def test_adversarial_content_never_crosses_the_boundary(sink: MemorySink) -> None:
-    # Every adversarial value, offered under an *allowed* key. `template_id`
-    # and `source` are in pod.created's allowlist, so the key check alone would
-    # let these through -- the value check is what stops them.
+    # Every adversarial value, offered under an *allowed* key. `source` is in
+    # pod.created's allowlist, so the key check alone would let these through --
+    # the value check is what stops them.
     for label, value in ADVERSARIAL.items():
-        _emit_pod_created(pod_id=POD, template_id=value, source=value)
+        _emit_pod_created(pod_id=POD, source=value)
 
     # And again under keys that are not in the allowlist at all.
     _emit_pod_created(pod_id=POD, **ADVERSARIAL)
@@ -75,7 +75,6 @@ def test_adversarial_content_never_crosses_the_boundary(sink: MemorySink) -> Non
     for label, value in ADVERSARIAL.items():
         assert value not in serialized, f"{label} survived export"
     for event in sink.events:
-        assert "template_id" not in event.properties
         assert "source" not in event.properties
         assert set(event.properties) <= (
             ANALYTICS_CATALOG["pod.created"].properties | SPINE_PROPERTIES
@@ -84,10 +83,9 @@ def test_adversarial_content_never_crosses_the_boundary(sink: MemorySink) -> Non
 
 def test_bounded_identifier_values_do_cross(sink: MemorySink) -> None:
     """The boundary must not be so tight that it drops legitimate data."""
-    _emit_pod_created(pod_id=POD, source="import", template_id="crm-starter")
+    _emit_pod_created(pod_id=POD, source="provisioned")
     event = sink.events[-1]
-    assert event.properties["source"] == "import"
-    assert event.properties["template_id"] == "crm-starter"
+    assert event.properties["source"] == "provisioned"
     assert event.properties["pod_id"] == POD
 
 

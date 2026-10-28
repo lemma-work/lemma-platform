@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -37,6 +38,16 @@ from ...cli_app.app_bundle import (
 )
 
 app = typer.Typer(help="App commands.")
+
+
+def deploy_asks_first(*, yes: bool, interactive: bool) -> bool:
+    """Whether `apps deploy` stops to confirm before uploading.
+
+    Deploying replaces a release, it does not destroy one, so a session with
+    nobody to answer -- an agent, CI, a pipe -- deploys rather than stopping on
+    a [y/N] it can never answer.
+    """
+    return interactive and not yes
 
 
 def _bundle_root(directory: Path) -> Path:
@@ -338,7 +349,9 @@ def deploy_app(
         False,
         "--yes",
         "-y",
-        help="Skip the interactive deployment confirmation.",
+        help=(
+            "Skip the deployment confirmation. Implied when stdin is not a terminal."
+        ),
     ),
 ) -> None:
     """Build and deploy an app bundle.
@@ -368,7 +381,7 @@ def deploy_app(
 
         tier = classify_app_source(source_dir)
 
-        if not yes:
+        if deploy_asks_first(yes=yes, interactive=sys.stdin.isatty()):
             console.print("[bold]App deploy[/bold]")
             console.print(f"App: {app}")
             console.print(f"Pod: {pod_label}")

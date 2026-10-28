@@ -21,14 +21,140 @@ pub(crate) fn configured_connection_mode(config: &Value) -> String {
     }
 }
 
+/// The Lemma server a hosted launch opens: Lemma Cloud, unless the person
+/// connected this app to another one -- a self-hosted deployment, a staging
+/// server -- from the chooser.
 pub(crate) fn hosted_url() -> String {
     // The capability that grants this origin the shell's commands is gated on
     // `dev_override`; the navigation has to be gated the same way, or a
     // release build would be sent to an environment-named host with no
-    // permissions and no explanation.
+    // permissions and no explanation. A server saved in the config is not
+    // that: the person typed it into the app, which checked it answers as a
+    // Lemma server, and the same choice grants it its commands.
     dev_override("LEMMA_DESKTOP_HOSTED_URL")
         .and_then(|value| value.into_string().ok())
+        .or_else(|| configured_hosted_server(&read_config()))
         .unwrap_or_else(|| DEFAULT_HOSTED_URL.into())
+}
+
+/// The server saved by "Connect to your own server", if it is still one this
+/// app would accept. A config edited by hand into something else is ignored
+/// rather than trusted, and the app falls back to Lemma Cloud.
+pub(crate) fn configured_hosted_server(config: &Value) -> Option<String> {
+    config[HOSTED_SERVER_KEY]
+        .as_str()
+        .and_then(|raw| normalize_server_url(raw).ok())
+}
+
+pub(crate) const HOSTED_SERVER_KEY: &str = "hostedServer";
+
+/// How long the check that an address is a Lemma server may take.
+const SERVER_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The origin of a Lemma server a person typed, or why it cannot be one.
+///
+/// Only the origin is kept: the workspace, its sign-in and the Agent Host's
+/// pairing are all decided against it, and a path would only be dropped later.
+/// HTTPS, except a server on this computer by its loopback name -- a
+/// developer's `make dev`. Not `*.localhost`: `lemma.localhost` is this
+/// installation's own workspace, whose alias ports serve pod apps' code, and
+/// must never be granted the shell's commands by an address someone typed.
+pub(crate) fn normalize_server_url(raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("Enter your Lemma server's address.".into());
+    }
+    let candidate = if raw.contains("://") {
+        raw.to_owned()
+    } else {
+        format!("https://{raw}")
+    };
+    let url = tauri::Url::parse(&candidate).map_err(|_| format!("{raw} is not a web address."))?;
+    let host = url
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| format!("{raw} is not a web address."))?
+        .to_ascii_lowercase();
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(
+            "Leave the sign-in out of the address. You sign in on the server itself.".into(),
+        );
+    }
+    // Refused by name, whatever the scheme: the guard above must not rest on
+    // the alias ports happening to serve plain http today.
+    if host.ends_with(".localhost") {
+        return Err(format!(
+            "{host} is this computer's own Lemma. Choose Use Local Lemma instead."
+        ));
+    }
+    let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]");
+    match url.scheme() {
+        "https" => {}
+        "http" if loopback => {}
+        "http" => {
+            return Err(
+                "Use an https:// address. Plain http works only for a server on this computer."
+                    .into(),
+            );
+        }
+        _ => return Err(format!("{raw} is not a web address.")),
+    }
+    Ok(url.origin().ascii_serialization())
+}
+
+/// Does `origin` answer as a Lemma server?
+///
+/// Every Lemma frontend serves `/site-config.js`, which sets
+/// `window.__LEMMA_SITE__` before the page runs. Asked before the choice is
+/// saved, so a typo is said on the chooser rather than as a blank window, and
+/// so the shell's commands are never granted to a site that is not Lemma.
+pub(crate) fn check_lemma_server(origin: &str) -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(SERVER_PROBE_TIMEOUT)
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .get(format!("{origin}/site-config.js"))
+        .send()
+        .map_err(|_| format!("Couldn't reach {origin}. Check the address and your connection."))?;
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    if status.is_success() && is_lemma_site_config(&body) {
+        Ok(())
+    } else {
+        Err(format!("{origin} doesn't look like a Lemma server."))
+    }
+}
+
+pub(crate) fn is_lemma_site_config(body: &str) -> bool {
+    body.contains("window.__LEMMA_SITE__")
+}
+
+/// Save where hosted mode connects: `None` is Lemma Cloud.
+///
+/// Lemma Cloud's own address is saved as nothing, so choosing it is the same as
+/// never having chosen another server.
+pub(crate) fn save_hosted_server(server: Option<&str>) -> Result<(), String> {
+    let origin = server.map(normalize_server_url).transpose()?;
+    let default_origin = tauri::Url::parse(DEFAULT_HOSTED_URL)
+        .map(|url| url.origin().ascii_serialization())
+        .unwrap_or_default();
+    let custom = origin.filter(|origin| *origin != default_origin);
+    if let Some(origin) = custom.as_deref() {
+        check_lemma_server(origin)?;
+    }
+    write_config(|config| {
+        if let Some(config) = config.as_object_mut() {
+            match custom {
+                Some(origin) => {
+                    config.insert(HOSTED_SERVER_KEY.into(), json!(origin));
+                }
+                None => {
+                    config.remove(HOSTED_SERVER_KEY);
+                }
+            }
+        }
+    })
 }
 
 /// The first URL a hosted launch opens.
@@ -44,9 +170,19 @@ pub(crate) fn hosted_entry_url(hosted: &str) -> WebviewUrl {
     }
 }
 
-pub(crate) fn set_connection_mode_impl(app: AppHandle, mode: String) -> Result<(), String> {
+pub(crate) fn set_connection_mode_impl(
+    app: AppHandle,
+    mode: String,
+    server: Option<String>,
+) -> Result<(), String> {
     if mode != "local" && mode != "hosted" {
         return Err(format!("unknown mode {mode:?}"));
+    }
+    if mode == "hosted" {
+        // Before anything else changes, so an address that is not a Lemma
+        // server leaves the app exactly where it was.
+        save_hosted_server(server.as_deref())?;
+        grant_hosted_workspace_capability(&app, &hosted_url());
     }
     let _ = std::fs::remove_file(app_support_dir().join("recovery-mode"));
     app.state::<Shell>()
@@ -263,9 +399,10 @@ pub(crate) async fn set_connection_mode(
     window: Webview,
     app: AppHandle,
     mode: String,
+    server: Option<String>,
 ) -> Result<(), String> {
     require_local_native_window(&window)?;
-    tauri::async_runtime::spawn_blocking(move || set_connection_mode_impl(app, mode))
+    tauri::async_runtime::spawn_blocking(move || set_connection_mode_impl(app, mode, server))
         .await
         .map_err(|error| error.to_string())?
 }

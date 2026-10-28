@@ -1,10 +1,11 @@
 """The other half of `test_startup_import_laziness`.
 
 That file pins what a process serving a health check must *not* import. This one
-pins that the cost was moved rather than forgotten: the same three libraries are
-imported at startup by a background task, off the event loop, so the first agent
-request does not pay ~1s of import and ~3s of tokenizer build inside a request
-every other request in the process shares.
+pins that the cost was moved rather than forgotten: the model clients and the
+tokenizer are loaded at startup, off the event loop -- by the API, and by a
+worker before it claims its first agent turn -- so neither the first request nor
+the first turn pays for them inside a stall everything else in the process
+shares.
 
 The pair matters more than either half. Warming the wrong module names is
 silent -- a rename leaves a warm-up that logs a failure at every boot and a
@@ -22,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from app.warm_imports import WARM_MODULES, _warm
+from app.warm_imports import TURN_WARM_MODULES, WARM_MODULES, _warm
 
 pytestmark = pytest.mark.unit
 
@@ -35,8 +36,62 @@ for name in {names!r}:
 print(json.dumps(sorted({{name.split(".")[0] for name in sys.modules}})))
 """
 
+# Boots the agent module's worker lifespans the way `worker_services` does, three
+# times over, and reports what each boot left loaded. The order matters: a boot
+# that warms cannot be followed by one that proves it did not.
+_WORKER_PROBE = """
+import asyncio, json, sys
+from contextlib import AsyncExitStack
 
-@pytest.mark.parametrize("module_name", WARM_MODULES)
+from app.core.config import settings
+from app.core.infrastructure.work.config import work_settings
+from app.core.infrastructure.work.process import WorkerContext, register_worker_modules
+from app.core.registry.assembly import enter_worker_lifespans
+from app.modules.agent.module import module as agent
+import app.warm_imports as warm_imports
+
+
+# The real build may download the vocabulary, with no timeout; that the build is
+# scheduled is the whole claim here.
+async def _no_tokenizer_build():
+    return None
+
+
+warm_imports.warm_tokenizer = _no_tokenizer_build
+register_worker_modules([agent])
+WATCHED = {watched!r}
+
+
+async def boot(environment, work_classes):
+    settings.environment = environment
+    work_settings.work_classes = work_classes
+    async with AsyncExitStack() as stack:
+        await enter_worker_lifespans(stack, [agent], WorkerContext(None))
+        tokenizer = [
+            task for task in asyncio.all_tasks()
+            if task.get_name() == "worker-warm-tokenizer"
+        ]
+        if tokenizer:
+            await asyncio.wait(tokenizer)
+        return {{
+            "loaded": sorted(name for name in WATCHED if name in sys.modules),
+            "tokenizer": bool(tokenizer),
+        }}
+
+
+async def main():
+    print(json.dumps({{
+        "local": await boot("local", ""),
+        "ingestion_only": await boot("development", "ingestion"),
+        "runs_turns": await boot("development", ""),
+    }}))
+
+
+asyncio.run(main())
+"""
+
+
+@pytest.mark.parametrize("module_name", TURN_WARM_MODULES)
 def test_every_warmed_name_still_exists(module_name: str) -> None:
     """A renamed module would leave the warm-up warming nothing, quietly.
 
@@ -68,7 +123,45 @@ def test_warming_is_what_pulls_the_heavy_libraries() -> None:
     assert completed.returncode == 0, completed.stderr
     loaded = set(json.loads(completed.stdout.strip().splitlines()[-1]))
 
-    assert {"openai", "anthropic", "pydantic_ai"} <= loaded
+    # Not `anthropic`: only an Anthropic profile needs that SDK, and the model
+    # factory imports it when it builds one.
+    assert {"openai", "pydantic_ai"} <= loaded
+
+
+def test_a_worker_that_runs_turns_loads_them_before_it_claims_one() -> None:
+    """The first turn on a fresh worker finds a turn's imports already paid.
+
+    Left to that turn, they ran on the event loop, stalling every other turn on
+    the worker while they did. The two skips are pinned too: local mode warms
+    nothing, as the API's lifespan does not, and neither does a worker whose
+    classes hold no turns -- an ingestion-only one has no use for model clients.
+
+    A subprocess for the same reason as above, and one boot after another in it
+    so the interpreter is paid for once.
+    """
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _WORKER_PROBE.format(watched=[*TURN_WARM_MODULES, "anthropic"]),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr[-3000:]
+    boots = json.loads(completed.stdout.strip().splitlines()[-1])
+
+    assert boots["local"] == {"loaded": [], "tokenizer": False}
+    assert boots["ingestion_only"] == {"loaded": [], "tokenizer": False}
+    # The Anthropic SDK too: metering no longer imports it, so a turn-running
+    # worker warms it rather than leaving it to its first Anthropic turn.
+    assert boots["runs_turns"] == {
+        "loaded": sorted([*TURN_WARM_MODULES, "anthropic"]),
+        "tokenizer": True,
+    }
 
 
 async def test_an_unreachable_tokenizer_does_not_cost_the_other_warm_ups() -> None:

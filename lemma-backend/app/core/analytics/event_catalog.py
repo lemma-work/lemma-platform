@@ -103,8 +103,11 @@ ANALYTICS_CATALOG: Final[dict[str, AnalyticEvent]] = {
         groups=_ORG_ONLY,
     ),
     # -- Pod lifecycle ---------------------------------------------------
+    # ``source`` says whether somebody asked for the pod or the platform made it
+    # for them (``PodCreationSource``): every sign-up provisions one, and a
+    # funnel that counts those as choices measures sign-ups twice.
     "pod.created": AnalyticEvent(
-        properties=frozenset({"pod_id", "source", "template_id", "recipe_id"}),
+        properties=frozenset({"pod_id", "source"}),
     ),
     "pod.member_joined": AnalyticEvent(
         properties=frozenset({"pod_id", "member_count_bucket"}),
@@ -160,9 +163,14 @@ ANALYTICS_CATALOG: Final[dict[str, AnalyticEvent]] = {
             {"pod_id", "workflow_id", "status", "duration_bucket", "waited_on_form"}
         ),
     ),
+    # One origin per schedule type: a clock (SCHEDULE), a table write
+    # (DATA_TRIGGER), or a webhook from outside the pod (CONNECTOR). A redrive
+    # somebody asked for carries none and is not counted here.
     "schedule_run.completed": AnalyticEvent(
         properties=frozenset({"pod_id", "schedule_id", "status"}),
-        origins=frozenset({OriginKind.SCHEDULE, OriginKind.DATA_TRIGGER}),
+        origins=frozenset(
+            {OriginKind.SCHEDULE, OriginKind.DATA_TRIGGER, OriginKind.CONNECTOR}
+        ),
     ),
     "app.session_started": AnalyticEvent(
         properties=frozenset({"pod_id", "app_id"}),
@@ -204,17 +212,17 @@ ANALYTICS_CATALOG: Final[dict[str, AnalyticEvent]] = {
         groups=frozenset(),
         person_profile=PersonProfile.ANONYMOUS,
     ),
-    # ``is_remix`` belongs at *start*, not only on completion: the abandonment
-    # between the two is the interesting number, and it is only countable if
-    # both ends carry the same dimension.
     "import.started": AnalyticEvent(
         properties=frozenset({"bundle_id", "is_remix"}),
         groups=_ORG_ONLY,
     ),
+    # No ``is_remix``: a remix does not go through an import. It opens a
+    # conversation asking the pod's agent to rebuild the app, so an import the
+    # server completes is never one, and a flag that is always false is not a
+    # dimension. ``resource_count_bucket`` counts the way ``bundle.exported``
+    # does (``pod_bundle.infrastructure.bundle_contents``), so the two compare.
     "import.completed": AnalyticEvent(
-        properties=frozenset(
-            {"pod_id", "bundle_id", "resource_count_bucket", "is_remix"}
-        ),
+        properties=frozenset({"pod_id", "bundle_id", "resource_count_bucket"}),
     ),
 }
 

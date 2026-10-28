@@ -15,9 +15,12 @@ from fastapi import APIRouter, Query, Request, status
 
 from app.core.api.actor_policy import require_person
 from app.core.api.dependencies import CurrentUser
+from app.core.authorization.context import ResourceRef
 from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.permissions import Permissions
 from app.modules.connectors.api.dependencies import (
     ConnectorOperationServiceDep,
+    ConnectorServiceDep,
     ConnectorOperationUseCasesDep,
     PodConnectorCoverageServiceDep,
     PodConnectorServiceDep,
@@ -28,6 +31,7 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionRequest,
     OperationExecutionResponse,
 )
+from app.modules.connectors.services.install_on_connect import install_to_connect
 from app.modules.connectors.api.schemas.pod_connector_schemas import (
     AccountPodUsageResponse,
     AskMembersRequest,
@@ -73,13 +77,34 @@ async def list_pod_connectors(
     status_code=status.HTTP_201_CREATED,
     operation_id="pod.connector.create",
     summary="Declare A Pod Connector",
+    description=(
+        "Declare a connector by an organization installation "
+        "(`auth_config_id`) or by a catalog connector (`connector_id`): its "
+        "organization default, or Lemma's own app for it installed now when the "
+        "organization has none and the caller may install connectors. "
+        "`slug` defaults to the installation's name; `mode` to PER_MEMBER."
+    ),
 )
 async def create_pod_connector(
     pod_id: UUID,
     body: PodConnectorCreateRequest,
     ctx: PodContextDep,
+    user: CurrentUser,
     service: PodConnectorServiceDep,
+    connector_service: ConnectorServiceDep,
 ) -> PodConnectorResponse:
+    if body.connector_id is not None and ctx.organization_id is not None:
+        # Asked first: installing for the organization is a step further than
+        # declaring a connector, and nobody who may not declare one gets it.
+        await ctx.require(Permissions.POD_CONNECTOR_MANAGE, ResourceRef.pod(pod_id))
+        install = await install_to_connect(
+            connector_service,
+            user_id=user.id,
+            organization_id=ctx.organization_id,
+            connector_id=body.connector_id,
+            auth_config_id=None,
+        )
+        body = body.model_copy(update={"auth_config_id": install.id})
     return await service.create_connector(ctx, pod_id, body)
 
 

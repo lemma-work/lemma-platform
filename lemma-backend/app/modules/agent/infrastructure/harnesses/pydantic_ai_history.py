@@ -13,6 +13,7 @@ beside the credential check it depends on.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from typing import Any
 from uuid import UUID
 
 import pydantic_core
@@ -277,6 +278,36 @@ def _sent_while_running(message: object) -> bool:
     return isinstance(metadata, dict) and metadata.get(DURING_ACTIVE_RUN) is True
 
 
+#: Where a tool call's provider identity is stored on its message row. Some
+#: endpoints attach data to a call that they require back on it, and a run that
+#: resumes -- after an approval, say -- rebuilds the call from this row.
+TOOL_CALL_PROVIDER_NAME_KEY = "tool_call_provider_name"
+TOOL_CALL_PROVIDER_DETAILS_KEY = "tool_call_provider_details"
+
+
+def tool_call_identity(part: object) -> dict[str, object]:
+    """The metadata that lets a stored tool call be sent back as it arrived."""
+    name = getattr(part, "provider_name", None)
+    details = getattr(part, "provider_details", None)
+    if not isinstance(name, str) or not name or not isinstance(details, dict):
+        return {}
+    return {
+        TOOL_CALL_PROVIDER_NAME_KEY: name,
+        TOOL_CALL_PROVIDER_DETAILS_KEY: details,
+    }
+
+
+def _stored_tool_call_identity(msg: object) -> dict[str, Any]:
+    metadata = getattr(msg, "metadata", None)
+    if not isinstance(metadata, dict):
+        return {}
+    name = metadata.get(TOOL_CALL_PROVIDER_NAME_KEY)
+    details = metadata.get(TOOL_CALL_PROVIDER_DETAILS_KEY)
+    if not isinstance(name, str) or not name or not isinstance(details, dict):
+        return {}
+    return {"provider_name": name, "provider_details": details}
+
+
 def _user_moved_on(messages: list[object], after_index: int) -> bool:
     """Whether the person sent something new instead of answering.
 
@@ -374,6 +405,7 @@ def _build_tool_batch(
                 # Keep the raw arguments when they did not parse: the model can
                 # see what it sent and correct it.
                 args=parsed_args if parsed_args is not None else {},
+                **_stored_tool_call_identity(msg),
             )
         )
         request_parts.append(
