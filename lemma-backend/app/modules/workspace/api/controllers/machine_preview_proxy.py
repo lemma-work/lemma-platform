@@ -199,7 +199,9 @@ async def proxy_preview(label: str, request: Request, path: str = "") -> Respons
     if "/" + path == AUTH_PATH:
         return _exchange(preview, request.query_params.get("ticket") or "")
     if not _authorized(preview, request.headers.get("cookie")):
-        return RedirectResponse(open_url(label), status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(
+            open_url(preview.label), status_code=status.HTTP_302_FOUND
+        )
     endpoint = await _endpoint(preview)
     if endpoint is None:
         return Response(
