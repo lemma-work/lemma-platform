@@ -695,3 +695,43 @@ async def test_the_run_context_part_only_ever_rides_at_the_tail(
 
     breaks = await _breaks(played, protocol, context_anywhere=False)
     assert not breaks, "\n\n".join(str(item) for item in breaks)
+
+
+@pytest.mark.anyio
+async def test_a_history_of_pasted_text_compacts_once_and_shrinks() -> None:
+    """Live, a history that was mostly the person's own pasted text compacted
+    to a larger one (the turns are kept verbatim) and, still over the trigger,
+    compacted again on every turn with a new summary call each time."""
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
+    agent = Agent(
+        pod_id=conversation.pod_id,
+        user_id=conversation.user_id,
+        name="reader",
+        instruction="Read what they paste.",
+    )
+    storage = Storage(conversation)
+    model = Model()
+    trigger = await _fixed_tokens(agent, conversation) + 3_000
+
+    pasted = "the contract says " * 1_200
+    for turn in range(3):
+        run_id = uuid4()
+        storage.user(f"Paste {turn}: {pasted}", run_id=run_id)
+        await _run(
+            model,
+            storage,
+            agent=agent,
+            run_id=run_id,
+            script=[_text(f"Read part {turn}.")],
+            trigger_tokens=trigger,
+        )
+
+    assert model.summaries == [2], "compacted once, in the run that crossed"
+    last = model.sent[-1]
+    assert _carries_summary(last)
+    breaks = await _breaks(
+        Played(sent=model.sent[-2:], summaries=model.summaries),
+        "openai",
+        context_anywhere=True,
+    )
+    assert not breaks, "\n\n".join(str(item) for item in breaks)
