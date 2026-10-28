@@ -101,6 +101,18 @@ def test_the_pass_is_told_how_to_keep_memory_but_not_when():
     assert "reply `nothing`" in pass_prompt
 
 
+def test_the_screen_reads_the_turn_without_the_contract():
+    """The cheap first read: what is worth keeping, with none of the rules for
+    writing it, which only the keeper needs."""
+    from app.modules.agent.domain.prompts import load_memory_screen_prompt
+
+    screen = load_memory_screen_prompt()
+    contract = _sections(load_memory_prompt())
+
+    assert "`nothing`" in screen
+    assert contract["How to write it"] not in screen
+
+
 @pytest.mark.anyio
 @pytest.mark.parametrize("after_turn", [False, True])
 async def test_the_assembled_run_is_told_the_contract_its_context_chose(after_turn):

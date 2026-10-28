@@ -22,13 +22,20 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from pydantic import BaseModel, Field, JsonValue, SecretStr
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.api.agent_host_schemas import (
     AgentHostHarnessListResponse,
     AgentHostHarnessResponse,
     AgentHostListResponse,
 )
+from app.modules.agent.contracts.conversations_for_surfaces import (
+    append_notification_message,
+)
+from app.modules.agent.domain.agent_host import AGENT_HOST_SESSION_METADATA_KEY
 from app.modules.agent.domain.value_objects import JsonObject
+from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e.agent_host_binary import agent_host_binary
@@ -425,6 +432,123 @@ async def test_rust_host_streams_into_the_real_conversation_and_persists_its_ans
             if turn_count == 2:
                 assert "Stream turn 1." in str(prompts[1].params)
                 assert "Stream turn 2." in str(prompts[1].params)
+
+
+def _prompt_text(params: JsonObject) -> str:
+    """The text a ``session/prompt`` carried."""
+    blocks = params.get("prompt")
+    return "\n".join(
+        str(block.get("text") or "")
+        for block in (blocks if isinstance(blocks, list) else [])
+        if isinstance(block, dict)
+    )
+
+
+async def _answered(client: httpx.AsyncClient, path: str, content: str) -> None:
+    """Send one message and read its stream to the end, which must be a reply."""
+    async with asyncio.timeout(90):
+        async with client.stream("POST", path, json={"content": content}) as response:
+            assert response.is_success, await response.aread()
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                frame = StreamFrame.model_validate_json(line.removeprefix("data: "))
+                if frame.type in {"completed", "error", "stopped"}:
+                    assert frame.type == "completed", frame
+                    return
+    raise AssertionError("the stream ended before the turn did")
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_session_is_sent_what_was_written_between_its_turns(
+    scenario: E2EScenario,
+    backend_server: dict[str, str],
+    worker: object,
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    """A reminder delivered between two turns reaches the session they share.
+
+    The scripted agent advertises ``loadSession`` here, as Claude Code and
+    Codex do, so the second turn loads the session the first one opened and is
+    sent only what that session has not seen -- which is not the first turn,
+    but is the reminder the person is answering: it is in no turn at all
+    (``turn_messages``). One delivered before the first turn went with it, and
+    is not sent again.
+    """
+    del worker
+    await scenario.create_org_with_pod(name_prefix="Host resumed session")
+    minted = await scenario.owner_client.post(
+        "/me/runtime/agent-host-pairings",
+        json={"display_name": "isolated resumed-session host"},
+    )
+    assert minted.is_success, minted.text
+    pairing = PairingCode.model_validate(minted.json())
+    base_url = backend_server["host_base_url"]
+    uow = SqlAlchemyUnitOfWork(db_session)
+
+    async def remind(conversation_id: UUID, text: str) -> None:
+        await append_notification_message(
+            uow, conversation_id=conversation_id, message=text, notification_id=uuid4()
+        )
+        await db_session.commit()
+
+    async with running_host(
+        tmp_path, base_url, pairing.pairing_code, scenario_file="resume.json"
+    ) as traffic:
+        async with httpx.AsyncClient(
+            base_url=base_url, headers=scenario.owner_client.headers, timeout=90
+        ) as client:
+            conversation_path = await create_host_conversation(client, scenario)
+            conversation_id = UUID(conversation_path.rsplit("/", 1)[-1])
+            path = f"{conversation_path}/messages"
+            traffic.with_suffix(".release").write_text("continue")
+            await remind(conversation_id, "Your table hold at Cafe Rosa expires today.")
+            await _answered(client, path, "Book me a table for four on Friday.")
+
+            async def binding() -> JsonValue | None:
+                await db_session.commit()
+                return await ConversationRepository(uow).get_conversation_metadata_key(
+                    conversation_id, AGENT_HOST_SESSION_METADATA_KEY
+                )
+
+            # What the second turn is sent depends on the first turn's prompt
+            # having landed, which the host reports apart from the stream.
+            await eventually(
+                label="the first turn's prompt recorded as landed in the session",
+                probe=binding,
+                done=lambda stored: (
+                    isinstance(stored, dict)
+                    and stored.get("prompted_run_id") is not None
+                ),
+                timeout_seconds=30,
+            )
+            await remind(conversation_id, "Cafe Rosa wants a deposit by noon. Pay it?")
+            await _answered(client, path, "Yes, pay it.")
+
+    records = [
+        AcpRecord.model_validate_json(line)
+        for line in traffic.read_text().splitlines()
+        if '"direction":"environment"' not in line
+    ]
+    sent = [record.message for record in records if record.direction == "client->agent"]
+    prompts = [
+        _prompt_text(message.params)
+        for message in sent
+        if message.method == "session/prompt"
+    ]
+    loads = [message.params for message in sent if message.method == "session/load"]
+    assert len(prompts) == 2, prompts
+    # The first turn opened the session, and had to bring everything with it.
+    assert "table hold at Cafe Rosa" in prompts[0]
+    assert "Book me a table" in prompts[0]
+    assert [load.get("sessionId") for load in loads] == ["scripted-session"]
+    resumed = prompts[1]
+    assert "deposit by noon" in resumed
+    assert "Yes, pay it." in resumed
+    assert resumed.index("deposit by noon") < resumed.index("Yes, pay it.")
+    for seen in ("Book me a table", "table hold at Cafe Rosa"):
+        assert seen not in resumed, seen
 
 
 @pytest.mark.asyncio

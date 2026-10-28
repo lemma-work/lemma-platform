@@ -228,3 +228,55 @@ async def test_a_retry_success_does_not_reactivate_a_tripped_schedule(
     row = await _schedule_row(db_manager, schedule_id)
     assert row.consecutive_failures == 0
     assert row.is_active is False
+
+
+async def test_resuming_a_tripped_schedule_forgives_the_streak_that_paused_it(
+    authenticated_client, fixed_test_org, db_manager
+) -> None:
+    """One failure after a resume is one failure, not threshold + 1.
+
+    Reactivating zeroed the counter, but the breaker recounts the streak from
+    the run ledger on every outcome, and the ledger still held the failures
+    that paused it -- so the next failure switched the schedule straight off.
+    """
+    threshold = schedule_settings.schedule_max_consecutive_failures
+    assert threshold > 0
+    pod_id, schedule_id, user_id = await _workflow_schedule(
+        authenticated_client, fixed_test_org["id"]
+    )
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    for index in range(threshold):
+        run = await _dispatched(
+            factory,
+            schedule_id=schedule_id,
+            user_id=user_id,
+            key=f"fire-{index}",
+            kind="WORKFLOW",
+        )
+        failed_at = _BASE + timedelta(minutes=index)
+        assert await _outcome(factory, run, ScheduleRunStatus.TARGET_FAILED, failed_at)
+    assert (await _schedule_row(db_manager, schedule_id)).is_active is False
+
+    resumed = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule_id}", json={"is_active": True}
+    )
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["consecutive_failures"] == 0
+
+    run = await _dispatched(
+        factory,
+        schedule_id=schedule_id,
+        user_id=user_id,
+        key="after-resume",
+        kind="WORKFLOW",
+    )
+    assert await _outcome(
+        factory,
+        run,
+        ScheduleRunStatus.TARGET_FAILED,
+        datetime.now(timezone.utc) + timedelta(seconds=1),
+    )
+
+    row = await _schedule_row(db_manager, schedule_id)
+    assert row.consecutive_failures == 1
+    assert row.is_active is True

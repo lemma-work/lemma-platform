@@ -28,7 +28,10 @@ about it when it eventually cannot.
 - If a person creates a schedule whose timing cannot be interpreted, then the
   system shall refuse at creation rather than accepting it and never firing.
 - The system shall interpret a schedule's timing in a time zone the person
-  chose, and shall keep firing correctly across daylight-saving changes.
+  chose, and shall keep firing correctly across daylight-saving changes. A
+  timing given without a time zone is read in UTC.
+- When a schedule is created, the system shall say when it will next fire, in
+  UTC and in the schedule's own time zone.
 
 **Contracts:** `schedule.create`, `schedule.get`, `schedule.created`
 
@@ -38,7 +41,8 @@ about it when it eventually cannot.
 - When a person deactivates a schedule, the system shall stop firing it and
   shall keep its definition and history.
 - When a person reactivates a schedule, the system shall resume firing from that
-  point and shall not replay the occurrences it missed while paused.
+  point and shall not replay the occurrences it missed while paused. Failures
+  from before the pause shall not count toward pausing it again.
 - When a person changes a schedule's timing, the system shall apply the new
   timing to the next occurrence.
 
@@ -51,6 +55,9 @@ about it when it eventually cannot.
   in whatever component actually holds the timer.
 - When a pod is deleted, the system shall stop every schedule in it.
 - The system shall leave no timer running for a schedule that no longer exists.
+- When an agent deletes a schedule it created, acting for the same person, the
+  system shall not ask that person to approve it; deleting any other schedule
+  still needs their approval or a standing grant.
 
 **Contracts:** `schedule.delete`, `pod.delete`
 

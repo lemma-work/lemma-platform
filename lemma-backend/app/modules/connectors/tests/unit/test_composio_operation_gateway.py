@@ -21,11 +21,37 @@ from app.modules.connectors.infrastructure.adapters.composio_operation_gateway i
 pytestmark = pytest.mark.asyncio
 
 
-def _gateway(execute_response):
-    composio = SimpleNamespace(
-        tools=SimpleNamespace(execute=lambda *a, **k: execute_response)
+def _composio(execute):
+    """A client whose only way to execute is the raw API call; the SDK's
+    schema-fetching ``tools.execute`` wrapper is absent, so using it fails."""
+    return SimpleNamespace(
+        client=SimpleNamespace(
+            without_retries=SimpleNamespace(tools=SimpleNamespace(execute=execute))
+        )
     )
+
+
+def _gateway(execute_response):
+    composio = _composio(lambda *a, **k: execute_response)
     return ComposioOperationGateway(composio_client_factory=lambda: composio)
+
+
+async def test_execute_is_one_api_call_naming_the_connection():
+    calls: list[dict] = []
+    composio = _composio(
+        lambda **kwargs: calls.append(kwargs) or {"successful": True, "data": {}}
+    )
+
+    await _run(ComposioOperationGateway(composio_client_factory=lambda: composio))
+
+    assert calls == [
+        {
+            "tool_slug": "OPENWEATHER_API_GET_CURRENT_WEATHER",
+            "arguments": {"q": "London"},
+            "connected_account_id": "ca_test",
+            "version": "latest",
+        }
+    ]
 
 
 async def _run(gateway):
@@ -86,12 +112,10 @@ async def test_sdk_telemetry_is_opt_in_and_context_is_restored():
     from composio.core.models.base import allow_tracking
 
     seen_tracking_values: list[bool] = []
-    composio = SimpleNamespace(
-        tools=SimpleNamespace(
-            execute=lambda *a, **k: (
-                seen_tracking_values.append(allow_tracking.get())
-                or {"successful": True, "data": {"ok": True}}
-            )
+    composio = _composio(
+        lambda *a, **k: (
+            seen_tracking_values.append(allow_tracking.get())
+            or {"successful": True, "data": {"ok": True}}
         )
     )
     assert allow_tracking.get() is True

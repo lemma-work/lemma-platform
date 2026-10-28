@@ -73,6 +73,11 @@ def sync_detailed(
 ) -> Response[ErrorResponse | PodConnectorResponse]:
     """Declare A Pod Connector
 
+     Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector
+    (`connector_id`): its organization default, or Lemma's own app for it installed now when the
+    organization has none and the caller may install connectors. `slug` defaults to the installation's
+    name; `mode` to PER_MEMBER.
+
     Args:
         pod_id (UUID):
         body (PodConnectorCreateRequest):
@@ -105,6 +110,11 @@ def sync(
 ) -> ErrorResponse | PodConnectorResponse | None:
     """Declare A Pod Connector
 
+     Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector
+    (`connector_id`): its organization default, or Lemma's own app for it installed now when the
+    organization has none and the caller may install connectors. `slug` defaults to the installation's
+    name; `mode` to PER_MEMBER.
+
     Args:
         pod_id (UUID):
         body (PodConnectorCreateRequest):
@@ -131,6 +141,11 @@ async def asyncio_detailed(
     body: PodConnectorCreateRequest,
 ) -> Response[ErrorResponse | PodConnectorResponse]:
     """Declare A Pod Connector
+
+     Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector
+    (`connector_id`): its organization default, or Lemma's own app for it installed now when the
+    organization has none and the caller may install connectors. `slug` defaults to the installation's
+    name; `mode` to PER_MEMBER.
 
     Args:
         pod_id (UUID):
@@ -161,6 +176,11 @@ async def asyncio(
     body: PodConnectorCreateRequest,
 ) -> ErrorResponse | PodConnectorResponse | None:
     """Declare A Pod Connector
+
+     Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector
+    (`connector_id`): its organization default, or Lemma's own app for it installed now when the
+    organization has none and the caller may install connectors. `slug` defaults to the installation's
+    name; `mode` to PER_MEMBER.
 
     Args:
         pod_id (UUID):

@@ -179,6 +179,7 @@ class DatastoreFileEntity(AggregateRoot):
                 actor_id=actor_id,
                 path=self.path,
                 metadata=self.metadata or {},
+                size_bytes=self.size_bytes,
             )
         )
 

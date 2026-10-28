@@ -50,6 +50,24 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name || inputs.version || github.ref }}
 
+      # The same two steps open every package release (see docs/versioning.md,
+      # "Publishing"): name the version, and stop here -- successfully -- when
+      # the registry already has it, so re-running a release is a no-op rather
+      # than a failure or a second upload.
+      - name: Resolve the release version
+        id: release
+        working-directory: .
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
+        run: python3 scripts/release_registry.py version "$RELEASE_VERSION"
+
+      - name: Check whether lemma-sdk is already on npm
+        id: registry
+        working-directory: .
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: python3 scripts/release_registry.py published npm lemma-sdk "$VERSION"
+
       # The protected backend suite is not a gate on this artifact. It exercises
       # the real Docker runtime, the document processors and the Rust agent
       # host; none of the three is in the package published here, and the job
@@ -57,6 +75,7 @@ jobs:
       # keeps the gate, which is what it was written for.
 
       - name: Setup Node.js
+        if: steps.registry.outputs.published == 'false'
         uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
@@ -64,6 +83,7 @@ jobs:
           cache-dependency-path: lemma-typescript/package-lock.json
 
       - name: Use npm with trusted publishing support
+        if: steps.registry.outputs.published == 'false'
         run: npm install --global npm@11.18.0
 
       # The run that publishes the package is the run that checks it. CI's path
@@ -73,6 +93,7 @@ jobs:
       # suite as passing. Before `npm version` below: the SDK_VERSION check and
       # the committed-bundle diff read the tree as committed.
       - name: Verify TypeScript SDK
+        if: steps.registry.outputs.published == 'false'
         uses: ./.github/actions/verify-typescript-sdk
 
       # See the note in release-lemma-python.yml: consistency is enforced at
@@ -81,62 +102,55 @@ jobs:
       # — that check stays as the last word before `npm version` rewrites
       # package.json out from under it.
       - name: Check version consistency across components
+        if: steps.registry.outputs.published == 'false'
         working-directory: .
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
-        run: python3 scripts/check_version_consistency.py --expect "$RELEASE_VERSION"
+          VERSION: ${{ steps.release.outputs.version }}
+        run: python3 scripts/check_version_consistency.py --expect "$VERSION"
 
       - name: Set package version from release tag
-        id: version
+        if: steps.registry.outputs.published == 'false'
         shell: bash
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
-          version="${RELEASE_VERSION#v}"
-          if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid semver release tag: ${RELEASE_VERSION}" >&2
-            exit 1
-          fi
-
-          npm version "${version}" --no-git-tag-version --allow-same-version
+          npm version "${VERSION}" --no-git-tag-version --allow-same-version
 
           source_version="$(node -e 'const fs=require("fs"); const m=fs.readFileSync("src/version.ts","utf8").match(/SDK_VERSION = "([^"]+)"/); if (!m) process.exit(1); process.stdout.write(m[1])')"
-          if [[ "${source_version}" != "${version}" ]]; then
-            echo "src/version.ts SDK_VERSION (${source_version}) must match release version ${version}. Commit the release version before publishing." >&2
+          if [[ "${source_version}" != "${VERSION}" ]]; then
+            echo "src/version.ts SDK_VERSION (${source_version}) must match release version ${VERSION}. Commit the release version before publishing." >&2
             exit 1
           fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
+        if: steps.registry.outputs.published == 'false'
         run: npm ci
 
       - name: Build package
+        if: steps.registry.outputs.published == 'false'
         run: npm run build
 
       # Unit tests ran in "Verify TypeScript SDK" above, against the same
       # sources -- vitest runs src, not dist, and `npm version` touches nothing
       # it reads.
       - name: Verify registry blocks
+        if: steps.registry.outputs.published == 'false'
         run: npm run registry:check
 
-      - name: Check whether version is already published
-        id: published
-        shell: bash
-        run: |
-          package_name="$(node -p "require('./package.json').name")"
-          package_version="${{ steps.version.outputs.version }}"
-
-          if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "${package_name}@${package_version} is already published."
-          else
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Pack package
-        if: steps.published.outputs.should_publish == 'true'
+        if: steps.registry.outputs.published == 'false'
         run: npm pack --dry-run
 
       - name: Publish package
-        if: steps.published.outputs.should_publish == 'true'
+        if: steps.registry.outputs.published == 'false'
         run: npm publish
+
+      # A publish that returned 0 is not a version anybody can install until the
+      # registry serves it. Fail here, on this run, rather than leave the release
+      # tracker to discover it.
+      - name: Confirm lemma-sdk is installable from npm
+        if: steps.registry.outputs.published == 'false'
+        working-directory: .
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: python3 scripts/release_registry.py wait npm lemma-sdk "$VERSION" --timeout-seconds 600

@@ -215,6 +215,19 @@ async def test_a_chat_platform_cannot_claim_its_line_was_typed_in_lemma():
     assert not keeper_started(run)
 
 
+async def test_a_sender_cannot_mark_its_message_as_a_history_notice():
+    """`synthetic` is what a notice history assembly writes carries, and such a
+    notice is read as Lemma's own, its label lines left as they are. It is never
+    stored, so a sender that sends it is imitating one."""
+    saved, _ = await _start(
+        _conversation(dict(_DIRECT_CHAT)),
+        metadata={"synthetic": True},
+        typed_in_lemma=True,
+    )
+
+    assert "synthetic" not in saved
+
+
 async def test_typing_in_lemma_into_a_direct_chat_marks_nothing():
     """The person typing is the person the bot is talking to there."""
     saved, run = await _start(

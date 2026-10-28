@@ -184,7 +184,6 @@ that enforces it, and whether it is a hard failure or a ratchet — is in
   keeps its old path as a dated `LEGACY_ALIASES` entry.
   `app/core/tests/unit/test_route_auth_classes.py` fails on an exempt route in
   no class, an entry with no route, and an alias past its date.
-- Add an Alembic upgrade and downgrade test for schema changes.
 - Do not annotate with `Any`, or with a bare `dict`, `list` or `tuple`. Both
   say "this boundary is not checked", and the checker then cannot help at
   exactly the place two pieces of code meet. Parameterise the container, or
@@ -201,6 +200,41 @@ and says what to do instead in the cases people reach for them in.
 not. The `Any` rule is ratcheted too, per module — there are thousands of
 existing annotations and no plan to rewrite them at once, but the count only
 goes down.
+
+### Migrations
+
+A release does not swap code and schema at one instant. New pods start before
+`alembic upgrade head` finishes, and old pods keep serving after it does, so
+for a few minutes each version of the code runs against the other version of
+the schema. Work queued in that window retries on a budget that is shorter
+than the window, and what exhausts it is lost.
+
+- **Expand, then contract.** A migration that ships in a release only adds:
+  tables, nullable columns, columns with a default, indexes, backfills. The
+  code that ships with it must still run against the schema before it, and the
+  code before it must still run against the schema after it. Dropping a
+  column or table, renaming one, or tightening a constraint is a separate
+  migration in a later release, once no deployed code reads it. One migration
+  per effort still holds for the expand half; the contract half is the next
+  effort's.
+- **Count what a backfill drops before it ships.** A backfill that deletes,
+  unbinds or narrows something a person relies on — a grant, a binding, an
+  account reference — states in the pull request how many rows it affects and
+  in which organizations, measured against production, and the release notes
+  carry it. A migration log line is not a notice: nobody reads it. The people
+  who lose something are told where they will see it, in the app.
+- **A narrowed grant keeps covering what it covered.** When a backfill maps a
+  broad grant onto narrower rows, every row the old grant reached gets the
+  grant, not the one a default picks. A narrowing the product wants is a
+  decision for the pod's owner, made after the migration, not by it.
+- **New deployment requirements go in the deployment docs in the same pull
+  request**: a database privilege, an environment variable, an external
+  service. A missing one is found at startup or by `/health/ready`, at error
+  level, not by the first request that needs it. It blocks readiness only when
+  the process can serve nothing without it; one that breaks a single feature
+  (the datastore's `CREATEROLE`) is reported there and does not take every
+  replica out of rotation.
+- Add an Alembic upgrade and downgrade test for every migration.
 
 ## Code and comments
 

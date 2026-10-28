@@ -3,7 +3,9 @@
 Two contacts that turn out to be one person each had a conversation with the
 same agent in their channel; one keeps the seat (``contact_conversations``),
 and what the person saw of the other is copied into it here, so the agent
-answering them next has it, and so does the other browser's chat.
+answering them next has it, and so does the other browser's chat. The copies
+are in no run, so the agent reads them only because its history carries them
+on purpose, as another chat's (``domain/folded_turns``).
 """
 
 from __future__ import annotations
@@ -12,11 +14,11 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts.contact_conversations import (
-    FOLDED_FROM_KEY,
     MAX_EXPORTED_MESSAGES,
     _seen_by_them,
     _was_seen,
 )
+from app.modules.agent.domain.folded_turns import FOLDED_FROM_KEY
 from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
@@ -37,7 +39,8 @@ async def fold_history(
 
     Copied, not moved -- the runs, waits and answers that point at the
     unseated one stay with it -- and marked (``FOLDED_FROM_KEY``), so an
-    export does not carry it twice. Appended after what the seated one holds.
+    export does not carry it twice and the agent's history reads it as the
+    other chat's. Appended after what the seated one holds.
     """
     rows = await uow.session.execute(
         _seen_by_them()

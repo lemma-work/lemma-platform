@@ -456,6 +456,59 @@ async def test_a_retry_does_not_inherit_the_abandoned_attempts_half_thought(
 
 
 @pytest.mark.asyncio
+async def test_reasoning_the_prompt_opened_is_taken_back_off_the_answer(monkeypatch):
+    """A model whose template opens the block in the prompt streams its
+    reasoning as text, and only its ``</think>`` says so. The client is told to
+    clear what it showed and handed it again as a thought; the model's next
+    response is held as a thought from its first token."""
+    from app.modules.agent.services import run_event_pump as pump_module
+
+    published: list[dict] = []
+
+    async def _capture(conversation_id, payload, **kwargs):  # noqa: ARG001
+        published.append(payload)
+
+    monkeypatch.setattr(pump_module, "publish_conversation_event", _capture)
+
+    pump = pump_module.RunEventPump(message_writer=None, finalizer=None)
+    run = RunIdentity(conversation_id=uuid4(), agent_run_id=uuid4())
+    outcome = pump_module.RunOutcome()
+
+    async def _token(data: str) -> None:
+        await pump.handle(
+            event=AgentEvent(
+                type=AgentEventType.TOKEN,
+                data={"kind": "text", "data": data},
+                agent_run_id=run.agent_run_id,
+            ),
+            run=run,
+            outcome=outcome,
+        )
+
+    def _shown_as_answer() -> str:
+        shown = ""
+        for frame in published:
+            if frame.get("kind") == "stream_reset":
+                shown = ""
+            elif frame.get("kind") == "text":
+                shown += str(frame["data"])
+        return shown
+
+    await _token("The person is someone@example.com, ")
+    await _token(f"so I will greet them.{CLOSE}Hello!")
+    await pump._drain_tokens(run)
+    assert "stream_reset" in [frame.get("kind") for frame in published]
+    assert _shown_as_answer() == "Hello!"
+
+    published.clear()
+    await _token("Again someone@example.com")
+    assert "someone@example.com" not in _shown_as_answer()
+    await _token(f"{CLOSE}Done.")
+    await pump._drain_tokens(run)
+    assert _shown_as_answer() == "Done."
+
+
+@pytest.mark.asyncio
 async def test_a_token_the_harness_already_classified_passes_through(monkeypatch):
     """Only the text lane is examined.
 

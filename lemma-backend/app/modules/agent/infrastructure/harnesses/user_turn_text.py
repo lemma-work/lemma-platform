@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from app.modules.agent.domain.folded_turns import folded_from
 from app.modules.agent.domain.private_notes import defuse_lemma_labels, lemma_label
 from app.modules.agent.domain.surface_prompts import attachment_listing_block
 from app.modules.agent.domain.value_objects import (
@@ -49,13 +50,17 @@ def timed_user_prompt_text(msg: object, *, with_roster: bool = True) -> str:
 
 def _sent_at_note(msg: object) -> str | None:
     """Only on a person's message: a notice Lemma made up has no sending time,
-    and one stamped when it was built would change on every run."""
+    and one stamped when it was built would change on every run. Nor on what
+    a contact merge copied in: the copy was written when the merge ran, which
+    is not when they sent it (``folded_turns``)."""
     if getattr(msg, "role", None) is not MessageRole.USER:
         return None
     if getattr(msg, "kind", None) is not MessageKind.TEXT:
         return None
     metadata = getattr(msg, "metadata", None)
-    if isinstance(metadata, dict) and metadata.get("synthetic"):
+    if isinstance(metadata, dict) and (
+        metadata.get("synthetic") or folded_from(metadata) is not None
+    ):
         return None
     sent = getattr(msg, "created_at", None)
     if not isinstance(sent, datetime):
@@ -86,9 +91,12 @@ def user_prompt_text(msg: object, *, with_roster: bool = True) -> str:
     pieces = [
         label,
         sender_label(metadata, platform),
-        # Only a message Lemma labelled is known to be a member's; any other
-        # body could be a stranger's imitating that label.
-        body if label else defuse_lemma_labels(body),
+        # Only a message Lemma labelled is known to be a member's, and only a
+        # notice history assembly wrote is known to be Lemma's own; any other
+        # body could be a stranger's imitating either.
+        body
+        if label or metadata.get("synthetic") is True
+        else defuse_lemma_labels(body),
         quoted_message_block(metadata),
         participants_block(metadata) if with_roster else None,
         channel_context_block(metadata),

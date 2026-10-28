@@ -193,19 +193,42 @@ def test_a_stream_with_no_tags_passes_straight_through():
     ]
 
 
+def _growth(read, make, size: int) -> float:
+    """How much longer ``read`` takes on four times the input.
+
+    Linear work takes about 4x as long, quadratic about 16x. A ratio rather than
+    a time limit, because a limit is a guess about the runner: on a loaded CI
+    worker the same linear read took 1.2s against a 0.5s bound. And this
+    process's CPU time rather than the wall clock, which on an oversubscribed
+    machine also counts the time spent waiting for a core -- unevenly between
+    the two sizes, so even the ratio failed under load. Best of five.
+    """
+    import time
+
+    def best(text: str) -> float:
+        runs = []
+        for _ in range(5):
+            started = time.process_time()
+            read(text)
+            runs.append(time.process_time() - started)
+        return min(runs)
+
+    return best(make(4 * size)) / best(make(size))
+
+
 def test_a_run_of_unfinished_tags_is_read_in_linear_time():
     """Text a model was made to repeat -- ``<think<think=<think=...`` -- once made
     every ``<think`` scan to the end of the message: 0.2s at 32k characters and
     quadratic beyond. Blocks are now found by walking forward from each open
-    tag to its close. The bound is generous; the old shape takes ~8s here."""
-    import time
+    tag to its close."""
 
-    for repeated in (OPEN, "<think="):
-        text = "<think" + repeated * 30_000
-        started = time.perf_counter()
+    def read(text: str) -> None:
         split_thinking_segments(text)
         strip_thinking_tokens(text)
-        assert time.perf_counter() - started < 1.0, repeated
+
+    for repeated, size in ((OPEN, 300_000), ("<think=", 30_000)):
+        growth = _growth(read, lambda n: "<think" + repeated * n, size)
+        assert growth < 8, (repeated, growth)
 
 
 # --- the review's probes ----------------------------------------------------
@@ -266,16 +289,14 @@ def test_the_stream_and_the_saved_message_hide_the_same_text():
 
 def test_many_fences_and_blocks_are_read_in_linear_time():
     """The fence check was ``any`` over every fence for every block."""
-    import time
-
     unit = f"```\ncode {OPEN} quoted\n```\n{OPEN}reasoning{CLOSE}answer ~~~x~~~ "
-    text = unit * (200_000 // len(unit))
-    started = time.perf_counter()
-    stripped = strip_thinking_tokens(text)
-    elapsed = time.perf_counter() - started
 
-    assert "reasoning" not in stripped
-    assert elapsed < 0.5
+    def make(size: int) -> str:
+        return unit * (size // len(unit))
+
+    assert "reasoning" not in strip_thinking_tokens(make(200_000))
+    growth = _growth(strip_thinking_tokens, make, 200_000)
+    assert growth < 8, growth
 
 
 def test_the_platforms_own_context_blocks_a_model_echoed_are_dropped():
@@ -288,3 +309,71 @@ def test_the_platforms_own_context_blocks_a_model_echoed_are_dropped():
     assert strip_context_echo(echoed) == "You chose blue."
     assert strip_context_echo("a <b>memory</b> of it") == "a <b>memory</b> of it"
     assert strip_context_echo("") == ""
+
+
+# --- reasoning the prompt opened --------------------------------------------
+
+
+def _visible(segments: list[tuple[str, str]]) -> str:
+    """What a reader that clears on ``reset`` is left showing as the answer."""
+    shown = ""
+    for kind, chunk in segments:
+        if kind == "reset":
+            shown = ""
+        elif kind == "text":
+            shown += chunk
+    return shown
+
+
+def test_a_close_with_no_open_makes_what_came_before_it_reasoning():
+    """A chat template that opens the block in the prompt leaves the content
+    starting mid-thought: the close is the first sign of it."""
+    text = f"The user is someone@example.com and wants a summary.{CLOSE}\n\nHere it is."
+
+    assert split_thinking_segments(text) == [
+        ("thinking", "The user is someone@example.com and wants a summary."),
+        ("text", "\n\nHere it is."),
+    ]
+    assert strip_thinking_tokens(text) == "Here it is."
+    assert has_thinking_tokens(text) is True
+
+
+def test_a_stream_takes_back_what_it_showed_once_the_close_arrives():
+    splitter = ThinkingStreamSplitter()
+    segments = splitter.feed("The user's email is ")
+    segments += splitter.feed("someone@example.com.</thi")
+    segments += splitter.feed("nk>Done.")
+    segments += splitter.flush()
+
+    assert "reset" in [kind for kind, _ in segments]
+    assert _visible(segments) == "Done."
+    assert ("thinking", "The user's email is someone@example.com.") in segments
+
+
+def test_the_next_response_of_such_a_model_is_held_as_reasoning_from_the_start():
+    splitter = ThinkingStreamSplitter()
+    splitter.feed(f"first thought{CLOSE}first answer")
+    splitter.flush()
+
+    second = splitter.feed("second thought, with an address in it")
+    assert all(kind == "thinking" for kind, _ in second)
+    second += splitter.feed(f"{CLOSE}second answer")
+    second += splitter.flush()
+    assert _visible(second) == "second answer"
+
+
+def test_a_presumed_thought_that_never_closes_is_released_as_the_answer():
+    splitter = ThinkingStreamSplitter()
+    splitter.feed(f"thought{CLOSE}answer")
+    splitter.flush()
+
+    segments = splitter.feed("Just an answer this time.")
+    segments += splitter.flush()
+    assert _visible(segments) == "Just an answer this time."
+
+
+def test_a_close_quoted_inline_or_after_an_open_is_not_a_prompt_opened_block():
+    quoted = f"End reasoning with `{CLOSE}` in your template."
+    assert strip_thinking_tokens(quoted) == quoted
+    later = f"{OPEN}a{CLOSE}Answer, then a stray {CLOSE} tag."
+    assert strip_thinking_tokens(later) == f"Answer, then a stray {CLOSE} tag."

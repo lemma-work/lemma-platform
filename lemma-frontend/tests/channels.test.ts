@@ -81,11 +81,13 @@ test("reads a contact's inbox fields off the channel itself", () => {
 });
 
 test("names a chat the way its reader sees it", () => {
-    /* Your private line is named by where you reach it, or is the notices
-       the teammate sends you. */
-    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }] }, "Marketing"), "WhatsApp");
-    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }, { platform: "TELEGRAM", title: null }] }, "Marketing"), "WhatsApp and Telegram");
-    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [] }, "Marketing"), "Notices");
+    /* Your private line is named after the teammate it is with -- never
+       "Email" beside chats named for people -- and, where no teammate name
+       is to hand, by where you reach it or the notices it sends you. */
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "RESEND", title: null }] }, "Marketing"), "Marketing");
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }] }, ""), "WhatsApp");
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [{ platform: "WHATSAPP", title: null }, { platform: "TELEGRAM", title: null }] }, ""), "WhatsApp and Telegram");
+    assert.equal(channelTitle({ kind: "DIRECT", title: null, person: null, sources: [] }, ""), "Notices");
     assert.equal(channelTitle(contact, "Marketing"), "Tomás");
     assert.equal(channelTitle(launch, "Marketing"), "launch");
     // A group with no title of its own is called where it is.

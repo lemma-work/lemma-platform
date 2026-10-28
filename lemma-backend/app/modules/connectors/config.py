@@ -10,8 +10,9 @@ flows are resolved directly from the environment in
 ``infrastructure/adapters/env_system_oauth_config.py`` (env-presence drives
 availability), kept SEPARATE from the login OAuth client in core config:
 ``CONNECTOR_GOOGLE_CLIENT_ID`` / ``CONNECTOR_GOOGLE_CLIENT_SECRET`` (a system
-connector client typically needs different scopes than login), falling back to
-the legacy shared ``GOOGLE_CLIENT_ID`` / ``GOOGLE_CLIENT_SECRET``.
+connector client typically needs different scopes than login). The login
+client's ``GOOGLE_CLIENT_ID`` / ``GOOGLE_CLIENT_SECRET`` are never used for
+connectors.
 """
 
 from typing import Optional

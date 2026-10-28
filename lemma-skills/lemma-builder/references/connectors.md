@@ -7,7 +7,8 @@ credentials. Which account the operation runs as is the pod connector's
 decision: the invoking member's own, or one account its owner shared with the
 pod.
 
-> Grounds in `pod-model.md` (connectors are org-global capabilities). This is the
+> Grounds in `pod-model.md` (the catalog and installations are org-level; pod
+> connectors belong to the pod). This is the
 > build + CLI view; the `lemma-user` skill is the operator view of the same
 > commands.
 
@@ -104,8 +105,12 @@ lemma connectors run gmail "list recent emails" --dry-run   # resolve + print th
 lemma connectors run gmail GMAIL_FETCH_EMAILS -d '{"max_results": 5}'
 ```
 
-- The first argument is the **pod connector's slug**. An unknown slug lists the
-  slugs the pod declares.
+- The first argument is the **pod connector's slug**, your own installation's
+  name, or a catalog id. Nothing has to be declared first: the first run adds
+  your installation to the pod as your own account (a refused call adds
+  nothing), and an app you have not connected answers `CONNECTION_REQUIRED`
+  with a `connect_url` to open — then run it again. `--pod` runs it in another
+  pod.
 - The second is an **operation id** or a plain-English intent. The resolved id is
   always printed, so the next run can name it exactly.
 - `--dry-run` stops after resolving and prints the input schema. Omitting `--data`
@@ -147,14 +152,15 @@ README so anyone can reconnect after import.
 lemma connectors list
 lemma connectors get gmail
 
-# 2. Create the org auth config (required before any operation/trigger command)
-lemma connectors auth-configs create gmail --name workspace-gmail --kind http   # composio | http | sql | mcp
-lemma connectors auth-configs list
-lemma connectors auth-configs get workspace-gmail
+# 2. OAuth app: a connect link. With no install yet, this installs Lemma's own
+#    app for the organization (if you may install connectors) and returns the
+#    link; asking again within a few minutes returns the same link.
+lemma connectors connect-requests create gmail          # → authorization_url
+lemma connectors accounts list --app gmail              # confirm an account appears
 
-# 3a. OAuth app: open a connect-request link, user completes it in the browser
+# Your own OAuth app, or a second install: create it explicitly
+lemma connectors auth-configs create gmail --name workspace-gmail --kind http   # composio | http | sql | mcp
 lemma connectors connect-requests create gmail --auth-config-id <auth-config-id>
-lemma connectors accounts list --app gmail            # confirm an account appears
 
 # 3b. Token / API-key app: create the account directly with credentials
 lemma connectors accounts create --auth-config workspace-gmail --file payloads/account.json
@@ -167,14 +173,18 @@ lemma connectors overview
 `auth-configs update` additionally carries `--default/--no-default` (which install a
 bare connector id resolves to) and `--status ACTIVE|DISABLED`; `auth-configs
 refresh-operations` re-syncs the operation catalog — only meaningful for the
-per-install discovery kinds (`mcp`, `http`), since every other kind's operations come
-from the catalog.
+installs that discover per install (`mcp`, and the generic `openapi` entry), since
+every other connector's operations come from the catalog.
 
 ### Declare it in the pod
 
-An installation does nothing in a pod until the pod declares it:
+A person's own installation is declared on its first run (above), so this is
+for choosing the slug, sharing one account, or asking everyone to connect. A
+catalog id works where an installation does — the org default, or Lemma's own
+app installed now:
 
 ```bash
+lemma connectors pod-add gmail gmail                       # catalog id: installs if needed
 # Each member's own account (the usual case)
 lemma connectors pod-add gmail workspace-gmail --mode PER_MEMBER --required \
   --purpose "Triage reads your inbox"
@@ -183,7 +193,13 @@ lemma connectors pod-add gmail workspace-gmail --mode PER_MEMBER --required \
 lemma connectors pod-share <your-account-id>                  # owner only; prints the pod account id
 lemma connectors pod-add support-inbox workspace-gmail --mode SHARED \
   --shared-account <pod-account-id>
+# ...or, when the owner may also manage pod connectors, both in one step:
+lemma connectors pod-share-as <pod-account-id> support-inbox
 ```
+
+`--required` asks every member to connect their own account. `pod-coverage
+<slug>` shows who has and who it is still waiting on; `pod-ask <slug>` nudges
+them (once a day at most per member).
 
 A pod may declare one installation twice — `gmail` (PER_MEMBER) for "my inbox"
 work beside `support-inbox` (SHARED) for the team mailbox.
@@ -357,18 +373,21 @@ The discovery loop is non-negotiable: operation ids and payload keys are
 kind-specific, so **search by intent, read the schema, then execute**.
 
 ```bash
-# 1. Search by intent — returns ranked matches for THIS auth config's kind
+# 1. Search by intent, through the pod connector (or your app, or a catalog id)
+lemma connectors pod-operations gmail "send email"
+
+# 2. Execute through the pod connector — `run` does both in one call
+lemma connectors run gmail gmail_send_email \
+  -d '{"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "Test"}'
+
+# Org-level discovery, by installation name, when you are setting one up
 lemma connectors operations search workspace-gmail "send email" --limit 5
-
-# 2. Read the input schema (one or more ops; --details for the whole batch)
-lemma connectors operations get workspace-gmail gmail_send_email
 lemma connectors operations details workspace-gmail gmail_send_email slack_chat_post_message
-
-# 3. Execute through the pod connector — payload goes under "payload"
-lemma connectors operations execute gmail gmail_send_email \
-  --data '{"payload": {"recipient_email": "anukul@lemma.work", "subject": "Hi", "body": "Test"}}'
-lemma connectors pod-operations gmail "send email"   # the same search, through the pod connector
 ```
+
+Never pass `--auth-config` or `--account` to `execute`/`run`: that is the
+deprecated org-level route, kept only for old scripts. It prints a warning and
+skips the pod's choice of account.
 
 - `operations search` scans names + descriptions and returns ranked hits **for the
   auth config's kind only**. `operations list` is the same with no query.
@@ -498,10 +517,14 @@ whole thing, but only half of it is its own: **the agent creates the install, a
 person supplies the credentials.** There is no way around that second half and no
 reason to want one — the credential is theirs.
 
-**What the `CONNECTORS` toolset can do.** Four tools, all execution-only:
-`list_connectors`, `search_connector_operations`, `describe_connector_operation`,
-`run_connector_operation`. **None of them creates anything.** An agent that needs
-a new connector needs the `WORKSPACE_CLI` toolset and runs `lemma` itself.
+**What the `CONNECTORS` toolset can do.** `list_connectors`,
+`search_connector_operations`, `describe_connector_operation`,
+`run_connector_operation` and `connect_connector`. A **catalog** app (Gmail,
+Notion, Slack…) needs nothing more: running it before anyone connected it
+answers `CONNECTION_REQUIRED` with a `connect_url` for the person, and the run
+after they connect adds it to the pod as their own account. An app **outside
+the catalog** — an API, MCP server or database of the organization's own —
+needs the `WORKSPACE_CLI` toolset and the loop below.
 
 The loop, in full:
 
@@ -580,9 +603,9 @@ A trigger id is **kind-qualified**: `{app}:{kind}:{slug}` (e.g.
 
 ## Patterns
 
-- **Outbound action from a workload.** Function/agent grants `connector.use`,
-  executes one operation (send email, post message, create event) on the user's
-  account. The hands-on half of most pods.
+- **Outbound action from a workload.** Function/agent is granted `connector.use`
+  on a pod connector and executes one operation (send email, post message, create
+  event) on the account that connector picks. The hands-on half of most pods.
 - **Inbound event → automation.** A connector trigger + WEBHOOK schedule +
   `filter_instruction` starts a workflow on real-world events (see
   `schedules-and-triggers.md`).
@@ -614,8 +637,8 @@ A trigger id is **kind-qualified**: `{app}:{kind}:{slug}` (e.g.
 ```bash
 lemma connectors overview                          # auth config + accounts wired?
 lemma connectors pod-list                          # declared in the pod, status READY?
-# read-only smoke test of one operation:
-lemma connectors operations execute gmail <read-only-op> --data '{"payload": {}}'
+# read-only smoke test of one operation, through the pod connector:
+lemma connectors run gmail <read-only-op-id>
 # then verify the delegated workload path end-to-end:
 lemma functions run <fn-that-calls-the-connector> --data '{...}'
 ```

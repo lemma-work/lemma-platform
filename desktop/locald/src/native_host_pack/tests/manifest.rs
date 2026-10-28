@@ -91,6 +91,15 @@ fn renders_packaged_managed_runtime_without_compatibility_supervisor() {
         manifest["services"][0]["env"]["SUPERTOKENS_TLDEXTRACT_DISABLE_HTTP"],
         "1"
     );
+    // The work runtime's own knob: WORKER_BULK_CONCURRENCY went with the
+    // FastStream worker and is ignored now.
+    assert_eq!(
+        manifest["services"][0]["env"]["WORK_SLOTS_JSON"],
+        r#"{"ingestion": 1}"#
+    );
+    assert!(manifest["services"][0]["env"]
+        .get("WORKER_BULK_CONCURRENCY")
+        .is_none());
     assert_eq!(
         manifest["services"][0]["env"]["LOCAL_EMBEDDING_CACHE_DIR"],
         path_text(&paths.root.join("state").join("cache").join("fastembed")).unwrap()

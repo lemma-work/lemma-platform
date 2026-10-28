@@ -11,7 +11,7 @@ import { request as __request } from '../core/request.js';
 export class CallsService {
     /**
      * Open a call
-     * Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.
+     * Open a live voice call with a pod agent, in the chat named by `conversation_id` or in a new conversation. The call is held in that conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.
      * @param podId
      * @param requestBody
      * @returns CallResponse Successful Response
@@ -31,8 +31,9 @@ export class CallsService {
             mediaType: 'application/json',
             errors: {
                 403: `The caller may not run this agent.`,
-                404: `The agent was not found.`,
-                422: `Validation Error`,
+                404: `The agent, or the conversation, was not found.`,
+                409: `That conversation cannot hold a call.`,
+                422: `The caller cannot run the model the agent runs on.`,
                 503: `No voice engine is configured.`,
             },
         });

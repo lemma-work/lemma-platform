@@ -43,7 +43,7 @@ type AppTab = Extract<Tab, { kind: "app" }>;
  *  ways to start something, and a plain box to ask it. Sending from the box starts the conversation
  *  and moves you into it — Home stays a place you come back to, not a thread
  *  that grows. */
-export function Home({ pod, pods, apps, onOpenApp, onOpenApps, onNewPage, onOpenRun, onOpenConversation, onAbout, onAsk }: {
+export function Home({ pod, pods, apps, onOpenApp, onOpenApps, onNewPage, onOpenRun, onOpenConversation, onAbout, onAsk, onCall }: {
     pod: Pod;
     pods: Pod[];
     /** The space's apps: the newest few show as covers under its name. */
@@ -56,6 +56,8 @@ export function Home({ pod, pods, apps, onOpenApp, onOpenApps, onNewPage, onOpen
     onOpenConversation: (id: string) => void;
     /** The teammate's own page. */
     onAbout: () => void;
+    /** Call the teammate; absent where no voice engine is set up. */
+    onCall?: () => void;
     /** Start a conversation with these words and files, in the Chat tab --
      *  on the model picked here, when one was. */
     onAsk: (text: string, files: File[], model: Choice | null) => void;
@@ -242,6 +244,7 @@ export function Home({ pod, pods, apps, onOpenApp, onOpenApps, onNewPage, onOpen
                     fill={fill}
                     onFilled={() => setFill(null)}
                     onAsk={(text, files) => { onAsk(text, files, model); setModel(null); }}
+                    onCall={onCall}
                     model={<ModelPicker podId={pod.id} orgId={pod.orgId} conversationId={null} picked={model} onPicked={setModel} />}
                 />
             </div>
