@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 _THE_POD_PROMPT_PATH = _PROMPT_DIR / "the_pod.md"
 _TEAMMATE_PROMPT_PATH = _PROMPT_DIR / "teammate.md"
+_OUTSIDER_PROMPT_PATH = _PROMPT_DIR / "outsider.md"
 _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
 _CONNECTORS_PROMPT_PATH = _PROMPT_DIR / "connectors.md"
 _REPLIES_PROMPT_PATH = _PROMPT_DIR / "replies.md"
@@ -117,6 +118,10 @@ def load_teammate_base_prompt() -> str:
 
 def load_agent_base_prompt() -> str:
     return _read_required_prompt(_AGENT_BASE_PROMPT_PATH)
+
+
+def load_outsider_base_prompt() -> str:
+    return _read_required_prompt(_OUTSIDER_PROMPT_PATH)
 
 
 def load_connectors_prompt() -> str:
@@ -365,7 +370,13 @@ def build_agent_instruction_parts(
     # Shared resource guidance stays ahead of agent-specific content for caching.
     sections = [load_the_pod_prompt()]
 
-    if conversation.is_pod_assistant:
+    # Somebody outside the pod is told what they can have, not how to build and
+    # write: a run that read "build missing pieces" told a stranger it had
+    # saved what it had no tool to save.
+    for_outsider = run_audience(ctx).answers_outsiders
+    if for_outsider:
+        sections.append(load_outsider_base_prompt())
+    elif conversation.is_pod_assistant:
         sections.append(load_teammate_base_prompt())
     else:
         sections.append(load_agent_base_prompt())
@@ -390,12 +401,18 @@ def build_agent_instruction_parts(
     # here whenever they can run workspace tools. A native agent also has a host
     # cwd, resolved by Agent Host at dispatch; the sandbox path stays scoped to
     # its tools so neither masquerades as a mount that does not exist.
-    sections = list(
-        _directory_sections(
-            ctx=ctx,
-            conversation=conversation,
-            enabled=enabled,
-            runs_as_remote_process=runs_as_remote_process,
+    # No working directory for somebody outside: theirs is the member's who
+    # looks after them, and none of it is readable to them.
+    sections = (
+        []
+        if for_outsider
+        else list(
+            _directory_sections(
+                ctx=ctx,
+                conversation=conversation,
+                enabled=enabled,
+                runs_as_remote_process=runs_as_remote_process,
+            )
         )
     )
     if conversation.instructions and conversation.instructions.strip():
@@ -424,11 +441,15 @@ def _remote_fragments(enabled: set[AgentToolset], *, ctx: AgentContext) -> list[
     # says so, and the workspace contract -- a VM home, `exec_command` -- would
     # contradict it.
     native_commands = bool(getattr(ctx, "host_runs_native_commands", False))
+    # Not how to write and post to a run answering somebody outside the pod,
+    # which can do neither (``capabilities/assembler._NOT_FOR_OUTSIDERS``).
+    outsider = run_audience(ctx).answers_outsiders
     fragments = [
         _read_required_prompt(path)
         for toolset, path in FRAGMENT_BY_TOOLSET.items()
         if toolset in enabled
         and not (toolset is AgentToolset.WORKSPACE_CLI and native_commands)
+        and not (outsider and toolset in (AgentToolset.POD, AgentToolset.MESSAGING))
     ]
     # Imported where it is used so the prompt layer, which every run loads,
     # does not carry the platform tables a surface run needs.

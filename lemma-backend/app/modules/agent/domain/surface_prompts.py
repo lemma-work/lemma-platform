@@ -72,7 +72,10 @@ def surface_platform_guidance(
 
     if facts.is_email:
         lines.extend(_email_sections(facts))
-    else:
+    elif not audience.answers_outsiders:
+        # How to show files, ask, approve and narrate long work: tools a run
+        # answering somebody outside the pod is not given, and one told about
+        # them reached for them.
         lines.append(_delivery_section(facts))
         if facts.shows_live_progress:
             lines.append(_long_work_section(facts))
@@ -253,7 +256,9 @@ def group_participants_notice(participants: object) -> str | None:
             f"{', '.join(outside)} "
             f"{'is' if _one(outside, unnamed[False]) else 'are'} not in this pod: "
             "they read only what this pod has made public, so say nothing here "
-            "that they should not hear."
+            "that they should not hear. When they ask the bot themselves it can "
+            "only read what is Public for them and cannot save or change "
+            "anything: what they want written down, you write."
         )
     lines.append(
         "This is for you to judge the answer by, not to repeat: do not tell the "

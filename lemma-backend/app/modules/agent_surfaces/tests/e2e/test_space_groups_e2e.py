@@ -21,7 +21,6 @@ from httpx import AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent.tools.messaging.people import CALLED_IN_GROUP
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
@@ -332,13 +331,17 @@ async def test_a_clients_question_and_the_bots_answer_are_the_groups_lines(
     assert asked[0] == "CONTACT" and "order 1182 by Friday" in asked[1]
     assert answered == ("AGENT", "I've asked the team, and will answer here.")
 
-    # The keeper is told in their own channel, pointed at the group, not Contacts.
+    # The keeper is told in their own channel, pointed at the group, not
+    # Contacts -- which group, and that nothing was done; never the guest's
+    # words, which would outlive them here if they were forgotten.
     mine = await authenticated_client.get(f"/pods/{pod_id}/channels/me")
     assert mine.status_code == 200, mine.text
     notes = await authenticated_client.get(
         f"/pods/{pod_id}/channels/{mine.json()['id']}/messages"
     )
-    assert [line["text"] for line in notes.json()["items"]][-1:] == [CALLED_IN_GROUP]
+    note = notes.json()["items"][-1]["text"]
+    assert "nothing was done for them" in note
+    assert "order 1182" not in note
 
 
 async def _file(

@@ -35,7 +35,9 @@ from app.modules.agent_surfaces.tests.e2e.group_timeline import (
     say,
 )
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.agent_surfaces.services.group_log import group_source
 from app.modules.agent.domain.asked_questions import message_ref
 from app.modules.channels.contracts import (
     Asker,
@@ -700,3 +702,50 @@ async def test_a_strangers_background_leaves_out_answers_made_with_a_members_acc
     shown = await background_read(asked["metadata"])
     assert "MEMBER-ANSWER-SECRET" not in " ".join(line.text for line in shown.lines)
     assert shown.withheld == 1
+
+
+async def test_a_guest_reads_further_back_in_their_group_and_nothing_more(
+    scenario, db_session: AsyncSession, fake_telegram, monkeypatch
+):
+    """``group_history``: the group's own lines, as the guest may read them --
+    not a note the members kept out of the chat."""
+    _, group, owner = await _group_with_owner(
+        scenario, db_session, fake_telegram, monkeypatch
+    )
+    await say(
+        db_session,
+        group,
+        "We agreed on six people for the trip.",
+        sender=Sender.member(owner, display_name="Arjun"),
+    )
+    uow = SqlAlchemyUnitOfWork(db_session)
+    source = await group_source(uow, group)
+    note = await post(
+        uow,
+        channel_id=source.channel_id,
+        line=NewLine(
+            sender=Sender.member(owner, display_name="Arjun"),
+            text="MEMBERS-ONLY-NOTE: do not tell them the budget.",
+            members_only=True,
+        ),
+    )
+    assert note is not None
+    await db_session.commit()
+
+    context = await _stranger_asks(
+        db_session,
+        text="how many of us did we agree on?",
+        message_id=111,
+        script=[
+            script_tool_call("group_history", {"limit": 30}, tool_call_id="hist-1"),
+            script_text("Six, from what the group said."),
+        ],
+    )
+
+    results = await _tool_results(
+        scenario.owner_client,
+        pod_id=scenario.pod_id,
+        conversation_id=context.conversation_id,
+    )
+    assert "We agreed on six people for the trip." in results["hist-1"]
+    assert "MEMBERS-ONLY-NOTE" not in results["hist-1"]
