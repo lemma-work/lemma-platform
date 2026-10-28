@@ -25,7 +25,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import DisplayResourceRequest
+from app.modules.agent.contracts.tools import DisplayResourceRequest
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.private_message import (
     PrivateMessage,

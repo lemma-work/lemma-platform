@@ -234,7 +234,7 @@ async def _start_agent(
     schedule: ScheduleEntity,
     owner_ctx: Context | None,
 ) -> None:
-    from app.modules.agent.contracts.workflow_control import (
+    from app.modules.agent.contracts.automation import (
         build_agent_control_adapter,
     )
 

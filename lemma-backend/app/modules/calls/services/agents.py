@@ -36,10 +36,8 @@ from app.modules.agent.contracts.calls import (
     CanvasItem,
     call_canvas,
     call_conversations,
-)
-from app.modules.agent.contracts.channels import (
-    append_delivery_notice,
-    start_surface_turn,
+    keep_transcript,
+    speak_into_call,
 )
 
 logger = get_logger(__name__)
@@ -137,13 +135,12 @@ class CallAgents:
 
     async def send_turn(self, content: str) -> None:
         async with as_caller(self._party) as scope:
-            await start_surface_turn(
+            await speak_into_call(
                 scope.uow,
-                conversation_id=self.call_id,
+                call_id=self.call_id,
                 user_id=self._party.user_id,
                 pod_id=self._party.pod_id,
                 content=content,
-                message_metadata={"source": "call"},
             )
 
     async def canvas(self) -> list[CanvasItem]:
@@ -153,11 +150,8 @@ class CallAgents:
     async def record(self, transcript: str) -> None:
         """The call's transcript, kept in its conversation once it ends."""
         async with as_caller(self._party) as scope:
-            await append_delivery_notice(
-                scope.uow,
-                conversation_id=self.call_id,
-                message=transcript,
-                metadata={"call_transcript": str(uuid4())},
+            await keep_transcript(
+                scope.uow, call_id=self.call_id, transcript=transcript, key=str(uuid4())
             )
 
     async def signals(self) -> AsyncIterator[AgentSignal]:

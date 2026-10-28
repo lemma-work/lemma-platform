@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.modules.agent_surfaces.platforms.slack.errors import slack_api_error
 
-from app.modules.agent.contracts import ToolContext
+from app.modules.agent.contracts.tools import ToolContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     SurfaceChannelInfo,

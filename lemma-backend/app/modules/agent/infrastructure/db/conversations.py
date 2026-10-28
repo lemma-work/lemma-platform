@@ -263,6 +263,13 @@ class Conversations(UnitOfWorkRepository):
             pod_id=pod_id,
         )
 
+    async def title_of(self, conversation_id: UUID) -> str | None:
+        return await self.session.scalar(
+            select(ConversationModel.title).where(
+                ConversationModel.id == conversation_id
+            )
+        )
+
     async def lock_conversation(self, conversation_id: UUID) -> None:
         await lock_conversation_row(self.session, conversation_id=conversation_id)
 

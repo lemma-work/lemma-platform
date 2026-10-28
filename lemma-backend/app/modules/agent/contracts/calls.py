@@ -1,12 +1,10 @@
-"""What the calls module does to a conversation: open one as a call, and read
-the call's canvas back.
+"""What the calls module does to a conversation: open one as a call, speak
+into it, keep its transcript, and read its canvas back.
 
-A turn on a call is an ordinary inbound message (``conversations_for_surfaces.
-start_surface_turn``), so it steers the coordinator's run when one is going and
-starts one when not. What is new is only that a conversation can be a call, and
-that a call's canvas spans the coordinator's conversation and its sub-agents'.
-
-A submodule rather than ``contracts/__init__``, which is a leaf.
+A call is a conversation whose origin is ``CALL`` and whose ``call`` column
+names it the coordinator. A turn on it is an ordinary message, so it steers the
+coordinator's run when one is going and starts one when not; its canvas spans
+the coordinator's conversation and its sub-agents' (``infrastructure/db/calls``).
 """
 
 from __future__ import annotations
@@ -16,25 +14,21 @@ from datetime import datetime
 from uuid import UUID
 
 from pydantic import JsonValue
-from sqlalchemy import or_, select
 
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.domain.calls import (
-    CANVAS_TOOL_NAMES,
-    CallMark,
-    CallRole,
-    coordinator_brief,
-)
-from app.modules.agent.domain.value_objects import ConversationOrigin, MessageKind
-from app.modules.agent.infrastructure.models import ConversationModel, MessageModel
-from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.application.conversations.start import StartConversation
-
-
-#: Sub-agents one call may draw from. A coordinator spawns one per distinct
-#: ask; a call that has spawned more than this has stopped being a call.
-MAX_CALL_CONVERSATIONS = 200
+from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.domain.calls import CallMark, CallRole, coordinator_brief
+from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.value_objects import (
+    ConversationOrigin,
+    MessageDraft,
+    MessageKind,
+)
+from app.modules.agent.infrastructure.db.calls import Calls
+from app.modules.agent.infrastructure.db.conversations import Conversations
+from app.modules.agent.infrastructure.db.messages import Messages
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,69 +84,69 @@ async def owned_call(
     uow: SqlAlchemyUnitOfWork, *, conversation_id: UUID, user_id: UUID, pod_id: UUID
 ) -> bool:
     """Whether this is a call's own conversation, in this pod, owned by this person."""
-    row = (
-        await uow.session.execute(
-            select(
-                ConversationModel.user_id,
-                ConversationModel.pod_id,
-                ConversationModel.call,
-            ).where(ConversationModel.id == conversation_id)
-        )
-    ).one_or_none()
-    if row is None or row.user_id != user_id or row.pod_id != pod_id:
-        return False
-    mark = CallMark.from_json(row.call)
-    return mark is not None and mark.role is CallRole.COORDINATOR
+    return await Calls(uow).owned(
+        conversation_id=conversation_id, user_id=user_id, pod_id=pod_id
+    )
 
 
 async def call_conversations(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[UUID]:
     """The call's own conversation, then each sub-agent's, oldest first."""
-    rows = await uow.session.execute(
-        select(ConversationModel.id)
-        .where(
-            or_(ConversationModel.id == call_id, ConversationModel.parent_id == call_id)
-        )
-        .order_by(ConversationModel.created_at)
-        .limit(MAX_CALL_CONVERSATIONS)
+    return await Calls(uow).conversations(call_id)
+
+
+async def speak_into_call(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    call_id: UUID,
+    user_id: UUID,
+    pod_id: UUID,
+    content: str,
+) -> None:
+    """What the caller said, as a turn of the call's conversation."""
+    await SendMessage.build(uow).send(
+        conversation_id=call_id,
+        user_id=user_id,
+        content=content,
+        pod_id=pod_id,
+        message_metadata={"source": "call"},
     )
-    return list(rows.scalars())
+
+
+async def keep_transcript(
+    uow: SqlAlchemyUnitOfWork, *, call_id: UUID, transcript: str, key: str
+) -> None:
+    """The call's transcript, kept in its conversation, in no run."""
+    await Messages(uow).append_message(
+        conversation_id=call_id,
+        agent_run_id=None,
+        draft=MessageDraft.of_notification(
+            transcript, metadata={"call_transcript": key}
+        ),
+    )
 
 
 async def call_canvas(uow: SqlAlchemyUnitOfWork, call_id: UUID) -> list[CanvasItem]:
     """Everything shown on the call's canvas so far, in the order it was shown."""
-    conversations = await call_conversations(uow, call_id)
-    rows = (
-        await uow.session.execute(
-            select(MessageModel)
-            .where(
-                MessageModel.conversation_id.in_(conversations),
-                MessageModel.tool_name.in_(CANVAS_TOOL_NAMES),
-                MessageModel.kind.in_(
-                    [MessageKind.TOOL_CALL.value, MessageKind.TOOL_RETURN.value]
-                ),
-            )
-            .order_by(MessageModel.created_at, MessageModel.sequence)
-        )
-    ).scalars()
-    calls: dict[str, MessageModel] = {}
+    calls = Calls(uow)
+    shown_calls: dict[str, Message] = {}
     results: dict[str, JsonValue] = {}
-    for row in rows:
-        if not row.tool_call_id:
+    for message in await calls.canvas_messages(await calls.conversations(call_id)):
+        if not message.tool_call_id:
             continue
-        if row.kind == MessageKind.TOOL_CALL.value:
-            calls.setdefault(row.tool_call_id, row)
+        if message.kind is MessageKind.TOOL_CALL:
+            shown_calls.setdefault(message.tool_call_id, message)
         else:
-            results[row.tool_call_id] = row.tool_result
+            results[message.tool_call_id] = message.tool_result
     return [
         CanvasItem(
-            conversation_id=row.conversation_id,
+            conversation_id=message.conversation_id,
             tool_call_id=tool_call_id,
-            tool_name=row.tool_name or "",
-            args=row.tool_args,
+            tool_name=message.tool_name or "",
+            args=message.tool_args,
             result=results.get(tool_call_id),
-            shown_at=row.created_at,
+            shown_at=message.created_at,
         )
-        for tool_call_id, row in calls.items()
+        for tool_call_id, message in shown_calls.items()
         if _shown(results.get(tool_call_id))
     ]
 
@@ -167,6 +161,8 @@ __all__ = [
     "OpenedCall",
     "call_canvas",
     "call_conversations",
+    "keep_transcript",
     "open_call",
     "owned_call",
+    "speak_into_call",
 ]

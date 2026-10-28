@@ -12,7 +12,7 @@ from uuid import UUID
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.errors import ConversationStateError
-from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
+from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
 from app.modules.agent.domain.value_objects import (
     AgentRunStartResult,
     AgentRunStatus,

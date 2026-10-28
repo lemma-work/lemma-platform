@@ -23,7 +23,10 @@ from app.modules.agent_surfaces.tests.unit.surface_doubles import (
     surface_conversation,
 )
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
-from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
+from app.modules.agent.contracts.tools import (
+    DisplayResourceRequest,
+    DisplayResourceType,
+)
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ConversationType,

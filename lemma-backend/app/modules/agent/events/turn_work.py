@@ -1,6 +1,6 @@
 """Agent turns on the work runtime: ``agent.turn`` (and its automation twin), ``agent.title``.
 
-A turn is written by ``contracts.turns.stage_agent_turn`` in the transaction
+A turn is written by ``services.turn_staging.stage_agent_turn`` in the transaction
 that creates its run, so a committed run always has the work that executes it.
 What used to carry it -- an outbox row, the ``agent-events`` consumer group, a
 streaq job, a Redis heartbeat per job and a ten-minute sweep for the runs all

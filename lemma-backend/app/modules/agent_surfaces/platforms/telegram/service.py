@@ -18,7 +18,7 @@ from typing import Any
 
 from redis.exceptions import RedisError
 
-from app.modules.agent.contracts import ToolContext
+from app.modules.agent.contracts.tools import ToolContext
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,

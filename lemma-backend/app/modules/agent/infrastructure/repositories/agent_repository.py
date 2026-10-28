@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -169,6 +169,16 @@ class AgentRepository:
             return None
         identifier, name, kind, icon_url = row
         return identifier, name, AgentKind(kind), icon_url
+
+    async def count_in_pod(self, pod_id: UUID) -> int:
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(AgentModel)
+                .where(AgentModel.pod_id == pod_id)
+            )
+            or 0
+        )
 
     async def id_for_name(self, *, pod_id: UUID, name: str) -> UUID | None:
         return await self.session.scalar(

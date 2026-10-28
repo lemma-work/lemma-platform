@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 
 
-from app.modules.agent.contracts import ToolContext
+from app.modules.agent.contracts.tools import ToolContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     TeamsSurfaceEventMetadata,

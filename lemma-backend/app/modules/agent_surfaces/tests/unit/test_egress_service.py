@@ -16,7 +16,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.contracts import (
+from app.modules.agent.contracts.tools import (
     DisplayResourceRequest,
     DisplayResourceType,
 )

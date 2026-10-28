@@ -18,7 +18,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
+from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
 from app.modules.agent.domain.entities import Conversation, Message
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.ports import AgentRepository

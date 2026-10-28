@@ -1,9 +1,6 @@
-"""Agent adapter output normalization for the workflow resume path.
+"""Starting a workflow step's or a schedule's run, and reading what became of it."""
 
-The adapter belongs to `agent`, which owns every collaborator it drives; this
-file stays here because what it pins down is `workflow`'s side of the bargain --
-the shapes `run_resume_service` reads back out of `AgentPort`.
-"""
+from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -12,28 +9,47 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.application.automation import start as automation_start
+from app.modules.agent.application.automation.outcome import AutomatedRunOutcome
+from app.modules.agent.contracts.automation import build_agent_control_adapter
+from app.modules.agent.domain.automation_prompts import step_output
+from app.modules.agent.domain.value_objects import ConversationStatus
 from app.modules.agent.tests.unit.work_recording import RecordingWorkSession
 
-from app.modules.agent.infrastructure.adapters import workflow_control
-from app.modules.agent.infrastructure.adapters.workflow_control import (
-    AgentControlAdapter,
-)
-from app.modules.agent.domain.value_objects import ConversationStatus
+
+def _uow():
+    return Mock(session=RecordingWorkSession())
 
 
-def _adapter() -> AgentControlAdapter:
-    """The adapter over a recording session. Stopping a run and the pod's
-    default runtime are handed in by its contract; these tests reach neither
-    unless they replace them."""
-    return AgentControlAdapter(
-        Mock(session=RecordingWorkSession()),
-        stop_run=AsyncMock(),
-        default_runtime=AsyncMock(return_value=None),
+def _driver(agent):
+    """The workflow's port over a recording session, its agent found and its
+    pod's organization and default runtime answered without a database."""
+    driver = build_agent_control_adapter(_uow())
+    driver.agents = Mock(
+        get=AsyncMock(return_value=agent),
+        get_by_pod_and_name=AsyncMock(return_value=agent),
     )
+    starts = driver.starts
+    starts.organization_of = AsyncMock(return_value=uuid4())
+    starts.default_runtime = AsyncMock(return_value=None)
+    starts.conversations = starts.runs = starts.messages = Mock(
+        create_conversation=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
+        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
+        append_message=AsyncMock(),
+        collect_events=Mock(),
+    )
+    return driver, starts
+
+
+def _outcome(conversation, waits=()):
+    outcome = AutomatedRunOutcome.build(_uow())
+    outcome.conversations = Mock(get_conversation=AsyncMock(return_value=conversation))
+    outcome.pauses = Mock(pending=AsyncMock(return_value=list(waits)))
+    return outcome
 
 
 def test_normalize_agent_output_wraps_non_dict_as_answer():
-    normalize = AgentControlAdapter._normalize_agent_output
+    normalize = step_output
     # Structured output (agent has an output_schema) passes through.
     assert normalize({"answer": "x", "score": 1}) == {"answer": "x", "score": 1}
     # No output_schema -> bare string -> {"answer": text}.
@@ -49,44 +65,29 @@ def test_normalize_agent_output_wraps_non_dict_as_answer():
 async def test_reserved_id_returns_existing_conversation_without_side_effects(
     monkeypatch,
 ):
-    adapter = _adapter()
     pod_id = uuid4()
-    # `agent_runtime` is read to hand to the shared start path, before the
-    # reserved-id branch can return. A real `Agent` always carries it; the fake
-    # has to as well, or this asserts against a shape that never occurs.
     agent = SimpleNamespace(
         id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
     )
-    adapter.agent_repo = Mock(
-        get=AsyncMock(return_value=agent),
-        get_by_pod_and_name=AsyncMock(return_value=agent),
-    )
+    driver, starts = _driver(agent)
     existing = SimpleNamespace(id=uuid4())
     create_reserved = AsyncMock(return_value=(existing, False))
-    monkeypatch.setattr(workflow_control, "create_conversation_for_id", create_reserved)
-    adapter.conversations = adapter.runs = adapter.messages = Mock(
-        create_agent_run=AsyncMock(),
-        append_message=AsyncMock(),
-    )
-    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
-    conversation_id = existing.id
+    monkeypatch.setattr(automation_start, "create_conversation_for_id", create_reserved)
 
-    result = await adapter.run_agent_by_id(
+    result = await driver.run_agent_by_id(
         agent_id=agent.id,
         input_data={"ticket": 42},
         pod_id=pod_id,
         user_id=uuid4(),
-        conversation_id=conversation_id,
+        conversation_id=existing.id,
         source="SCHEDULE",
     )
 
     assert result == existing.id
     invocation = create_reserved.await_args.args[1]
-    assert invocation.id == conversation_id
-    assert invocation.origin_type is None
-    assert invocation.origin_id is None
-    adapter.runs.create_agent_run.assert_not_awaited()
-    adapter.messages.append_message.assert_not_awaited()
+    assert invocation.id == existing.id
+    starts.runs.create_agent_run.assert_not_awaited()
+    starts.messages.append_message.assert_not_awaited()
 
 
 @pytest.mark.anyio
@@ -101,17 +102,12 @@ async def test_waiting_conversation_reports_wait_when_a_wait_is_active(monkeypat
     """
     conversation_id = uuid4()
     wakes_at = datetime(2026, 8, 4, 9, 0, tzinfo=timezone.utc)
-    adapter = _adapter()
-    adapter.conversations = adapter.runs = adapter.messages = Mock(
-        get_conversation=AsyncMock(
-            return_value=SimpleNamespace(status=ConversationStatus.WAITING, output=None)
-        )
-    )
-    adapter.pauses = Mock(
-        pending=AsyncMock(return_value=[SimpleNamespace(wake_at=wakes_at)])
+    outcome = _outcome(
+        SimpleNamespace(status=ConversationStatus.WAITING, output=None),
+        waits=[SimpleNamespace(wake_at=wakes_at)],
     )
 
-    status = await adapter.get_conversation_status(conversation_id)
+    status = await outcome.status(conversation_id)
 
     assert status["status"] == "WAITING"
     assert status["wait_reason"] == "WAIT"
@@ -121,15 +117,9 @@ async def test_waiting_conversation_reports_wait_when_a_wait_is_active(monkeypat
 @pytest.mark.anyio
 async def test_waiting_conversation_still_reports_human_without_a_wait():
     """An agent blocked on a person is the hang the ceiling exists to catch."""
-    adapter = _adapter()
-    adapter.conversations = adapter.runs = adapter.messages = Mock(
-        get_conversation=AsyncMock(
-            return_value=SimpleNamespace(status=ConversationStatus.WAITING, output=None)
-        )
-    )
-    adapter.pauses = Mock(pending=AsyncMock(return_value=[]))
+    outcome = _outcome(SimpleNamespace(status=ConversationStatus.WAITING, output=None))
 
-    status = await adapter.get_conversation_status(uuid4())
+    status = await outcome.status(uuid4())
 
     assert status["wait_reason"] == "HUMAN"
     assert status["wakes_at"] is None
@@ -143,18 +133,15 @@ async def test_a_failed_conversation_carries_the_reason_the_agent_recorded():
     leaves "Agent conversation FAILED" as the only thing a run records, which
     is exactly as much as knowing the status.
     """
-    adapter = _adapter()
-    adapter.conversations = adapter.runs = adapter.messages = Mock(
-        get_conversation=AsyncMock(
-            return_value=SimpleNamespace(
-                status=ConversationStatus.FAILED,
-                output=None,
-                last_run_error="model provider returned 401",
-            )
+    outcome = _outcome(
+        SimpleNamespace(
+            status=ConversationStatus.FAILED,
+            output=None,
+            last_run_error="model provider returned 401",
         )
     )
 
-    status = await adapter.get_conversation_status(uuid4())
+    status = await outcome.status(uuid4())
 
     assert status["status"] == "FAILED"
     assert status["error"] == "Agent conversation FAILED: model provider returned 401"
@@ -163,16 +150,13 @@ async def test_a_failed_conversation_carries_the_reason_the_agent_recorded():
 @pytest.mark.anyio
 async def test_a_failed_conversation_without_a_reason_reads_as_it_did():
     """No reason recorded is common; do not append a dangling colon for it."""
-    adapter = _adapter()
-    adapter.conversations = adapter.runs = adapter.messages = Mock(
-        get_conversation=AsyncMock(
-            return_value=SimpleNamespace(
-                status=ConversationStatus.FAILED, output=None, last_run_error=None
-            )
+    outcome = _outcome(
+        SimpleNamespace(
+            status=ConversationStatus.FAILED, output=None, last_run_error=None
         )
     )
 
-    status = await adapter.get_conversation_status(uuid4())
+    status = await outcome.status(uuid4())
 
     assert status["error"] == "Agent conversation FAILED"
 
@@ -187,24 +171,13 @@ async def test_the_assistant_is_started_like_any_other_agent(monkeypatch):
     the conversation still reads as the assistant's, which is what selects its
     base prompt.
     """
-    adapter = _adapter()
     pod_id = uuid4()
     assistant = SimpleNamespace(
         id=pod_id, pod_id=pod_id, name="pod_default", agent_runtime=None
     )
-    adapter.agent_repo = Mock(
-        get=AsyncMock(return_value=assistant),
-        get_by_pod_and_name=AsyncMock(return_value=assistant),
-    )
+    adapter, starts = _driver(assistant)
     created = SimpleNamespace(id=uuid4())
-    adapter.conversations = adapter.runs = adapter.messages = Mock(
-        create_conversation=AsyncMock(return_value=created),
-        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        append_message=AsyncMock(),
-        collect_events=Mock(),
-    )
-    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
-    adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
+    starts.conversations.create_conversation.return_value = created
 
     result = await adapter.run_agent_by_id(
         agent_id=pod_id,
@@ -216,14 +189,14 @@ async def test_the_assistant_is_started_like_any_other_agent(monkeypatch):
     )
 
     assert result == created.id
-    conversation = adapter.conversations.create_conversation.await_args.args[0]
+    conversation = starts.conversations.create_conversation.await_args.args[0]
     assert conversation.agent_id == pod_id
     # Still the assistant, and still selects the assistant's base prompt.
     assert conversation.is_pod_assistant
     # The trigger's words reach the run as conversation instructions, which the
     # prompt appends after the agent's own -- which the assistant does not have.
     assert conversation.instructions == "Post the overnight summary."
-    assert adapter.runs.create_agent_run.await_args.kwargs["agent_id"] == pod_id
+    assert starts.runs.create_agent_run.await_args.kwargs["agent_id"] == pod_id
 
 
 @pytest.mark.anyio
@@ -234,24 +207,13 @@ async def test_named_agent_run_carries_the_schedule_instruction_too(monkeypatch)
     to it rather than replacing it -- `build_agent_instructions` layers agent
     instruction then conversation instructions, in that order.
     """
-    adapter = _adapter()
     pod_id = uuid4()
     agent = SimpleNamespace(
         id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
     )
-    adapter.agent_repo = Mock(
-        get=AsyncMock(return_value=agent),
-        get_by_pod_and_name=AsyncMock(return_value=agent),
-    )
+    adapter, starts = _driver(agent)
     created = SimpleNamespace(id=uuid4())
-    adapter.conversations = adapter.runs = adapter.messages = Mock(
-        create_conversation=AsyncMock(return_value=created),
-        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        append_message=AsyncMock(),
-        collect_events=Mock(),
-    )
-    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
-    adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
+    starts.conversations.create_conversation.return_value = created
 
     await adapter.run_agent_by_id(
         agent_id=agent.id,
@@ -262,7 +224,7 @@ async def test_named_agent_run_carries_the_schedule_instruction_too(monkeypatch)
         instructions="Only the tickets raised overnight.",
     )
 
-    conversation = adapter.conversations.create_conversation.await_args.args[0]
+    conversation = starts.conversations.create_conversation.await_args.args[0]
     assert conversation.agent_id == agent.id
     assert conversation.instructions == "Only the tickets raised overnight."
 
@@ -284,23 +246,11 @@ def _schedule_input(**metadata) -> dict:
 
 
 async def _start_scheduled_run(adapter_input: dict, instructions: str | None):
-    adapter = _adapter()
     pod_id = uuid4()
     agent = SimpleNamespace(
         id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
     )
-    adapter.agent_repo = Mock(
-        get=AsyncMock(return_value=agent),
-        get_by_pod_and_name=AsyncMock(return_value=agent),
-    )
-    adapter.conversations = adapter.runs = adapter.messages = Mock(
-        create_conversation=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        append_message=AsyncMock(),
-        collect_events=Mock(),
-    )
-    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
-    adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
+    adapter, starts = _driver(agent)
 
     await adapter.run_agent_by_id(
         agent_id=agent.id,
@@ -310,8 +260,8 @@ async def _start_scheduled_run(adapter_input: dict, instructions: str | None):
         source="SCHEDULE",
         instructions=instructions,
     )
-    draft = adapter.messages.append_message.await_args.kwargs["draft"]
-    conversation = adapter.conversations.create_conversation.await_args.args[0]
+    draft = starts.messages.append_message.await_args.kwargs["draft"]
+    conversation = starts.conversations.create_conversation.await_args.args[0]
     return draft.text, conversation
 
 
@@ -386,23 +336,11 @@ async def test_a_workflow_node_still_gets_the_json_envelope():
     Workflow nodes bind their inputs to this shape; only a schedule firing gets
     the wake-up rendering.
     """
-    adapter = _adapter()
     pod_id = uuid4()
     agent = SimpleNamespace(
         id=uuid4(), pod_id=pod_id, name="triage", agent_runtime=None
     )
-    adapter.agent_repo = Mock(
-        get=AsyncMock(return_value=agent),
-        get_by_pod_and_name=AsyncMock(return_value=agent),
-    )
-    adapter.conversations = adapter.runs = adapter.messages = Mock(
-        create_conversation=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        append_message=AsyncMock(),
-        collect_events=Mock(),
-    )
-    adapter._get_pod_organization_id = AsyncMock(return_value=uuid4())
-    adapter._default_agent_runtime_for_pod = AsyncMock(return_value=None)
+    adapter, starts = _driver(agent)
 
     await adapter.run_agent_by_id(
         agent_id=agent.id,
@@ -412,7 +350,7 @@ async def test_a_workflow_node_still_gets_the_json_envelope():
         workflow_run_id=uuid4(),
     )
 
-    draft = adapter.messages.append_message.await_args.kwargs["draft"]
+    draft = starts.messages.append_message.await_args.kwargs["draft"]
     assert draft.text.startswith("Workflow input JSON:")
-    conversation = adapter.conversations.create_conversation.await_args.args[0]
+    conversation = starts.conversations.create_conversation.await_args.args[0]
     assert conversation.title == "Workflow run: triage"

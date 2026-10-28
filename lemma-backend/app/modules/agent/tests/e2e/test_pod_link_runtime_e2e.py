@@ -20,7 +20,7 @@ from fastapi import status
 from app.modules.test_support.e2e.scripted_model import tag_conversation
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.contracts.turns import stage_agent_turn, turn_for
+from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
 from app.modules.agent.domain.pod_asks import ANSWER_SOURCE, AskMode
 from app.modules.agent.domain.value_objects import ConversationStatus, MessageKind
 from app.modules.agent.infrastructure.harness.lemma.mock_model import (

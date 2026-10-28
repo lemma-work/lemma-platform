@@ -16,8 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import select
-
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkClass, WorkWriter, pod_namespace
 from app.modules.agent.contracts.run_facts import AgentRunOrigin
@@ -32,7 +30,7 @@ from app.modules.agent.events.work_kinds import (
     title_key,
     turn_key,
 )
-from app.modules.agent.infrastructure.models import ConversationModel
+from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.services.run_dispatch import run_enqueue_suppressed
 
 #: Origins whose turns nobody is watching live: they run in the automation
@@ -123,11 +121,7 @@ async def stage_agent_turn(
     # coalesces a *queued* item, so a second turn staged while the first title
     # is still being generated writes another; the concurrency key runs it
     # after the first, which has set the title by then, so it calls no model.
-    title = await uow.session.scalar(
-        select(ConversationModel.title).where(
-            ConversationModel.id == run.conversation_id
-        )
-    )
+    title = await Conversations(uow).title_of(run.conversation_id)
     if not title:
         await work.add(
             AGENT_TITLE,

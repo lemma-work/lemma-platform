@@ -1,7 +1,7 @@
 """The widget store behind a conversation's rendered HTML.
 
 One factory, and the same exception to "operations, not classes" that
-`agent/contracts/workflow_control.py` is: `WidgetContentReader` is a port the
+`agent/contracts/automation.py` is: `WidgetContentReader` is a port the
 consumer declares in `app/core/ports/widget_content.py` and holds, and a free
 function would only make it reassemble one.
 

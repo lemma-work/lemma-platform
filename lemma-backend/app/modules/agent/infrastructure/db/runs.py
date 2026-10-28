@@ -196,6 +196,39 @@ class Runs(UnitOfWorkRepository):
                 updated=True,
             )
 
+    async def completed_in_pod(self, pod_id: UUID, *, more_than: int) -> bool:
+        """Whether the pod has more than ``more_than`` completed runs."""
+        return bool(
+            await self.session.scalar(
+                select(
+                    exists(
+                        select(AgentRunModel.id)
+                        .join(
+                            ConversationModel,
+                            ConversationModel.id == AgentRunModel.conversation_id,
+                        )
+                        .where(
+                            ConversationModel.pod_id == pod_id,
+                            func.upper(AgentRunModel.status).in_(
+                                ("COMPLETED", "SUCCEEDED")
+                            ),
+                        )
+                        .offset(more_than)
+                    )
+                )
+            )
+        )
+
+    async def is_private_note(self, agent_run_id: UUID) -> bool:
+        """Whether the run answers a member's private note; False for none."""
+        return bool(
+            await self.session.scalar(
+                select(AgentRunModel.private_note).where(
+                    AgentRunModel.id == agent_run_id
+                )
+            )
+        )
+
     async def get_agent_run(self, agent_run_id: UUID) -> AgentRunEntity | None:
         result = await self.session.execute(
             select(AgentRunModel).where(AgentRunModel.id == agent_run_id)

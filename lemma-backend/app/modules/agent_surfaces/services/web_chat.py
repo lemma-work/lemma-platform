@@ -296,7 +296,7 @@ class WebChat:
         text: str,
         client_nonce: str | None,
     ) -> None:
-        agent_name = await agent_name_for_id(uow.session, widget.agent_id)
+        agent_name = await agent_name_for_id(uow, widget.agent_id)
         metadata = _visitor_metadata(
             await self._display_name(uow, session), client_nonce
         )
@@ -339,7 +339,7 @@ class WebChat:
         contact_id: UUID,
         kept: UUID | None,
     ) -> UUID:
-        agent_name = await agent_name_for_id(uow.session, widget.agent_id)
+        agent_name = await agent_name_for_id(uow, widget.agent_id)
         name = await self._display_name(uow, session)
         context_token = set_current_context(
             await create_authorization_data_service(uow).build_user_context(

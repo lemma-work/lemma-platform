@@ -22,11 +22,9 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from uuid import UUID
 
-from sqlalchemy import select
-
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.value_objects import MessageKind
-from app.modules.agent.infrastructure.models.conversation import AgentRunModel
+from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.live import live_events
 from app.modules.agent.infrastructure.tools.form import FILL_FORM_TOOL
@@ -147,10 +145,7 @@ def _private_run_lookup(
                 known[run_id] = True
                 return True
             async with uow_factory() as uow:
-                private = await uow.session.scalar(
-                    select(AgentRunModel.private_note).where(AgentRunModel.id == parsed)
-                )
-            known[run_id] = bool(private)
+                known[run_id] = await Runs(uow).is_private_note(parsed)
         return known[run_id]
 
     return is_private

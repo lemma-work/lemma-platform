@@ -16,7 +16,7 @@ from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.infrastructure.live import conversation_channel
 from app.modules.agent.domain.entities import Agent
-from app.modules.agent.contracts.turns import AgentTurnStart, stage_agent_turn
+from app.modules.agent.services.turn_staging import AgentTurnStart, stage_agent_turn
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,

@@ -22,7 +22,7 @@ from app.modules.agent.contracts import (
     AgentEvent,
     AgentEventType,
 )
-from app.modules.agent.contracts import ToolContext
+from app.modules.agent.contracts.tools import ToolContext
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
 )

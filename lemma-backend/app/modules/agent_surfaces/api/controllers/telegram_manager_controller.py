@@ -81,9 +81,7 @@ async def start_telegram_managed_bot_setup(
         raise AgentSurfaceAlreadyExistsError(surface_name)
 
     agent_name_id = (
-        await agent_id_for_name(
-            uow.session, pod_id=pod_id, name=request.default_agent_name
-        )
+        await agent_id_for_name(uow, pod_id=pod_id, name=request.default_agent_name)
         if request.default_agent_name
         else None
     )

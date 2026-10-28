@@ -29,7 +29,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import DisplayResourceRequest
+from app.modules.agent.contracts.tools import DisplayResourceRequest
 from app.modules.agent.contracts.tools import ToolSpec
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SurfaceEventMetadata,

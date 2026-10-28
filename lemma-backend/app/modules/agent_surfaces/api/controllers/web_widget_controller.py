@@ -197,7 +197,7 @@ async def create_widget(
     looked_after_by = request.looked_after_by or user.id
     await _require_member(uow, pod_id, looked_after_by)
     agent_id = (
-        await agent_id_for_name(uow.session, pod_id=pod_id, name=request.agent_name)
+        await agent_id_for_name(uow, pod_id=pod_id, name=request.agent_name)
         if request.agent_name and request.agent_name != _POD_ASSISTANT
         else pod_id
     )

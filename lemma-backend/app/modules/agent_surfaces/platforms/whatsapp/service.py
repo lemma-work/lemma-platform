@@ -10,7 +10,7 @@ from typing import Any
 
 
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import ToolContext
+from app.modules.agent.contracts.tools import ToolContext
 import httpx
 
 from app.modules.agent_surfaces.domain.entities import (

@@ -26,7 +26,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.config import agent_settings
-from app.modules.agent.contracts.workflow_control import (
+from app.modules.agent.contracts.automation import (
     build_agent_control_adapter,
 )
 from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness

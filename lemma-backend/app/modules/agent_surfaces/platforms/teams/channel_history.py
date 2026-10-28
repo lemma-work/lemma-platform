@@ -17,7 +17,7 @@ import aiohttp
 
 from app.core.log.log import get_logger
 from app.core.net.aiohttp_client import new_aiohttp_session
-from app.modules.agent.contracts import ToolContext
+from app.modules.agent.contracts.tools import ToolContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
 from app.modules.agent_surfaces.domain.surface_event_metadata import (

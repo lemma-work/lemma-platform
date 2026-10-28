@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.infrastructure.work import WorkClass
-from app.modules.agent.contracts.turns import turn_class_for
+from app.modules.agent.services.turn_staging import turn_class_for
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pod_asks import AskChain, AskMode, PodAsk
 from app.modules.agent.domain.run_origin import run_origin

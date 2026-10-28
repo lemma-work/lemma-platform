@@ -21,7 +21,10 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import DisplayResourceRequest, DisplayResourceType
+from app.modules.agent.contracts.tools import (
+    DisplayResourceRequest,
+    DisplayResourceType,
+)
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery

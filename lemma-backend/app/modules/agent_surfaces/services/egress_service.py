@@ -27,7 +27,7 @@ from pydantic import ValidationError
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
+from app.modules.agent.contracts.tools import (
     AskUserRequest,
     DisplayResourceRequest,
     DisplayResourceType,

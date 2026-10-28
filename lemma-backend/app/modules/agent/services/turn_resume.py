@@ -33,7 +33,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -58,6 +58,10 @@ from app.modules.agent.infrastructure.db.runs import Runs
 from app.modules.agent.infrastructure.live import publish_conversation_event
 from app.modules.agent.domain.live_events import message_payload
 from app.modules.agent.services.run_finalizer import RunFinalizer
+
+if TYPE_CHECKING:
+    from app.modules.agent.domain.context import ToolContext
+    from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.agent.infrastructure.tools.tool_errors import format_tool_error
@@ -111,7 +115,7 @@ class ReplayReport:
         ]
 
 
-def recorded_args(message: Message) -> dict[str, Any]:
+def recorded_args(message: Message) -> dict[str, object]:
     """The call's arguments as recorded: a JSON object, or empty when unreadable."""
     raw = message.tool_args
     if isinstance(raw, dict):
@@ -131,7 +135,7 @@ class TurnResume:
     def __init__(
         self,
         uow_factory: UnitOfWorkFactory,
-        message_writer: Any,
+        message_writer: RunMessageWriter,
     ) -> None:
         self.uow_factory = uow_factory
         self.message_writer = message_writer
@@ -142,7 +146,7 @@ class TurnResume:
         *,
         conversation: Conversation,
         agent: Agent,
-        ctx: Any,
+        ctx: ToolContext,
         messages: list[Message],
         in_process: bool,
         reload: Callable[[], Awaitable[list[Message]]],
@@ -204,7 +208,7 @@ class TurnResume:
         run_id: UUID,
         conversation: Conversation,
         agent: Agent,
-        ctx: Any,
+        ctx: ToolContext,
     ) -> ReplayReport:
         async with self.uow_factory() as uow:
             calls = await Runs(uow).list_unpaired_tool_calls(run_id)
@@ -262,7 +266,7 @@ class TurnResume:
         )
 
     async def _tools(
-        self, conversation: Conversation, agent: Agent, ctx: Any
+        self, conversation: Conversation, agent: Agent, ctx: ToolContext
     ) -> ToolRuntime:
         """The run's tools, which say how each open call may be settled."""
         return ToolRuntime(
@@ -280,9 +284,9 @@ class TurnResume:
         self,
         runtime: ToolRuntime,
         run_id: UUID,
-        ctx: Any,
+        ctx: ToolContext,
         call: Message,
-        args: dict[str, Any],
+        args: dict[str, object],
     ) -> object:
         tool_name = str(call.tool_name)
         try:

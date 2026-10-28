@@ -533,9 +533,7 @@ class SlackAppProvisioner:
         if is_pod_default_agent(agent_id, pod_id=pod_id):
             name = await pod_name(self.uow.session, pod_id)
         else:
-            name = await agent_name_in_pod(
-                self.uow.session, pod_id=pod_id, agent_id=agent_id
-            )
+            name = await agent_name_in_pod(self.uow, pod_id=pod_id, agent_id=agent_id)
         return humanize_name(name) or "Lemma"
 
     async def _may_manage(self, organization_id: UUID, user_id: UUID) -> bool:
