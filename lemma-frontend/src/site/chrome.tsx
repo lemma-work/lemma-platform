@@ -89,7 +89,7 @@ export function SitePage({
     wide?: boolean;
 }) {
     return (
-        <div className="site">
+        <div className="site site--day">
             <a className="site-skip" href="#content">
                 Skip to content
             </a>
@@ -130,9 +130,9 @@ export function SiteHeader() {
                 <Link href="/templates">Templates</Link>
                 <Link href="/docs">Docs</Link>
                 <HostedOnly><Link href="/download" data-nav="download">Download</Link></HostedOnly>
-                <a href={githubUrl} data-nav="github">GitHub ↗</a>
-                <a href={discordUrl} data-nav="discord">Discord ↗</a>
-                <Link href="/t">Get started ↗</Link>
+                <a href={githubUrl} data-nav="github">GitHub</a>
+                <Link href="/t" data-nav="sign-in">Sign in</Link>
+                <Link href="/t" data-nav="start">Get started</Link>
             </nav>
         </header>
     );
