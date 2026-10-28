@@ -60,6 +60,11 @@ _NEXT_STEP_BY_CODE: dict[str, str] = {
         "An agent may not do this on its own. Ask the person to approve it "
         "(request_approval), then try again, or ask them to do it themselves."
     ),
+    "OUTSIDE_TEXT_REQUIRES_APPROVAL": (
+        "This run is reading what people outside the pod wrote, so it asks "
+        "before acting. Ask the person you are working for to approve it "
+        "(request_approval), then try again."
+    ),
     "WORKLOAD_NOT_ALLOWED": (
         "An agent may never do this, approved or not. Ask the person to do it "
         "themselves."

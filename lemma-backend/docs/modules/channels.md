@@ -280,9 +280,11 @@ never what they said, and read from the timeline whenever its prompt is built
 edited, a deleted line or a forgotten contact's is gone, and nothing anybody
 said is copied into another conversation to outlive them there. A member's run
 in Lemma is shown a contact's lines too, quoted and marked as said by somebody
-outside the pod; a member's run in a group on a platform is not shown them
-(the answer is posted where everybody reads it); a contact's run reads what
-the channel lets a contact read. A platform's history read live (Slack, Teams)
+outside the pod; a member's run in a group on a platform is shown them the
+same way, with the bot's answers to them, and not members' notes (the answer is
+posted where everybody reads it, and a run that could not see what the room
+said answered it wrongly); a contact's run reads what the channel lets a
+contact read. A platform's history read live (Slack, Teams)
 keeps the lines the pod heard as references, and only what it never heard as
 the platform gave it.
 

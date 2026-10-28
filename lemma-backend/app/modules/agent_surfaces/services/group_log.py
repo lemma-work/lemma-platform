@@ -62,6 +62,9 @@ from app.modules.agent_surfaces.services.sender_handles import (
     group_handle,
     workspace_handle,
 )
+from app.modules.agent_surfaces.services.verified_surface_identity import (
+    resolve_shared_verified_identity,
+)
 from app.modules.agent_surfaces.services.channel_places import (
     ChannelSeats,
     ChannelSeatsInDatabase,
@@ -101,6 +104,13 @@ GROUP_CONTEXT_LINES = 15
 #: How many of a group's people go in front of the model. The roster is who the
 #: pod knows is there, and a group past this many speakers has outgrown a list.
 _MAX_PARTICIPANTS = 20
+
+#: Where a sender's verified identity is one binding for every bot of the
+#: platform, so a group line can be matched to it without the installation a
+#: Slack or Teams binding is kept under.
+_SHARED_BINDING_PLATFORMS = frozenset(
+    {SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP}
+)
 
 
 def keeps_group_log(platform: str) -> bool:
@@ -213,7 +223,7 @@ class GroupLog:
                 tenant_id=parsed.tenant_id,
                 external_user_ids=[external_id],
             )
-            user_id = resolved.get(external_id)
+            user_id = resolved.get(external_id) or await self._verified_user(parsed)
             if (
                 user_id is not None
                 and user_id
@@ -236,6 +246,21 @@ class GroupLog:
             display_name=name,
         )
         return Sender.contact(contact.id, display_name=name)
+
+    async def _verified_user(self, parsed: ParsedInboundSurfaceEvent) -> UUID | None:
+        """The Lemma user this sender proved to be, where the cache has no row.
+
+        A member who proved their account to the bot -- by the onboarding
+        code -- holds a verified identity, and that identity is what a DM
+        resolves them by. The group log asked only the
+        cache, which a DM fills only on some paths and a phone change empties:
+        their next line in a group was written as a new contact's, and a group
+        line nobody addressed to the bot never resolves anybody to fill it.
+        """
+        if parsed.platform not in _SHARED_BINDING_PLATFORMS:
+            return None
+        resolved = await resolve_shared_verified_identity(self.uow, parsed)
+        return resolved.internal_user_id if resolved is not None else None
 
     async def _known_colleague(
         self, group: SurfaceGroup, parsed: ParsedInboundSurfaceEvent, name: str | None
@@ -298,11 +323,13 @@ async def group_background(
       (``channels.domain.projection``): this group's lines, but no answer the
       bot made with a member's own access -- most from before this person was
       in the group.
-    * **A member's run** acts with all of the member's access, so it is not
-      shown what people outside the pod wrote, nor the bot's answers to them:
-      nothing a stranger steered reaches it as background. Who they are is
-      kept, so the run can be told that they read what it posts. Nor a note
-      the pod's members left one another: the answer goes to the whole group.
+    * **A member's run** is shown everything said in the group, what people
+      outside the pod wrote marked as theirs: an answer made without what the
+      room said is wrong in front of the room. It acts with all of the
+      member's access, so what it reads from outside is information, never a
+      request -- the authorizer asks the member before such a run acts
+      (``core.authorization.outside_text``). Not a note the pod's members left
+      one another: the answer goes to the whole group.
 
     ``reader`` is ``None`` for a run that is neither -- another pod asking --
     which is shown nothing.
@@ -329,13 +356,10 @@ async def group_background(
         if outside and author:
             outside_authors.append(author)
         if reader.is_member:
-            # Not a members' note either: the answer is posted where everybody
-            # in the group reads it.
-            shown = not (
-                line.members_only
-                or outside
-                or (from_agent and not line.sender.used_a_members_access)
-            )
+            # Not a members' note: the answer is posted where everybody in the
+            # group reads it. The same rule the background is read back by
+            # (``channels.contracts.backgrounds``, MEMBER_IN_GROUP).
+            shown = not line.members_only
         else:
             shown = may_read(reader, line)
         if not shown:
@@ -415,36 +439,30 @@ def roster_reads(
     return membership, ExternalSurfaceUserRepository(uow)
 
 
-async def live_participants(
+async def live_members(
     uow_factory: UnitOfWorkFactory,
     *,
     lines: Sequence[Mapping[str, object]],
     pod_id: UUID,
     platform: str,
     tenant_id: str | None,
-    asker_external_id: str | None,
     conversation_id: UUID,
     reads: RosterReads = roster_reads,
-) -> tuple[SurfaceGroupParticipant, ...]:
-    """The roster of a group whose history was fetched live (Slack, Teams).
+) -> set[str] | None:
+    """Which speakers of a history fetched live (Slack, Teams) hold access here:
+    the pod's own answer (``pod_members_in_lines``), since a line says who
+    spoke, never who holds access.
 
-    The platform hands over lines and nothing else, and a line says who spoke
-    rather than who holds access, so the roster is the pod's own answer about
-    those speakers (``pod_members_in_lines``). A colleague in the same
-    workspace who never spoke to the bot, and anyone there with no Lemma
-    account, is named as outside the pod rather than as a member.
-
-    Nothing where nothing was fetched: an empty roster claims nothing, where a
-    guessed one claims access somebody may not hold. The same answer when the
-    read fails -- the history beside it is best-effort, and a roster is not a
-    reason to fail the member's turn and replay it from the top.
+    ``None`` when the read fails, which is not "nobody": the caller marks
+    every speaker as outside and names no roster, rather than fail the
+    member's turn over a best-effort history.
     """
     if not lines:
-        return ()
+        return set()
     try:
         async with uow_factory() as uow:
             membership, external_users = reads(uow)
-            verified = await pod_members_in_lines(
+            return await pod_members_in_lines(
                 lines=lines,
                 pod_id=pod_id,
                 platform=platform,
@@ -460,10 +478,7 @@ async def live_participants(
             error_type=type(exc).__name__,
             exc_info=True,
         )
-        return ()
-    return participants_in_lines(
-        lines, verified=verified, asker_external_id=asker_external_id
-    )
+        return None
 
 
 def participants_in_lines(
@@ -516,17 +531,34 @@ def _external_id(line: Mapping[str, object]) -> str:
     return str(line.get("author_external_id") or "").strip()
 
 
-def for_member_run(
+def marked_for_member_run(
     lines: Sequence[dict[str, object]],
-) -> tuple[list[dict[str, object]], int]:
-    """A platform's history as a member's run may see it: strangers' lines out.
+    *,
+    verified: Set[str] | None,
+    asker_external_id: str | None,
+) -> list[dict[str, object]]:
+    """A platform's history as a member's run is shown it: every line, each
+    marked by whether somebody outside the pod wrote it.
 
     The same rule ``group_background`` applies to the pod's own log, for the
-    platforms whose history is read live (Slack), where a line from another
-    workspace is marked ``outside_pod``.
+    platforms whose history is read live (Slack). The mark is the pod's answer
+    about who holds access (``live_members``), not the platform's: Slack marks
+    only another company's lines, and a colleague here with no Lemma account
+    reads exactly like a member. The asker's own lines and an app's are no
+    stranger's. Where the pod's answer could not be read (``verified`` is
+    ``None``), every other person's line is marked: a stranger left unmarked is
+    the mistake that costs, a colleague marked only asks the member before the
+    run acts.
     """
-    kept = [line for line in lines if not line.get("outside_pod")]
-    return kept, len(lines) - len(kept)
+    marked: list[dict[str, object]] = []
+    for line in lines:
+        external_id = _external_id(line)
+        somebody_else = not line.get("from_bot") and not (
+            asker_external_id and external_id == asker_external_id
+        )
+        outside = somebody_else and (verified is None or external_id not in verified)
+        marked.append({**line, "outside_pod": outside})
+    return marked
 
 
 async def _participants(

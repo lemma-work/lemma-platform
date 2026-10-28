@@ -34,6 +34,7 @@ from app.core.authorization.delegation import (
     DESTRUCTIVE_ACTIONS,
     WorkloadPrincipalType,
 )
+from app.core.authorization.outside_text_gate import outside_text_decision
 from app.core.authorization.session_approvals import has_session_approval
 
 
@@ -177,11 +178,9 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         if resource is None:
             # Destructive capability checks (no specific resource) must still be
             # gated for delegated workloads, before the user-mirror allows them.
-            destructive = await self._destructive_delegated_decision(
-                ctx, permission_id, None
-            )
-            if destructive is not None:
-                return destructive
+            gated = await self._delegated_gates(ctx, permission_id, None)
+            if gated is not None:
+                return gated
             if not ctx.has_permission(permission_id):
                 return AuthorizationDecision(
                     False,
@@ -219,11 +218,9 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
         outside = self._outside_the_pod_decision(ctx, permission_id, hydrated)
         if outside is not None:
             return outside
-        destructive = await self._destructive_delegated_decision(
-            ctx, permission_id, hydrated
-        )
-        if destructive is not None:
-            return destructive
+        gated = await self._delegated_gates(ctx, permission_id, hydrated)
+        if gated is not None:
+            return gated
         if self._is_function_self_read(ctx, permission_id, hydrated):
             return AuthorizationDecision(
                 True, "FUNCTION_SELF_READ", permission_id, hydrated
@@ -414,6 +411,35 @@ class Authorizer(ResourceHydrationMixin, GrantResolutionMixin):
                 return None
         return AuthorizationDecision(
             False, "DESTRUCTIVE_ACTION_REQUIRES_APPROVAL", permission_id, resource
+        )
+
+    async def _delegated_gates(
+        self,
+        ctx: Context,
+        permission_id: str,
+        resource: ResourceRef | None,
+    ) -> AuthorizationDecision | None:
+        """What software acting for a person must ask first, whatever it holds:
+        a destructive action, and anything an agent does while it reads what
+        people outside the pod wrote (``outside_text_gate``). Either is
+        answered by the person's approval; ``None`` goes on deciding."""
+        destructive = await self._destructive_delegated_decision(
+            ctx, permission_id, resource
+        )
+        if destructive is not None or ctx.delegation is None:
+            return destructive
+        session_id = ctx.delegation.session_id
+
+        async def approved(permission: str) -> bool:
+            return await _session_approval(
+                ctx,
+                session_id=session_id,
+                workload_actor_id=ctx.actor_id,
+                permission_id=permission,
+            )
+
+        return await outside_text_decision(
+            ctx, permission_id, resource, approved=approved
         )
 
     @staticmethod

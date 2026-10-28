@@ -522,10 +522,23 @@ is answered *for the pod*, in a group the pod has opened to them.
   recent lines as background, chosen by whose access it acts with
   (`group_log.group_background`): a contact's run reads what the channel lets
   a contact read -- never an answer made with a member's access; a member's run
-  is not shown what people outside the pod wrote, the bot's answers to them,
-  or members' notes -- on Slack, lines from another workspace are left out the
-  same way. What is left out is counted. Each line is one quoted line however
-  many it spanned. Nothing is deleted automatically. The run's message keeps
+  is shown everything said in the group, what people outside the pod wrote
+  marked `(not in this pod)` and fenced as information rather than a request,
+  and not members' notes. On Slack, read live, a line is marked by whether the
+  pod resolves its author to one of its members (`group_log.live_members`),
+  not by Slack's own mark, which only names another company's lines; when that
+  cannot be read, every line but the asker's is marked. What is left out is
+  counted. Each line is one quoted line however many it spanned. A member's
+  run that reads such a line marks its conversation, and while it is marked
+  the authorizer asks the member before the run does anything beyond reading
+  and writing the pod's own records and files (`OUTSIDE_TEXT_REQUIRES_APPROVAL`,
+  `core/authorization/outside_text.py`, set by `agent/services/outside_text.py`
+  as a turn starts, when a steered message brings a background, and when
+  `channel_read`/`channel_search` return a stranger's line). It covers every
+  path the authorizer sees -- in-process tools, MCP, the sandbox's `lemma` CLI,
+  approved re-runs -- and not what does not ask it: `channel_post`, a raw
+  network call from the sandbox, Agent Host's native tools, or the answer
+  itself, which is why the prompt says it too. Nothing is deleted automatically. The run's message keeps
   which lines, not what they said (`services/run_background.py`): they are read
   from the timeline as its prompt is built, so an edit or a forgotten contact
   reaches it. A platform's history read live keeps the lines the pod heard as
