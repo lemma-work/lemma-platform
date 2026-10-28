@@ -16,6 +16,9 @@ been on a platform:
   for an answer that never came.
 * **Every try of one delivery is the same message** where the platform dedupes
   on a key (Resend).
+* **An answer given before the person said more** (``is_earlier_answer``) is a
+  message of its own: no files, no stream to finish -- and none at all where
+  the run's live stream already shows it.
 
 The answer goes where the run's conversation answers (the message it took up,
 in its thread), not where the place last spoke.
@@ -31,7 +34,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.run_replies import run_reply_material
+from app.modules.agent.contracts.run_replies import (
+    is_earlier_answer,
+    run_reply_material,
+)
 from app.modules.agent_surfaces.domain.adapter_port import IDEMPOTENCY_KEY
 from app.modules.agent_surfaces.domain.envelope import DeliveryReceipt
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
@@ -42,6 +48,7 @@ from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.live_display import (
     LiveDisplay,
     forget_live_display,
+    live_display_of,
     remainder_after,
     take_live_display,
 )
@@ -73,6 +80,21 @@ def delivery_key(delivery: Delivery) -> str:
     return f"channel-delivery-{delivery.id}"
 
 
+#: Why an answer given before a steer was not sent: the person read it as the
+#: run's live stream wrote it.
+SHOWN_IN_STREAM = "Already shown in the run's live stream."
+
+
+async def _streamed_already(run_id: UUID, text: str) -> bool:
+    """Whether the run's live stream shows ``text`` -- it streams everything
+    the run writes, an answer it went on past included."""
+    display = await live_display_of(run_id)
+    if display is None:
+        return False
+    said = " ".join(text.split())
+    return bool(said) and said in " ".join(display.streamed.split())
+
+
 def is_run_answer(line: ChannelMessage) -> bool:
     """A run's answer (or its failure notice), posted for it to be delivered."""
     return (
@@ -98,6 +120,13 @@ class RunAnswerSends:
     ) -> Outcome:
         run_id, conversation_id = line.agent_run_id, line.conversation_id
         assert run_id is not None and conversation_id is not None  # is_run_answer
+        send_metadata = {**metadata, IDEMPOTENCY_KEY: delivery_key(delivery)}
+        if is_earlier_answer(line.client_message_id):
+            if await _streamed_already(run_id, text):
+                return Outcome.delivered(platform, reason=SHOWN_IN_STREAM)
+            return await self._deliver(
+                delivery, conversation_id, text, send_metadata, platform=platform
+            )
         failed = await self._run_failed(run_id)
         if not failed:
             streamed = await self._finish_stream(
@@ -105,10 +134,28 @@ class RunAnswerSends:
             )
             if streamed is not None:
                 return streamed
-        send_metadata = {**metadata, IDEMPOTENCY_KEY: delivery_key(delivery)}
         if failed:
             send_metadata["retry_action"] = True
-        run = None if failed else RunFiles(run_id)
+        return await self._deliver(
+            delivery,
+            conversation_id,
+            text,
+            send_metadata,
+            platform=platform,
+            run=None if failed else RunFiles(run_id),
+        )
+
+    async def _deliver(
+        self,
+        delivery: Delivery,
+        conversation_id: UUID,
+        text: str,
+        send_metadata: dict[str, object],
+        *,
+        platform: str,
+        run: RunFiles | None = None,
+    ) -> Outcome:
+        """Send ``text`` as a new message, with ``run``'s held files."""
         receipt: DeliveryReceipt | None = None
         raised: BaseException | None = None
         with track_sends() as sends:

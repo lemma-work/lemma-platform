@@ -129,13 +129,17 @@ async def _nothing(*_args, **_kwargs) -> None:
     return None
 
 
-async def _send(egress: _Egress, run_id, text: str):
+async def _send(
+    egress: _Egress, run_id, text: str, *, client_message_id: str | None = None
+):
     """The answer line's delivery to a Slack place, sent."""
     conversation_id = uuid4()
     line = SimpleNamespace(
         agent_run_id=run_id,
         conversation_id=conversation_id,
         sender=SimpleNamespace(kind=SenderKind.AGENT),
+        client_message_id=client_message_id
+        or run_replies.answer_line_client_id(run_id),
     )
     return await RunAnswerSends(_Uow(), egress_for=lambda _u: egress).send(
         delivery=SimpleNamespace(id=uuid4()),
@@ -217,6 +221,64 @@ async def test_the_answer_closes_the_sealed_stream_with_what_is_left(
     assert _a_completed_run == [STREAM.message_id]
     # Finished: a later look finds nothing left to close.
     assert await take_live_display(run_id, wait_seconds=0) is None
+
+
+# --- an answer given before the person said more ---------------------------------
+
+
+def test_only_a_numbered_run_line_is_an_answer_given_before_a_steer() -> None:
+    run_id = uuid4()
+
+    assert run_replies.is_earlier_answer(
+        run_replies.earlier_answer_client_id(run_id, 1)
+    )
+    assert not run_replies.is_earlier_answer(run_replies.answer_line_client_id(run_id))
+    assert not run_replies.is_earlier_answer(f"turn:{run_id}")
+    assert not run_replies.is_earlier_answer(None)
+
+
+async def test_an_earlier_answer_the_stream_shows_is_not_sent_again() -> None:
+    """The stream carries everything the run wrote, the answer it went on
+    past included: that answer is delivered, and the stream is left for the
+    final answer to close."""
+    run_id = uuid4()
+    await record_live_display(
+        run_id,
+        conversation_id=uuid4(),
+        handle=STREAM,
+        streamed="Sunny today.\n\nRain tomorrow.",
+        sealed=True,
+    )
+    egress = _Egress()
+
+    result = await _send(
+        egress,
+        run_id,
+        "Sunny  today.",
+        client_message_id=run_replies.earlier_answer_client_id(run_id, 1),
+    )
+
+    assert result.sent and result.external_message_id is None
+    assert egress.posted == [] and egress.finished == [] and egress.cleared == []
+    assert await take_live_display(run_id, wait_seconds=0) is not None
+
+
+async def test_an_earlier_answer_is_a_message_of_its_own_without_the_files() -> None:
+    run_id = uuid4()
+    egress = _Egress()
+
+    result = await _send(
+        egress,
+        run_id,
+        "Sunny today.",
+        client_message_id=run_replies.earlier_answer_client_id(run_id, 1),
+    )
+
+    assert result.sent
+    [posted] = egress.posted
+    assert posted["message"] == "Sunny today."
+    assert posted["attach_files_of"] is None
+    assert egress.finished == [] and egress.cleared == []
 
 
 async def test_a_refused_close_takes_the_stream_down_and_posts_the_answer(
