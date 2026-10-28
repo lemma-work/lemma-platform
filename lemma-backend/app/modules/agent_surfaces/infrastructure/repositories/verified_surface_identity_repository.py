@@ -11,6 +11,10 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 )
 
 
+#: The platform accounts one person proved from a Lemma session: a handful.
+MAX_PROVED_ACCOUNTS = 20
+
+
 class VerifiedSurfaceIdentityRepository:
     """The verified identities a person has proven on a chat platform."""
 
@@ -125,3 +129,18 @@ class VerifiedSurfaceIdentityRepository:
         identity.proved_through_surface_id = surface_id
         await self.session.flush()
         return identity
+
+    async def session_proved_accounts(self, user_id: UUID, platform: str) -> list[str]:
+        """The accounts on ``platform`` this person proved from a Lemma
+        session, still theirs."""
+        rows = await self.session.scalars(
+            select(VerifiedSurfaceIdentity.external_user_id)
+            .where(
+                VerifiedSurfaceIdentity.user_id == user_id,
+                VerifiedSurfaceIdentity.platform == platform,
+                VerifiedSurfaceIdentity.session_proved_at.is_not(None),
+                VerifiedSurfaceIdentity.revoked_at.is_(None),
+            )
+            .limit(MAX_PROVED_ACCOUNTS)
+        )
+        return [row for row in rows if row]

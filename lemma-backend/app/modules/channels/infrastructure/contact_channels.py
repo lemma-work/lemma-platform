@@ -268,6 +268,63 @@ class ContactChannels:
                 .execution_options(synchronize_session=False)
             )
 
+    # -- a contact who proved to be a member ------------------------------------
+
+    async def became_member(
+        self, *, pod_id: UUID, contact_id: UUID, user_id: UUID
+    ) -> int:
+        """What the contact said in the pod's groups, the member said: their
+        lines and seats there are the member's. Not the contact's own channel,
+        a conversation the pod had with somebody it took for a stranger; nor
+        an answer an agent made for them, which was made from what is Public
+        and says so. How many lines changed hands. Channels in id order, each
+        locked first, the order a new line takes it in."""
+        own = await self._own_channels(pod_id, [contact_id])
+        spoken = await self._spoken_in(pod_id, [contact_id])
+        seated = await self._seated_in(pod_id, [contact_id])
+        line, seat = ChannelMessageModel, ChannelMemberModel
+        moved = 0
+        for channel_id in sorted((spoken | seated) - own):
+            await self._lock_one(channel_id)
+            said = list(
+                await self.session.scalars(
+                    update(line)
+                    .where(
+                        line.channel_id == channel_id,
+                        line.sender_contact_id == contact_id,
+                    )
+                    .values(
+                        sender_kind="MEMBER",
+                        sender_user_id=user_id,
+                        sender_contact_id=None,
+                    )
+                    .returning(line.id)
+                    .execution_options(synchronize_session=False)
+                )
+            )
+            await _log_changed(self.session, channel_id, said)
+            moved += len(said)
+            already = select(seat.channel_id).where(
+                seat.channel_id == channel_id, seat.user_id == user_id
+            )
+            await self.session.execute(
+                delete(seat)
+                .where(
+                    seat.channel_id == channel_id,
+                    seat.contact_id == contact_id,
+                    seat.channel_id.in_(already),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            await self.session.execute(
+                update(seat)
+                .where(seat.channel_id == channel_id, seat.contact_id == contact_id)
+                .values(contact_id=None, user_id=user_id, role="member")
+                .execution_options(synchronize_session=False)
+            )
+            await next_rev(self.session, channel_id, channel_changed=True)
+        return moved
+
     # -- a contact forgotten -----------------------------------------------------
 
     async def forget(self, *, pod_id: UUID, contact_ids: Collection[UUID]) -> int:

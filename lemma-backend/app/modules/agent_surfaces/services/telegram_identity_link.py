@@ -54,6 +54,9 @@ from app.modules.agent_surfaces.infrastructure.repositories.verified_surface_ide
     VerifiedSurfaceIdentityRepository,
 )
 from app.modules.agent_surfaces.services.onboarding_transport import binding_key_of
+from app.modules.agent_surfaces.services.proved_account_folds import (
+    fold_proved_account,
+)
 
 logger = get_logger(__name__)
 
@@ -259,6 +262,11 @@ async def bind_confirmed(
         display_name=account.name,
         raw_profile=None,
         resolved_user_id=code.user_id,
+    )
+    # The contacts the pods made for the account, where the member is one, are
+    # them: their lines in groups become the member's.
+    await fold_proved_account(
+        uow, user_id=code.user_id, external_user_id=account.external_user_id
     )
     logger.info(
         "agent_surfaces.telegram_identity_link.proved.observed",

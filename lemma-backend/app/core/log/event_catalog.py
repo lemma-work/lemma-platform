@@ -824,6 +824,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.sandbox_borrowers.withdraw_failed.degraded': EventSpec('warning', frozenset()),
     'connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic': EventSpec('debug', frozenset({'error_type'})),
     'connectors.webhook_sources.mcp.heard.degraded': EventSpec('warning', frozenset({'subscription_id'})),
+    'contacts.contact_became_member.observed': EventSpec('info', frozenset({'contact_id', 'folded', 'pod_id'})),
     'contacts.contact_merged.observed': EventSpec('info', frozenset({'merged_id', 'pod_id', 'survivor_id'})),
     'contacts.forget.contact_forgotten.observed': EventSpec('info', frozenset({'contact_id', 'conversations', 'forgotten_by_user_id', 'pod_id', 'rows', 'senders', 'web_sessions'})),
     'contacts.outreach.day_count_unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
