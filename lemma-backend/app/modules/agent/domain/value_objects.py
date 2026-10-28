@@ -341,6 +341,9 @@ class AgentEventType(str, Enum):
     # can distinguish "busy, retry" from "the provider crashed" and surface a
     # more actionable message.
     REJECTED = "REJECTED"
+    # A step for the run log (``domain/run_log``): what the model was sent
+    # and answered, serialized. Persisted, never shown.
+    RUN_STEP = "RUN_STEP"
 
     @classmethod
     def _missing_(cls, value: object) -> "AgentEventType | None":

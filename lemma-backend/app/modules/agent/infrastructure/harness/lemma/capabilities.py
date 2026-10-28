@@ -61,10 +61,8 @@ from app.modules.agent.infrastructure.harness.lemma.history_parts import (
 )
 from app.modules.agent.infrastructure.harness.lemma.pending_user_messages import (
     ClaimSteered,
+    OnSteered,
     PendingUserMessagesCapability,
-)
-from app.modules.agent.infrastructure.harness.lemma.reveal_referenced_tools import (
-    RevealReferencedToolsCapability,
 )
 from app.modules.agent.infrastructure.harness.lemma.toolset_adapter import (
     function_toolset,
@@ -88,6 +86,7 @@ def harness_capabilities(
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
     claim_steered: ClaimSteered | None = None,
+    on_steered: OnSteered | None = None,
 ) -> list[AgentCapability[ToolContext]]:
     """Every capability an in-process run gets, its tools included."""
     with run_phase("capabilities") as span:
@@ -97,7 +96,7 @@ def harness_capabilities(
             runtime=runtime,
             enable_prompt_caching=enable_prompt_caching,
             protocol=protocol,
-            claim_steered=claim_steered,
+            steering=(claim_steered, on_steered),
         )
         span.set_attribute("lemma.capabilities", len(capabilities))
         return capabilities
@@ -110,7 +109,7 @@ def _capabilities(
     runtime: ToolRuntime,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol,
-    claim_steered: ClaimSteered | None = None,
+    steering: tuple[ClaimSteered | None, OnSteered | None] = (None, None),
 ) -> list[AgentCapability[ToolContext]]:
     groups = _groups(spec for spec in specs if spec.toolset is not ToolGroup.QUESTIONS)
     # Deferral is for the pod's own assistant, which accumulates every optional
@@ -141,12 +140,11 @@ def _capabilities(
             and protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
         )
     )
-    capabilities.extend(_run_hooks(ctx, claim_steered))
+    capabilities.extend(_run_hooks(ctx, *steering))
     if deferred:
         # Provider-native search on Anthropic/OpenAI, a local `search_tools`
         # elsewhere; see `MeteredModel` for the monetary-limit case.
         capabilities.append(ToolSearch())
-        capabilities.append(RevealReferencedToolsCapability())
         capabilities.extend(
             with_guidance(group, function_toolset(group, runtime).defer_loading())
             for group in deferred
@@ -169,7 +167,9 @@ def _capabilities(
 
 
 def _run_hooks(
-    ctx: ToolContext, claim_steered: ClaimSteered | None = None
+    ctx: ToolContext,
+    claim_steered: ClaimSteered | None = None,
+    on_steered: OnSteered | None = None,
 ) -> list[AgentCapability[ToolContext]]:
     """Steering, memory guidance and the platform's guidance, as the run has them."""
     hooks: list[AgentCapability[ToolContext]] = []
@@ -177,7 +177,9 @@ def _run_hooks(
     if ctx.agent_run_id is not None:
         hooks.append(
             PendingUserMessagesCapability(
-                agent_run_id=ctx.agent_run_id, claim=claim_steered
+                agent_run_id=ctx.agent_run_id,
+                claim=claim_steered,
+                on_steered=on_steered,
             )
         )
     if ctx.memory_enabled:

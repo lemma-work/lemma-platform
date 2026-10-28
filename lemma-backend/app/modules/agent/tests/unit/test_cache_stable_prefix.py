@@ -59,6 +59,14 @@ from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.folded_turns import framed_folds
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.message_state import MessageState
+from app.modules.agent.domain.run_log import (
+    ReplayStep,
+    RunLogReplay,
+    RunStepDraft,
+    RunStepKind,
+    open_tool_call_ids,
+    pending_rows,
+)
 from app.modules.agent.domain.state_kinds import PauseKind, QueueState
 from app.modules.agent.domain.tools import (
     AgentInputRequired,
@@ -70,6 +78,7 @@ from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     MessageDraft,
+    MessageKind,
     MessageRole,
 )
 from app.modules.agent.infrastructure.harness.lemma.harness import PydanticAIHarness
@@ -213,10 +222,11 @@ def _jsonb(value: object) -> object:
 
 @dataclass(slots=True)
 class Storage:
-    """The conversation's rows, written the way the runner writes them."""
+    """The conversation's rows and run log, written the way the runner writes them."""
 
     conversation: Conversation
     rows: list[Message] = field(default_factory=list)
+    log: list[ReplayStep] = field(default_factory=list)
 
     def _next(self) -> tuple[int, datetime]:
         sequence = len(self.rows) + 1
@@ -251,14 +261,46 @@ class Storage:
         )
 
     def store(self, events: Sequence[AgentEvent], *, run_id: UUID) -> None:
+        """As the event pump does: rows, and log steps covering them."""
+        written: list[UUID] = []
         for event in events:
             if event.type is AgentEventType.MESSAGE and isinstance(
                 event.data, MessageDraft
             ):
-                self.write(event.data, run_id=run_id)
+                written.append(self.write(event.data, run_id=run_id).id)
+            elif event.type is AgentEventType.RUN_STEP:
+                assert isinstance(event.data, RunStepDraft)
+                self._append(event.data, run_id, covers=[*event.data.covers, *written])
+                written = []
+
+    def _append(self, draft: RunStepDraft, run_id: UUID, *, covers: list[UUID]) -> None:
+        seq = (self.log[-1].seq if self.log else 0) + 1
+        if draft.kind is RunStepKind.COMPACTION:
+            self.log = []
+        self.log.append(ReplayStep(seq, draft.kind, run_id, draft.messages))
+        carried = set(covers)
+        self.rows = [
+            row.model_copy(update={"run_step_seq": seq})
+            if row.id in carried and row.run_step_seq is None
+            else row
+            for row in self.rows
+        ]
 
     def history(self) -> list[Message]:
         return framed_folds(sorted(self.rows, key=lambda row: row.sequence))
+
+    def replay(self) -> RunLogReplay:
+        """What the runner hands a run: the log and what it does not carry."""
+        open_ids = open_tool_call_ids(step.messages for step in self.log)
+        returns: dict[str, Message] = {}
+        for row in self.rows:
+            if row.kind is MessageKind.TOOL_RETURN and row.tool_call_id in open_ids:
+                returns.setdefault(row.tool_call_id, row)
+        return RunLogReplay(
+            steps=list(self.log),
+            pending=pending_rows(self.history(), fallback=not self.log),
+            returns=returns,
+        )
 
 
 # -- The conversation --------------------------------------------------------
@@ -329,6 +371,7 @@ async def _run(
             history_summarization_token_limit=trigger_tokens,
             history_summarization_keep_messages=4,
             history_hard_token_ceiling=trigger_tokens * 4,
+            run_log=storage.replay(),
         ),
         agent_run_id=run_id,
     ):
@@ -491,14 +534,27 @@ async def _fixed_tokens(agent: Agent, conversation: Conversation) -> int:
 
 # -- The wire ---------------------------------------------------------------
 
-Protocol = Literal["openai", "anthropic"]
+Protocol = Literal["openai", "openai-reasoning", "anthropic"]
+
+#: An OpenAI-compatible reasoning model that takes its thoughts back in their
+#: own field, as DeepSeek and Kimi on Fireworks do.
+_REASONING_FIELD = {
+    "openai_chat_thinking_field": "reasoning_content",
+    "openai_chat_send_back_thinking_parts": "field",
+}
 
 
 async def _wire(messages: list[ModelMessage], protocol: Protocol) -> list[str]:
     """The request's history as the provider receives it, one block per entry."""
     parameters = ModelRequestParameters()
-    if protocol == "openai":
+    if protocol != "anthropic":
         model = OpenAIChatModel("gpt-4o", provider=OpenAIProvider(api_key="unused"))
+        if protocol == "openai-reasoning":
+            model = OpenAIChatModel(
+                "deepseek",
+                provider=OpenAIProvider(api_key="unused"),
+                profile={**model.profile, **_REASONING_FIELD},  # type: ignore[typeddict-item]
+            )
         mapped = await model._map_messages(messages, parameters)
         # The instructions are compared on their own; this is the history.
         return [
@@ -529,6 +585,11 @@ def _without_tail_context(blocks: list[str]) -> list[str]:
     return blocks[:end]
 
 
+def _without_context(blocks: list[str]) -> list[str]:
+    """``blocks`` less the run-context part, wherever it sits."""
+    return [block for block in blocks if _RUN_CONTEXT not in block]
+
+
 @dataclass(slots=True)
 class Break:
     after: int
@@ -550,11 +611,22 @@ class Break:
         )
 
 
-async def _breaks(played: Played, protocol: Protocol) -> list[Break]:
+async def _breaks(
+    played: Played, protocol: Protocol, *, context_anywhere: bool
+) -> list[Break]:
+    """Where a request does not start with the one before it.
+
+    ``context_anywhere`` leaves the run-context part out wherever it sits, for
+    the history's own prefix; otherwise only at the tail, where it belongs.
+    """
     found: list[Break] = []
     for index, (earlier, later) in enumerate(zip(played.sent, played.sent[1:])):
-        before = _without_tail_context(await _wire(earlier.messages, protocol))
+        before = await _wire(earlier.messages, protocol)
         after = await _wire(later.messages, protocol)
+        if context_anywhere:
+            before, after = _without_context(before), _without_context(after)
+        else:
+            before = _without_tail_context(before)
         if earlier.instructions != later.instructions:
             found.append(
                 Break(index, earlier.run, later.run, -1, "instructions", "changed")
@@ -566,68 +638,60 @@ async def _breaks(played: Played, protocol: Protocol) -> list[Break]:
                 became = after[at] if at < len(after) else "(nothing)"
                 found.append(Break(index, earlier.run, later.run, at, block, became))
                 break
-    return found
+    return [item for item in found if not _is_compaction(played, item)]
+
+
+def _carries_summary(sent: Sent) -> bool:
+    return any(
+        SUMMARY_MARKER in json.dumps(part.content)
+        for message in sent.messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if hasattr(part, "content")
+    )
 
 
 def _is_compaction(played: Played, item: Break) -> bool:
     """The one break allowed: the request a compaction rewrote."""
-    later = played.sent[item.after + 1]
-    return any(
-        SUMMARY_MARKER in json.dumps(part.content)
-        for message in later.messages
-        if isinstance(message, ModelRequest)
-        for part in message.parts
-        if hasattr(part, "content")
-    ) and not any(
-        SUMMARY_MARKER in json.dumps(part.content)
-        for message in played.sent[item.after].messages
-        if isinstance(message, ModelRequest)
-        for part in message.parts
-        if hasattr(part, "content")
+    return _carries_summary(played.sent[item.after + 1]) and not _carries_summary(
+        played.sent[item.after]
     )
 
 
-_KNOWN_BREAKS = (
-    "Red until the verbatim run log (PR B phase 1). On the reconstruction from "
-    "message rows: (1) a run's first request carries the run-context part before "
-    "the person's turn and the second moves it to the tail, so request 2 re-reads "
-    "the turn (and a one-request run's turn is never a cacheable prefix for the "
-    "next run); (2) the next run's replay diverges from what was sent at the first "
-    "response -- the steered message comes back where it was typed, before the "
-    "response it was delivered after, and behind it the thought is dropped, the "
-    "preamble and its call are split in two, and JSONB has re-sorted and "
-    "re-spaced the call's arguments and result; (3) the compaction is not kept: "
-    "the next run re-reads the uncompacted history and summarizes again."
-)
-
-
 @pytest.mark.anyio
-@pytest.mark.xfail(strict=True, reason=_KNOWN_BREAKS)
-@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+@pytest.mark.parametrize("protocol", ["openai", "openai-reasoning", "anthropic"])
 async def test_every_request_starts_with_the_one_before(protocol: Protocol) -> None:
     played = await _play()
 
     assert [sent.run for sent in played.sent] == [1, 1, 2, 3, 3, 3, 4]
-    breaks = [
-        item
-        for item in await _breaks(played, protocol)
-        if not _is_compaction(played, item)
-    ]
+    breaks = await _breaks(played, protocol, context_anywhere=True)
     assert not breaks, "\n\n".join(str(item) for item in breaks)
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(strict=True, reason=_KNOWN_BREAKS)
 async def test_a_conversation_past_the_threshold_compacts_once() -> None:
     played = await _play()
 
+    # Once, in the run that crossed it: the next run starts from what it left.
     assert played.summaries == [3]
-    # The compaction happened, and the next run read what it left.
-    assert any(
-        SUMMARY_MARKER in json.dumps(part.content)
-        for message in played.sent[-1].messages
-        if isinstance(message, ModelRequest)
-        for part in message.parts
-        if hasattr(part, "content")
-    )
-    assert isinstance(played.sent[-1].messages[-2], ModelResponse | ModelRequest)
+    assert _carries_summary(played.sent[-1])
+
+
+@pytest.mark.anyio
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Prompt tiers (PR B, next phase): a run's first request carries the "
+        "run-context part just before the person's turn, and every later request "
+        "moves it to the tail -- so request 2 of a run re-reads the turn, and the "
+        "next run re-reads a one-request run's turn."
+    ),
+)
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_the_run_context_part_only_ever_rides_at_the_tail(
+    protocol: Protocol,
+) -> None:
+    played = await _play()
+
+    breaks = await _breaks(played, protocol, context_anywhere=False)
+    assert not breaks, "\n\n".join(str(item) for item in breaks)

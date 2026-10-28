@@ -76,6 +76,13 @@ on is narrowed: every row keeps its JSON.
 Adding a column with a constant default rewrites no row on Postgres 11+; the
 backfills touch only rows whose JSON carries one of the keys.
 
+`agent_run_steps` is new: the run log, what each model step added to a
+conversation's model history, as pydantic-ai serialized it. `messages` is TEXT,
+never JSONB, which would re-sort the keys it exists to keep. Nothing is
+backfilled: a conversation's first run after this takes its past in from the
+message rows once and logs it. `agent_messages.run_step_seq` says which step
+carries a row into that history; NULL until one does.
+
 The downgrade drops the columns and indexes. The JSON was never changed, so
 the code before this reads exactly what it wrote.
 
@@ -534,6 +541,7 @@ def _add_columns() -> None:
         sa.Column("folded_from", sa.Uuid(), nullable=True),
         _flag_column("synthetic_tool_return"),
         sa.Column("parked_in_run_id", sa.Uuid(), nullable=True),
+        sa.Column("run_step_seq", sa.BigInteger(), nullable=True),
     ):
         op.add_column("agent_messages", column)
 
@@ -705,6 +713,48 @@ _PAUSES_UNMAPPED = {
             AND p.tool_call_id = m.tool_call_id)
     """,
 }
+
+
+def _create_run_steps() -> None:
+    op.create_table(
+        "agent_run_steps",
+        sa.Column("id", sa.Uuid(), primary_key=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "conversation_id",
+            sa.Uuid(),
+            sa.ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "run_id",
+            sa.Uuid(),
+            sa.ForeignKey("agent_runs.id", ondelete="SET NULL"),
+            nullable=True,
+        ),
+        sa.Column("seq", sa.BigInteger(), nullable=False),
+        sa.Column(
+            "kind",
+            _enum(
+                "runstepkind",
+                "STEP",
+                "COMPACTION",
+                "NOTICE",
+                "RESUME",
+                "HELD",
+                "FOLDED",
+                length=16,
+            ),
+            nullable=False,
+        ),
+        sa.Column("messages", sa.Text(), nullable=False),
+        sa.UniqueConstraint("conversation_id", "seq", name="uq_agent_run_step_seq"),
+    )
+    op.create_index(
+        "ix_agent_run_steps_conversation_seq",
+        "agent_run_steps",
+        ["conversation_id", "seq"],
+    )
 
 
 def _create_pauses() -> None:
@@ -1176,6 +1226,7 @@ def upgrade() -> None:
     _backfill_agent_host_tables(conn)
     _create_surface_table()
     _backfill_surface_table(conn)
+    _create_run_steps()
 
 
 def downgrade() -> None:
@@ -1186,6 +1237,7 @@ def downgrade() -> None:
     conn.execute(sa.text(_RESTORE_RUN_RECORDS))
     conn.execute(sa.text(_RESTORE_SURFACES))
     conn.execute(sa.text(_RESTORE_SCHEDULE_TYPES))
+    op.drop_table("agent_run_steps")
     op.drop_table("surface_conversation_state")
     op.drop_table("agent_host_run_records")
     op.drop_table("agent_host_sessions")
@@ -1210,6 +1262,7 @@ def downgrade() -> None:
                 "folded_from",
                 "synthetic_tool_return",
                 "parked_in_run_id",
+                "run_step_seq",
             ),
         ),
         (

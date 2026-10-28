@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
+from app.modules.agent.contracts.model_history import forget_model_history
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import platform_value_for_source
@@ -156,6 +157,11 @@ async def _apply(
             parts=said.parts,
             mentions=said.mentions,
             mentioned_agents=said.agents,
+        )
+    if done is not None:
+        # A run that was shown this line read it as it said then.
+        await forget_model_history(
+            uow, pod_id=line.pod_id, reading_channels=[line.channel_id]
         )
     logger.info(
         "agent_surfaces.line_changes.applied.observed",

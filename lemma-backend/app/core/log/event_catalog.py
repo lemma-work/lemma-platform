@@ -64,7 +64,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.approval.failure_notice_line_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.approval.grant_conferred': EventSpec('info', frozenset({'agent_id', 'connector', 'conversation_id', 'user_id'})),
     'agent.capabilities.duplicate_tool_call_ids.dropped.degraded': EventSpec('warning', frozenset({'dropped', 'renamed', 'tool_names'})),
-    'agent.capabilities.referenced_tools.revealed': EventSpec('info', frozenset({'tools'})),
     'agent.channel_answer.not_a_pod_agent.observed': EventSpec('warning', frozenset({'agent_id', 'channel_id', 'pod_id'})),
     'agent.channel_answer.refused.observed': EventSpec('warning', frozenset({'agent_id', 'channel_id', 'pod_id', 'reason'})),
     'agent.channel_background.unreadable.degraded': EventSpec('warning', frozenset({'message_id'})),

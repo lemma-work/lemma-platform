@@ -66,6 +66,10 @@ from app.modules.agent.infrastructure.harness.lemma.capabilities import (
 from app.modules.agent.infrastructure.harness.lemma.pending_user_messages import (
     ClaimSteered,
 )
+from app.modules.agent.domain.prompt.run_context import run_context_for
+from app.modules.agent.infrastructure.harness.lemma.run_log import (
+    starting_history,
+)
 from app.modules.agent.infrastructure.harness.lemma.cache_telemetry import (
     CacheTelemetry,
 )
@@ -84,9 +88,6 @@ from app.modules.agent.services.tool_runtime import ToolRuntime
 from app.modules.agent.infrastructure.harness.lemma.history import history_capabilities
 from app.modules.agent.infrastructure.harness.lemma.history_replay import (
     history_and_prompt,
-)
-from app.modules.agent.infrastructure.harness.lemma.thinking import (
-    replays_prior_run_reasoning,
 )
 from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
     failure_event,
@@ -309,13 +310,12 @@ class PydanticAIHarness:
     ) -> AsyncIterator[AgentEvent]:
         snapshot = options.runtime_profile
         with run_phase("history_convert") as history_span:
-            history, user_prompt = self._history_and_prompt(
+            history, user_prompt, recorder = starting_history(
                 messages,
-                # Whether a stored thought can be replayed depends on the
-                # provider family: each wants different reasoning credentials.
-                protocol=snapshot.protocol if snapshot else None,
-                current_run_id=agent_run_id,
-                replay_prior_run_reasoning=replays_prior_run_reasoning(snapshot),
+                options=options,
+                conversation_id=conversation.id,
+                context_text=run_context_for(ctx),
+                agent_run_id=agent_run_id,
             )
             history_span.set_attribute("lemma.history.model_messages", len(history))
         # e2e mock mode swaps only the model — the rest of the harness (tool
@@ -353,6 +353,7 @@ class PydanticAIHarness:
                 else RuntimeProfileProtocol.OPENAI_COMPATIBLE
             ),
             claim_steered=self._claim_steered,
+            on_steered=recorder.claimed if recorder is not None else None,
         )
         # Before the history processors, not after. Capabilities run in
         # registration order, and the processors include the hard-ceiling guard
@@ -447,6 +448,7 @@ class PydanticAIHarness:
             conversation_id=ctx.conversation_id,
             final_output_message=self._final_output_message,
             structured_output=output_type is not None,
+            recorder=recorder,
         )
 
         async def _drive() -> None:

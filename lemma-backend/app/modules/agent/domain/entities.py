@@ -109,6 +109,9 @@ class Message(CreatedEntity):
     metadata: JsonObject | None = None
     #: What the server records about it beyond its body (``domain/message_state``).
     state: MessageState = MessageState()
+    #: The run-log step that carries it into the model's history
+    #: (``domain/run_log``); None while none does.
+    run_step_seq: int | None = None
 
     @classmethod
     def create(

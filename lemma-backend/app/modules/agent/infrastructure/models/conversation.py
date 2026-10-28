@@ -545,6 +545,7 @@ class MessageModel(UUIDCreatedBase):
     folded_from: Mapped[UUID | None] = mapped_column(nullable=True)
     synthetic_tool_return: Mapped[bool] = flag_column()
     parked_in_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    run_step_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     conversation: Mapped["ConversationModel"] = relationship(
         ConversationModel,
@@ -579,6 +580,7 @@ class MessageModel(UUIDCreatedBase):
             tool_result=self.tool_result,
             metadata=self.message_metadata,
             state=message_state_of(self),
+            run_step_seq=self.run_step_seq,
         )
 
 

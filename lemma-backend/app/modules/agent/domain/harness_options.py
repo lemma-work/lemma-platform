@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from app.modules.agent.domain.run_budget import RunSpend
+from app.modules.agent.domain.run_log import RunLogReplay
 from app.modules.agent.domain.run_notices import RunNotices
 from app.modules.agent.domain.runtime_snapshot import RuntimeSnapshot
 from app.modules.agent.domain.tools import ToolSpec
@@ -73,4 +74,8 @@ class HarnessOptions:
     #: The run's place in its conversation, 1 for the first: what each model
     #: request's prompt-cache report is read against. None when unknown.
     run_index: int | None = None
+    #: The conversation's run log and what to take in from outside it. None
+    #: rebuilds the history from ``messages`` alone, as a test or a caller
+    #: with no database does.
+    run_log: RunLogReplay | None = None
     extra: JsonObject = field(default_factory=dict)

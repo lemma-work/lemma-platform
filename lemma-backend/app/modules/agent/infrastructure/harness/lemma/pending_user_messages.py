@@ -43,16 +43,23 @@ logger = get_logger(__name__)
 #: order it was sent. The database's claim, and its live frame, unless a caller
 #: hands in another -- which then tells the client itself.
 ClaimSteered = Callable[[UUID], Awaitable[list[Message]]]
+#: Told the ids of the rows steered in, so the run log marks them carried.
+OnSteered = Callable[[list[UUID]], None]
 
 
 class PendingUserMessagesCapability(AbstractCapability[object]):
     """Steers messages that arrived mid-run into the run that is answering."""
 
     def __init__(
-        self, *, agent_run_id: UUID, claim: ClaimSteered | None = None
+        self,
+        *,
+        agent_run_id: UUID,
+        claim: ClaimSteered | None = None,
+        on_steered: OnSteered | None = None,
     ) -> None:
         self._agent_run_id = agent_run_id
         self._claim_from = claim
+        self._on_steered = on_steered
 
     def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
         return "pending_user_messages"
@@ -93,6 +100,8 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
 
         for message in messages:
             ctx.enqueue(timed_user_prompt_text(message))
+        if self._on_steered is not None:
+            self._on_steered([message.id for message in messages])
         # The claim is committed and the prompts are in the run: the frame only
         # tells the client. Failing it must not cost the turn the messages it
         # just took -- a reload reads the same claim. Publishing already

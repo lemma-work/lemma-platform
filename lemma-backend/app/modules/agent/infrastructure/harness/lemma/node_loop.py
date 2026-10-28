@@ -27,10 +27,9 @@ crashes the worker.
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from typing import Protocol
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from pydantic_ai import ModelRequestNode, CallToolsNode
 from pydantic_ai.messages import ModelMessage
@@ -55,23 +54,27 @@ from app.modules.agent.infrastructure.tools.tool_errors import result_is_failure
 
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.tool_call_ids import (
-    call_signature,
-    unique_per_call_id,
-    unparsed_signature,
-)
 from app.modules.agent.domain.value_objects import (
-    AnswerKind,
     AgentEvent,
     AgentEventType,
     JsonObject,
     MessageDraft,
     MessageKind,
-    MessageRole,
     to_json_value,
 )
 from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
     ModelRequestStreamer,
+)
+from app.modules.agent.infrastructure.harness.lemma.node_events import (
+    _canonical,
+    _is_open_answer,
+    _not_final,
+    settle_response_answers,
+    unique_stored_calls,
+)
+from app.modules.agent.infrastructure.harness.lemma.run_log import (
+    RunLogRecorder,
+    budget_pause_response,
 )
 from app.modules.agent.infrastructure.harness.lemma.usage import (
     warn_if_implausible_usage,
@@ -80,109 +83,12 @@ from app.modules.agent.services.run_input_settings import shorter_answer_setting
 
 logger = get_logger(__name__)
 
-
-def _tool_call_id_of(event: AgentEvent) -> str | None:
-    draft = event.data
-    if not isinstance(draft, MessageDraft) or draft.kind is not MessageKind.TOOL_CALL:
-        return None
-    return draft.tool_call_id
-
-
-def _tool_call_signature(event: AgentEvent) -> str | None:
-    draft = event.data
-    assert isinstance(draft, MessageDraft)
-    return call_signature(draft.tool_name, draft.tool_args)
-
-
-def _raw_tool_call_signature(event: AgentEvent) -> str:
-    draft = event.data
-    assert isinstance(draft, MessageDraft)
-    return unparsed_signature(draft.tool_name, draft.tool_args)
-
-
-def _under_call_id(event: AgentEvent, call_id: str) -> AgentEvent:
-    draft = event.data
-    assert isinstance(draft, MessageDraft)
-    return event.model_copy(
-        update={"data": draft.model_copy(update={"tool_call_id": call_id})}
-    )
-
-
-def unique_stored_calls(events: list[AgentEvent]) -> list[AgentEvent]:
-    """The stored half of `UniqueToolCallIdsCapability`, by the same rule: a
-    call the provider repeated under one id is stored once, as it runs once,
-    and a different call under a taken id is stored under the id it ran under.
-    """
-    kept, _repeats = unique_per_call_id(
-        events,
-        call_id=_tool_call_id_of,
-        signature=_tool_call_signature,
-        raw_signature=_raw_tool_call_signature,
-        renamed=_under_call_id,
-    )
-    return kept
-
-
-def _canonical(value: object) -> str:
-    """One spelling per value, so equal arguments and results compare equal."""
-    return json.dumps(value, sort_keys=True, default=str)
+__all__ = ["NodeLoop", "settle_response_answers", "unique_stored_calls"]
 
 
 #: Fraction of the run's wall-clock budget past which an answer that ran out of
 #: time is not tried again.
 _LATE_IN_THE_RUN = 0.9
-
-
-def _is_open_answer(event: AgentEvent) -> bool:
-    """Assistant text nobody has yet said is, or is not, the final answer."""
-    draft = event.data
-    return (
-        event.type is AgentEventType.MESSAGE
-        and isinstance(draft, MessageDraft)
-        and draft.role is MessageRole.ASSISTANT
-        and draft.kind is MessageKind.TEXT
-        and draft.state.answer is None
-    )
-
-
-def _not_final(event: AgentEvent) -> AgentEvent:
-    draft = event.data
-    assert isinstance(draft, MessageDraft)
-    state = draft.state.model_copy(update={"answer": AnswerKind.NOT_FINAL})
-    return event.model_copy(update={"data": draft.model_copy(update={"state": state})})
-
-
-def settle_response_answers(
-    messages: list[AgentEvent],
-) -> tuple[list[AgentEvent], list[AgentEvent]]:
-    """One finished response's messages: those settled, and those still open.
-
-    Unmarked assistant text is stored as the final answer, and a text part is
-    written before the rest of its response arrives -- so a preamble before a
-    tool call, and a run that answered and then went on working, each stored a
-    final answer the run did not end on. Only the text a run ends on is final:
-
-    - a response that calls a tool goes on, so none of its text is final;
-    - otherwise every text but the last is not, and the last -- with whatever
-      follows it, so the order holds -- waits for the next node to say whether
-      the run ends here.
-    """
-    open_at = [index for index, event in enumerate(messages) if _is_open_answer(event)]
-    if not open_at:
-        return messages, []
-    calls_a_tool = any(
-        isinstance(event.data, MessageDraft)
-        and event.data.kind is MessageKind.TOOL_CALL
-        for event in messages
-    )
-    last = None if calls_a_tool else open_at[-1]
-    settled = [
-        _not_final(event) if index in open_at and index != last else event
-        for index, event in enumerate(messages)
-    ]
-    if last is None:
-        return settled, []
-    return settled[:last], settled[last:]
 
 
 class FinalOutputWriter(Protocol):
@@ -209,8 +115,12 @@ class NodeLoop[DepsT]:
         conversation_id: UUID,
         final_output_message: FinalOutputWriter,
         structured_output: bool = False,
+        recorder: RunLogRecorder | None = None,
     ) -> None:
         self.run_context = run_context
+        #: Writes each finished step to the run log; None for a run that keeps
+        #: none (a private note's, or one handed no log).
+        self.recorder = recorder
         #: The run owes a final answer through an output tool.
         self.structured_output = structured_output
         self.queue = queue
@@ -235,6 +145,8 @@ class NodeLoop[DepsT]:
         # A text-only response's closing text, held until the next node says
         # whether the run ends on it (`settle_response_answers`).
         self._undecided: list[AgentEvent] = []
+        #: What a budget pause adds to the log after the run's own messages.
+        self._paused_with: list[ModelMessage] = []
 
     def shorter_answer_settings(self) -> JsonObject | None:
         """Settings for one more try at an answer that ran out of time, or None.
@@ -272,8 +184,14 @@ class NodeLoop[DepsT]:
             # That request was counted when it was first made; counting it
             # again would let a flaky connection spend the run's allowance.
             already_counted = resume_history is not None
+            # The run's messages are logged only from a clean boundary: a
+            # dropped stream leaves a truncated response behind, which the
+            # retry replaces, and a stop leaves an unfinished one.
+            clean = False
             try:
                 async for node in run:
+                    # The node before this one has finished: log what it added.
+                    await self._log(run)
                     if PydanticAIAgent.is_model_request_node(node):
                         # Another request: the run went on past that answer.
                         await self._release_undecided(final=False)
@@ -284,7 +202,7 @@ class NodeLoop[DepsT]:
                         if already_counted:
                             already_counted = False
                         else:
-                            await self._spend_a_model_request()
+                            await self._spend_a_model_request(node)
                         if await self._pump_model_request(node, run, state):
                             return
                     elif PydanticAIAgent.is_call_tools_node(node):
@@ -294,7 +212,9 @@ class NodeLoop[DepsT]:
                         await self._release_undecided(final=True)
                         if await self._pump_end_node(node):
                             return
+                clean = True
             except AgentInputRequired:
+                clean = True
                 # A pause, not a failure, and this is the last place that can
                 # say so. The span pydantic-ai opened for the whole run is the
                 # current one here; by the time the harness catches this
@@ -312,9 +232,29 @@ class NodeLoop[DepsT]:
                 # However the attempt ended, what the model said is kept, and
                 # nothing came after it.
                 await self._release_undecided(final=True)
+                if clean:
+                    await self._log(run, then=self._paused_with)
                 # Billing is the metered model's, per request; this only says
                 # so when a provider reports a count that cannot be true.
                 warn_if_implausible_usage(getattr(run, "usage", None))
+
+    async def _log(
+        self, run: AgentRun[DepsT, object], *, then: Sequence[ModelMessage] = ()
+    ) -> None:
+        """Queue the run-log steps that bring the log up to what ``run`` holds."""
+        if self.recorder is None:
+            return
+        for draft in self.recorder.take([*run.all_messages(), *then]):
+            await self.queue.put(
+                (
+                    "event",
+                    AgentEvent(
+                        type=AgentEventType.RUN_STEP,
+                        data=draft,
+                        agent_run_id=self.agent_run_id,
+                    ),
+                )
+            )
 
     async def _release_undecided(self, *, final: bool) -> None:
         """Hand on the held closing text, final or not as the run turned out."""
@@ -325,7 +265,9 @@ class NodeLoop[DepsT]:
             )
             await self.queue.put(("event", settled))
 
-    async def _spend_a_model_request(self) -> None:
+    async def _spend_a_model_request(
+        self, node: ModelRequestNode[DepsT, object] | None = None
+    ) -> None:
         """Count this step, and stop the run if it has spent its allowance.
 
         Raised rather than returned so it leaves by the path a pause already
@@ -360,13 +302,18 @@ class NodeLoop[DepsT]:
             return
 
         tool_call_id = budget_pause_tool_call_id()
-        for event in budget_pause_events(
+        events = budget_pause_events(
             agent_run_id=self.agent_run_id,
             tool_call_id=tool_call_id,
             exhausted=exhausted,
             sequence=0,
-        ):
+        )
+        for event in events:
             await self.queue.put(("event", event))
+        # The log ends where the run stopped: the request it was about to send,
+        # and the approval it asks instead -- answered when the person decides.
+        pending = [node.request] if node is not None else []
+        self._paused_with = [*pending, *budget_pause_response(events)]
         logger.info(
             "agent.run_budget.exhausted.observed",
             agent_run_id=str(self.agent_run_id),

@@ -13,16 +13,16 @@ terminal, which is how the driver knows to stop consuming.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator
+from uuid import UUID
 
 
 from app.core.log.log import get_logger
-from app.core.text.thinking_tags import RESET as SPLITTER_RESET
 from app.core.text.thinking_tags import ThinkingStreamSplitter
-from app.modules.agent.domain.approval_message import with_approval_message
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.run_log import RunStepDraft
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -33,13 +33,18 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
 )
-from app.modules.agent.services.run_message_writer import split_reasoning_drafts
 from app.modules.agent.domain.live_events import message_to_payload
 from app.modules.agent.infrastructure.live import publish_conversation_event
 from app.modules.agent.domain.live_events import (
     message_payload,
     status_payload,
     token_payload,
+)
+from app.modules.agent.services.run_event_shapes import (
+    STREAM_RESET_KIND as _STREAM_RESET_KIND,
+    _as_token_lanes,
+    _split_message_event,
+    _usage_from_event,
 )
 from app.modules.agent.services.run_identity import RunIdentity
 from app.modules.agent.services.run_phase_spans import observe_first_output
@@ -49,10 +54,6 @@ from app.modules.agent.services.run_finalizer import (
 )
 
 logger = get_logger(__name__)
-
-#: The retry path's "discard what you have" signal, sent as a token with no
-#: payload (`PydanticAIHarness._stream_reset_event`).
-_STREAM_RESET_KIND = "stream_reset"
 
 
 class TurnYielded(BaseException):
@@ -127,6 +128,9 @@ _STATUS_OF_TERMINAL_EVENT = {
 }
 
 
+_ENDINGS = frozenset({AgentEventType.COMPLETED})
+
+
 class RunEventPump:
     """Applies harness events to persistence and the realtime channel."""
 
@@ -142,6 +146,10 @@ class RunEventPump:
         # `RunMessageWriter` had to rename. The WAITING event that follows a
         # pause still carries the provider's, and a surface answers by it.
         self._stored_ids: dict[str, str] = {}
+        # Rows written since the run's last log step, which the next one covers
+        # -- or, when the run ends first, the last one.
+        self._since_last_step: list[UUID] = []
+        self._last_step: int | None = None
 
     async def handle(
         self,
@@ -151,6 +159,8 @@ class RunEventPump:
         outcome: RunOutcome,
     ) -> bool:
         """True when this event was terminal and the run has been finalized."""
+        if event.type in _STATUS_OF_TERMINAL_EVENT or event.type in _ENDINGS:
+            await self._carry_the_rest(run)
         terminal = await self._apply(event=event, run=run, outcome=outcome)
         # These finalize without a final status of their own, and the run
         # metrics read it: unset, every one of them was counted completed. Set
@@ -190,6 +200,17 @@ class RunEventPump:
 
         if event.type == AgentEventType.MESSAGE:
             await self._persist_message(event, run)
+            return False
+
+        if event.type == AgentEventType.RUN_STEP:
+            assert isinstance(event.data, RunStepDraft)
+            # Every row the run wrote since its last step is carried by this one.
+            written, self._since_last_step = self._since_last_step, []
+            self._last_step = await self.message_writer.append_step(
+                conversation_id=run.conversation_id,
+                agent_run_id=run.agent_run_id,
+                draft=replace(event.data, covers=(*event.data.covers, *written)),
+            )
             return False
 
         if event.type == AgentEventType.STATUS:
@@ -251,6 +272,16 @@ class RunEventPump:
             return True
 
         return False
+
+    async def _carry_the_rest(self, run: RunIdentity) -> None:
+        """What the run wrote after its last step -- the answer it closed on,
+        the returns its ending made up -- is carried by that step."""
+        if self._last_step is None or not self._since_last_step:
+            return
+        rest, self._since_last_step = self._since_last_step, []
+        await self.message_writer.carry(
+            conversation_id=run.conversation_id, row_ids=rest, step=self._last_step
+        )
 
     async def _finish_ended(
         self, *, stopped: bool, run: RunIdentity, outcome: RunOutcome
@@ -334,7 +365,10 @@ class RunEventPump:
             should_stop = False
             for split in _split_message_event(raw_event):
                 event = self._addressed_as_stored(split)
-                await notify_event(observer, event, conversation, ctx, run.agent_run_id)
+                if event.type is not AgentEventType.RUN_STEP:
+                    await notify_event(
+                        observer, event, conversation, ctx, run.agent_run_id
+                    )
                 if event.type == AgentEventType.USAGE:
                     outcome.usage_data = _usage_from_event(event) or outcome.usage_data
                     continue
@@ -385,6 +419,7 @@ class RunEventPump:
             agent_run_id=run.agent_run_id,
             data=event.data,
         )
+        self._since_last_step.append(saved_message.id)
         sent_as = getattr(event.data, "tool_call_id", None)
         if sent_as and saved_message.kind is MessageKind.TOOL_CALL:
             # Every call, renamed or not: a provider that reuses an id means
@@ -532,48 +567,3 @@ async def drive_harness(
         if aclose is not None:
             await aclose()
         raise
-
-
-def _as_token_lanes(segments: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
-    """The splitter's segments as the token lanes clients read.
-
-    Its ``reset`` -- what it released of this stream was not what it said --
-    is the lane a retry already uses to clear the bubble, and every client of
-    the stream (the web chat, a visitor's page, a channel) acts on it.
-    """
-    return [
-        (_STREAM_RESET_KIND if kind == SPLITTER_RESET else kind, chunk)
-        for kind, chunk in segments
-    ]
-
-
-def _split_message_event(event: AgentEvent) -> list[AgentEvent]:
-    """One message event, split into the messages it should actually become.
-
-    Identity for everything that is not an assistant message carrying reasoning
-    in its text, or an approval the agent asked for -- which is preceded by
-    what it tells the person about it (``domain/approval_message``) -- so all
-    but a handful of events; the list is returned unchanged rather than rebuilt
-    so the common path allocates nothing.
-    """
-    if event.type is not AgentEventType.MESSAGE or not isinstance(
-        event.data, MessageDraft
-    ):
-        return [event]
-    drafts = [
-        split
-        for draft in with_approval_message(event.data)
-        for split in split_reasoning_drafts(draft)
-    ]
-    if len(drafts) == 1 and drafts[0] is event.data:
-        return [event]
-    return [event.model_copy(update={"data": draft}) for draft in drafts]
-
-
-def _usage_from_event(event: AgentEvent) -> AgentRunUsage | None:
-    """The usage an event carries, however the harness chose to shape it."""
-    if isinstance(event.data, AgentRunUsage):
-        return event.data
-    if isinstance(event.data, dict):
-        return AgentRunUsage.model_validate(event.data)
-    return None

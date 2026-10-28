@@ -77,6 +77,7 @@ _MESSAGE_COLUMNS = (
     "folded_from",
     "synthetic_tool_return",
     "parked_in_run_id",
+    "run_step_seq",
 )
 
 
@@ -705,6 +706,39 @@ def _assert_messages(rows: dict[UUID, dict], ids: _Ids) -> None:
     assert rows[ids["parked"]]["parked_in_run_id"] == ids["asked_run"]
 
 
+def _assert_run_log_keeps_bytes(plain_url: str) -> None:
+    """The run log is new and empty, and hands back the bytes it was given:
+    TEXT, so neither key order nor spacing moves."""
+    assert _columns(plain_url, "agent_run_steps") == {
+        "id",
+        "created_at",
+        "conversation_id",
+        "run_id",
+        "seq",
+        "kind",
+        "messages",
+    }
+    written = '[{"parts": [{"tool_name":"x","args":"{\\"b\\": 1,  \\"a\\": 2}"}]}]'
+    with psycopg.connect(plain_url) as connection:
+        conversation_id = connection.execute(
+            "SELECT id FROM agent_conversations LIMIT 1"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO agent_run_steps "
+            "(id, created_at, conversation_id, seq, kind, messages) "
+            "VALUES (%s, now(), %s, 1, 'STEP', %s)",
+            (uuid4(), conversation_id, written),
+        )
+        (read,) = connection.execute(
+            "SELECT messages FROM agent_run_steps WHERE conversation_id = %s",
+            (conversation_id,),
+        ).fetchone()
+        assert read == written
+        assert connection.execute(
+            "SELECT count(*) FROM agent_messages WHERE run_step_seq IS NOT NULL"
+        ).fetchone() == (0,)
+
+
 def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
     with get_postgres_container() as postgres:
         database_url = get_postgres_url(postgres)
@@ -732,6 +766,7 @@ def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
         assert "1 later client_message_id copies dropped" in log
         # Expand only: the JSON is untouched.
         assert _metadata(plain_url) == metadata_before
+        _assert_run_log_keeps_bytes(plain_url)
 
         # Learned after the upgrade: only agent_surfaces' table hears of it.
         with psycopg.connect(plain_url) as connection:
@@ -747,6 +782,7 @@ def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
         assert not set(_RUN_COLUMNS) & _columns(plain_url, "agent_runs")
         assert not set(_MESSAGE_COLUMNS) & _columns(plain_url, "agent_messages")
         assert not _columns(plain_url, "surface_conversation_state")
+        assert not _columns(plain_url, "agent_run_steps")
         restored = _metadata(plain_url)
         surfaced = restored["agent_conversations"][ids["surface"]]
         assert surfaced["external_thread_id"] == "777"
