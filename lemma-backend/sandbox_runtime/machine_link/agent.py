@@ -63,6 +63,9 @@ REVOKED_STRIKES = 3
 #: A link that lasted this long before being superseded was a hand-over.
 HANDOVER_AFTER_SECONDS = 60.0
 MAX_BACKOFF_SECONDS = 300.0
+#: How long a machine waits for the runtime Lemma said it would push before
+#: starting the one it has. Installing it can resolve packages, hence minutes.
+PUSH_WAIT_SECONDS = 180.0
 
 AGENT_RELEASE = "machine-agent/1"
 
@@ -245,6 +248,7 @@ class _Link:
         self._socket = socket
         self._send_lock = asyncio.Lock()
         self._mux = mux.Mux(self._send_bytes, role="acceptor", accept=self._accept)
+        self._pushed = asyncio.Event()
 
     async def _send_bytes(self, frame: bytes) -> None:
         async with self._send_lock:
@@ -272,7 +276,9 @@ class _Link:
         heartbeat = int(welcome.get("heartbeat_ms") or 20_000) / 1000
         token = str(runtime.get("token") or "")
         _log.info("connected to Lemma as %s", welcome.get("name"))
-        starting = asyncio.ensure_future(self._start_runtime(token))
+        starting = asyncio.ensure_future(
+            self._start_runtime(token, expected=runtime.get("version"))
+        )
         beating = asyncio.ensure_future(self._heartbeat(heartbeat))
         reconnect_after: int | None = None
         try:
@@ -298,7 +304,13 @@ class _Link:
             await self._mux.close()
         return self._socket.close_code, self._socket.close_reason or "", reconnect_after
 
-    async def _start_runtime(self, token: str) -> None:
+    async def _start_runtime(self, token: str, *, expected: object) -> None:
+        if expected and expected != self._agent.runtime.installed_version():
+            # Lemma pushes this version next. Start on it, not on what is here:
+            # a runtime started now would report ready and then restart under
+            # the first requests. If the push never lands, start what is here.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._pushed.wait(), PUSH_WAIT_SECONDS)
         try:
             await self._agent.runtime.ensure(token)
         except RuntimeError as error:
@@ -369,6 +381,7 @@ class _Link:
             outcome = {"installed": False, "error": str(error)[:500]}
         finally:
             archive.unlink(missing_ok=True)
+            self._pushed.set()
         await stream.write(json.dumps(outcome).encode())
         await stream.write_eof()
         await self._beat()
