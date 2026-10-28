@@ -159,7 +159,8 @@ converted markdown** — otherwise they assume they only get search snippets.
   (`lemma files upload`) — script that in `seed/` and the README.
 - Indexing lags briefly after upload — `stat` shows status (`COMPLETED` = searchable,
   `NOT_REQUIRED` = stored but not a document, `PENDING`/`PROCESSING` = in progress
-  or retrying, `FAILED_PERMANENT` = gave up; the reason is in `last_processing_error`).
+  or retrying, `FAILED_PERMANENT` = gave up; the reason is in `last_processing_error`, and
+  `lemma files retry <path>` re-runs it once that is fixed).
 - Don't expect markdown/search for XLSX/CSV/JSON/email/images — these are stored, not
   indexed; keep structured data in tables, or parse a one-off with the python or
   `liteparse-documents` skill (its lane is documents **outside** the pod, plus the

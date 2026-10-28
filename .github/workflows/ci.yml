@@ -267,6 +267,7 @@ jobs:
               # cannot live in the backend-gated quality job.
               - '.github/workflows/**'
               - '.github/e2e-shards.json'
+              - '.github/protected-e2e-shards.json'
               - '.github/dependabot.yml'
               - 'scripts/check_ci_aggregators.py'
               - 'scripts/check_release_parity.py'

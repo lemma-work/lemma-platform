@@ -364,9 +364,12 @@ await c.workflows.runs.create("onboard_customer");
 await lemma.act("gmail", "send_message", { to, subject, text }, { kind: "http" });
 ```
 
-`lemma.act(connector, operation, payload)` finds the organization's install of
-the connector itself; `kind` names the backend the operation names belong to,
-so a widget written for another one says so instead of failing obscurely.
+`lemma.act(connector, operation, payload)` runs through the pod connector that
+serves `connector` (the pod's, else the viewer's own install, declared on first
+use), so it uses the pod's account choice and never names an account. A
+connection the viewer still has to make or remake shows a Connect button beside
+the error. `kind` names the backend the operation names belong to, so a widget
+written for another one says so instead of failing obscurely.
 Everything runs under the viewer's own permissions and RLS, so a person who
 cannot write a table cannot write it through a widget either.
 

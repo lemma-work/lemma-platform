@@ -55,8 +55,8 @@ test("a personal workspace is named after its person, never a counter", () => {
     assert.equal(personalNameFor(null, "anukul@lemma.work"), "Anukul's workspace");
     assert.equal(personalNameFor("", "alice.chen+test@acme.com"), "Alice's workspace");
     // ...and a mailbox is not: this screen offered somebody
-    // "deepakjha0196+99's Personal".
-    assert.equal(personalNameFor("", "deepakjha0196+99@gmail.com"), "My workspace");
+    // "ada0196+99's Personal".
+    assert.equal(personalNameFor("", "ada0196+99@example.com"), "My workspace");
     assert.equal(personalNameFor(null), "My workspace");
     assert.ok(!/\d/.test(personalNameFor(null, "x1@acme.com")));
 });

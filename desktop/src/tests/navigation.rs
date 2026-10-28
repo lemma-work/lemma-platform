@@ -768,3 +768,19 @@ fn returning_to_the_chooser_is_granted_to_the_workspace_and_registered() {
     let acted = body.find("return_to_mode_chooser_impl").expect("it acts");
     assert!(checked < acted);
 }
+
+/// A URL reaches the Windows browser through ShellExecuteW, never Explorer.
+///
+/// `explorer.exe <url>` opened OneDrive's Documents folder instead of the
+/// hosted sign-in link: Explorer parses its own command line and, given a URL
+/// with a query string it does not take as one, opens its default folder. No
+/// test here runs on Windows, so the shape is held instead.
+#[test]
+fn windows_opens_a_url_with_shell_execute_not_explorer() {
+    let source = include_str!("../navigation.rs").replace("\r\n", "\n");
+    let open = function_body(&source, "pub(crate) fn open_external(");
+    assert!(open.contains("shell_open(&url)"), "{open}");
+    assert!(!open.contains("explorer.exe\")"), "{open}");
+    let shell = function_body(&source, "fn shell_open(");
+    assert!(shell.contains("ShellExecuteW("), "{shell}");
+}

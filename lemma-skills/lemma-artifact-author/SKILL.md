@@ -161,7 +161,8 @@ retried shows as `PENDING` again (with a backoff), so re-`stat` before reporting
 `FAILED_PERMANENT` is terminal and a delivery defect: the reason is in
 `last_processing_error`, and nothing re-drives it on its own. Re-uploading the
 same bytes does not reopen it; new bytes or an explicit retry
-(`pod.files.retry_processing(path)` in the Python SDK) do. Never describe a
+(`lemma files retry <path>`, or `pod.files.retry_processing(path)` in the
+Python SDK) do. Never describe a
 document as searchable on the strength of a successful upload alone.
 
 For high-stakes delivery, download the exact uploaded bytes to a fresh temporary

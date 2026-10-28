@@ -305,6 +305,19 @@ def create_schedule(
         extra, agent=agent, workflow=workflow, connector=connector
     )
     account = _deprecated_account(extra, account)
+    # One schedule has one trigger. Each later one used to replace the config
+    # the earlier built, so `--cron … --webhook-source …` quietly lost the cron.
+    triggers = [
+        flag
+        for flag, given in (
+            ("--cron/--at", cron or at),
+            ("--datastore", datastore),
+            ("--webhook-source", webhook_source),
+        )
+        if given
+    ]
+    if len(triggers) > 1:
+        fail(f"A schedule has one trigger; pick one of {', '.join(triggers)}.")
     schedule_type = "TIME"
     config: dict[str, object] = {}
     if cron:
