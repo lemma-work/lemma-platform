@@ -181,14 +181,17 @@ def test_the_bot_taken_out_of_a_slack_channel_is_a_bot_left(event):
     assert classify("SLACK", payload).platform_update
 
 
-def test_the_bot_invited_back_is_a_bot_returned_and_a_colleague_joining_is_nothing():
+def test_the_bot_invited_back_is_a_bot_returned_and_a_colleague_joining_joins():
     back = _slack({"type": "member_joined_channel", "user": BOT, "channel": "C1"})
     colleague = _slack(
         {"type": "member_joined_channel", "user": "W06GH7XHN", "channel": "C1"}
     )
 
     assert [u.kind for u in slack_group_updates(back)] == [GroupUpdateKind.BOT_RETURNED]
-    assert slack_group_updates(colleague) == []
+    [joined] = slack_group_updates(colleague)
+    assert joined.kind is GroupUpdateKind.MEMBER_JOINED
+    assert (joined.external_channel_id, joined.external_user_id) == ("C1", "W06GH7XHN")
+    assert classify("SLACK", colleague).platform_update
 
 
 def test_a_slack_channel_shared_and_unshared():
@@ -259,6 +262,21 @@ def test_a_person_removed_from_a_teams_chat_is_named_by_their_aad_id():
     assert classify("TEAMS", activity).platform_update
 
 
+def test_a_person_added_to_a_teams_chat_joins_and_the_bot_returns():
+    activity = _members_removed()
+    activity["membersAdded"] = [
+        {"id": "29:1xyz", "aadObjectId": "b20e77ef-bd6b-4636-9f5b-20dd28beba24"},
+        {"id": "28:c3e201f2-a8ef-4026-bef4-d3da0153b191"},
+    ]
+
+    updates = teams_group_updates(activity)
+
+    assert [(u.kind, u.external_user_id) for u in updates] == [
+        (GroupUpdateKind.MEMBER_JOINED, "b20e77ef-bd6b-4636-9f5b-20dd28beba24"),
+        (GroupUpdateKind.BOT_RETURNED, None),
+    ]
+
+
 def test_the_bot_removed_from_a_teams_chat_is_a_bot_left():
     activity = _members_removed({"id": "28:c3e201f2-a8ef-4026-bef4-d3da0153b191"})
 
@@ -291,6 +309,38 @@ def test_somebody_leaving_a_telegram_group_is_a_member_left():
         "-1009876543210",
         "1111111",
     )
+    verdict = classify("TELEGRAM", update)
+    assert verdict.platform_update and not verdict.message
+
+
+def test_people_added_to_a_telegram_group_join_by_name_and_bots_do_not():
+    update = {
+        "update_id": 10002,
+        "message": {
+            "message_id": 1366,
+            "from": {"id": 1111111, "is_bot": False, "first_name": "Dana"},
+            "chat": _telegram_group(),
+            "date": 1441645532,
+            "new_chat_members": [
+                {
+                    "id": 2222222,
+                    "is_bot": False,
+                    "first_name": "Ravi",
+                    "last_name": "K",
+                },
+                {"id": 3333333, "is_bot": False, "first_name": "Mo"},
+                {"id": 42, "is_bot": True, "first_name": "Some bot"},
+            ],
+        },
+    }
+
+    joined = group_membership_updates(update)
+
+    assert [(u.kind, u.external_user_id, u.display_name) for u in joined] == [
+        (GroupUpdateKind.MEMBER_JOINED, "2222222", "Ravi K"),
+        (GroupUpdateKind.MEMBER_JOINED, "3333333", "Mo"),
+    ]
+    assert {u.external_channel_id for u in joined} == {"-1009876543210"}
     verdict = classify("TELEGRAM", update)
     assert verdict.platform_update and not verdict.message
 

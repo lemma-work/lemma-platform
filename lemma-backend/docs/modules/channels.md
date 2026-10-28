@@ -93,7 +93,7 @@ A seat in `channel_members` means one of four things, by the channel:
 | A public `GROUP` | a subscription: whom its lines are pushed to and counted as unread for (anybody in the pod reads it) |
 
 and says why it was taken (`seated_by`): `PLATFORM` (the platform shows them
-in the place it mirrors, or they spoke there), `SPOKE` (they wrote in it in
+in the place it mirrors -- they joined it, or spoke there), `SPOKE` (they wrote in it in
 Lemma), `ADDED` (a member added them), `CREATOR` (they made it, or it was made
 for them), `JOINED` (they joined it themselves). Seated again for a stronger
 reason -- the platform's, then speaking in Lemma, then anything the pod chose

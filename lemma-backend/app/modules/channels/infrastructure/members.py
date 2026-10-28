@@ -85,11 +85,13 @@ class MemberRepository(ReadState):
         role: MemberRole | None = None,
         added_by_user_id: UUID | None = None,
         spoke: tuple[datetime, str | None] | None = None,
+        shown_as: str | None = None,
     ) -> bool:
         """Put a member or a contact in the channel, for ``seated_by``. Already
         in it, the seat keeps its role and takes the stronger reason; ``spoke``
-        (when, and the name they spoke under) is noted either way. ``True``
-        only for a seat made now."""
+        (when, and the name they spoke under) is noted either way. ``shown_as``
+        names a seat with none yet -- somebody who joined before speaking.
+        ``True`` only for a seat made now."""
         seat = ChannelMemberModel
         values: dict[str, object] = {
             "channel_id": channel.id,
@@ -106,6 +108,8 @@ class MemberRepository(ReadState):
         }
         if spoke is not None:
             values["last_spoke_at"], values["last_name"] = spoke
+        elif shown_as:
+            values["last_name"] = shown_as
         statement = insert(seat).values(**values)
         stronger = _strength(statement.excluded.seated_by) > _strength(seat.seated_by)
         again: dict[str, object] = {
@@ -123,6 +127,10 @@ class MemberRepository(ReadState):
             )
             again["last_name"] = func.coalesce(
                 statement.excluded.last_name, seat.last_name
+            )
+        elif shown_as:
+            again["last_name"] = func.coalesce(
+                seat.last_name, statement.excluded.last_name
             )
         column = seat.user_id if principal.user_id is not None else seat.contact_id
         seated = await self.session.execute(
