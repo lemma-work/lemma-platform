@@ -71,12 +71,12 @@ test("a destructive step says it replaces yours whatever its action", () => {
 test("the installer is never asked about a variable that fills itself in", () => {
     const variables: VariableSpec[] = [
         { name: "owner", kind: "pod_member", description: null, required: false, default: null },
-        { name: "slack_account", kind: "account", description: null, required: true, default: null, connector: "slack" },
+        { name: "triage_channel", kind: "free", description: null, required: true, default: null },
         { name: "slug", kind: "free", description: null, required: false, default: "queue" },
     ];
     assert.deepEqual(
         askedVariables(variables).map((v) => v.name),
-        ["slack_account", "slug"],
+        ["triage_channel", "slug"],
     );
 });
 
