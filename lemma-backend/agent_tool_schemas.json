@@ -1051,13 +1051,35 @@
     }
   },
   {
+    "tool_name": "connect_connector",
+    "toolset": "CONNECTORS",
+    "description": "Get the link your person opens to connect an app (Gmail, Notion, ...).\n\nYou do not need this before running an operation: `run_connector_operation`\nanswers with the same `connect_url` when something is not connected. Use it\nwhen your person asks to connect something. Hand them `connect_url`\nas it is; do not describe menus instead.",
+    "input_schema": {
+      "properties": {
+        "connector": {
+          "description": "What to connect: a pod connector's slug, an installation's name, or a catalog connector id such as `gmail`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "connector"
+      ],
+      "title": "ConnectConnectorRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "describe_connector_operation",
     "toolset": "CONNECTORS",
     "description": "Get one operation's description and input/output schemas.\n\nCall this before running an operation you have not run before -- the input\nschema is what `run_connector_operation` validates `payload` against.",
     "input_schema": {
       "properties": {
         "connector": {
-          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`).",
+          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`). A catalog connector id (`gmail`, `notion`) works too: browsing it needs nothing connected, and running it answers with a `connect_url` until your person has connected it.",
           "type": "string"
         },
         "operation": {
@@ -3717,6 +3739,18 @@
           "default": null,
           "description": "Why this needs approval."
         },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Your whole reply above the card: what you did, what this does, why."
+        },
         "payload": {
           "anyOf": [
             {
@@ -3853,7 +3887,7 @@
       "description": "No account argument: the connector decides whose account a call runs as.\n\nA per-member connector uses the account of the person you act for; a\nshared one uses the account its owner shared with the pod. An\n``account_id`` here was a free argument a model could fill in to act as a\ncolleague.",
       "properties": {
         "connector": {
-          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`).",
+          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`). A catalog connector id (`gmail`, `notion`) works too: browsing it needs nothing connected, and running it answers with a `connect_url` until your person has connected it.",
           "type": "string"
         },
         "operation": {
@@ -4005,7 +4039,7 @@
             }
           ],
           "default": null,
-          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`). Omit to search every connector you may use in this pod -- prefer that when you know the task but not which connector provides it."
+          "description": "The pod connector, by its slug, as `list_connectors` names it (e.g. `gmail`, `support-inbox`). A catalog connector id (`gmail`, `notion`) works too: browsing it needs nothing connected, and running it answers with a `connect_url` until your person has connected it. Omit to search every connector you may use in this pod -- prefer that when you know the task but not which connector provides it."
         },
         "query": {
           "anyOf": [

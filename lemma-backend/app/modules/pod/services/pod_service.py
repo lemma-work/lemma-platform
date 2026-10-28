@@ -21,6 +21,7 @@ from app.modules.pod.domain.errors import (
 )
 from app.modules.pod.domain.pod_names import normalize_pod_name
 from app.modules.pod.domain.pod_entities import (
+    PodCreationSource,
     PodEntity,
     PodJoinPolicy,
     PodMemberEntity,
@@ -67,7 +68,13 @@ class PodService:
         self._plan_limits = plan_limits
         self._owned_pods = owned_pods
 
-    async def create_pod(self, entity: PodEntity, creator_user_id: UUID) -> PodEntity:
+    async def create_pod(
+        self,
+        entity: PodEntity,
+        creator_user_id: UUID,
+        *,
+        source: PodCreationSource = PodCreationSource.PERSON,
+    ) -> PodEntity:
         member = await self.organization_repository.get_member(
             creator_user_id, entity.organization_id
         )
@@ -88,7 +95,7 @@ class PodService:
         )
 
         # Aggregate method registers pod.created event.
-        entity.mark_created(creator_user_id)
+        entity.mark_created(creator_user_id, source=source)
 
         pod = await self.pod_repository.create(entity)
 

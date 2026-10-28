@@ -31,45 +31,14 @@ from app.modules.identity.domain.organization_slugs import (
     normalize_organization_slug,
 )
 
-# How many readable names to try before falling back to one that cannot collide.
-# Small on purpose: past a handful, "Acme 7" is no better a name than a suffixed
-# one, and each rung costs a query.
+# How many numbered handles to try before falling back to one that cannot
+# collide. Small on purpose: past a handful, ``acme-7`` is no more recognisable
+# than a suffixed one, and each rung costs a query.
 READABLE_ATTEMPTS = 5
 
 # Suffixed candidates are 24 bits of hex against a namespace of one organization.
 # Bounded anyway, because an unbounded loop in a signup path is a hang.
 SUFFIXED_ATTEMPTS = 5
-
-IsFree = Callable[[str, str], Awaitable[bool]]
-
-
-class NoAvailableOrganizationName(Exception):
-    """Every candidate was taken. Astronomically unlikely; not silently ignored."""
-
-
-async def resolve_available_identity(
-    base_name: str,
-    *,
-    is_free: IsFree,
-) -> tuple[str, str]:
-    """A ``(name, slug)`` pair no organization holds yet.
-
-    ``is_free`` answers for one candidate pair; the caller owns the lookup so
-    this stays independent of how organizations are stored.
-    """
-    for attempt in range(READABLE_ATTEMPTS):
-        candidate = base_name if attempt == 0 else f"{base_name} {attempt + 1}"
-        slug = normalize_organization_slug("", candidate)
-        if await is_free(candidate, slug):
-            return candidate, slug
-
-    for _ in range(SUFFIXED_ATTEMPTS):
-        candidate = f"{base_name} {uuid4().hex[:6]}"
-        slug = normalize_organization_slug("", candidate)
-        if await is_free(candidate, slug):
-            return candidate, slug
-
-    raise NoAvailableOrganizationName(base_name)
 
 
 async def resolve_email_domain_for_policy(
@@ -103,8 +72,13 @@ async def resolve_email_domain_for_policy(
 
     existing_domain = await get_email_domain_org(owner_domain)
     if existing_domain and existing_domain.id != exclude_org_id:
+        # Said as what the person can do next, with a code a client can branch
+        # on: the domain is not theirs to take, but joining that organization,
+        # or making one people join by invitation, both still are.
         raise OrganizationConflictError(
-            "This email domain is already taken by another organization"
+            "An organization already uses this email domain. Join it, or "
+            "create one that people join by invitation.",
+            code=OrganizationConflictError.DOMAIN_TAKEN,
         )
     return owner_domain
 
@@ -120,31 +94,20 @@ async def assign_organization_identity(
 ) -> None:
     """Settle ``entity``'s name and slug, or refuse.
 
-    ``resolve_conflicts`` is for a name the user did not choose -- the one
-    onboarding derives for a first workspace. There the walk picks a
-    ``(name, slug)`` pair whose *handle* is free rather than dead-ending
-    somebody who never typed a name. A slug the user did type still conflicts
-    loudly, because silently creating ``acme-2`` for someone who asked for
-    ``acme`` would be worse than telling them.
+    The name always stands, and only the slug is ever checked: two
+    organizations may both be called "Acme". A handle derived from the name
+    moves aside when it is taken; a slug the user did type conflicts loudly,
+    because silently creating ``acme-2`` for someone who asked for ``acme``
+    would be worse than telling them.
 
-    Only the slug is ever checked: two organizations may both be called "Acme".
+    ``resolve_conflicts`` once walked the *name* for a workspace onboarding
+    named -- "Personal 2", "Personal 5" -- writing a counter onto somebody's
+    workspace that they never chose and that says nothing about them. Moving
+    the handle instead is what it now shares with every other create, so the
+    flag no longer changes anything here; it stays on the wire for callers
+    that send it.
     """
-
-    async def _is_free(name: str, slug: str) -> bool:
-        del name  # `IsFree` is asked about the pair; the label is not scarce.
-        return await get_by_slug(slug) is None
-
-    if resolve_conflicts:
-        try:
-            entity.name, entity.slug = await resolve_available_identity(
-                entity.name, is_free=_is_free
-            )
-        except NoAvailableOrganizationName as exc:
-            raise OrganizationConflictError(
-                "Could not find an available organization name",
-                code=OrganizationConflictError.NAME_TAKEN,
-            ) from exc
-        return
+    del resolve_conflicts
 
     # Whether the person typed a handle, asked before it is derived from the
     # name. It decides who the conflict below belongs to.
@@ -175,8 +138,7 @@ async def _free_handle_near(base: str, get_by_slug: GetBySlug) -> str:
 
     ``acme`` taken becomes ``acme-2``, then ``acme-3``. Past a handful the
     numbering stops being recognisable, so it falls back to a suffix that
-    cannot realistically collide -- the same shape, and the same reasoning, as
-    :func:`resolve_available_identity`.
+    cannot realistically collide.
     """
     for attempt in range(2, READABLE_ATTEMPTS + 2):
         candidate = f"{base}-{attempt}"

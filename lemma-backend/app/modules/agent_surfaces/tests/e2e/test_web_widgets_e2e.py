@@ -4,7 +4,9 @@ The whole path with only the model's next move scripted. A member puts a chat
 widget on a shop's site; an anonymous visitor writes and is answered from what
 the pod made Public; a signed-in customer of the shop, named by a token the
 shop's server signed, is answered as a contact; an anonymous visitor who proves
-an email address becomes one, keeping the conversation. And the refusals: a
+an email address becomes one, keeping the conversation; a visitor held for a
+person is answered, once the agent has them back, having read what they said
+meanwhile. And the refusals: a
 page on another site, a forged or long-lived token, a host session that tries
 to outlive its token, a known-only widget's strangers, every guess at a code
 counted however fast they come, and a deployment with public web switched off.
@@ -36,7 +38,8 @@ from app.core.public_web import public_web_settings
 from app.modules.datastore.events.contact_merged_work import (
     register_contact_merged_work as register_datastore_contact_merged_work,
 )
-from app.modules.agent.infrastructure.models import ConversationModel
+from app.modules.agent.domain.folded_turns import FOLDED_CHAT_ENDS, FOLDED_CHAT_OPENS
+from app.modules.agent.infrastructure.models import AgentRunModel, ConversationModel
 from app.modules.agent.services.run_dispatch import suppress_agent_run_enqueue
 from app.modules.agent_surfaces.events.visitor_retention import sweep_web_visitors
 from app.modules.agent_surfaces.services.channel_deliveries import WAITS_IN_WEB_CHAT
@@ -46,6 +49,7 @@ from app.modules.channels.infrastructure.models import ChannelSourceModel
 from app.modules.channels.infrastructure.source_repository import MAX_PLACES
 from app.modules.agent_surfaces.tests.e2e.helpers import _messages_for_conversation
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
+    record_model_requests,
     run_scripted_agent_run,
     script_text,
     script_tool_call,
@@ -1525,11 +1529,13 @@ async def test_two_browsers_that_prove_one_email_carry_on_in_one_conversation(
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
+    monkeypatch,
 ):
     """Two browsers chat, then both prove one email: one contact, one channel,
     and one conversation in it. The second browser's conversation lost its seat
     to the first's when their channels became one; its next word continues the
-    conversation that holds the seat, rather than claiming it a second time."""
+    conversation that holds the seat, rather than claiming it a second time --
+    and the agent answering it has read what was said in both."""
     pod_id = test_pod["id"]
     owner = UUID(fixed_test_user["id"])
     widget = await _widget(authenticated_client, pod_id, name="Two browsers")
@@ -1571,6 +1577,7 @@ async def test_two_browsers_that_prove_one_email_carry_on_in_one_conversation(
         assert verified.status_code == 200, verified.text
     await _carry_out_merges()
 
+    requests = record_model_requests(monkeypatch)
     again = await _say(
         authenticated_client,
         db_session,
@@ -1602,6 +1609,21 @@ async def test_two_browsers_that_prove_one_email_carry_on_in_one_conversation(
     for said in ("Hi from my laptop", "Hi from my phone", "Hello again.", "Still me"):
         assert said in texts, (said, texts)
     assert texts.count("Hi from my phone") == 1
+    # The phone's words, and the agent's answer to them, were in no run of the
+    # conversation that kept the seat: carried on purpose, once, and read as
+    # the other chat's rather than as the newest thing said in this one.
+    seen = requests[0]["text"]
+    _read_in_order(
+        seen,
+        "Hi from my laptop",
+        "Hello.",
+        FOLDED_CHAT_OPENS,
+        "Hi from my phone",
+        "Hello again.",
+        FOLDED_CHAT_ENDS,
+        "Still me",
+    )
+    assert seen.count("Hi from my phone") == 1
 
 
 async def _carry_out_merges() -> None:
@@ -1837,12 +1859,13 @@ async def test_past_the_contacts_cap_a_visitor_is_told_a_person_will_reply(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
+    fixed_test_user,
     fixed_test_org,
+    monkeypatch,
 ):
     """The cap holds the web chat as it holds every other door: no run starts,
-    the message is kept for the member, and the visitor reads why, once."""
-    from app.modules.agent.infrastructure.models import AgentRunModel
-
+    the message is kept for the member, and the visitor reads why, once. Once
+    the cap is lifted, the agent answering them has read all of it."""
     pod_id = test_pod["id"]
     widget = await _widget(authenticated_client, pod_id)
     key = widget["public_key"]
@@ -1877,6 +1900,108 @@ async def test_past_the_contacts_cap_a_visitor_is_told_a_person_will_reply(
     said = [m["text"] for m in history.json()["messages"]]
     assert "Is the shop open?" in said and "Hello?" in said
     assert sum("will reply here" in text for text in said) == 1
+
+    lifted = await authenticated_client.put(
+        f"/usage/organizations/{fixed_test_org['id']}/contacts-cap",
+        json={"monthly_limit_usd": None},
+    )
+    assert lifted.status_code == 200, lifted.text
+    requests = record_model_requests(monkeypatch)
+    await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Are you open now?",
+        owner=UUID(fixed_test_user["id"]),
+        pod_id=pod_id,
+        script=[script_text("We are, until six.")],
+    )
+    seen = requests[0]["text"]
+    _read_in_order(
+        seen, "Is the shop open?", "will reply here", "Hello?", "Are you open now?"
+    )
+    assert seen.count("will reply here") == 1
+
+
+def _read_in_order(seen: str, *lines: str) -> None:
+    """Every line is in what the model was sent, in this order."""
+    at, before = 0, ""
+    for line in lines:
+        found = seen.find(line, at)
+        assert found >= 0, f"the model was never sent {line!r}{before}"
+        at, before = found + len(line), f" after {line!r}"
+
+
+@pytest.mark.drives_work
+async def test_a_visitor_a_member_had_is_answered_with_all_they_said_meanwhile(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    monkeypatch,
+):
+    """While a member has the chat no run answers the visitor, and their
+    messages wait for the member. Once the agent has them back, it reads those
+    messages before the one it answers -- not the newest alone, as if there
+    were no earlier thread."""
+    pod_id = test_pod["id"]
+    owner = UUID(fixed_test_user["id"])
+    widget = await _widget(authenticated_client, pod_id, name="Held for a member")
+    key = widget["public_key"]
+    visitor = await _session(authenticated_client, key)
+    conversation_id = await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Is the blue one in stock?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Let me check.")],
+    )
+    contact = await _contact_of(db_session, conversation_id)
+    channel = await contact_channel_id(authenticated_client, pod_id, str(contact))
+    # The member steps in by writing to them.
+    await member_writes(authenticated_client, pod_id, channel, "We have two left.")
+    await send_deliveries()
+
+    held = ("Can you keep one for me?", "I can pick it up on Friday.")
+    for text in held:
+        with suppress_agent_run_enqueue():
+            sent = await authenticated_client.post(
+                f"/public/web/{key}/messages", json={"text": text}, headers=_as(visitor)
+            )
+        assert sent.status_code == 202, sent.text
+    runs = await db_session.scalars(
+        select(AgentRunModel.id).where(AgentRunModel.conversation_id == conversation_id)
+    )
+    assert len(runs.all()) == 1, "a run answered while the member had the chat"
+
+    handed_back = await authenticated_client.patch(
+        f"/pods/{pod_id}/channels/{channel}", json={"agents_answer": True}
+    )
+    assert handed_back.status_code == 200, handed_back.text
+    requests = record_model_requests(monkeypatch)
+    await _say(
+        authenticated_client,
+        db_session,
+        key=key,
+        visitor=visitor,
+        text="Hello? Is that a yes?",
+        owner=owner,
+        pod_id=pod_id,
+        script=[script_text("Yes, one is kept for you until Friday.")],
+    )
+
+    _read_in_order(
+        requests[0]["text"],
+        "Is the blue one in stock?",
+        "Let me check.",
+        "We have two left.",
+        *held,
+        "Hello? Is that a yes?",
+    )
 
 
 async def test_past_the_contacts_cap_a_visitors_message_is_held_without_a_ledger_sum(

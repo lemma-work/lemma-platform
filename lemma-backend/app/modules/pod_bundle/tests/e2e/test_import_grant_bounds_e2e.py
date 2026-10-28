@@ -2,7 +2,9 @@
 
 An import writes agent and function grants. Those writes are bounded like the
 permissions routes are: the importer may hand an agent only what they could use
-themselves (audit H13), whoever wrote the bundle. And a grant on a connector the
+themselves (audit H13), whoever wrote the bundle -- and the plan says so, and
+the apply is refused with the pod untouched, rather than failing at the grants
+step after the agent was created. And a grant on a connector the
 pod does not declare and the organization never installed is refused while
 planning, before anything is written -- it used to fail at the grants step with
 "Unknown names", after the agent it grants to had been created.
@@ -119,24 +121,23 @@ async def test_an_editor_cannot_import_an_agent_holding_a_delete_they_lack(
     )
 
     import_id = await _import(async_client, pod_id, zip_bytes, editor)
-    await _wait(
+    planned = await _wait(
         async_client, pod_id, import_id, editor, until={"AWAITING_CONFIRMATION"}
     )
+    [grants_step] = [s for s in planned["plan"]["steps"] if s["kind"] == "AGENT_GRANTS"]
+    assert "datastore.table.delete" in (grants_step.get("error") or ""), grants_step
+    assert any("datastore.table.delete" in w for w in planned["plan"]["warnings"])
+
     apply = await async_client.post(
         f"/pods/{pod_id}/bundle/imports/{import_id}/apply",
         json={"variables": {}},
         headers=editor,
     )
-    assert apply.status_code == status.HTTP_202_ACCEPTED, apply.text
-    final = await _wait(
-        async_client, pod_id, import_id, editor, until={"COMPLETED", "FAILED"}
-    )
-
-    assert final["status"] == "FAILED", final
-    assert "datastore.table.delete" in (final.get("error") or ""), final
-    held = await authenticated_client.get(f"/pods/{pod_id}/agents/cleaner/permissions")
-    assert held.status_code == status.HTTP_200_OK, held.text
-    assert held.json()["grants"] == [], held.json()
+    assert apply.status_code == status.HTTP_403_FORBIDDEN, apply.text
+    assert apply.json()["code"] == "CONFERRAL_EXCEEDS_HOLDER", apply.text
+    # Refused with the pod untouched: the agent it would have armed is not there.
+    agent = await authenticated_client.get(f"/pods/{pod_id}/agents/cleaner")
+    assert agent.status_code == status.HTTP_404_NOT_FOUND, agent.text
 
 
 async def test_a_grant_on_a_connector_nobody_installed_is_refused_at_planning(

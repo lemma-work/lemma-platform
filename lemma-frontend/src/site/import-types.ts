@@ -48,14 +48,62 @@ export interface PlanStep {
 }
 
 /** A value the bundle asks for at install time. `pod_member` fills itself in
- *  with whoever installs; `free` is a name. A bundle's connectors are pod
- *  connectors it declares, not variables — nobody picks an account here. */
+ *  with whoever installs; `free` is a name. A bundle's connectors are not
+ *  variables: they come with their own choices, in `ImportPlan.connectors`. */
 export interface VariableSpec {
     name: string;
     kind: "pod_member" | "free";
     description: string | null;
     required: boolean;
     default: string | null;
+}
+
+export type ConnectorPlanStatus =
+    | "READY"
+    | "NEEDS_ACCOUNT"
+    | "NEEDS_INSTALLATION"
+    | "EXISTS"
+    | "CONFLICT";
+
+export interface InstallationOption {
+    auth_config_id: string;
+    name: string;
+    is_default: boolean;
+}
+
+/** One of the installer's own accounts, shareable for a SHARED connector. */
+export interface AccountOption {
+    account_id: string;
+    auth_config_id: string;
+    label: string | null;
+}
+
+/** A pod connector the bundle declares (`connectors/<slug>/`), and what the
+ *  installer may choose for it in their own organization. A bundle carries
+ *  the catalog connector and the mode only — never an installation or an
+ *  account, which are chosen here. */
+export interface ConnectorPlan {
+    slug: string;
+    connector: string;
+    mode: "PER_MEMBER" | "SHARED";
+    required: boolean;
+    purpose: string | null;
+    visibility: "POD" | "RESTRICTED";
+    status: ConnectorPlanStatus;
+    installations: InstallationOption[];
+    /** The installation used unless another is picked: the org's default. */
+    auth_config_id: string | null;
+    can_create_installation: boolean;
+    account_options: AccountOption[];
+    used_by: string[];
+    message: string | null;
+}
+
+/** What the apply request says for one connector, by slug. */
+export interface ConnectorChoice {
+    auth_config_id?: string;
+    create_installation?: boolean;
+    share_account_id?: string;
 }
 
 export interface ImportPlan {
@@ -65,6 +113,8 @@ export interface ImportPlan {
     variables: VariableSpec[];
     warnings: string[];
     has_destructive_steps: boolean;
+    /** Absent from a plan made before bundles carried connectors. */
+    connectors?: ConnectorPlan[];
 }
 
 export interface ImportStatusResponse {

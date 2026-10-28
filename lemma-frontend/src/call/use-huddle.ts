@@ -3,152 +3,157 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
+import { NEW_CONVERSATION } from "@/data/types";
+import { lemma } from "@/session/client";
 import { buildTurns } from "@/thread/turns";
 import { historyBrief } from "./history-brief";
 import { podBrief } from "./pod-brief";
 import { useCall } from "./use-call";
-import { useCallSession } from "./use-call-session";
 
-/** How much of the written conversation to read before the call opens. */
-/** Voice and conversation routing persist at pod level during a call. */
-export function useHuddle({ pod, teammate, conversationId }: {
+/** Who a call is with, fixed when it is placed. */
+export interface CallTarget {
     pod: { id: string; name: string };
     teammate: string;
-    /** The conversation open when the call starts. */
+}
+
+/** Where a call is placed: the chat it continues, or a new conversation. */
+export interface CallPlace extends CallTarget {
+    /** The chat the call is held in; null (or a new pane) starts a new one. */
     conversationId: string | null;
-}) {
-    const backend = useCallSession({ podId: pod.id, conversationId });
+}
+
+/** A call with a pod's teammate.
+ *
+ *  A call is held in a conversation on the server: the chat it was started
+ *  from, or a new one when it was started from nowhere -- so the call, the
+ *  teammate's work and the transcript are one chat, the one the person was
+ *  in. Its teammate coordinates the call there, hands work to sub-agents, and
+ *  puts what is worth seeing on the call's canvas.
+ *
+ *  Where it is placed is passed to `start`, not read from the hook's
+ *  arguments: the call must not follow the person to another pod, and a call
+ *  ended by the server must not leave the next one aimed at the last pod. */
+export function useHuddle() {
+    const call = useCall();
     /** Expanded is the screen; collapsed is the bar. A call is never gone
      *  just because you are looking at something else. */
     const [expanded, setExpanded] = useState(false);
-
-    /* Read when a call starts, not on every pod you look at. The profile is
-       seven round trips — as a standing `useQuery` here it would have fired
-       them for every pod in the app on the chance somebody might call, and
-       with an empty id before a pod had even resolved.
-
-       `ensureQueryData` shares the profile tab's cache both ways: a pod whose
-       profile has been opened starts its call with this already in hand, and a
-       call warms the tab. */
-    const queryClient = useQueryClient();
-    const context = useCallback(async () => {
-        if (!pod.id) return "";
-        const profile = await queryClient.ensureQueryData({
-            queryKey: ["profile", pod.id],
-            queryFn: () => source.getProfile(pod.id),
-            staleTime: 5 * 60_000,
-        });
-        const brief = podBrief(profile, teammate);
-        backend.setContext(brief);
-        return brief;
-    }, [queryClient, pod.id, teammate, backend.setContext]);
-
-    const history = () => historyBrief(buildTurns(backend.historyMessages()), teammate);
-
-    const call = useCall({
-        teammate,
-        pod: pod.name,
-        handlers: { observeTranscript: backend.observeTranscript, route: backend.route, subscribe: backend.subscribe, history, context },
-    });
-
-    const { start: startCall, end: endCall } = call;
-    const { open: openConversation, close: closeConversation } = backend;
-
-    /* Kept, not swallowed. Failing to open the call's conversation breaks
-       every other part of a call, so it is the last failure that should be
-       discarded into a `.catch(() => undefined)`: the voice still connects,
-       the person still talks, and nothing ever comes back with no symptom
-       anywhere to explain it. */
+    const [callId, setCallId] = useState<string | null>(null);
+    const [target, setTarget] = useState<CallTarget | null>(null);
+    /** A call is being set up or is on: a second press opens it rather than
+     *  placing another, which would have no connection of its own. */
+    const busy = useRef(false);
+    const [starting, setStarting] = useState(false);
     const [setupError, setSetupError] = useState<string | null>(null);
     const setupAttempt = useRef(0);
-    const setupPending = useRef(false);
-    useEffect(() => () => { setupAttempt.current++; }, []);
+    const queryClient = useQueryClient();
 
-    const start = useCallback(async () => {
-        if (setupPending.current) return;
-        setupPending.current = true;
+    /* The pod and the chat the call continues, for the voice -- the teammate
+       has the chat itself. A pod or chat that cannot be read is a call without
+       the background, worse but not broken, so neither failure stops it. */
+    const context = useCallback(async (place: CallPlace) => {
+        const parts: string[] = [];
+        const profile = await queryClient.ensureQueryData({
+            queryKey: ["profile", place.pod.id],
+            queryFn: () => source.getProfile(place.pod.id),
+            staleTime: 5 * 60_000,
+        }).catch(() => null);
+        if (profile) parts.push(podBrief(profile, place.teammate));
+        if (place.conversationId && place.conversationId !== NEW_CONVERSATION) {
+            const page = await lemma(place.pod.id).conversations.messages
+                .list(place.conversationId, { pod_id: place.pod.id, limit: 80 })
+                .catch(() => null);
+            const history = page ? historyBrief(buildTurns(page.items), place.teammate) : "";
+            if (history) parts.push(history);
+        }
+        return parts.join("\n\n");
+    }, [queryClient]);
+
+    const { start: startCall, end: endCall } = call;
+
+    /** Place a call, or open the one already on. Resolves to the call's
+     *  conversation once it is placed, for the shell to show; null when a
+     *  call was already on or placing it failed. */
+    const start = useCallback(async (place: CallPlace): Promise<string | null> => {
+        if (busy.current || call.active) { setExpanded(true); return null; }
+        busy.current = true;
+        setStarting(true);
         const attempt = ++setupAttempt.current;
         setSetupError(null);
         setExpanded(true);
-        // Load routing candidates before opening audio.
+        setTarget({ pod: place.pod, teammate: place.teammate });
+        const existing = place.conversationId && place.conversationId !== NEW_CONVERSATION
+            ? place.conversationId : null;
         try {
-            const config = await fetch("/api/call/config").then(response => response.json());
-            if (attempt !== setupAttempt.current) return;
-            /* The button is only offered once this is known to be true (see
-               `useVoiceConfigured`); reaching here means the setting changed
-               since. Said to the person, not the operator. */
-            if (!config.configured) throw new Error("Voice calls aren’t set up on this install.");
-            await openConversation();
-            if (attempt !== setupAttempt.current) return;
-            await startCall();
+            const opened = await lemma(place.pod.id).calls.open({
+                ...(existing ? { conversation_id: existing } : {}),
+                display_name: place.teammate || "your teammate",
+                title: `Call with ${place.teammate || "your teammate"}`,
+            });
+            if (attempt !== setupAttempt.current) return null;
+            setCallId(opened.call_id);
+            const brief = await context(place);
+            if (attempt !== setupAttempt.current) return null;
+            void startCall(place.pod.id, opened.call_id, { teammate: place.teammate, pod: place.pod.name, context: brief });
+            return opened.call_id;
         } catch (problem) {
-            if (attempt !== setupAttempt.current) return;
-            setSetupError(problem instanceof Error ? problem.message : "Could not open the call's conversation.");
+            if (attempt !== setupAttempt.current) return null;
+            setCallId(null);
+            setTarget(null);
+            setSetupError(problem instanceof Error ? problem.message : "Could not start the call.");
             setExpanded(false);
-            return;
-        } finally { if (attempt === setupAttempt.current) setupPending.current = false; }
-    }, [openConversation, startCall]);
+            return null;
+        } finally {
+            if (attempt === setupAttempt.current) { busy.current = false; setStarting(false); }
+        }
+    }, [context, startCall, call.active]);
 
     const end = useCallback(() => {
-        setupAttempt.current++; setupPending.current = false;
+        setupAttempt.current++;
+        busy.current = false;
+        setStarting(false);
         setSetupError(null);
+        setCallId(null);
+        setTarget(null);
         endCall();
-        closeConversation();
         setExpanded(false);
-    }, [endCall, closeConversation]);
+    }, [endCall]);
 
-    /* Announced once, by name and kind, the moment it exists. Tracking what
-       has been said keeps a re-render from telling the voice the same chart
-       appeared four times. The kind matters out loud: "the vendor table is on
-       your screen" and "the file is on your screen" are different sentences,
-       and the voice cannot tell them apart from a label alone. */
-    const announcedRef = useRef(new Set<string>());
-    const { announceWidget } = call;
+    // Ended from the other side -- the server, the network -- as well as here:
+    // the next call is placed from wherever the person is then.
     useEffect(() => {
-        if (!call.active) return;
-        for (const shown of backend.resources) {
-            if (announcedRef.current.has(shown.id)) continue;
-            announcedRef.current.add(shown.id);
-            announceWidget(`${shown.resource.type.toLowerCase()} — ${shown.label}`);
+        if (call.status === "ended" || call.status === "error") {
+            setCallId(null);
+            setTarget(null);
         }
-    }, [call.active, backend.resources, announceWidget]);
-
-    useEffect(() => {
-        if (!call.active) announcedRef.current = new Set();
-    }, [call.active]);
-
-    useEffect(() => {
-        if (call.status === "ended" || call.status === "error") closeConversation();
-    }, [call.status, closeConversation]);
-
-    const expand = useCallback(() => setExpanded(true), []);
-    const collapse = useCallback(() => setExpanded(false), []);
+    }, [call.status]);
 
     return {
         status: call.status,
         error: setupError ?? call.error,
+        notice: call.notice,
         muted: call.muted,
         transcript: call.transcript,
-        plan: backend.plan,
-        /* Two sources, because the lighter model is silent about itself.
-           `gemini-3.8-live` never sends `interactionStatus` — only the
-           extended-thinking variant does — so on the default model
-           `call.thinking` is always false.
-
-           The teammate's own run is the better signal anyway: "still working
-           on it" should mean the work is still running, not that a voice model
-           is still reasoning about what to say. */
-        thinking: call.thinking || backend.isStreaming,
+        /** Someone in the call is working: "still on it" means work is running. */
+        thinking: call.working,
+        liveEpoch: call.liveEpoch,
         level: call.level,
         active: call.active,
-        resources: backend.resources,
-        callConversationId: backend.conversationId,
+        canvas: call.canvas,
+        showing: call.showing,
+        target,
+        callConversationId: callId,
+        settled: call.settled,
+        /** A call is on or being set up: pressing call again should open it. */
+        inCall: starting || call.active,
         expanded: expanded && call.active,
-        expand,
-        collapse,
+        expand: useCallback(() => setExpanded(true), []),
+        collapse: useCallback(() => setExpanded(false), []),
         start,
         end,
         toggleMute: call.toggleMute,
+        show: call.show,
+        renderFailed: call.renderFailed,
     };
 }
 

@@ -92,3 +92,72 @@ export function surfacesForAgent(surfaces: Surface[], agentName = "pod_default")
         ? surface.mine
         : !surface.mine && surface.agentKey === agentName);
 }
+
+/** Which pod connector a surface runs as, and how that account stands. */
+export interface SurfaceConnectionView {
+    podConnector: string;
+    connectorId: string;
+    /** The account's name at the provider. */
+    label: string;
+    /** Whose account it is, by name or email; "you" when it is yours. */
+    owner: string;
+    /** The owner has left the pod. Their token works until it expires. */
+    ownerGone: boolean;
+    /** CONNECTED, REAUTH_REQUIRED, DISCONNECTED or MISSING. */
+    status: string;
+}
+
+export function readConnection(surface: Pick<AgentSurfaceResponse, "connection" | "pod_connector">): SurfaceConnectionView | null {
+    const connection = surface.connection;
+    const slug = connection?.pod_connector ?? surface.pod_connector ?? "";
+    if (!slug) return null;
+    const owner = connection?.connected_by;
+    return {
+        podConnector: slug,
+        connectorId: connection?.connector_id ?? "",
+        label: connection?.display_name ?? "",
+        owner: owner ? (owner.is_you ? "you" : owner.name || owner.email || "") : "",
+        ownerGone: owner ? owner.is_pod_member === false : false,
+        status: String(connection?.status ?? "").toUpperCase(),
+    };
+}
+
+/** One line for the account a surface runs as: "Runs as support-inbox ·
+ *  support@acme.com · by Alice". */
+export function connectionLine(view: SurfaceConnectionView): string {
+    return ["Runs as " + view.podConnector, view.label, view.owner && "by " + view.owner].filter(Boolean).join(" · ");
+}
+
+/** Why a surface's connector cannot run, said for whoever can fix it, or
+ *  empty when it can. `connector` is the pod connector it names, when the
+ *  pod's list has it. */
+export function connectionTrouble(view: SurfaceConnectionView, connector: { status: string } | undefined): string {
+    if (!connector && view.status !== "CONNECTED") return view.podConnector + " is no longer one of this teammate's connectors.";
+    if (connector?.status === "UNAVAILABLE") return "The installation behind " + view.podConnector + " is turned off for the organization.";
+    if (connector?.status === "NEEDS_ACCOUNT" || view.status === "MISSING") return view.podConnector + " has no account shared with it right now.";
+    if (view.status === "REAUTH_REQUIRED") return "The account behind " + view.podConnector + " needs " + (view.owner === "you" ? "you" : view.owner || "its owner") + " to sign in again.";
+    if (view.status === "DISCONNECTED") return "The account behind " + view.podConnector + " was disconnected.";
+    return "";
+}
+
+/** Whether to offer moving the surface to another connector: its own one
+ *  runs as nobody, or names a connector that is gone. */
+export function needsRebind(view: SurfaceConnectionView, connector: { status: string } | undefined): boolean {
+    return !connector || connector.status === "NEEDS_ACCOUNT" || view.status === "MISSING";
+}
+
+/** The app a surface is on, as a catalog connector id: what its connection
+ *  says, else the connector it names, else its platform's connector. Empty
+ *  when none of them says — and then nothing is offered in its place. */
+export function surfaceApp(view: SurfaceConnectionView, current: { connectorId: string } | undefined, platformConnector: string): string {
+    return view.connectorId || current?.connectorId || platformConnector;
+}
+
+/** The SHARED connectors a surface could run as instead: on the surface's own
+ *  app (`app`, from `surfaceApp`), ready, and not the one it has. A
+ *  connector whose app this page cannot read is not offered — a Slack
+ *  channel moved onto a Gmail account answers nobody. */
+export function rebindChoices<T extends { slug: string; connectorId: string; mode: string; status: string }>(view: SurfaceConnectionView, connectors: T[], app: string): T[] {
+    if (!app) return [];
+    return connectors.filter((one) => one.mode === "SHARED" && one.status === "READY" && one.slug !== view.podConnector && one.connectorId === app);
+}

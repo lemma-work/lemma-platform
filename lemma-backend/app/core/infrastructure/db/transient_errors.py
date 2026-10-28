@@ -24,6 +24,7 @@ __all__ = [
     "DEADLOCK_DETECTED",
     "SERIALIZATION_FAILURE",
     "is_database_unavailable",
+    "is_schema_skew",
     "raise_if_database_unavailable",
     "raise_if_transient_database_error",
     "is_deadlock",
@@ -32,6 +33,10 @@ __all__ = [
 
 DEADLOCK_DETECTED = "40P01"
 SERIALIZATION_FAILURE = "40001"
+
+#: A column or table the code names and the database does not have (yet):
+#: undefined_column, undefined_table.
+_SCHEMA_SKEW_SQLSTATES = frozenset({"42703", "42P01"})
 
 _RETRYABLE_SQLSTATES = frozenset({DEADLOCK_DETECTED, SERIALIZATION_FAILURE})
 
@@ -123,6 +128,17 @@ def is_database_unavailable(exc: BaseException) -> bool:
     ``exc``'s chain of direct causes.
     """
     return any(_link_unavailable(link) for link in _chain(exc))
+
+
+def is_schema_skew(exc: BaseException) -> bool:
+    """The code and the schema disagree: a column or table is missing.
+
+    During a release, new code runs before ``alembic upgrade head`` finishes
+    and old code after it, each against the other's schema. The same work is
+    expected to succeed once the rollout settles -- or never, if it is a real
+    bug, which is why the caller bounds how long it believes the first.
+    """
+    return any(_sqlstate(link) in _SCHEMA_SKEW_SQLSTATES for link in _chain(exc))
 
 
 def is_transient_database_error(exc: BaseException) -> bool:

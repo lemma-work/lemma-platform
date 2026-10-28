@@ -76,7 +76,9 @@ class RedisChannelAdapter:
         self._listener_task = None
         if task is not None:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            # A listener that already ended on a lost connection hands that
+            # error back here; Redis being gone is no reason to fail shutdown.
+            with contextlib.suppress(asyncio.CancelledError, RedisError, OSError):
                 await task
 
         clients = {
@@ -231,8 +233,18 @@ class RedisChannelAdapter:
 
     async def _listen(self) -> None:
         backoff = 0.25
+        # Set when the connection was lost: the next pass waits this long,
+        # takes a fresh lease and resubscribes before listening again. Inside
+        # the `try`, so Redis still being down when it does is one more failure
+        # to back off from. Outside it, that error ended the listener for good
+        # -- every subscriber stopped hearing anything -- and, at shutdown,
+        # surfaced from `disconnect` and failed the app's lifespan.
+        reconnect_after: float | None = None
         while not self._closing:
             try:
+                if reconnect_after is not None:
+                    await self._reconnect(reconnect_after)
+                    reconnect_after = None
                 pubsub = await self._ensure_pubsub()
                 async for message in pubsub.listen():
                     if message.get("type") != "message":
@@ -256,7 +268,7 @@ class RedisChannelAdapter:
                     return
                 reconnect_counter.add(1)
                 self._connection_incident.record_failure(error_type=type(exc).__name__)
-                await self._reconnect(backoff)
+                reconnect_after = backoff
                 backoff = min(backoff * 2, RECONNECT_MAX_SECONDS)
 
     async def _fan_out(self, channel: object, data: str | bytes) -> None:

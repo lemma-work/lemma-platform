@@ -290,6 +290,28 @@ def stat_file(
         emit(state, result)
 
 
+@app.command("retry")
+def retry_processing(
+    ctx: typer.Context,
+    path: str = typer.Argument(...),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Process a file again after it failed for good (FAILED_PERMANENT).
+
+    `file stat` shows why in `last_processing_error`; fix that first, or the
+    retry fails the same way.
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).files.retry_processing(
+            api_path(path)
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
 # --- Writing --------------------------------------------------------------
 
 

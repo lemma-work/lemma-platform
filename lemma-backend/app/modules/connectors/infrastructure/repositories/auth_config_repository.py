@@ -204,6 +204,25 @@ class AuthConfigRepository(
         instance = result.scalars().first()
         return await self._to_entity(instance) if instance else None
 
+    async def get_disabled_by_org_and_app(
+        self, organization_id: UUID, connector_id: str
+    ) -> AuthConfigEntity | None:
+        """An install of this connector an admin switched off, if there is one:
+        what stops a first connect from quietly installing it again."""
+        stmt = (
+            select(AuthConfig)
+            .where(
+                AuthConfig.organization_id == organization_id,
+                AuthConfig.connector_id == connector_id,
+                AuthConfig.status == AuthConfigStatus.DISABLED.value,
+            )
+            .order_by(AuthConfig.id)
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        instance = result.scalars().first()
+        return await self._to_entity(instance) if instance else None
+
     async def list_by_org(
         self,
         organization_id: UUID,

@@ -13,9 +13,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID
 
+from app.core.origin import Origin, current_origin
+from app.modules.agent.domain.run_origin import conversation_origin
 from app.modules.usage.contracts import UsageReservation
+
+if TYPE_CHECKING:
+    from app.modules.agent.domain.entities import AgentRun, Conversation
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +48,51 @@ class RunIdentity:
     #: re-derived at the finish, so the pass follows exactly the runs whose
     #: prompt promised one.
     memory_after_turn: bool = False
+    #: How the run's work arrived, for the completion event. Resolved where the
+    #: run starts, because the finalizer runs in a work item that has no origin
+    #: of its own to inherit (``domain.run_origin.conversation_origin``).
+    origin: Origin | None = None
+
+    @classmethod
+    def of_turn(
+        cls,
+        conversation: Conversation,
+        agent_run: AgentRun,
+        *,
+        agent_run_id: UUID,
+        user_id: UUID,
+        usage_source: str,
+    ) -> "RunIdentity":
+        """The identity of ``agent_run``, a turn of ``conversation``, as it starts.
+
+        Its origin is the request's when the turn runs inside one; otherwise --
+        the usual case, a work item -- what the conversation records.
+        """
+        return cls(
+            conversation_id=conversation.id,
+            agent_run_id=agent_run_id,
+            organization_id=conversation.organization_id,
+            pod_id=conversation.pod_id,
+            user_id=user_id,
+            agent_id=conversation.agent_id,
+            started_at=agent_run.started_at,
+            usage_source=usage_source,
+            origin=current_origin()
+            or conversation_origin(
+                metadata=conversation.metadata,
+                parent_id=conversation.parent_id,
+                conversation_id=conversation.id,
+            ),
+        )
+
+    @property
+    def origin_kind(self) -> str | None:
+        """``origin`` as an event records it."""
+        return self.origin.kind.value if self.origin else None
+
+    @property
+    def origin_platform(self) -> str | None:
+        return self.origin.platform if self.origin else None
 
     def with_reservation(self, reservation: UsageReservation | None) -> "RunIdentity":
         """The same run, once usage has been reserved for it.

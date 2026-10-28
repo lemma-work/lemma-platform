@@ -22,6 +22,7 @@ from uuid import UUID
 from app.core.infrastructure.db.transient_errors import raise_if_database_unavailable
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
+from app.core.concurrency.offload import run_blocking
 from app.core.domain.errors import DomainError
 from app.core.infrastructure.work import Defer
 from app.core.log.log import get_logger
@@ -48,6 +49,11 @@ from app.modules.pod_bundle.infrastructure.archive_offload import (
     extract_bundle_offloaded,
 )
 from app.modules.pod_bundle.infrastructure import github_fetcher
+from app.modules.pod_bundle.infrastructure.bundle_contents import (
+    archived_resource_count,
+    resource_count,
+)
+from app.modules.pod_bundle.infrastructure.bundle_identity import read_bundle_id
 from app.modules.pod_bundle.infrastructure import publish_manifest
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
@@ -230,6 +236,7 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
                     ctx=ctx,
                     uow=uow,
                     on_progress=on_progress,
+                    bundle_id=export_id,
                 )
 
         # (c) upload — no DB connection held.
@@ -257,7 +264,9 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
             export_id=export_id,
             pod_id=pod_id,
             user_id=user_id,
-            resource_count=len(getattr(state, "manifest", None) or ()),
+            resource_count=await run_blocking(
+                archived_resource_count, zip_bytes, limiter="cpu_bound"
+            ),
         )
         state.completed_at = _now()
         # Retain the READY export state (and thus its archive) for the URL's TTL,
@@ -377,23 +386,35 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
                 user_id=state.user_id, pod_id=state.pod_id
             )
             async with context_scope(ctx):
+                from app.modules.pod_bundle.infrastructure.account_checks import (
+                    ServiceAccountUsability,
+                )
                 from app.modules.pod_bundle.infrastructure.connector_grants import (
                     ServiceConnectorDirectory,
+                )
+                from app.modules.pod_bundle.infrastructure.connector_planning import (
+                    ServiceConnectorLookup,
+                )
+                from app.modules.pod_bundle.infrastructure.grant_planning import (
+                    ServiceGrantConferral,
                 )
                 from app.modules.pod_bundle.infrastructure.plan_builder import (
                     PlanBuilder,
                     ServiceExistingResources,
                 )
 
-                existing = ServiceExistingResources(
-                    uow=uow, ctx=ctx, pod_id=state.pod_id, user_id=state.user_id
-                )
-                connectors = ServiceConnectorDirectory(
+                scope = {"uow": uow, "ctx": ctx, "pod_id": state.pod_id}
+                existing = ServiceExistingResources(**scope, user_id=state.user_id)
+                directory = ServiceConnectorDirectory(
                     uow=uow, pod_id=state.pod_id, organization_id=ctx.organization_id
                 )
-                plan = await PlanBuilder(existing, connectors).build_plan(
-                    bundle_root=bundle_root
-                )
+                plan = await PlanBuilder(
+                    existing,
+                    directory,
+                    connectors=ServiceConnectorLookup(**scope, user_id=state.user_id),
+                    grants=ServiceGrantConferral(**scope),
+                    accounts=ServiceAccountUsability(**scope),
+                ).build_plan(bundle_root=bundle_root)
 
     await _raise_if_cancelled(store, import_id)
     state.plan = plan
@@ -600,12 +621,20 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         app_runner = AppStepRunner(uow_factory=worker_ctx.uow_factory)
         function_runner = None
 
+        source_bundle_id: UUID | None = None
+        bundle_resources = 0
         with tempfile.TemporaryDirectory(prefix="lemma-pod-apply-") as tmp:
             try:
                 bundle_root = await extract_bundle_offloaded(archive, tmp)
             except ValueError as exc:
                 raise BundleInvalidError(str(exc)) from exc
             publish_manifest.prepare_published_bundle(bundle_root)
+            source_bundle_id = await run_blocking(
+                read_bundle_id, bundle_root, limiter="cpu_bound"
+            )
+            bundle_resources = await run_blocking(
+                resource_count, bundle_root, limiter="cpu_bound"
+            )
 
             while (step := state.plan.next_pending_step()) is not None:
                 yield_point()  # every earlier step is committed and checkpointed
@@ -670,6 +699,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                                     # applier takes is checkpointed with the step
                                     # and read back by the status endpoint.
                                     warnings=state.warnings,
+                                    connector_choices=state.connector_choices,
                                 )
                                 await applier.apply_step(step)
                                 await _raise_if_cancelled(store, import_id)
@@ -714,10 +744,10 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         await bundle_analytics.record_import_completed(
             worker_ctx,
             import_id=import_id,
+            bundle_id=source_bundle_id,
             pod_id=pod_id,
             user_id=user_id,
-            resource_count=len(getattr(state.plan, "steps", None) or ()),
-            is_remix=bool(getattr(state, "is_remix", False)),
+            resource_count=bundle_resources,
         )
         await publish_bundle_event(
             import_id, completed_payload(state.status.value, state.seq)

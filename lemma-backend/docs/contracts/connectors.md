@@ -39,6 +39,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `connector.status.get` | GET | `/organizations/{organization_id}/connectors/status` | Get Connector Status |
 | `connector.trigger.get` | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers/{trigger_name}` | Get Connector Trigger |
 | `connector.trigger.list` | GET | `/organizations/{organization_id}/connectors/{auth_config_name}/triggers` | List Connector Triggers |
+| `pod.connector.ask_members` | POST | `/pods/{pod_id}/connectors/{slug}/ask-members` | Ask Members To Connect |
+| `pod.connector.coverage` | GET | `/pods/{pod_id}/connectors/{slug}/coverage` | Who A Per-Member Connector Is Waiting On |
 | `pod.connector.create` | POST | `/pods/{pod_id}/connectors` | Declare A Pod Connector |
 | `pod.connector.delete` | DELETE | `/pods/{pod_id}/connectors/{slug}` | Remove Pod Connector |
 | `pod.connector.get` | GET | `/pods/{pod_id}/connectors/{slug}` | Get Pod Connector |
@@ -50,6 +52,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `pod.connector_account.add` | POST | `/pods/{pod_id}/connector-accounts` | Add One Of Your Accounts To The Pod |
 | `pod.connector_account.list` | GET | `/pods/{pod_id}/connector-accounts` | List Accounts In Use In The Pod |
 | `pod.connector_account.remove` | DELETE | `/pods/{pod_id}/connector-accounts/{pod_account_id}` | Remove An Account From The Pod |
+| `pod.connector_account.share_as` | POST | `/pods/{pod_id}/connector-accounts/{pod_account_id}/share-as` | Share Your Account As A Pod Connector |
 | `pod.connector_account.update` | PATCH | `/pods/{pod_id}/connector-accounts/{pod_account_id}` | Share Or Withdraw Your Account In The Pod |
 
 <!-- /generated:operations -->

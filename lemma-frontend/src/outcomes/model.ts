@@ -6,7 +6,7 @@
 import { CORE_SCHEMA, dump, load } from "js-yaml";
 import type { ConversationRef } from "@/data/types";
 import { listedAsChat } from "@/channels/chat-list";
-import { channelTitle, platformsOf, previewOf, type Channel } from "@/channels/model";
+import { channelTitle, directPlaces, platformsOf, previewOf, type Channel } from "@/channels/model";
 import type { OriginKind } from "@/thread/conversation-origin";
 import { readableName } from "@/library/reading";
 import type { AskedRow } from "@/thread/waiting-on-you";
@@ -838,7 +838,7 @@ export function chatItems(input: {
                 podId: pod.id,
                 podName: pod.name,
                 kind: channel.kind === "DIRECT" ? "line" : "shared",
-                title: channel.kind === "DIRECT" ? lineTitle(channelTitle(channel, pod.name)) : channelTitle(channel, pod.name),
+                title: channel.kind === "DIRECT" ? lineTitle(directPlaces(channel)) : channelTitle(channel, pod.name),
                 said: channel.lastLine || channel.topic ? previewOf(channel, input.me) : null,
                 at: timeOf(channel.lastMessageAt ?? channel.createdAt),
                 needsYou: channel.unread.waiting > 0,

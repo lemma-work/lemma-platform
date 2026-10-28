@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
-from attrs import field as _attrs_field
 
 from ..models.pod_account_visibility import PodAccountVisibility
 from ..types import UNSET, Unset
@@ -20,18 +19,27 @@ T = TypeVar("T", bound="PodAccountUpdateRequest")
 class PodAccountUpdateRequest:
     """
     Attributes:
+        allow_sandbox_use (bool | None | Unset): Owner only: allow this account's credential inside sandboxes, so a
+            SHARED connector on it (the pod's `github`) can give other members' workspaces its raw token for git and gh,
+            which they can copy. Off by default; withdrawing the account turns it off.
         is_member_default (bool | None | Unset): Owner only: make this the account your own calls use here.
         share_with (list[GranteeRef] | None | Unset): RESTRICTED only: replaces who may use it.
         visibility (None | PodAccountVisibility | Unset): Owner only. PERSONAL withdraws it: SHARED connectors using it
             need another account at once.
     """
 
+    allow_sandbox_use: bool | None | Unset = UNSET
     is_member_default: bool | None | Unset = UNSET
     share_with: list[GranteeRef] | None | Unset = UNSET
     visibility: None | PodAccountVisibility | Unset = UNSET
-    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        allow_sandbox_use: bool | None | Unset
+        if isinstance(self.allow_sandbox_use, Unset):
+            allow_sandbox_use = UNSET
+        else:
+            allow_sandbox_use = self.allow_sandbox_use
+
         is_member_default: bool | None | Unset
         if isinstance(self.is_member_default, Unset):
             is_member_default = UNSET
@@ -59,8 +67,10 @@ class PodAccountUpdateRequest:
             visibility = self.visibility
 
         field_dict: dict[str, Any] = {}
-        field_dict.update(self.additional_properties)
+
         field_dict.update({})
+        if allow_sandbox_use is not UNSET:
+            field_dict["allow_sandbox_use"] = allow_sandbox_use
         if is_member_default is not UNSET:
             field_dict["is_member_default"] = is_member_default
         if share_with is not UNSET:
@@ -75,6 +85,15 @@ class PodAccountUpdateRequest:
         from ..models.grantee_ref import GranteeRef
 
         d = dict(src_dict)
+
+        def _parse_allow_sandbox_use(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        allow_sandbox_use = _parse_allow_sandbox_use(d.pop("allow_sandbox_use", UNSET))
 
         def _parse_is_member_default(data: object) -> bool | None | Unset:
             if data is None:
@@ -127,26 +146,10 @@ class PodAccountUpdateRequest:
         visibility = _parse_visibility(d.pop("visibility", UNSET))
 
         pod_account_update_request = cls(
+            allow_sandbox_use=allow_sandbox_use,
             is_member_default=is_member_default,
             share_with=share_with,
             visibility=visibility,
         )
 
-        pod_account_update_request.additional_properties = d
         return pod_account_update_request
-
-    @property
-    def additional_keys(self) -> list[str]:
-        return list(self.additional_properties.keys())
-
-    def __getitem__(self, key: str) -> Any:
-        return self.additional_properties[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.additional_properties[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        del self.additional_properties[key]
-
-    def __contains__(self, key: str) -> bool:
-        return key in self.additional_properties

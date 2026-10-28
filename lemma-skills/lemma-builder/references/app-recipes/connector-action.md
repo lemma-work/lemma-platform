@@ -1,21 +1,18 @@
 # Recipe — call a connector operation from an app
 
-Run a third-party action (send email, post message, …) on the user's connected
-account, from the app. (← `apps.md`)
+Run a third-party action (send email, post message, …) through one of the pod's
+connectors, from the app. (← `apps.md`)
 
 ## The model (see `connectors.md`)
 
-A **connector** (catalog: `gmail`, `slack`…) has an org **auth-config**; each user
-has an **account** under it; the connector exposes **operations**. The app executes
-an operation **on the user's account** (delegated) — it never holds credentials.
-You address operations by the **auth-config name**, which you find with
-`lemma connectors overview`.
+The pod declares **pod connectors** by slug (`gmail`, `support-inbox`), each on
+one of the org's installations. The app addresses an operation by **pod connector
+slug** — find them with `lemma connectors pod-list` — and the connector decides
+whose account runs it: the signed-in person's own (PER_MEMBER) or the one shared
+with the pod (SHARED). The app never holds credentials or names an account. The
+person needs `connector.use` on the connector (POD_USER and above by default).
 
 ## Discover, then execute
-
-Every `connectors.operations.*` call takes a **scope** first — `{ organizationId,
-authConfigName }` — because auth configs are org-scoped, not pod-scoped. The pod knows
-its org, so resolve it once:
 
 ```ts
 // A pod connector is addressed by its slug; the pod declares it (`lemma
@@ -45,7 +42,7 @@ declares it, but cannot run anything.
 ## Make it a safe action
 
 - **Discover, don't guess** operation names — list/search first; names are
-  kind-specific (`package` and `composio` differ).
+  kind-specific (`http` and `composio` differ).
 - **Confirm side-effects.** An operation that sends/posts/charges is irreversible —
   gate it behind an explicit confirm and show what will happen.
 - **Handle the no-account case.** When the person has no account for a PER_MEMBER
@@ -56,5 +53,5 @@ declares it, but cannot run anything.
 - For server-side calls (a function/agent acting for the user), the same operation
   runs through the in-function SDK with a granted connector — see `functions.md`.
 
-> Exact surface: `cat node_modules/lemma-sdk/dist/namespaces/connectors.d.ts`; the org
-> auth-config names come from `lemma connectors overview`.
+> Exact surface: `cat node_modules/lemma-sdk/dist/namespaces/connectors.d.ts`; the
+> pod's connector slugs come from `lemma connectors pod-list`.

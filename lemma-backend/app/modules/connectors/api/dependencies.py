@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated
 from uuid import UUID
 
@@ -5,7 +6,9 @@ from fastapi import Depends
 
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.authorization.context import Context
+from app.core.config import settings
 from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.cache.resilient_cache import ResilientJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
@@ -63,6 +66,9 @@ from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.connectors.services.trigger_service import ConnectorTriggerService
 
 if TYPE_CHECKING:
+    from app.modules.connectors.services.pod_connector_coverage import (
+        PodConnectorCoverageService,
+    )
     from app.modules.connectors.api.schemas.connector_operation_schemas import (
         OperationExecutionResponse,
     )
@@ -105,13 +111,30 @@ def _operation_repository(uow: UoWDep) -> ConnectorOperationRepository:
     return ConnectorOperationRepository(uow=uow)
 
 
+#: A Composio auth config outlives any one connect; a week bounds how long an
+#: id made under a since-rotated API key is tried before being made again.
+_COMPOSIO_AUTH_CONFIG_TTL_SECONDS = 7 * 24 * 3600
+
+
+@lru_cache(maxsize=1)
+def _composio_auth_config_ids() -> ResilientJsonCache:
+    """Composio auth config ids, shared by every replica through Redis."""
+    return ResilientJsonCache(
+        name="composio_auth_config_ids",
+        key_prefix="connectors:composio-auth-config",
+        redis_url=settings.redis_url,
+        ttl_seconds=_COMPOSIO_AUTH_CONFIG_TTL_SECONDS,
+    )
+
+
 def _auth_provider_registry(uow: UoWDep) -> AuthProviderRegistry:
     connector_repository = _connector_repository(uow)
     return AuthProviderRegistry(
         providers={
             AuthProvider.LEMMA.value: LemmaAuthProvider(),
             AuthProvider.COMPOSIO.value: ComposioAuthProvider(
-                connector_repository=connector_repository
+                connector_repository=connector_repository,
+                auth_config_ids=_composio_auth_config_ids(),
             ),
         }
     )
@@ -256,4 +279,41 @@ ConnectorOperationUseCasesDep = Annotated[
 ]
 PodConnectorServiceDep = Annotated[
     PodConnectorService, Depends(get_pod_connector_service)
+]
+
+
+def get_pod_connector_coverage_service(
+    uow: UoWDep,
+) -> "PodConnectorCoverageService":
+    # Imported here: the adapters reach `channels` and `pod` contracts, which
+    # every process importing a connector route would otherwise pay for.
+    from app.modules.connectors.infrastructure.adapters.member_coverage import (
+        RedisAskLedger,
+        connector_title_through_catalog,
+        member_context_through_authorizer,
+        people_through_contracts,
+        tell_through_channels,
+    )
+    from app.modules.connectors.infrastructure.repositories.pod_connector_repository import (
+        PodConnectorRepository,
+    )
+    from app.modules.connectors.services.pod_connector_coverage import (
+        PodConnectorCoverageService,
+    )
+
+    return PodConnectorCoverageService(
+        uow=uow,
+        pod_connectors=PodConnectorRepository(uow),
+        people=people_through_contracts,
+        member_context=member_context_through_authorizer,
+        ledger=RedisAskLedger(uow.session),
+        tell=tell_through_channels,
+        connector_title=connector_title_through_catalog(
+            uow, _auth_config_repository(uow)
+        ),
+    )
+
+
+PodConnectorCoverageServiceDep = Annotated[
+    "PodConnectorCoverageService", Depends(get_pod_connector_coverage_service)
 ]

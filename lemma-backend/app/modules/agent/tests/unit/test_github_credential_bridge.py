@@ -38,9 +38,9 @@ class _FakeRedis:
         self.values: dict[str, str] = {}
         self.calls: list[tuple] = []
 
-    async def exists(self, key: str) -> int:
-        self.calls.append(("exists", key))
-        return 1 if key in self.values else 0
+    async def get(self, key: str) -> str | None:
+        self.calls.append(("get", key))
+        return self.values.get(key)
 
     async def set(self, key: str, value: str, *, ex: int):
         self.calls.append(("set", key, value, ex))
@@ -513,11 +513,20 @@ async def _resolve(ctx, connector, refresh=_passthrough_refresh):
 class _Resolved:
     """The pod's `github` connector, resolving to one account."""
 
-    def __init__(self, *, owner: UUID | None = None, email: str | None = None):
+    def __init__(
+        self,
+        *,
+        owner: UUID | None = None,
+        email: str | None = None,
+        allow_sandbox_use: bool = False,
+        pod_account_id: UUID | None = None,
+    ):
         self.calls: list[dict[str, object]] = []
         self.context_while_resolving: object = "not-set"
         self._owner = owner
         self._email = email
+        self._allow_sandbox_use = allow_sandbox_use
+        self.pod_account_id = pod_account_id or uuid4()
 
     async def __call__(self, uow, auth_ctx, *, pod_id, slug):
         del uow
@@ -525,6 +534,8 @@ class _Resolved:
         self.context_while_resolving = get_current_context()
         return SimpleNamespace(
             owner_user_id=self._owner or auth_ctx.delegating_user_id,
+            pod_account_id=self.pod_account_id,
+            allow_sandbox_use=self._allow_sandbox_use,
             account=SimpleNamespace(
                 credentials=SimpleNamespace(access_token="gho_realtoken"),
                 display_name="octocat",
@@ -585,6 +596,25 @@ async def test_a_shared_account_is_never_written_into_a_sandbox() -> None:
     assert isinstance(refusal, bridge.GithubRefusal)
     assert refusal.code == "SHARED_ACCOUNT_NOT_FOR_SANDBOX"
     assert refusal.connect_url is None
+
+
+@pytest.mark.asyncio
+async def test_a_shared_account_its_owner_allowed_in_sandboxes_is_written() -> None:
+    """The owner's opt-in ("allow use inside sandboxes") is the one way a
+    borrowed account's token reaches a workspace (design §3.8), and the
+    credential remembers whose it is, for the session's marker."""
+    lent = _Resolved(owner=uuid4(), allow_sandbox_use=True)
+    ctx = _context()
+
+    credential = await _resolve(ctx, lent)
+
+    assert credential == bridge._GithubCredential(
+        access_token="gho_realtoken",
+        login="octocat",
+        email=None,
+        borrowed_pod_account_id=lent.pod_account_id,
+        borrower_user_id=ctx.user_id,
+    )
 
 
 @pytest.mark.asyncio

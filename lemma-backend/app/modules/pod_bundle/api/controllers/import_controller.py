@@ -212,6 +212,7 @@ async def apply_import(
         user_id=user.id,
         variables=data.variables,
         confirm_destructive=data.confirm_destructive,
+        connectors=data.connectors,
     )
     return ImportStatusResponse.from_state(state)
 
@@ -286,7 +287,7 @@ async def stream_import_events(
 
     store = get_pod_bundle_state_store()
     return StreamingResponse(
-        import_event_stream(store, channel_service, pod_id, import_id),
+        import_event_stream(store, channel_service, pod_id, import_id, user_id=user.id),
         media_type="text/event-stream",
     )
 
@@ -296,15 +297,20 @@ async def import_event_stream(
     channel_service: RealtimeChannel,
     pod_id: UUID,
     import_id: UUID,
+    *,
+    user_id: UUID,
 ) -> AsyncGenerator[str, None]:
     """SSE frames for an import: a full ``snapshot`` first (so a late/reconnecting
     client sees the whole plan), then live frames with ``seq <= snapshot`` dropped,
     closing on a terminal event/status. Module-level and dependency-injected so it
-    is unit-testable without the FastAPI request machinery."""
+    is unit-testable without the FastAPI request machinery.
+
+    Only its starter's: anyone else gets ``expired``, as for an id that names
+    no import, because the plan lists the starter's own accounts."""
     # Subscribe BEFORE reading the snapshot so an event fired in between is not lost.
     async with channel_service.subscribe([bundle_job_channel(import_id)]) as iterator:
         state = await store.get_import(import_id)
-        if state is None or state.pod_id != pod_id:
+        if state is None or state.pod_id != pod_id or state.user_id != user_id:
             yield _frame({"type": "expired"})
             return
         snapshot_seq = state.seq

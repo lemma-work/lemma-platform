@@ -54,8 +54,8 @@ export interface DatastoreChangeFrame {
      */
     payload: Record<string, unknown>;
     /**
-     * The row body was not carried. `payload` is `{}`; fetch the record by
-     * `record_id` if you need its values.
+     * @deprecated Always `false`: every frame carries the whole row. Kept so
+     * code that reads it still compiles.
      */
     payload_truncated?: boolean;
     occurred_at?: string;

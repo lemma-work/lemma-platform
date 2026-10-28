@@ -1,8 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+    CREATE_INSTALLATION,
     actionLabel,
+    askedConnectors,
     askedVariables,
+    blockedBy,
+    connectorChoices,
+    defaultPick,
     contentsLine,
     groupSteps,
     humanize,
@@ -12,7 +17,11 @@ import {
     suggestedValue,
     teammateName,
 } from "../src/site/import/plan.ts";
-import type { PlanStep, VariableSpec } from "../src/site/import-types.ts";
+import type {
+    ConnectorPlan,
+    PlanStep,
+    VariableSpec,
+} from "../src/site/import-types.ts";
 
 function step(kind: string, name: string, extra: Partial<PlanStep> = {}): PlanStep {
     return {
@@ -146,4 +155,83 @@ test("what a bundle brings reads as one line, not a checklist", () => {
         "1 agent and 1 table",
     );
     assert.equal(contentsLine([]), "");
+});
+
+function connector(extra: Partial<ConnectorPlan> = {}): ConnectorPlan {
+    return {
+        slug: "crm",
+        connector: "hubspot",
+        mode: "PER_MEMBER",
+        required: false,
+        purpose: null,
+        visibility: "POD",
+        status: "READY",
+        installations: [{ auth_config_id: "hs-1", name: "hubspot", is_default: true }],
+        auth_config_id: "hs-1",
+        can_create_installation: false,
+        account_options: [],
+        used_by: [],
+        message: null,
+        ...extra,
+    };
+}
+
+test("a per-member connector with one installation asks nothing", () => {
+    const shared = connector({
+        slug: "inbox",
+        mode: "SHARED",
+        status: "NEEDS_ACCOUNT",
+    });
+    assert.deepEqual(
+        askedConnectors([connector(), shared]).map((c) => c.slug),
+        ["inbox"],
+    );
+});
+
+test("the defaults send nothing, and share no account", () => {
+    const shared = connector({
+        slug: "inbox",
+        mode: "SHARED",
+        account_options: [
+            { account_id: "me", auth_config_id: "hs-1", label: "me@x" },
+        ],
+    });
+    assert.deepEqual(connectorChoices([connector(), shared], {}), {});
+    assert.deepEqual(
+        connectorChoices([shared], { inbox: { installation: "hs-1", share: "me" } }),
+        { inbox: { share_account_id: "me" } },
+    );
+});
+
+test("a connector with no installation blocks until one is chosen to be made", () => {
+    const missing = connector({
+        installations: [],
+        auth_config_id: null,
+        status: "NEEDS_INSTALLATION",
+        message: "Ask an admin",
+    });
+    assert.equal(blockedBy(missing, defaultPick(missing)), "Ask an admin");
+    assert.equal(
+        blockedBy(missing, { installation: CREATE_INSTALLATION, share: "" }),
+        "Ask an admin",
+    );
+    const creatable = { ...missing, can_create_installation: true };
+    assert.equal(
+        blockedBy(creatable, { installation: CREATE_INSTALLATION, share: "" }),
+        null,
+    );
+    assert.deepEqual(
+        connectorChoices([creatable], {
+            crm: { installation: CREATE_INSTALLATION, share: "" },
+        }),
+        { crm: { create_installation: true } },
+    );
+});
+
+test("a connector the pod already has is kept; a clashing slug blocks", () => {
+    const kept = connector({ status: "EXISTS" });
+    const clash = connector({ slug: "x", status: "CONFLICT", message: "taken" });
+    assert.equal(blockedBy(kept, defaultPick(kept)), null);
+    assert.equal(blockedBy(clash, defaultPick(clash)), "taken");
+    assert.deepEqual(connectorChoices([kept], {}), {});
 });

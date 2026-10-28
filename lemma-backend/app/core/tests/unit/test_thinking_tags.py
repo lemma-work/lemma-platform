@@ -341,3 +341,71 @@ def test_the_platforms_own_context_blocks_a_model_echoed_are_dropped():
     assert strip_context_echo(echoed) == "You chose blue."
     assert strip_context_echo("a <b>memory</b> of it") == "a <b>memory</b> of it"
     assert strip_context_echo("") == ""
+
+
+# --- reasoning the prompt opened --------------------------------------------
+
+
+def _visible(segments: list[tuple[str, str]]) -> str:
+    """What a reader that clears on ``reset`` is left showing as the answer."""
+    shown = ""
+    for kind, chunk in segments:
+        if kind == "reset":
+            shown = ""
+        elif kind == "text":
+            shown += chunk
+    return shown
+
+
+def test_a_close_with_no_open_makes_what_came_before_it_reasoning():
+    """A chat template that opens the block in the prompt leaves the content
+    starting mid-thought: the close is the first sign of it."""
+    text = f"The user is someone@example.com and wants a summary.{CLOSE}\n\nHere it is."
+
+    assert split_thinking_segments(text) == [
+        ("thinking", "The user is someone@example.com and wants a summary."),
+        ("text", "\n\nHere it is."),
+    ]
+    assert strip_thinking_tokens(text) == "Here it is."
+    assert has_thinking_tokens(text) is True
+
+
+def test_a_stream_takes_back_what_it_showed_once_the_close_arrives():
+    splitter = ThinkingStreamSplitter()
+    segments = splitter.feed("The user's email is ")
+    segments += splitter.feed("someone@example.com.</thi")
+    segments += splitter.feed("nk>Done.")
+    segments += splitter.flush()
+
+    assert "reset" in [kind for kind, _ in segments]
+    assert _visible(segments) == "Done."
+    assert ("thinking", "The user's email is someone@example.com.") in segments
+
+
+def test_the_next_response_of_such_a_model_is_held_as_reasoning_from_the_start():
+    splitter = ThinkingStreamSplitter()
+    splitter.feed(f"first thought{CLOSE}first answer")
+    splitter.flush()
+
+    second = splitter.feed("second thought, with an address in it")
+    assert all(kind == "thinking" for kind, _ in second)
+    second += splitter.feed(f"{CLOSE}second answer")
+    second += splitter.flush()
+    assert _visible(second) == "second answer"
+
+
+def test_a_presumed_thought_that_never_closes_is_released_as_the_answer():
+    splitter = ThinkingStreamSplitter()
+    splitter.feed(f"thought{CLOSE}answer")
+    splitter.flush()
+
+    segments = splitter.feed("Just an answer this time.")
+    segments += splitter.flush()
+    assert _visible(segments) == "Just an answer this time."
+
+
+def test_a_close_quoted_inline_or_after_an_open_is_not_a_prompt_opened_block():
+    quoted = f"End reasoning with `{CLOSE}` in your template."
+    assert strip_thinking_tokens(quoted) == quoted
+    later = f"{OPEN}a{CLOSE}Answer, then a stray {CLOSE} tag."
+    assert strip_thinking_tokens(later) == f"Answer, then a stray {CLOSE} tag."

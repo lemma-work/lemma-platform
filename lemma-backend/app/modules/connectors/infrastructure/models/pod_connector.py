@@ -68,6 +68,12 @@ class PodAccount(UUIDAuditBase):
     last_used_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    #: The owner's "allow use inside sandboxes": whether a shared account's
+    #: credential may be written into a workspace (the git bridge). Only the
+    #: owner sets it, and withdrawing the account clears it.
+    allow_sandbox_use: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     __table_args__ = (
         UniqueConstraint("pod_id", "account_id", name="uq_pod_accounts_pod_account"),

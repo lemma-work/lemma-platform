@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         BoundConnectors,
         PodAgents,
         PodConversations,
+        PodCalls,
         PodDecisions,
         PodApps,
         PodFiles,
@@ -142,6 +143,12 @@ class Pod:
         from .resources import PodConversations
 
         return self._resource(PodConversations)
+
+    @cached_property
+    def calls(self) -> "PodCalls":
+        from .resources import PodCalls
+
+        return self._resource(PodCalls)
 
     @cached_property
     def decisions(self) -> "PodDecisions":

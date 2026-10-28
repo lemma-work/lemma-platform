@@ -45,6 +45,7 @@ from app.modules.connectors.infrastructure.models.connector_operation import (
     ConnectorOperation,
 )
 from app.modules.test_support.e2e.builders import E2EScenario
+from app.modules.test_support.e2e.waiters import eventually
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
@@ -201,7 +202,14 @@ async def test_approving_gives_the_agent_the_connector_and_the_call_goes_on(
 
     await _decide(scenario, asked, approval_id, AgentRunApprovalDecision.APPROVE_ONCE)
 
-    assert await _granted(scenario, asked) == ["connector.use"]
+    # The grant is written by the approval's work item, run after the
+    # decision commits -- not inside the request -- so it is waited for.
+    granted = await eventually(
+        label="the approved connector grant",
+        probe=lambda: _granted(scenario, asked),
+        done=lambda permissions: permissions == ["connector.use"],
+    )
+    assert granted == ["connector.use"]
     # Standing, not a loan: the next call, unapproved, is past the grant. It
     # stops where any call of the owner's would -- they have no mail account.
     again = await run_connector_operation(_run_context(_deps(scenario, asked)), _send())
