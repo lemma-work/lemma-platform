@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, status
 from sqlalchemy import select
 
 from app.core.api.dependencies import UoWDep
+from app.core.app_pin import refuse_app_invitation_above_member
 from app.core.authorization.service import AuthorizationDataService
 from app.core.email.email_sender import email_delivery_configured
 from app.core.api.pagination import parse_uuid_page_token
@@ -339,6 +340,9 @@ async def invite_member(
 ) -> OrganizationInvitationResponse:
     """Invite a user to join the organization."""
     user: UserEntity = request.state.user
+    refuse_app_invitation_above_member(
+        request, role=data.role.value, pod_id=data.pod_id, pod_role=data.pod_role
+    )
     entity = OrganizationInvitationEntity(
         email=data.email,
         organization_id=organization_id,

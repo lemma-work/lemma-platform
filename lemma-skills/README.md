@@ -77,9 +77,12 @@ read in one sitting, over a folder of reference documents each loaded only when
 a task reaches for it.
 
 Every `lemma …` command a skill teaches has to resolve against the shipped CLI.
-`lemma-cli/tests/test_docs_commands_resolve.py` walks the real Typer app that way
-for the markdown in `lemma-cli/` — it does **not** cover this directory, so when
-you edit a skill, run the commands you wrote.
+`lemma-cli/tests/test_docs_commands_resolve.py` walks the real Typer app for
+every line here that starts with `lemma ` (from `lemma-cli/`:
+`uv run pytest tests/test_docs_commands_resolve.py`). It checks command names and
+options, not arguments or behaviour, and skips lines with shell plumbing or
+inline code in prose — so when you edit a skill, still run the commands you
+wrote.
 
 To author skills that live inside a pod rather than shipping here, use
 [lemma-skill-creator](lemma-skill-creator/SKILL.md).

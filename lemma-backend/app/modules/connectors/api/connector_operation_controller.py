@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request
 
 from app.core.api.dependencies import CurrentUser
+from app.core.app_pin import app_pod_for
 from app.core.api.deprecation import deprecated_route
 from app.modules.connectors.api.dependencies import (
     ConnectorOperationServiceDep,
@@ -161,13 +162,17 @@ async def execute_operation(
     # No request-scoped service or context: the use case authorizes and
     # resolves in a short scope and makes the external call holding no pooled
     # connection, the same saga as the pod route.
+    #
+    # The pod comes from the body, which the app pin's path check cannot see:
+    # an app's page runs in its own pod, whether it names it or not.
+    pod_id = app_pod_for(request, body.pod_id)
     return await use_cases.execute_installation_operation(
         organization_id=organization_id,
         auth_config_name=auth_config_name,
         operation_name=operation_name,
         payload=body.payload,
         account_id=UUID(body.account_id) if body.account_id else None,
-        pod_id=body.pod_id,
+        pod_id=pod_id,
         user_id=user.id,
         request=request,
     )

@@ -3,25 +3,24 @@
 from __future__ import annotations
 
 from app.core.analytics.domain_events import projection
-from app.core.analytics import AnalyticsActor, emit
+from app.core.analytics import ANALYTICS_CATALOG, AnalyticsActor, emit
 from app.core.authorization.context import ActorType
-from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.origin import OriginKind
 from app.modules.analytics.events.wiring import (
     DELIVERED_STATUSES,
+    ProjectionReads,
     origin_of,
-    provide_uow_factory,
 )
-from app.modules.analytics.services.pod_delivery import (
-    DeliveryVia,
-    maybe_emit_pod_delivered,
-)
+from app.modules.analytics.services.pod_delivery import DeliveryVia
 from app.modules.schedule.domain.events.schedule import (
     ScheduleCreated,
     ScheduleRunCompleted,
 )
 
 WIRED = frozenset({"schedule.created", "schedule_run.completed"})
+
+#: Origins a schedule run arrives through, one per schedule type: the catalog's
+#: pin on ``schedule_run.completed``, read rather than restated.
+_FIRED = ANALYTICS_CATALOG["schedule_run.completed"].origins or frozenset()
 
 
 @projection(
@@ -30,9 +29,9 @@ WIRED = frozenset({"schedule.created", "schedule_run.completed"})
 )
 async def on_schedule_event(
     event: dict[str, object],
-    uow_factory: UnitOfWorkFactory | None = None,
+    reads: ProjectionReads | None = None,
 ) -> None:
-    uow_factory = uow_factory or provide_uow_factory()
+    reads = reads or ProjectionReads()
     event_type = event.get("event_type")
     if event_type not in {
         ScheduleCreated.get_event_type(),
@@ -48,6 +47,7 @@ async def on_schedule_event(
                 "schedule.created",
                 actor=AnalyticsActor.user(created.user_id),
                 origin=origin,
+                organization_id=await reads.organization_of_pod(created.pod_id),
                 pod_id=created.pod_id,
                 properties={
                     "pod_id": created.pod_id,
@@ -58,14 +58,12 @@ async def on_schedule_event(
             return
 
         completed = ScheduleRunCompleted.model_validate(event)
-        # Origin-pinned to SCHEDULE/DATA_TRIGGER in the catalog. A manual redrive
-        # is request-backed and legitimately arrives some other way, so it is
-        # filtered here rather than dropped-and-logged by the emitter.
-        if origin is None or origin.kind not in {
-            OriginKind.SCHEDULE,
-            OriginKind.DATA_TRIGGER,
-        }:
+        # Origin-pinned in the catalog. A redrive somebody asked for carries no
+        # origin (``schedule_run_origin``), so it is filtered here rather than
+        # dropped-and-logged by the emitter.
+        if origin is None or origin.kind not in _FIRED:
             return
+        organization_id = await reads.organization_of_pod(completed.pod_id)
         emit(
             "schedule_run.completed",
             # Delegated, not autonomous: the run is unattended but it is done for
@@ -78,6 +76,7 @@ async def on_schedule_event(
                 else AnalyticsActor.autonomous(ActorType.SYSTEM)
             ),
             origin=origin,
+            organization_id=organization_id,
             pod_id=completed.pod_id,
             properties={
                 "pod_id": completed.pod_id,
@@ -92,14 +91,14 @@ async def on_schedule_event(
             # Branch (b): autonomous work delivers without a recipient test. A
             # scheduled report nobody watches is the design's own example of a
             # pod earning its keep.
-            await maybe_emit_pod_delivered(
-                uow_factory,
+            await reads.deliver(
                 pod_id=completed.pod_id,
-                organization_id=None,
+                organization_id=organization_id,
                 via=DeliveryVia.SCHEDULE_RUN,
                 origin=origin,
                 recipient_user_id=None,
                 creator_user_id=None,
+                delegated_by_user_id=completed.user_id,
             )
 
     await record()

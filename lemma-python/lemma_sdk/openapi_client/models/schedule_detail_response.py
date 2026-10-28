@@ -47,7 +47,7 @@ class ScheduleDetailResponse:
         user_id (UUID):
         visibility (str):
         workflow_id (None | UUID):
-        account_id (None | Unset | UUID):
+        account_id (None | Unset | UUID): Deprecated and always null; see `pod_connector`.
         agent_name (None | str | Unset):
         allowed_actions (list[str] | Unset):
         consecutive_failures (int | Unset):  Default: 0.
@@ -59,6 +59,10 @@ class ScheduleDetailResponse:
         last_run_id (None | str | Unset):
         listening (ListeningResponse | None | Unset): For a schedule on an MCP server's event: whether it is still
             hearing from the server. Absent for every other schedule.
+        next_fire_at (datetime.datetime | None | Unset): TIME schedules: the next instant it fires, in UTC. Absent while
+            paused, after a one-time schedule has fired, and for other types.
+        next_fire_at_local (None | str | Unset): `next_fire_at` read in the schedule's `config.timezone` (UTC when it
+            sets none), as an ISO 8601 time with its offset.
         paused_reason (None | str | Unset): Why the platform paused this schedule: `fire_cap` (it fired more than its
             daily ceiling), `consecutive_failures`, `fire_failed` (a scheduled run could not be started), or another system
             reason. Absent while it runs, or when a person paused it. Reactivating clears it.
@@ -94,6 +98,8 @@ class ScheduleDetailResponse:
     last_fired_at: datetime.datetime | None | Unset = UNSET
     last_run_id: None | str | Unset = UNSET
     listening: ListeningResponse | None | Unset = UNSET
+    next_fire_at: datetime.datetime | None | Unset = UNSET
+    next_fire_at_local: None | str | Unset = UNSET
     paused_reason: None | str | Unset = UNSET
     pod_connector: None | str | Unset = UNSET
     workflow_name: None | str | Unset = UNSET
@@ -224,6 +230,20 @@ class ScheduleDetailResponse:
         else:
             listening = self.listening
 
+        next_fire_at: None | str | Unset
+        if isinstance(self.next_fire_at, Unset):
+            next_fire_at = UNSET
+        elif isinstance(self.next_fire_at, datetime.datetime):
+            next_fire_at = self.next_fire_at.isoformat()
+        else:
+            next_fire_at = self.next_fire_at
+
+        next_fire_at_local: None | str | Unset
+        if isinstance(self.next_fire_at_local, Unset):
+            next_fire_at_local = UNSET
+        else:
+            next_fire_at_local = self.next_fire_at_local
+
         paused_reason: None | str | Unset
         if isinstance(self.paused_reason, Unset):
             paused_reason = UNSET
@@ -287,6 +307,10 @@ class ScheduleDetailResponse:
             field_dict["last_run_id"] = last_run_id
         if listening is not UNSET:
             field_dict["listening"] = listening
+        if next_fire_at is not UNSET:
+            field_dict["next_fire_at"] = next_fire_at
+        if next_fire_at_local is not UNSET:
+            field_dict["next_fire_at_local"] = next_fire_at_local
         if paused_reason is not UNSET:
             field_dict["paused_reason"] = paused_reason
         if pod_connector is not UNSET:
@@ -527,6 +551,34 @@ class ScheduleDetailResponse:
 
         listening = _parse_listening(d.pop("listening", UNSET))
 
+        def _parse_next_fire_at(data: object) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                next_fire_at_type_0 = isoparse(data)
+
+                return next_fire_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        next_fire_at = _parse_next_fire_at(d.pop("next_fire_at", UNSET))
+
+        def _parse_next_fire_at_local(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        next_fire_at_local = _parse_next_fire_at_local(
+            d.pop("next_fire_at_local", UNSET)
+        )
+
         def _parse_paused_reason(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -583,6 +635,8 @@ class ScheduleDetailResponse:
             last_fired_at=last_fired_at,
             last_run_id=last_run_id,
             listening=listening,
+            next_fire_at=next_fire_at,
+            next_fire_at_local=next_fire_at_local,
             paused_reason=paused_reason,
             pod_connector=pod_connector,
             workflow_name=workflow_name,

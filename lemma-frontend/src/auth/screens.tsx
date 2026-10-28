@@ -21,6 +21,7 @@ import { CharacterPuppet } from "@/shell/character-puppet";
 import { HideIcon, LemmaLogo, ShowIcon } from "@/ui/icons";
 import { GoogleMark, MicrosoftMark } from "./marks";
 import { fetchConfiguredProviders, type ProviderId } from "./login-methods";
+import { portalTrip } from "@/session/portal-trip";
 
 /* ── the two panes ──────────────────────────────────────────────────── */
 
@@ -411,6 +412,10 @@ export function SignInUp({ mode }: { mode: "in" | "up" }) {
         let live = true;
         rememberDestination(pendingDestination(window.location.search));
         void accountAccess().then(access => {
+            /* Signed out here too, so this trip is not one half of a loop: the
+               workspace's "couldn't finish signing you in" is for a tab this
+               page sent back, not for someone who pressed Back on its form. */
+            if (access === "signed-out") portalTrip.clear();
             if (!live || attempted.current || access === "signed-out") return;
             const destination = completionDestination(access, window.location.search);
             if (access === "ready" && wouldLoop(destination)) {

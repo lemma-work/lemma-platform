@@ -305,7 +305,33 @@ async def _close_e2e_process_clients() -> None:
     await _run_cleanup_step("close_redis_json_caches", close_redis_json_caches)
     await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
     await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
-    await _run_cleanup_step("close_engine", close_engine)
+    if not _primary_engine_is_reusable():
+        await _run_cleanup_step("close_engine", close_engine)
+
+
+def _primary_engine_is_reusable() -> bool:
+    """Whether the next test can keep this process's primary engine.
+
+    Disposing it after every test made each test rebuild what an engine
+    keeps: the dialect's first-connect setup, the compiled-statement cache,
+    and -- the e2e process pools (`DB_POOL_IN_TESTING`) -- its connections
+    with their prepared statements. About a sixth of a second a test. Kept
+    only while it is still the engine `get_engine` would build: same database
+    and same pooling. Between tests its connections are idle in the pool and
+    hold no locks, so the next test's reset is not waiting on them.
+    """
+    from sqlalchemy.pool import NullPool
+
+    from app.core.config import settings
+    from app.core.infrastructure.db import session
+
+    current = session.engine
+    if current is None:
+        return True
+    unpooled = isinstance(current.pool, NullPool)
+    return unpooled == (not settings.db_pool_in_testing) and (
+        current.url.render_as_string(hide_password=False) == settings.database_url
+    )
 
 
 def _shared_context_resource(name: str, factory: Callable[[], Any]) -> Any:
@@ -818,6 +844,27 @@ def _seed_system_model_pricing() -> None:
     )
 
 
+#: The callback port, picked once per pytest process.
+#:
+#: "Session-scoped" is per fixture *definition*, not per process: every e2e
+#: conftest re-exports `e2e_settings` under its own name, so pytest registers
+#: one definition per conftest and runs each once -- `e2e_settings` runs again
+#: for every module directory the run enters. It used to pick a fresh port each
+#: time, while the session worker keeps the port it was born with, so from the
+#: second directory on the worker's sandboxes called back to a port nothing
+#: listened on any more.
+_CALLBACK_PORT: int | None = None
+
+
+def _session_callback_port() -> int:
+    global _CALLBACK_PORT
+    if _CALLBACK_PORT is None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            _CALLBACK_PORT = int(sock.getsockname()[1])
+    return _CALLBACK_PORT
+
+
 @pytest.fixture(scope="session")
 def e2e_settings(test_database_url, test_redis_url, supertokens_container, worker_id):
     from app.core.config import settings
@@ -874,9 +921,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # each test, so both API- and worker-driven sandboxes get the same explicit,
     # reachable URL. Production code intentionally performs no localhost or
     # container-hostname rewriting.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        callback_port = int(sock.getsockname()[1])
+    callback_port = _session_callback_port()
     callback_url = os.getenv(
         "WORKSPACE_E2E_DOCKER_API_URL",
         f"http://host.docker.internal:{callback_port}",
@@ -1168,6 +1213,10 @@ async def sandbox_reachable_backend(e2e_settings):
                     os.environ[key] = value
 
 
+#: The session worker subprocess of this pytest process, by database URL.
+_SESSION_WORKERS: dict[str, subprocess.Popen] = {}
+
+
 @pytest_asyncio.fixture(scope="session")
 async def worker(e2e_settings, sandbox_reachable_backend):
     """Run the real streaq worker process used in production.
@@ -1185,6 +1234,17 @@ async def worker(e2e_settings, sandbox_reachable_backend):
     import redis.asyncio as redis
 
     from app.core.config import settings
+
+    # One worker per process, however many conftests re-export this fixture.
+    # Each re-export is its own session-scoped definition, so without this
+    # every module directory started another worker and none of them stopped
+    # until the run ended: by the function tests a dozen were claiming from
+    # the same work table, and whichever won a job ran it with the settings it
+    # was born with -- see `_session_callback_port`.
+    shared = _SESSION_WORKERS.get(e2e_settings.database_url)
+    if shared is not None and shared.poll() is None:
+        yield shared
+        return
 
     # Worker lifespans may reconcile persisted state before any function-scoped
     # db_manager fixture runs. Build the schema once before starting the
@@ -1294,7 +1354,15 @@ async def worker(e2e_settings, sandbox_reachable_backend):
             '"event": "service.started"',
         )
         startup_ok = False
-        for _ in range(200):
+        # The worker reports started only after it has loaded the local
+        # embedding model, and on a cold cache that includes downloading it
+        # from the Hugging Face Hub. A budget shorter than that download lost
+        # the race on CI whenever the fetch was slow, and every test in the run
+        # failed at setup. A few minutes covers a cold download, and a hung
+        # start still fails.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 180
+        while loop.time() < deadline:
             if proc.poll() is not None:
                 log_file.flush()
                 log_file.seek(0)
@@ -1328,9 +1396,11 @@ async def worker(e2e_settings, sandbox_reachable_backend):
         )
 
         register_session_worker(proc.pid, e2e_settings.database_url)
+        _SESSION_WORKERS[e2e_settings.database_url] = proc
         try:
             yield proc
         finally:
+            _SESSION_WORKERS.pop(e2e_settings.database_url, None)
             unregister_session_worker(proc.pid)
             proc.terminate()
             try:
@@ -1404,8 +1474,13 @@ async def _ensure_schema_once(database_url: str) -> None:
 _IDENTITY_SNAPSHOT_SCHEMA = "e2e_module_identity"
 
 #: Queue tables never restored from a snapshot: a work item copied back for
-#: every test would be run again for every test.
-_SNAPSHOT_EXCLUDED_TABLES = ("work_items", "work_queues", "work_rate_buckets")
+#: every test would be run again for every test, and a rate bucket would carry
+#: one test's spent budget into the next. ``work_queues`` is restored: it is
+#: each namespace's configuration, which a test starting from a fresh pod had
+#: already. Without it a pod's first concurrent writes each open a side
+#: connection to create the row, and nineteen of them on a ten-connection
+#: pool time out (`test_lines_written_at_once_are_numbered_without_gaps`).
+_SNAPSHOT_EXCLUDED_TABLES = ("work_items", "work_rate_buckets")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1431,13 +1506,35 @@ async def _forget_cached_identity(redis_url: str, ids: tuple[str, ...]) -> None:
     import redis.asyncio as redis
 
     client = redis.from_url(redis_url, decode_responses=False)
+    # One pass over the keyspace for every id, not one per id: a module that
+    # extends its identity names a dozen of them, and this runs before every
+    # test.
+    needles = tuple(identity_id.encode() for identity_id in ids)
     try:
-        for identity_id in ids:
-            stale = [key async for key in client.scan_iter(match=f"*{identity_id}*")]
-            if stale:
-                await client.delete(*stale)
+        stale = [
+            key
+            async for key in client.scan_iter(count=1000)
+            if any(needle in key for needle in needles)
+        ]
+        if stale:
+            await client.delete(*stale)
     finally:
         await client.aclose()
+
+
+#: One manager per database for the life of the test process. A manager per
+#: test paid for a new engine each time -- connections, dialect setup and the
+#: compiled-statement cache -- in every test's setup, for an engine whose
+#: configuration never changes. Its connections sit idle in a two-slot pool
+#: between tests. The process exiting closes them.
+_DB_MANAGERS: dict[str, DatabaseManager] = {}
+
+
+def _shared_db_manager(database_url: str) -> DatabaseManager:
+    manager = _DB_MANAGERS.get(database_url)
+    if manager is None:
+        manager = _DB_MANAGERS[database_url] = DatabaseManager(database_url)
+    return manager
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -1447,7 +1544,7 @@ async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, N
     # pays a filtered DELETE sweep rather than a drop/create. Keeping the schema
     # stable also lets the shared streaq worker hold its connections.
     _ensure_repo_root_on_path()
-    manager = DatabaseManager(e2e_settings.database_url)
+    manager = _shared_db_manager(e2e_settings.database_url)
 
     _import_e2e_models()
 
@@ -1513,7 +1610,6 @@ async def db_manager(e2e_settings, request) -> AsyncGenerator[DatabaseManager, N
         raise last_exc
 
     yield manager
-    await manager.close()
 
 
 # Factory for the e2e app. Defaults to the OSS app; lemma-cloud overrides this
@@ -1768,6 +1864,60 @@ async def module_identity(e2e_settings) -> AsyncGenerator[ModuleIdentity, None]:
         _IDENTITY_SNAPSHOTS.pop(url, None)
         await manager.drop_snapshot(snapshot)
         await manager.close()
+
+
+async def extend_module_identity(
+    database_url: str,
+    build: Callable[["AsyncClient"], Any],
+) -> Any:
+    """Add rows to the module's shared identity, once per module.
+
+    For a module whose every test starts from the same world -- an
+    organization, a pod and the people in it -- and was building it test by
+    test, mostly in sign-ups. ``build`` gets a client signed in as the module's
+    user on a fresh app, starting from the identity's rows alone, and returns
+    ``(value, ids)``: what the tests need, and the ids of what it made, so their
+    cached Redis keys are dropped before each test the way the identity's are.
+    Its rows then join the snapshot ``db_manager`` restores, so every later
+    test of the module starts from them, and from nothing a test wrote.
+
+    Call it from a module-scoped fixture that depends on ``module_identity``.
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    identity = _IDENTITY_SNAPSHOTS.get(database_url)
+    if identity is None:
+        raise RuntimeError("extend_module_identity needs module_identity first")
+    manager = _shared_db_manager(database_url)
+    await manager.truncate_all(restore=identity.rows)
+    _reset_supertokens_testing_state()
+    app = _test_app_factory() if _test_app_factory is not None else None
+    if app is None:
+        from app.app import create_app
+
+        app = create_app()
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            value, ids = await build(client)
+        rows = await manager.snapshot(
+            _IDENTITY_SNAPSHOT_SCHEMA, exclude=_SNAPSHOT_EXCLUDED_TABLES
+        )
+        # Every user, organization and pod now in the snapshot is one a test
+        # may cache something under.
+        async with manager.engine.connect() as conn:
+            for table in ("users", "organizations", "pods"):
+                ids = [
+                    *ids,
+                    *(await conn.scalars(text(f"SELECT id::text FROM {table}"))),
+                ]
+    finally:
+        await _close_e2e_process_clients()
+    _IDENTITY_SNAPSHOTS[database_url] = _IdentitySnapshot(
+        rows=rows, ids=tuple({*identity.ids, *(str(i) for i in ids if i)})
+    )
+    return value
 
 
 @pytest_asyncio.fixture(scope="function")

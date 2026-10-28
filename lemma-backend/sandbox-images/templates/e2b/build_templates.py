@@ -10,6 +10,10 @@ from e2b import Template, default_build_logger, wait_for_port
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 UV_VERSION = "0.11.31"
+# The real uv binary. Build steps call it by this path: the shim that takes the
+# name `uv` on PATH is copied in after them, and a template that copies no shim
+# at all has no `uv` on PATH (see `_install_uv_command`).
+UV = "/usr/local/lib/lemma-uv-bin"
 #: The interpreter `Dockerfile.workspace`'s `python:3.14.6-slim` carries. The
 #: overlay is built `--no-deps` against one third-party closure, so the two
 #: fabrics' interpreters should be the same release, not merely the same minor.
@@ -24,6 +28,18 @@ GH_VERSION = "2.97.0"
 GH_LINUX_X64_SHA256 = "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
 DEFAULT_CPU_COUNT = 1
 DEFAULT_MEMORY_MB = 2048
+
+
+def parse_size(label: str) -> tuple[int, int]:
+    """``{cpu}x{memory_mb}``, the key the backend maps sizes to templates by."""
+    cpu, sep, memory = label.partition("x")
+    try:
+        cpu_count, memory_mb = int(cpu), int(memory)
+    except ValueError as exc:
+        raise ValueError(f"size must be {{cpu}}x{{memory_mb}}, got {label!r}") from exc
+    if not sep or cpu_count < 1 or memory_mb < 1:
+        raise ValueError(f"size must be {{cpu}}x{{memory_mb}}, got {label!r}")
+    return cpu_count, memory_mb
 
 
 def _positive_int_environment(name: str, *, default: int) -> int:
@@ -76,7 +92,7 @@ def _install_uv_command() -> str:
         # disagreeing about where a package goes, and the one the prompt
         # recommends being the broken one. Measured on a live sandbox, not
         # inferred.
-        f"install -m 0755 /tmp/{directory}/uv /usr/local/lib/lemma-uv-bin && "
+        f"install -m 0755 /tmp/{directory}/uv {UV} && "
         f"install -m 0755 /tmp/{directory}/uvx /usr/local/bin/uvx && "
         f"rm -rf /tmp/{archive} /tmp/{directory}"
     )
@@ -267,11 +283,11 @@ def workspace_template():
             "/build/lemma-backend/sandbox-images/templates/workspace-python",
         )
         .run_cmd(
-            f"UV_PYTHON_INSTALL_DIR=/opt/python uv python install {PYTHON_VERSION} && "
+            f"UV_PYTHON_INSTALL_DIR=/opt/python {UV} python install {PYTHON_VERSION} && "
             "UV_PYTHON_INSTALL_DIR=/opt/python "
             "UV_PROJECT_ENVIRONMENT=/opt/lemma-python "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
-            "uv sync --project /build/lemma-backend/sandbox-images/templates/workspace-python "
+            f"{UV} sync --project /build/lemma-backend/sandbox-images/templates/workspace-python "
             f"--python {PYTHON_VERSION} "
             "--locked --no-dev --no-editable && "
             "printf '%s\\n' "
@@ -326,7 +342,7 @@ def workspace_template():
             "test -x /opt/lemma-python/bin/lemma && "
             "ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma && "
             "/usr/local/bin/lemma --version && "
-            "uv cache clean && "
+            f"{UV} cache clean && "
             "rm -rf /build/lemma-python /build/lemma-pod-bundle "
             "/build/lemma-cli /build/lemma-skills /build/lemma-backend",
             user="root",
@@ -515,9 +531,9 @@ def function_template():
             f"{_install_uv_command()} && "
             "UV_PROJECT_ENVIRONMENT=/opt/lemma-function "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
-            "uv sync --project /build/lemma-backend/sandbox-images/templates/function-python "
+            f"{UV} sync --project /build/lemma-backend/sandbox-images/templates/function-python "
             "--locked --no-dev --no-editable && "
-            "uv cache clean && "
+            f"{UV} cache clean && "
             "rm -rf /build/lemma-python /build/lemma-backend",
             user="root",
         )
@@ -560,9 +576,12 @@ def build(
     *,
     target: str,
     name_suffix: str = "",
+    size: str | None = None,
 ) -> dict[str, dict[str, str]]:
     if not os.environ.get("E2B_API_KEY"):
         raise RuntimeError("E2B_API_KEY is required")
+    if size is not None and target != "workspace":
+        raise ValueError("--size sizes a workspace template; pass --target workspace")
     selected = {
         "workspace": (
             workspace_template,
@@ -592,6 +611,15 @@ def build(
             ),
         ),
     }
+    if size is not None:
+        # The name is the key `E2B_WORKSPACE_SIZE_TEMPLATES` maps the size to.
+        cpu_count, memory_mb = parse_size(size)
+        selected["workspace"] = (
+            workspace_template,
+            f"lemma-workspace-{cpu_count}x{memory_mb}",
+            cpu_count,
+            memory_mb,
+        )
     names = tuple(selected) if target == "all" else (target,)
     result: dict[str, dict[str, str]] = {}
     for name in names:
@@ -627,10 +655,20 @@ def main() -> None:
             "leave this empty."
         ),
     )
+    parser.add_argument(
+        "--size",
+        default=None,
+        help=(
+            "Build a workspace template for one plan size, `{cpu}x{memory_mb}` "
+            "(e.g. 2x4096), named lemma-workspace-{size}. Without it the "
+            "workspace template is built at E2B_WORKSPACE_CPU_COUNT x "
+            "E2B_WORKSPACE_MEMORY_MB, 1x2048 by default."
+        ),
+    )
     args = parser.parse_args()
     print(
         json.dumps(
-            build(target=args.target, name_suffix=args.name_suffix),
+            build(target=args.target, name_suffix=args.name_suffix, size=args.size),
             indent=2,
             sort_keys=True,
         )

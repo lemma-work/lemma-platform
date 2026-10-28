@@ -1,103 +1,80 @@
 name: Announce a release
 
-# The counterpart to "Notify a failure nobody is looking at". That one says when
-# a release *failed*; nothing said when one succeeded, and it turns out those
-# are not the same question -- 0.7.2 succeeded, by every signal this repository
-# produced, and shipped no packages at all.
+# Follows a release in Slack from the tag push to the last package, and says
+# what is actually installable.
 #
-# So this does not announce that a release happened. It asks PyPI, npm and the
-# releases API what they are actually serving, and says that. A component that
-# has not landed is named in the first line of the message.
+# It starts with the tag, alongside the workflows that publish, and posts as it
+# goes: that the release started; each package as its registry begins serving
+# that exact version, with a link; each release run that fails, with a link to
+# the run; and a final summary that names, registry by registry, what has the
+# version and what does NOT. A component that is missing is in the first line,
+# and this job fails, so the release shows red in Actions as well as in Slack.
 #
-# Triggered by `workflow_run` rather than `release: published` for the reason
-# that caused the 0.7.2 hole in the first place: a release created by a workflow
-# is authored by github-actions[bot], and GitHub will not start a new workflow
-# run from an event the default GITHUB_TOKEN raised. `workflow_run` fires
-# regardless of who triggered the run underneath it, which is exactly why the
-# failure notifier uses it too.
+# The registries are the source of truth, not the runs. 0.7.2 "succeeded" by
+# every signal this repository produced and shipped no packages at all, and
+# 0.8.0's three package publishes failed on the tag push without a message,
+# because the failure notifier does not announce tag pushes and this workflow
+# then only woke when the image release finished -- which it did, green.
 #
-# Watched by notify-failure.yml, like every other workflow here, so this one
-# going quiet is itself reported.
+# Triggered by the tag push rather than `release: published` for the reason
+# that caused the 0.7.2 hole: a release created by a workflow is authored by
+# github-actions[bot], and GitHub will not start a new workflow run from an
+# event the default GITHUB_TOKEN raised. A dispatch follows a repair: give it
+# the version, re-run whichever publish failed, and it reports those runs too.
+#
+# Watched by notify-failure.yml, which announces this workflow's tag-push
+# failures as well, so this one going quiet is itself reported.
 
 on:
-  workflow_run:
-    workflows:
-      # The workflow that creates the GitHub Release. When it finishes, the
-      # release exists and the package publishes -- which the tag started in
-      # parallel -- are usually a few minutes behind; the script waits for
-      # them rather than announcing a healthy release as broken.
-      - Release Local Stack Images
-    types: [completed]
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to announce, for example 0.8.0 or v0.8.0"
+        description: "Version to follow, for example 0.10.0 or v0.10.0"
         required: true
         type: string
 
 permissions:
   contents: read
+  # To read the release workflows' runs for the tag.
+  actions: read
+
+concurrency:
+  group: release-announce-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   announce:
     name: Announce
-    # Up to 45 minutes waiting for the release to finish landing, below.
-    timeout-minutes: 60
-    # Only a real release. A failed run is the failure notifier's business, and
-    # two messages for one event is how a channel stops being read. A
-    # workflow_dispatch upstream is a re-run or a repair rather than a release,
-    # and `head_branch` on a tag push is the tag itself -- anything else is a
-    # branch build that must not announce itself as a version.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      startsWith(github.event.workflow_run.head_branch, 'v'))
+    # The image release takes up to 90 minutes and dispatches the Desktop
+    # release, which takes up to 120 more; the tracker gives up at 210.
+    timeout-minutes: 225
     runs-on: ubuntu-latest
     steps:
-      # Resolved in the shell rather than in an expression: the dispatch input
-      # is documented as "0.8.0 or v0.8.0", and the expression language has no
-      # way to strip an optional prefix. Needs no checkout -- it is string work.
-      - name: Resolve the version and its tag
-        id: resolve
-        env:
-          RAW: >-
-            ${{ inputs.version || github.event.workflow_run.head_branch }}
-        run: |
-          set -euo pipefail
-          version="${RAW#v}"
-          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
-            echo "::error title=Not a version::'$RAW' is not a release version."
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      # The default branch, deliberately, rather than the tag being announced.
-      #
-      # Checking out the tag looked right -- announce the release from the
-      # release -- and is wrong twice over. A dispatch for any release older
-      # than this workflow checks out a tag that does not contain
-      # `report_release_to_slack.py`, and the next step fails on a missing
-      # file; v0.8.0 is already such a tag. And it would run a script version
-      # chosen by whatever that tag holds, rather than the reviewed one.
-      #
-      # Nothing is lost, because changelog entries accumulate here and are
-      # never removed: `lemma-frontend/content/changelog/` on the default
-      # branch holds every past release, including the one being announced --
-      # the release commit is what adds it. A version with no entry at all is
-      # already reported as having none.
+      # The default branch's script for a dispatch, deliberately, rather than
+      # the tag's: a dispatch for a release older than this workflow would
+      # otherwise check out a tag without the script. On a tag push the two are
+      # the same commit. Changelog entries accumulate and are never removed, so
+      # the entry being announced is on the default branch either way.
       - uses: actions/checkout@v7
         with:
           # This job reads files and posts to Slack; it pushes nothing, so the
           # checkout token has no reason to stay on disk for later steps.
           persist-credentials: false
 
-      - name: Announce, and say what is installable
+      - name: Resolve the release version
+        id: release
+        env:
+          RAW: ${{ inputs.version || github.ref_name }}
+        run: python3 scripts/release_registry.py version "$RAW"
+
+      - name: Post progress, then say what is installable
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          VERSION: ${{ steps.resolve.outputs.version }}
-        run: |
-          # 45 minutes: this starts when release-local-images finishes, which is
-          # also when it dispatches release-desktop, and the signed, notarized
-          # DMG and its update feed land about twenty minutes after that.
-          python3 scripts/report_release_to_slack.py "$VERSION" --wait-seconds 2700
+          GITHUB_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: >-
+          python3 scripts/report_release_to_slack.py "$VERSION"
+          --track --require-complete --wait-seconds 12600

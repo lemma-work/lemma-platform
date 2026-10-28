@@ -111,6 +111,9 @@ from ..openapi_client.api.connectors import (
     pod_connector_operation_get,
     pod_connector_operation_list,
     pod_connector_update,
+    pod_connector_account_share_as,
+    pod_connector_ask_members,
+    pod_connector_coverage,
 )
 from ..openapi_client.models.installation_operation_execution_request import (
     InstallationOperationExecutionRequest,
@@ -128,6 +131,12 @@ from ..openapi_client.models.pod_connector_create_request import (
 from ..openapi_client.models.pod_connector_list_response import (
     PodConnectorListResponse,
 )
+from ..openapi_client.models.ask_members_request import AskMembersRequest
+from ..openapi_client.models.ask_members_response import AskMembersResponse
+from ..openapi_client.models.pod_account_share_as_request import (
+    PodAccountShareAsRequest,
+)
+from ..openapi_client.models.pod_connector_coverage import PodConnectorCoverage
 from ..openapi_client.models.pod_connector_response import PodConnectorResponse
 from ..openapi_client.models.pod_connector_update_request import (
     PodConnectorUpdateRequest,
@@ -150,7 +159,7 @@ class ConnectorApps:
     def skill(self, app: str, *, kind: str | None = None) -> dict:
         """Get the skill guide markdown for a connector.
 
-        Pass kind='package' or kind='composio' for apps that ship as both.
+        Pass kind='http' or kind='composio' for apps that ship as both.
         Falls back to the generic doc when no kind-specific file exists.
         """
         transport = self._parent._transport
@@ -477,6 +486,37 @@ class BoundConnectors(BoundResource):
         """One pod connector, by slug."""
         return self._call(pod_connector_get, self._pod_uuid(), connector)
 
+    def connector_coverage(self, connector: str) -> PodConnectorCoverage:
+        """Who of the members allowed to use a required PER_MEMBER
+        ``connector`` has connected an account. Needs ``pod.connector.manage``."""
+        return self._call(pod_connector_coverage, self._pod_uuid(), connector)
+
+    def ask_members_to_connect(
+        self, connector: str, *, user_ids: list[str] | None = None
+    ) -> AskMembersResponse:
+        """Ask the members a PER_MEMBER ``connector`` is waiting on to connect,
+        at most once a day each; ``user_ids`` asks only those of them."""
+        return self._call(
+            pod_connector_ask_members,
+            self._pod_uuid(),
+            connector,
+            body=compact({"user_ids": user_ids}),
+            body_model=AskMembersRequest,
+        )
+
+    def share_pod_account_as(
+        self, pod_account_id: str, slug: str, *, purpose: str | None = None
+    ) -> PodConnectorResponse:
+        """Share one of your pod accounts as the SHARED connector ``slug`` in
+        one step: both happen, or neither."""
+        return self._call(
+            pod_connector_account_share_as,
+            self._pod_uuid(),
+            UUID(str(pod_account_id)),
+            body=compact({"slug": slug, "purpose": purpose}),
+            body_model=PodAccountShareAsRequest,
+        )
+
     def pod_operations(
         self, connector: str, query: str | None = None, *, limit: int = 100
     ) -> OperationDiscoverResponse:
@@ -496,17 +536,22 @@ class BoundConnectors(BoundResource):
 
     def declare_pod_connector(
         self,
-        slug: str,
-        auth_config_id: str,
-        mode: str,
+        slug: str | None = None,
+        auth_config_id: str | None = None,
+        mode: str = "PER_MEMBER",
         *,
+        connector_id: str | None = None,
         shared_pod_account_id: str | None = None,
         required: bool = False,
         purpose: str | None = None,
     ) -> PodConnectorResponse:
-        """Declare one of the org's installations in this pod, as ``slug``.
+        """Declare a connector in this pod: one of the org's installations
+        (``auth_config_id``), or a catalog connector (``connector_id``, e.g.
+        ``gmail``) -- its org default, or Lemma's own app installed now when
+        the org has none and you may install connectors.
 
-        ``mode`` is ``PER_MEMBER`` (each caller's own account) or ``SHARED``
+        ``slug`` defaults to the installation's name. ``mode`` is
+        ``PER_MEMBER`` (each caller's own account, the default) or ``SHARED``
         (the one pod account ``shared_pod_account_id`` names, which its owner
         must already have shared). Needs ``pod.connector.manage``.
         """
@@ -517,6 +562,7 @@ class BoundConnectors(BoundResource):
                 {
                     "slug": slug,
                     "auth_config_id": auth_config_id,
+                    "connector_id": connector_id,
                     "mode": mode,
                     "shared_pod_account_id": shared_pod_account_id,
                     "required": required,

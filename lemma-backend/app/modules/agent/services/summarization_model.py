@@ -113,7 +113,30 @@ async def resolve_summarization_model[T](
     fallback: T,
 ) -> Model | T:
     """A pydantic-ai model for compaction, or ``fallback`` (the run's model)."""
-    model_name = configured_summarization_model_name()
+    return await resolve_system_model(
+        configured_summarization_model_name(),
+        organization_id=organization_id,
+        user_id=user_id,
+        fallback=fallback,
+        purpose="summarization",
+    )
+
+
+async def resolve_system_model[T](
+    model_name: str | None,
+    *,
+    organization_id: UUID | None,
+    user_id: UUID,
+    fallback: T,
+    purpose: str,
+) -> Model | T:
+    """``model_name`` on the system provider, or ``fallback`` when it is unset,
+    there is no system provider, or it cannot be resolved (logged, with
+    ``purpose`` naming the setting's job).
+
+    For the side jobs a deployment may move off the run's own model --
+    compaction, the memory pass -- each named by its own setting.
+    """
     if not model_name:
         return fallback
 
@@ -160,8 +183,9 @@ async def resolve_summarization_model[T](
         # ImportError on every call) looked exactly like "no model configured"
         # at debug level, so the operator saw a setting that did nothing.
         logger.warning(
-            "agent.summarization_model.resolution_failed.observed",
+            "agent.system_model.resolution_failed.observed",
             model_name=model_name,
+            purpose=purpose,
             exc_info=True,
         )
         return fallback

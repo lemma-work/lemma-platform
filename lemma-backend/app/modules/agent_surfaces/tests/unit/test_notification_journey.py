@@ -40,6 +40,8 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
+from app.modules.agent.domain.folded_turns import folded_from
+from app.modules.agent.domain.held_turns import HELD_FOR_A_PERSON
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.runtime_profiles import SYSTEM_LEMMA_PROFILE_ID
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
@@ -213,19 +215,29 @@ class AgentSide:
             ]
         return runs
 
-    async def load_unattached_notifications(
-        self, conversation_id, *, after_sequence, before_sequence, limit
+    async def load_unattached_messages(
+        self, conversation_id, *, after_sequence, before_sequence, limit, folded_limit
     ):
         """The contract of the query, not a second opinion on it."""
-        matching = [
+        within = [
             message
             for message in self.messages[conversation_id]
             if message.agent_run_id is None
-            and message.kind is MessageKind.NOTIFICATION
             and (after_sequence is None or message.sequence > after_sequence)
             and (before_sequence is None or message.sequence < before_sequence)
         ]
-        return matching[-limit:]
+        copies = [m for m in within if folded_from(m.metadata) is not None]
+        others = [
+            m
+            for m in within
+            if folded_from(m.metadata) is None
+            and (
+                m.kind is MessageKind.NOTIFICATION
+                or (m.metadata or {}).get(HELD_FOR_A_PERSON) is True
+            )
+        ]
+        carried = {m.id for m in others[-limit:] + copies[-folded_limit:]}
+        return [message for message in within if message.id in carried]
 
     async def history_for(self, run: AgentRun):
         """What the model is shown for ``run``, split the way the harness splits it."""

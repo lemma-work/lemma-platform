@@ -267,7 +267,11 @@ async def test_inbox_counts_move_on_a_line_and_on_a_read(
         await editor.event(
             "i", "inbox.updated", channel_id=channel["id"], unread__lines=0
         )
-        heard = await other_tab.event("c", "read.updated", channel_id=channel["id"])
+        # This read's own event. The tab subscribed just after the editor was
+        # put in the group, and that can reach it as a `read.updated` at 0.
+        heard = await other_tab.event(
+            "c", "read.updated", channel_id=channel["id"], read_seq=line["seq"]
+        )
         assert heard["read_seq"] == line["seq"]
 
     # The call is the REST read: the same position, the same rule.

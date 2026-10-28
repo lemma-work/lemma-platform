@@ -218,7 +218,10 @@ def privacy_of(run_metadata: Mapping[str, object] | None) -> JsonObject:
 #: sender who writes one of these openings at the start of a line is imitating
 #: Lemma, whatever the spacing or case.
 _LABEL_OPENING = re.compile(
-    r"^(\s*)(\(\s*(?:a\s+(?:private\s+)?note\s+to\s+you|written\s+in\s+lemma))",
+    r"^(\s*)(\(\s*(?:a\s+(?:private\s+)?note\s+to\s+you|written\s+in\s+lemma)"
+    # The history's own notices, which frame what is around them -- "the other
+    # chat ends here" read inside a copied message would recast the rest of it.
+    r"|\[\s*conversation\s+history\s*\])",
     re.IGNORECASE | re.MULTILINE,
 )
 

@@ -1,5 +1,6 @@
 """Contracts that keep dependency automation and CI runner usage bounded."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -30,7 +31,13 @@ def test_native_desktop_dependency_caches_are_shared_across_build_workflows() ->
                 assert step["uses"] == "Swatinem/rust-cache@v2"
                 assert settings["workspaces"] == "desktop"
                 assert settings["shared-key"] == "${{ runner.os }}-${{ runner.arch }}"
-                assert "save-if" not in settings, "PRs need merge-ref cache reuse"
+                # Saved from main only, in every workflow: a pull request's or a
+                # tag's copy can be restored by nothing but that ref, and over
+                # the repository's cache limit it evicted the main caches every
+                # pull request restores.
+                assert (
+                    settings.get("save-if") == "${{ github.ref == 'refs/heads/main' }}"
+                ), f"{path}: {name}: only main may save its copy"
                 assert not settings.get("cache-all-crates", False)
                 assert not settings.get("cache-workspace-crates", False)
                 assert any(
@@ -163,6 +170,54 @@ def test_backend_e2e_triggers_directly_without_a_label() -> None:
     )
 
 
+# The suites the merge queue deliberately does not run. Each runs on the pull
+# request and again on the push to main, where a failure posts to Slack; the
+# queue keeps the light suites, so a merge waits for one full run rather than
+# two. Adding a job here is a decision about the merge gate, so it has to be
+# made in this list rather than by an `if:` that quietly stops matching.
+_KEPT_OUT_OF_THE_QUEUE = {
+    ".github/workflows/ci.yml": {
+        "desktop",
+        "desktop-contract",
+        "desktop-launch-smoke",
+        "desktop-windows",
+    },
+    ".github/workflows/e2e.yml": {
+        "backend-e2e",
+        "backend-e2e-sandbox",
+        "sandbox-images",
+        "service-images",
+    },
+}
+
+
+# Every condition a kept-out job's `if:` is made of, besides the event: each
+# is taken as satisfied, so what is left decides whether the event can run
+# the job at all. An atom outside this list fails the test rather than being
+# guessed at.
+_SATISFIED_ATOMS = re.compile(
+    r"!cancelled\(\)"
+    r"|needs\.[A-Za-z0-9_-]+\.result\s*==\s*'success'"
+    r"|needs\.changes\.outputs\.[A-Za-z0-9_-]+\s*==\s*'true'"
+    r"|needs\.changes\.outputs\.[A-Za-z0-9_-]+\s*!=\s*'\[\]'"
+    r"|contains\(fromJSON\('\[[^\]]*\]'\),\s*github\.event\.action\)"
+)
+_EVENT_ATOM = re.compile(r"github\.event_name\s*(==|!=)\s*'([a-z_]+)'")
+
+
+def _runs_on(condition: str, event: str) -> bool:
+    """Whether a job's `if:` lets `event` run it, every other condition met."""
+    skeleton = _EVENT_ATOM.sub(
+        lambda match: str((event == match.group(2)) == (match.group(1) == "==")),
+        _SATISFIED_ATOMS.sub("True", condition),
+    )
+    skeleton = " ".join(skeleton.replace("&&", " and ").replace("||", " or ").split())
+    assert re.fullmatch(r"[\s()]*(?:(?:True|False|and|or)[\s()]*)*", skeleton), (
+        f"an `if:` this test cannot read: {condition}"
+    )
+    return bool(eval(skeleton, {"__builtins__": {}}, {}))  # noqa: S307
+
+
 def test_every_gated_job_runs_in_the_merge_queue() -> None:
     """A required check has to run its suites on `merge_group`, not just report.
 
@@ -172,6 +227,10 @@ def test_every_gated_job_runs_in_the_merge_queue() -> None:
     skips in the queue, and its check goes green there having run nothing.
     `backend-e2e-sandbox` was added with exactly that allowlist after the
     trigger was first written.
+
+    The exception is `_KEPT_OUT_OF_THE_QUEUE`, and a job there has to say so
+    in its own `if:` and still run on main -- the backstop that makes leaving
+    the queue safe.
     """
     for path, aggregator in (
         (".github/workflows/ci.yml", "ci"),
@@ -186,8 +245,17 @@ def test_every_gated_job_runs_in_the_merge_queue() -> None:
         # an aggregator that stopped running in the queue would wave every
         # entry through without looking at the jobs below.
         assert "!= 'merge_group'" not in str(jobs[aggregator].get("if", "")), path
-        for name in [aggregator, *jobs[aggregator]["needs"]]:
+        kept_out = _KEPT_OUT_OF_THE_QUEUE.get(path, set())
+        for name in [aggregator, *jobs[aggregator]["needs"], *kept_out]:
             condition = str(jobs[name].get("if", ""))
+            if name in kept_out:
+                # Evaluated, not searched: out of the queue, and still on both
+                # the pull request and the push to main -- the backstop that
+                # makes leaving the queue safe.
+                assert not _runs_on(condition, "merge_group"), f"{path}: {name}"
+                assert _runs_on(condition, "pull_request"), f"{path}: {name}"
+                assert _runs_on(condition, "push"), f"{path}: {name}"
+                continue
             # `!= 'pull_request'` already lets a merge group through; only an
             # allowlist that names the pull request event has to name it too.
             if "== 'pull_request'" in condition:
@@ -212,6 +280,31 @@ def test_expensive_security_jobs_are_change_scoped() -> None:
     assert "needs.changes.outputs.backend_image == 'true'" in condition("container")
 
 
+_ON_MAIN = re.compile(r"github\.ref\s*==\s*'refs/heads/main'")
+_CACHE_MISS = re.compile(r"steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit\s*!=\s*'true'")
+
+
+def _saves_only_on_main(condition: str) -> bool:
+    """Whether a save step's `if:` can run on main and on nothing else.
+
+    Evaluated with the cache missed, once on main and once off it, rather
+    than searched for the word: `github.ref != 'refs/heads/main'` mentions
+    main too. Anything else in the condition fails the test unread.
+    """
+
+    def runs(on_main: bool) -> bool:
+        skeleton = _CACHE_MISS.sub("True", _ON_MAIN.sub(str(on_main), condition))
+        skeleton = " ".join(
+            skeleton.replace("&&", " and ").replace("||", " or ").split()
+        )
+        assert re.fullmatch(r"[\s()]*(?:(?:True|False|and|or)[\s()]*)*", skeleton), (
+            f"a save condition this test cannot read: {condition}"
+        )
+        return bool(eval(skeleton, {"__builtins__": {}}, {}))  # noqa: S307
+
+    return runs(True) and not runs(False)
+
+
 def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
     """Chromium is downloaded once per Playwright version, not once per run.
 
@@ -233,10 +326,25 @@ def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
             cache = [
                 earlier
                 for earlier in job["steps"][:index]
-                if earlier.get("uses", "").startswith("actions/cache@")
+                if earlier.get("uses", "").startswith(
+                    ("actions/cache@", "actions/cache/restore@")
+                )
                 and "ms-playwright" in str(earlier.get("with", {}).get("path", ""))
             ]
             assert cache, f"{name} downloads a browser it never restores"
+            # A restore-only cache is saved after the install, from main only,
+            # under the key it was restored with.
+            if cache[-1]["uses"].startswith("actions/cache/restore@"):
+                saves = [
+                    later
+                    for later in job["steps"][index + 1 :]
+                    if later.get("uses", "").startswith("actions/cache/save@")
+                    and later["with"]["key"] == cache[-1]["with"]["key"]
+                ]
+                assert saves, f"{name} restores a browser cache nothing saves"
+                assert _saves_only_on_main(str(saves[0].get("if", ""))), (
+                    f"{name} saves its browser cache from a pull request"
+                )
             key = cache[-1]["with"]["key"]
             lockfile = (
                 "lemma-frontend/package-lock.json"

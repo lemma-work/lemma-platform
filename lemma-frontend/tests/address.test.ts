@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress, type Address } from "../src/shell/address.ts";
+import { NOWHERE, TEAMMATES, isAlwaysListed, isNewPlace, readAddress, tabFromId, writeAddress, type Address } from "../src/shell/address.ts";
 
 /** The grammar has one obligation above all the others: a URL this app wrote
  *  must be a URL this app can read back. Everything below either asserts that
@@ -206,6 +206,18 @@ test("an app is not rebuilt from its id", () => {
     assert.equal(tabFromId("conversation"), null);
     assert.equal(tabFromId("library"), null);
     assert.equal(tabFromId("profile"), null);
+});
+
+test("a link to a tab every pod lists is waited for, an app is not", () => {
+    // The shell draws Home until the pod's tab list arrives. A link to the
+    // conversation that did not wait was overwritten with `/home` meanwhile.
+    assert.equal(isAlwaysListed("conversation"), true);
+    assert.equal(isAlwaysListed("library"), true);
+    assert.equal(isAlwaysListed("profile"), true);
+    // An app may have been deleted since the link was sent; waiting for it
+    // would hold the address still for good.
+    assert.equal(isAlwaysListed("app:launch-plan"), false);
+    assert.equal(isAlwaysListed("space:home"), false);
 });
 
 test("a malformed id rebuilds nothing", () => {

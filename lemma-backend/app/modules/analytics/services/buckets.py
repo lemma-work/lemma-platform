@@ -16,9 +16,16 @@ from datetime import datetime
 
 
 def bucket(value: int | None, edges: tuple[int, ...]) -> str | None:
-    """Band a count."""
+    """Band a count.
+
+    Zero is a band of its own. It used to fall into the first one and read
+    ``1-1``, so an agent with no tools and a run that called none were reported
+    as having one.
+    """
     if value is None:
         return None
+    if value <= 0:
+        return "0"
     low = 0
     for edge in edges:
         if value <= edge:
@@ -28,6 +35,9 @@ def bucket(value: int | None, edges: tuple[int, ...]) -> str | None:
 
 
 COUNT_EDGES = (1, 5, 20, 100)
+#: Model tokens in and out of one run. A turn reads its whole context, so the
+#: interesting range starts in the thousands, not at one.
+TOKEN_EDGES = (1_000, 10_000, 100_000, 1_000_000)
 
 
 def _range_bucket(
@@ -138,6 +148,7 @@ def document_kind(path: str | None) -> str:
 
 __all__ = [
     "COUNT_EDGES",
+    "TOKEN_EDGES",
     "bucket",
     "bytes_bucket",
     "days_bucket",

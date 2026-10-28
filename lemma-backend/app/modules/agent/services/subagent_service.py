@@ -46,6 +46,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
+from app.modules.agent.services.call_marks import call_of_parent, worker_canvas_note
 from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.poll_backoff import poll_delay
 from app.modules.agent.services.subagent_result_delivery import mark_collected
@@ -215,6 +216,7 @@ class SubAgentService:
                 if earlier is not None:
                     return earlier
                 service = self._conversation_service(uow)
+                in_call = await call_of_parent(uow, deps.conversation_id)
                 conversation = await service.create_conversation(
                     pod_id=deps.pod_id,
                     agent_name=target_name,
@@ -235,7 +237,9 @@ class SubAgentService:
                         "self_spawned": is_self,
                         SPAWN_KEY: key,
                         REPORTS_TO_PARENT_KEY: True,
+                        **in_call,
                     },
+                    instructions=worker_canvas_note() if in_call else None,
                 )
                 if spawn_call is not None:
                     await ConversationRepository(uow).set_spawn_call(

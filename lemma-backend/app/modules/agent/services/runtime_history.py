@@ -31,6 +31,9 @@ import json
 from typing import Protocol
 from uuid import UUID
 
+from app.modules.agent.domain.folded_turns import framed_folds, newest_folds
+from app.modules.agent.domain.history_notices import SYNTHETIC_NOTICE_PREFIX
+from app.modules.agent.domain.unattached_cut import newest_unattached
 from app.modules.agent.domain.private_notes import is_private_note, run_is_private
 from app.modules.agent.domain.queued_messages import STOP_REQUESTED_AFTER_SEQUENCE
 from app.modules.agent.domain.value_objects import AgentRunStatus
@@ -41,11 +44,6 @@ from app.modules.agent.domain.entities import (
     MessageRole,
     RuntimeHistoryWindow,
 )
-
-#: Opens every message this module synthesizes. Two jobs: the model reads it as
-#: scaffolding rather than as something a person said, and the compactor can tell
-#: these apart from real user turns so it does not pin them forever.
-SYNTHETIC_NOTICE_PREFIX = "[conversation history]"
 
 #: At least this many of the newest runs keep every message. Older runs are
 #: elided to what still matters about them.
@@ -173,9 +171,16 @@ def _dropped_runs_notice(run: AgentRun, dropped: int) -> Message:
     )
 
 
-#: How many run-less notifications ride along with the history. They are short
-#: and rarely stack up, so this is a backstop rather than a budget.
-MAX_UNATTACHED_NOTIFICATIONS = 20
+#: How many notifications and held messages ride along with the history, the
+#: newest kept. A backstop rather than a budget: notifications rarely stack up,
+#: and where lines do -- a stretch a member answered by hand, where both sides
+#: are run-less -- the agent taking the conversation back picks up from the newest.
+MAX_UNATTACHED_MESSAGES = 20
+
+#: How many copies a contact merge folded in (``folded_turns``) ride along, the
+#: newest kept. Their own bound, not a share of the one above: a long chat
+#: folded in would take every place in it, and the notifications would go.
+MAX_FOLDED_MESSAGES = 40
 
 
 def oldest_carried_sequence(runs: list[AgentRun]) -> int | None:
@@ -192,20 +197,21 @@ def first_sequence_of_run(runs: list[AgentRun], run_id: UUID) -> int | None:
     return None
 
 
-def unattached_notification_window(
+def unattached_message_window(
     runs: list[AgentRun],
     run_id: UUID,
     *,
     dropped_runs: int,
 ) -> tuple[int | None, int | None]:
-    """``(after, before)`` sequences bounding the run-less notifications to carry.
+    """``(after, before)`` sequences bounding the run-less messages to carry.
 
-    The lower bound exists to keep a notification that is older than the
-    history out of it, so it applies only when history *was* cut. Applied
+    The lower bound exists to keep a message that is older than the history
+    out of it, so it applies only when history *was* cut. Applied
     unconditionally it is the oldest message the prompt carries, and for a
     conversation a notification opened that is the first run's own first
     message -- the notification precedes it, so the person's first reply to a
-    report or a reminder was read against nothing.
+    report or a reminder was read against nothing. A contact whose first words
+    were held for a person is the same.
 
     The upper bound is the turn being answered, whether or not anything was cut.
     """
@@ -230,13 +236,14 @@ class RuntimeHistorySource(Protocol):
         self, runs: list[AgentRun], *, full_run_ids: set[UUID]
     ) -> list[AgentRun]: ...
 
-    async def load_unattached_notifications(
+    async def load_unattached_messages(
         self,
         conversation_id: UUID,
         *,
         after_sequence: int | None,
         before_sequence: int | None,
         limit: int,
+        folded_limit: int,
     ) -> list[Message]: ...
 
 
@@ -251,9 +258,12 @@ async def assemble_runtime_history(
     """Every message the model is shown for ``run_id``, in the order it reads them.
 
     One place for the whole recipe so the runner and anything that wants to know
-    what a turn will see cannot drift apart on it -- the notification bounds in
-    particular are a decision about *this* history, and were made inline where
-    nothing could exercise them without a database.
+    what a turn will see cannot drift apart on it -- the bounds on run-less
+    messages in particular are a decision about *this* history, and were made
+    inline where nothing could exercise them without a database. Those ride
+    along with the runs: notifications, what somebody outside the pod said
+    while a person had them (``held_turns``), and what a contact merge copied
+    in from another of their chats, read as that chat's (``folded_turns``).
     """
     # The trim decides which runs need every message, and it can keep an
     # old-but-active run while dropping newer ones -- so it runs before the
@@ -268,21 +278,32 @@ async def assemble_runtime_history(
     messages = select_runtime_history(bounded, already_dropped=dropped_runs)
     # Belong to no run, so the run-keyed reads above never see them; sequences
     # are conversation-wide, so the harness places them.
-    after_sequence, before_sequence = unattached_notification_window(
+    after_sequence, before_sequence = unattached_message_window(
         bounded, run_id, dropped_runs=dropped_runs
     )
-    messages.extend(
-        await source.load_unattached_notifications(
+    # One more than is carried of each, so a cut can be told to the model
+    # rather than made silently: an agent taking a conversation back from a
+    # member who answered by hand for a while would otherwise answer a thread
+    # whose start it never saw.
+    unattached, folds_cut = newest_folds(
+        await source.load_unattached_messages(
             conversation_id,
             after_sequence=after_sequence,
             before_sequence=before_sequence,
-            limit=MAX_UNATTACHED_NOTIFICATIONS,
-        )
+            limit=MAX_UNATTACHED_MESSAGES + 1,
+            folded_limit=MAX_FOLDED_MESSAGES + 1,
+        ),
+        keep=MAX_FOLDED_MESSAGES,
     )
-    if read_channel is None:
-        return messages
-    # A run cut to its requests keeps none of what it was shown around them.
-    return await read_channel(messages, background_of_runs=full_run_ids | {run_id})
+    messages.extend(newest_unattached(unattached, keep=MAX_UNATTACHED_MESSAGES))
+    if read_channel is not None:
+        # A run cut to its requests keeps none of what it was shown around them.
+        messages = await read_channel(
+            messages, background_of_runs=full_run_ids | {run_id}
+        )
+    # After the channel is read in, which drops a copied follow-up whose line
+    # is gone: a stretch of copies is framed as what is left of it.
+    return framed_folds(messages, cut=folds_cut)
 
 
 def without_private_runs(
@@ -299,7 +320,10 @@ def without_private_runs(
 
     Whole runs go, so a tool call never loses its return. A note queued into
     another run's history is dropped on its own. The current run is never
-    dropped: a private run reads its own note.
+    dropped: a private run reads its own note. What the stranger said while a
+    person had them stays: it is in no run, and never a note (``held_turns``).
+    So does what a merge copied in of another of their chats, which is only
+    what they saw of it (``folded_turns``).
     """
     private = {
         run.id

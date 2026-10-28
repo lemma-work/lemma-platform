@@ -188,6 +188,13 @@ class OrganizationInvitationListResponse(BaseSchema):
     next_page_token: str | None = None
 
 
+class OrganizationEffectivePermissionsResponse(BaseSchema):
+    """The organization-level permission ids the caller holds."""
+
+    organization_id: UUID
+    actions: list[str]
+
+
 class OrganizationMessageResponse(BaseSchema):
     """Generic organization message response."""
 

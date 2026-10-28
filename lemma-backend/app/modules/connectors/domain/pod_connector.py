@@ -107,6 +107,10 @@ class PodAccountEntity(Entity):
     is_member_default: bool = False
     source: PodAccountSource = PodAccountSource.MANUAL
     last_used_at: datetime | None = None
+    #: The owner allows the credential inside a sandbox (the git bridge). A
+    #: token there is readable by every later command, so sharing an account
+    #: for operations does not by itself let a shell hold it.
+    allow_sandbox_use: bool = False
 
     @property
     def is_shared(self) -> bool:

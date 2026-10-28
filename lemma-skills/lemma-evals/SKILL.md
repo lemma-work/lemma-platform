@@ -175,8 +175,9 @@ lemma workflows runs cancel <run-id> --pod <pod>
 
 Preserve `status`, `user_id`, `current_node_id`, `failed_node_id`, `error`,
 `execution_context`, `step_history`, `active_wait`, and timestamps. `WAITING` is the
-human-form state. Agent, function, and timer suspensions remain `RUNNING` and identify
-their platform work through `active_wait.wait_type` (`AGENT`, `FUNCTION`, or `TIME`).
+human-form state. Every other suspension remains `RUNNING` and identifies its
+platform work through `active_wait.wait_type` (`AGENT`, `FUNCTION`, `TIME`,
+`DECISION`, or `QUEUED` behind the workflow's concurrency limit).
 For a human gate, require `active_wait.wait_type == HUMAN`, verify that the intended
 assignee sees it in `runs waiting`, submit the documented decision as that member,
 and verify the next state. Do not interpret a still-running platform wait as failure.

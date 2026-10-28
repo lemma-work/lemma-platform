@@ -28,6 +28,12 @@ from pydantic_ai.capabilities import Toolset as ToolsetCapability
 from pydantic_ai.toolsets import AbstractToolset
 
 from app.core.log.log import get_logger
+from app.modules.agent.capabilities.unique_tool_call_ids import (
+    UniqueToolCallIdsCapability,
+)
+from app.modules.agent.capabilities.reveal_referenced_tools import (
+    RevealReferencedToolsCapability,
+)
 from app.modules.agent.capabilities.deferred_hint import (
     DeferredToolsHintCapability,
     build_deferred_tools_hint,
@@ -287,6 +293,9 @@ async def _build_lemma_harness_tooling(
     capabilities: list[AgentCapability[ConversationContext]] = [
         _visible_capability(obj, host_execution=host_execution) for obj in core
     ]
+    # A provider that repeats a tool call under one id must not run it twice.
+    # No instructions, so the cached prefix is untouched.
+    capabilities.append(UniqueToolCallIdsCapability())
     # What changes run to run, next to the current turn instead of in the
     # system prompt. Contributes no instructions, so it cannot disturb the
     # cached prefix the fragments below form.
@@ -336,6 +345,10 @@ async def _build_lemma_harness_tooling(
         # local everywhere under a monetary limit -- the native search has no
         # price, see `MeteredModel`).
         capabilities.append(ToolSearch())
+        # A run is not made to search again for what it is already told about:
+        # what earlier runs found, what its history called, and what its
+        # wake-up names (see `reveal_referenced_tools`).
+        capabilities.append(RevealReferencedToolsCapability())
         capabilities.extend(
             _deferred_capability(obj, host_execution=host_execution) for obj in extra
         )

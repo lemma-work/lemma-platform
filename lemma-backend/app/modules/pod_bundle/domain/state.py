@@ -14,6 +14,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.modules.pod_bundle.domain.connector_plan import ConnectorChoice, ConnectorPlan
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -85,6 +87,9 @@ class StepStatus(str, Enum):
 class StepKind(str, Enum):
     """Apply-step kinds, in no particular order (ordering lives in the plan)."""
 
+    #: A pod connector the bundle declares; planned first, since everything
+    #: else may name one by slug.
+    CONNECTOR = "CONNECTOR"
     TABLE = "TABLE"
     TABLE_DATA = "TABLE_DATA"
     FUNCTION = "FUNCTION"
@@ -131,12 +136,23 @@ class ImportPlan(BaseModel):
     steps: list[PlanStep] = Field(default_factory=list)
     variables: list[VariableSpec] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    #: The bundle's pod connectors and the choices each offers the importer.
+    connectors: list[ConnectorPlan] = Field(default_factory=list)
 
     def next_pending_step(self) -> PlanStep | None:
         for step in self.steps:
             if step.status in (StepStatus.PENDING, StepStatus.RUNNING):
                 return step
         return None
+
+    @property
+    def grant_refusals(self) -> list[str]:
+        """Each grant the importer could not make, named with its holder."""
+        return [
+            f"{step.kind.value.removesuffix('_GRANTS').lower()} '{step.name}': {item}"
+            for step in self.steps
+            for item in step.detail.get("refused") or []
+        ]
 
     @property
     def has_destructive_steps(self) -> bool:
@@ -213,6 +229,9 @@ class ImportState(_BundleJobState):
     plan: ImportPlan | None = None
     progress: Progress = Field(default_factory=Progress)
     variables_provided: dict[str, str] = Field(default_factory=dict)
+    #: The importer's connector choices, checked against the plan and made
+    #: whole (`connector_plan.resolve_connector_choices`), by slug.
+    connector_choices: dict[str, ConnectorChoice] = Field(default_factory=dict)
     confirm_destructive: bool = False
     cancel_requested_at: datetime | None = None
     current_step: int | None = None

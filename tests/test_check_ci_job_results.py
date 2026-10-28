@@ -179,6 +179,32 @@ def test_a_merge_only_job_may_skip_on_a_pull_request():
     assert "host-pack" in on_a_merge[0]
 
 
+def test_a_job_kept_out_of_the_merge_queue_may_skip_only_there():
+    """The desktop suites run on a pull request and on main, not in the queue.
+
+    Their skip in a merge group is correct; the same skip on a pull request
+    with a desktop change is a suite that stopped running.
+    """
+    workflow = {
+        "jobs": {
+            "changes": {"outputs": {"desktop": ""}},
+            "desktop": {
+                "if": "needs.changes.outputs.desktop == 'true' && "
+                "github.event_name != 'merge_group'"
+            },
+        }
+    }
+    context = needs_context({"desktop": "true"}, desktop="skipped")
+
+    in_the_queue, notes = check(workflow, context, "merge_group")
+    assert in_the_queue == []
+    assert notes == [], "the expression is understood, not merely tolerated"
+
+    on_a_pull_request, _ = check(workflow, context, "pull_request")
+    assert len(on_a_pull_request) == 1
+    assert "desktop" in on_a_pull_request[0]
+
+
 def test_without_an_event_name_such_a_job_is_reported_rather_than_assumed():
     workflow = {
         "jobs": {
