@@ -1,4 +1,8 @@
-"""What was said in the group somebody outside the pod is asking in.
+"""What somebody outside the pod may do in the group they are asking in.
+
+``group_history`` reads what was said there; ``group_records`` and
+``group_add_record`` read and add to the tables a member gave the group
+(``datastore``'s ``channel_grants``) -- none of them at all until one did.
 
 A run answering a guest in a group is handed the group's recent lines, and
 nothing further back: ``channel_read`` reads the pod's channels, which are its
@@ -12,6 +16,8 @@ guest's run reaching anything the guest could not already scroll up to.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
@@ -23,8 +29,24 @@ from app.modules.agent.tools.messaging.pydantic_adapter import line_sender_name
 from app.modules.channels.contracts import Reader, may_read
 from app.modules.channels.contracts.lines import page_lines
 from app.modules.channels.contracts.places import reply_address
+from app.modules.datastore.contracts.channel_grants import (
+    MAX_GRANTED_ROWS,
+    PublicRowRefused,
+    PublicRowsClosed,
+    add_granted_row,
+    read_granted_rows,
+)
 
 GROUP_HISTORY_TOOL = "group_history"
+GROUP_RECORDS_TOOL = "group_records"
+GROUP_ADD_RECORD_TOOL = "group_add_record"
+
+#: What a guest's run hears when a table is not the group's to read or add to,
+#: whatever the reason: which tables exist is not theirs to learn.
+_NOT_GIVEN = (
+    "This group was not given that table, or that column. Say you can't do "
+    "that here, and pass it on with ask_a_person if it matters."
+)
 GROUP_HISTORY_TOOLSET_ID = "group_history"
 
 #: Each line clipped: somebody's pasted log is still one line of a page.
@@ -44,6 +66,34 @@ class GroupLine(BaseModel):
     who: str
     text: str
     at: str
+
+
+class GroupRecordsRequest(BaseModel):
+    table: str
+    equals: dict[str, object] = Field(
+        default_factory=dict,
+        description="Only rows whose column equals this value; granted columns only.",
+    )
+    limit: int = Field(default=20, ge=1, le=MAX_GRANTED_ROWS)
+
+
+class GroupRecordsResponse(BaseModel):
+    success: bool
+    rows: list[dict[str, object]] = Field(default_factory=list)
+    error: str | None = None
+
+
+class GroupAddRecordRequest(BaseModel):
+    table: str
+    values: dict[str, object] = Field(
+        description="The new row, by column: only the columns the group may fill."
+    )
+
+
+class GroupAddRecordResponse(BaseModel):
+    success: bool
+    message: str | None = None
+    error: str | None = None
 
 
 class GroupHistoryResponse(BaseModel):
@@ -99,4 +149,67 @@ def build_group_history_toolset(
             earlier=first if first is not None and first > 1 else None,
         )
 
-    return FunctionToolset([group_history], id=GROUP_HISTORY_TOOLSET_ID)
+    async def group_records(
+        ctx: RunContext[BaseAgentContext], request: GroupRecordsRequest
+    ) -> GroupRecordsResponse:
+        """Read a table this group was given: its rows, the given columns only.
+
+        Everybody in the group reads what you quote from it."""
+        found = await _place(ctx.deps)
+        if found is None:
+            return GroupRecordsResponse(success=False, error=_NOT_GIVEN)
+        channel_id, contact_id = found
+        try:
+            rows = await read_granted_rows(
+                uow_factory,
+                pod_id=ctx.deps.pod_id,
+                channel_id=channel_id,
+                table_name=request.table,
+                equals=request.equals,
+                contact_id=contact_id,
+                limit=request.limit,
+            )
+        except PublicRowsClosed:
+            return GroupRecordsResponse(success=False, error=_NOT_GIVEN)
+        return GroupRecordsResponse(success=True, rows=rows)
+
+    async def group_add_record(
+        ctx: RunContext[BaseAgentContext], request: GroupAddRecordRequest
+    ) -> GroupAddRecordResponse:
+        """Add one row to a table this group may add to, as they asked.
+
+        Only say it is saved when this succeeds. Fixing or removing a row is
+        not yours to do: pass that on with ask_a_person."""
+        found = await _place(ctx.deps)
+        if found is None:
+            return GroupAddRecordResponse(success=False, error=_NOT_GIVEN)
+        channel_id, contact_id = found
+        try:
+            await add_granted_row(
+                uow_factory,
+                pod_id=ctx.deps.pod_id,
+                channel_id=channel_id,
+                table_name=request.table,
+                answers=request.values,
+                contact_id=contact_id,
+            )
+        except PublicRowsClosed:
+            return GroupAddRecordResponse(success=False, error=_NOT_GIVEN)
+        except PublicRowRefused as exc:
+            return GroupAddRecordResponse(success=False, error=str(exc))
+        return GroupAddRecordResponse(success=True, message="Saved.")
+
+    async def _place(deps: BaseAgentContext) -> tuple[UUID, UUID] | None:
+        """The group this conversation answers in, and the guest asking."""
+        contact_id = run_audience(deps).contact_id
+        if contact_id is None or deps.conversation_id is None or deps.pod_id is None:
+            return None
+        async with uow_factory() as uow:
+            place = await reply_address(uow, deps.conversation_id)
+        if place is None:
+            return None
+        return place.source.channel_id, contact_id
+
+    return FunctionToolset(
+        [group_history, group_records, group_add_record], id=GROUP_HISTORY_TOOLSET_ID
+    )

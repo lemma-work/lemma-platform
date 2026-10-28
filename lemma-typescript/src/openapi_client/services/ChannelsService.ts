@@ -25,6 +25,9 @@ import type { ReadRequest } from '../models/ReadRequest.js';
 import type { ReadResponse } from '../models/ReadResponse.js';
 import type { SearchResponse } from '../models/SearchResponse.js';
 import type { SenderKind } from '../models/SenderKind.js';
+import type { TableGrantRequest } from '../models/TableGrantRequest.js';
+import type { TableGrantResponse } from '../models/TableGrantResponse.js';
+import type { TableGrantsResponse } from '../models/TableGrantsResponse.js';
 import type { ThreadResponse } from '../models/ThreadResponse.js';
 import type { Visibility } from '../models/Visibility.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
@@ -957,6 +960,103 @@ export class ChannelsService {
             path: {
                 'pod_id': podId,
                 'channel_id': channelId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * List Table Grants
+     * The tables the group's people outside the pod may read or add to.
+     * @param podId
+     * @param channelId
+     * @returns TableGrantsResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelTableGrantList(
+        podId: string,
+        channelId: string,
+    ): CancelablePromise<TableGrantsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/channels/{channel_id}/table-grants',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+            },
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * Remove Table Grant
+     * The group no longer reads or adds to the table.
+     * @param podId
+     * @param channelId
+     * @param tableName
+     * @returns void
+     * @throws ApiError
+     */
+    public static channelTableGrantRemove(
+        podId: string,
+        channelId: string,
+        tableName: string,
+    ): CancelablePromise<void> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'table_name': tableName,
+            },
+            errors: {
+                400: `A cursor this API did not give.`,
+                403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+                404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+                409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+                422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`,
+            },
+        });
+    }
+    /**
+     * Set Table Grant
+     * Give the group these columns of the table to read, and those to fill.
+     *
+     * Everybody in the group reads what is granted -- the people outside the
+     * pod included -- through the granting member's own access.
+     * @param podId
+     * @param channelId
+     * @param tableName
+     * @param requestBody
+     * @returns TableGrantResponse Successful Response
+     * @throws ApiError
+     */
+    public static channelTableGrantSet(
+        podId: string,
+        channelId: string,
+        tableName: string,
+        requestBody: TableGrantRequest,
+    ): CancelablePromise<TableGrantResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}',
+            path: {
+                'pod_id': podId,
+                'channel_id': channelId,
+                'table_name': tableName,
             },
             body: requestBody,
             mediaType: 'application/json',

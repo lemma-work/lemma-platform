@@ -71,6 +71,7 @@ from .base import BoundResource, as_uuid, compact
 
 if TYPE_CHECKING:
     from .sources import ChannelSources
+    from .table_grants import ChannelTableGrants
 
 Kind = Literal["MEMBER", "CONTACT", "AGENT"]
 Answers = Literal["MENTIONED", "EVERY_LINE"]
@@ -142,6 +143,15 @@ class PodChannels(BoundResource):
         from .sources import ChannelSources
 
         return ChannelSources(self._transport, org_id=self.org_id, pod_id=self.pod_id)
+
+    @cached_property
+    def table_grants(self) -> "ChannelTableGrants":
+        """Tables a group's people outside the pod may read, or add rows to."""
+        from .table_grants import ChannelTableGrants
+
+        return ChannelTableGrants(
+            self._transport, org_id=self.org_id, pod_id=self.pod_id
+        )
 
     # -- channels ------------------------------------------------------------------
 

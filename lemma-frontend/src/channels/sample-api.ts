@@ -331,7 +331,22 @@ export function sampleChannelApi(_podId: string): ChannelApi {
         async declineIdentityLink() {
             linkOpenedAt = null;
         },
+        async tableGrants(channelId) {
+            await wait(120);
+            return [...(grants.get(channelId) ?? new Map()).values()];
+        },
+        async setTableGrant(channelId, table, grant) {
+            await wait(200);
+            const saved = { table, readColumns: grant.readColumns, addColumns: grant.addColumns };
+            grants.set(channelId, new Map(grants.get(channelId) ?? []).set(table, saved));
+            return saved;
+        },
+        async removeTableGrant(channelId, table) {
+            await wait(150);
+            grants.get(channelId)?.delete(table);
+        },
     };
 }
 
 let linkOpenedAt: number | null = null;
+const grants = new Map<string, Map<string, { table: string; readColumns: string[]; addColumns: string[] }>>();
