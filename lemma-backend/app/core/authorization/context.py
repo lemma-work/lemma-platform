@@ -297,6 +297,9 @@ class Context:
     #: with a database connection checked out and idle behind it. The answer
     #: cannot change within a request, so ask once.
     _session_approval_cache: dict[str, bool] = field(default_factory=dict)
+    #: Whether this request's conversation is reading lines from outside the
+    #: pod (``outside_text``): one Redis read per request, None until asked.
+    _outside_text_cache: bool | None = None
 
     @property
     def actor_type(self) -> ActorType:

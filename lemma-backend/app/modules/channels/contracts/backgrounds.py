@@ -15,9 +15,13 @@ applied at the reading, not the choosing:
   but not an answer another member's access made (``withheld_from``); what a
   contact wrote is shown marked as said by somebody outside the pod.
 * ``MEMBER_IN_GROUP`` -- a member's run answering in a group on a platform,
-  where everybody in the group reads the answer. Not what people outside the
-  pod wrote, nor the bot's answers to them, nor members' notes: counted, not
-  shown.
+  where everybody in the group reads the answer. Everything said in the group,
+  what people outside the pod wrote marked as theirs, and the bot's answers to
+  them; not members' notes, which never reached the group: counted, not shown.
+  A run that could not see what the room said answered the room wrongly, and
+  hiding it bought nothing -- the run could read the same lines from the
+  channel. What it reads from outside is information, never a request: the
+  authorizer asks the member before such a run acts (``outside_text``).
 * ``CONTACT`` -- a contact's run: what the channel lets them read.
 * ``PLATFORM`` -- a platform's own history, read live (Slack, Teams): its
   rule was applied as it was read. A line the pod heard is still a reference;
@@ -261,11 +265,7 @@ def _as_read(
             )
             outside, author = sender.kind is SenderKind.CONTACT, sender.display_name
         case BackgroundView.MEMBER_IN_GROUP:
-            shown = not (
-                line.members_only
-                or outside
-                or (from_agent and not sender.used_a_members_access)
-            )
+            shown = not line.members_only
         case BackgroundView.CONTACT:
             shown = refs.contact_id is not None and may_read(
                 Reader.contact(refs.contact_id, source_id=refs.source_id), line

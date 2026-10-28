@@ -177,7 +177,8 @@ user session approval (`APPROVE_FOR_SESSION` → Redis store in
 
 **Approval is how an agent goes beyond its grants.** A refused tool call
 (`MISSING_WORKLOAD_RESOURCE_GRANT`, `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL`,
-`AUTH_REQUIRED`) comes back as `needs_approval`; the agent calls
+`OUTSIDE_TEXT_REQUIRES_APPROVAL`, `AUTH_REQUIRED`) comes back as
+`needs_approval`; the agent calls
 `request_approval`, and when the person approves, exactly that call runs **as
 the person** — their own permissions, nothing more, and nothing standing
 afterwards. Only the conversation's owner can approve (`ApprovalNotOwnedError`
@@ -193,6 +194,8 @@ Frequent deny codes: `MISSING_WORKLOAD_RESOURCE_GRANT` (grant the workload),
 `DELEGATION_EXCEEDS_INVOKER` (the workload is granted it, the person who ran
 it is not — raise the person's role, not the grant),
 `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` (approve or grant),
+`OUTSIDE_TEXT_REQUIRES_APPROVAL` (the run is reading what people outside the
+pod wrote; approve -- no grant lifts it),
 `INSUFFICIENT_PERMISSION` (human role problem), `DELEGATION_SCOPE_VIOLATION`
 (minimal-scope token used outside its operation), `PERSONAL_RESOURCE_DENIED`
 (privacy trumps grants). The full model, with payload examples, is documented

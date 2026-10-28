@@ -51,6 +51,7 @@ from app.modules.agent.services.outsider_runtime import (
     default_runtimes,
     in_process_runtime,
 )
+from app.modules.agent.services.outside_text import note_what_the_turn_reads
 from app.modules.agent.services.run_limits import (
     budget_for_run,
     harness_usage_limits,
@@ -213,6 +214,7 @@ class AgentRunnerService:
                 answered, run=run, finalizer=self.finalizer
             )
             return
+        await note_what_the_turn_reads(conversation.id, messages)  # before it acts
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
         run_kind = run_origin(
