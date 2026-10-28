@@ -7,6 +7,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import json
 import os
+import re
 from pathlib import Path
 from typing import Literal, Optional
 from datetime import datetime, timezone
@@ -79,7 +80,7 @@ class EmailSender:
         output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         output_dir.chmod(0o700)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        safe_email = to_email.replace("@", "_at_").replace("/", "_")
+        safe_email = re.sub(r"[^A-Za-z0-9._-]", "_", to_email.replace("@", "_at_"))
         email_file = output_dir / f"{timestamp}_{safe_email}.json"
         descriptor = os.open(
             email_file,

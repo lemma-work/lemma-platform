@@ -85,13 +85,22 @@ jobs:
     #
     # `cancelled` is excluded too. `cancel-in-progress` cancels superseded runs
     # constantly, and treating that as news is the other way a channel dies.
+    #
+    # A tag push is a release, and "Announce a release" follows every release
+    # workflow on the tag and posts each failure with its run link -- so this
+    # announces only that workflow's own tag-push failure (which is also how
+    # an incomplete release ends), never a second copy of the others'. Before
+    # the tracker existed nothing here matched a tag push at all, and v0.8.0's
+    # three failed package publishes were announced nowhere.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'failure' &&
       (github.event.workflow_run.event == 'schedule' ||
       github.event.workflow_run.event == 'release' ||
       (github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main')))
+      github.event.workflow_run.head_branch == 'main') ||
+      (github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.name == 'Announce a release')))
     runs-on: ubuntu-latest
     steps:
       - name: Collect the failing jobs

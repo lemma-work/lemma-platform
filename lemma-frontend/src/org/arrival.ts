@@ -90,20 +90,40 @@ export function freshTeamNameFor(email: string | null | undefined, taken: readon
     return taken.some((one) => one.trim().toLowerCase() === key) ? "" : named;
 }
 
-/** What the platform calls a workspace belonging to one person.
+/** What a workspace belonging to one person is called: theirs, by name.
  *
- *  `"<who>'s Personal"` is not invented here — `shortOrgName` in `data/live.ts`
- *  already reads names in this shape back off the wire and shortens them for
- *  the switcher. Matching it means a workspace this app makes is indexed,
- *  displayed and shortened exactly like one the platform made. */
-export function personalNameFor(name: string | null | undefined): string {
-    /* The first name, and only a real one. The local part of an address is
-       not a name — this screen offered somebody "deepakjha0196+99's Personal",
-       which is a mailbox with a possessive stuck on it. Where there is no name
-       to use, the workspace is called Personal and the sentence about it goes
-       away rather than being filled in with the nearest string to hand. */
-    const who = (name ?? "").trim().split(/\s+/)[0] ?? "";
-    return who ? who + "'s Personal" : "Personal";
+ *  "Anukul's workspace", the same shape the backend gives a personal workspace
+ *  it makes (`personal_organization_name`). It used to be "Personal" whenever
+ *  no name was known, and the server numbered the clash — production grew a
+ *  workspace called "Personal 5", a counter that says nothing about whose it
+ *  is. Now the server keeps the name and moves only the handle, and the name
+ *  says whose it is. */
+export function personalNameFor(name: string | null | undefined, email?: string | null): string {
+    /* The first name, and only a real one. A mailbox is not a name — this
+       screen once offered somebody "deepakjha0196+99's Personal" — so an
+       address is used only when its first word reads as one: letters, and
+       nothing else, before any `+tag`, dot or dash. */
+    const who = (name ?? "").trim().split(/\s+/)[0] || nameFromAddress(email);
+    return who ? who + "'s workspace" : "My workspace";
+}
+
+function nameFromAddress(email: string | null | undefined): string {
+    const said = (email ?? "").trim();
+    const at = said.lastIndexOf("@");
+    if (at < 1) return "";
+    const first = said.slice(0, at).split("+")[0].split(/[._-]/)[0] ?? "";
+    if (!/^\p{L}{2,}$/u.test(first)) return "";
+    return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+}
+
+/** Whether a failed create was refused because another organization already
+ *  holds the email domain it tried to open to. Read off the code the API
+ *  sends, with its sentence as the fallback for a client that drops codes. */
+export function isDomainTaken(failure: unknown): boolean {
+    if (!failure || typeof failure !== "object") return false;
+    const said = failure as { code?: unknown; message?: unknown };
+    if (said.code === "ORGANIZATION_DOMAIN_CONFLICT") return true;
+    return typeof said.message === "string" && /already uses this email domain|email domain is already taken/i.test(said.message);
 }
 
 /** The heading over the arrival rungs.

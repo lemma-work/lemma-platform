@@ -203,6 +203,31 @@ describe("AgentController", () => {
     expect(snapshots.every(({ thinking, text }) => !(thinking && text))).toBe(true);
   });
 
+  it("withdraws what streamed when the server resets the stream", async () => {
+    // The server learned late that the text was reasoning: it resets, then
+    // streams it again as thinking. The answer bubble must not keep it.
+    const controller = makeController([
+      { type: "token", data: "The user is someone@example.com", kind: "text" },
+      { type: "token", data: "", kind: "stream_reset" },
+      { type: "token", data: "The user is someone@example.com", kind: "thinking" },
+      { type: "token", data: "Here it is.", kind: "text" },
+      { type: "completed" },
+    ], { paceMs: 5 });
+
+    const texts: string[] = [];
+    controller.subscribe(() => {
+      texts.push(controller.getState().streamingText);
+    });
+
+    await controller.createConversation();
+    await controller.sendMessage("work");
+
+    const afterReset = texts.slice(texts.lastIndexOf(""));
+    expect(texts.some((text) => text.includes("someone@example.com"))).toBe(true);
+    expect(texts.at(-1) === "" || texts.at(-1) === "Here it is.").toBe(true);
+    expect(afterReset.every((text) => !text.includes("someone@example.com"))).toBe(true);
+  });
+
   it("keeps an Agent Host call running from the token that follows it", async () => {
     // The host sends a call whole, so its message lands first and the `tool`
     // token after it -- the reverse of a streamed pydantic-ai call. The

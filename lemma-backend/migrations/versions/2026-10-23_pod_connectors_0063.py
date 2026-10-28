@@ -78,6 +78,7 @@ CREATE TABLE pod_accounts (
 	is_member_default BOOLEAN DEFAULT 'false' NOT NULL,
 	source VARCHAR(20) NOT NULL,
 	last_used_at TIMESTAMP WITH TIME ZONE,
+	allow_sandbox_use BOOLEAN DEFAULT 'false' NOT NULL,
 	id UUID NOT NULL,
 	created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	updated_at TIMESTAMP WITH TIME ZONE NOT NULL,

@@ -2,7 +2,12 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AgentSurfaceResponse, SurfaceSetupResponse } from "lemma-sdk";
 import { source, type Pod, type Surface } from "@/data";
-import { contactsSupported, filtersSupported, isOwnBot, routesSupported, surfaceDraft, surfacePatch, type SurfaceDraft } from "@/data/surface-settings";
+import {
+    connectionLine, connectionTrouble, contactsSupported, filtersSupported, isOwnBot, needsRebind, readConnection, rebindChoices,
+    routesSupported, surfaceApp, surfaceDraft, surfacePatch, type SurfaceDraft,
+} from "@/data/surface-settings";
+import { connectionsPlace, connectorLabel } from "@/data/pod-connectors";
+import { ProblemLine } from "@/connect/connection-problem";
 import { answerChoices } from "@/data/contacts";
 import { useBotGroups } from "@/channels/queries";
 import { GroupSheets, type GroupSheet } from "@/channels/source-sheets";
@@ -14,7 +19,7 @@ import { PlaceLink, channelHref, goTo } from "./place-link";
 import { NOWHERE, writeAddress } from "./address";
 import { SetUpOnThisMac } from "@/desktop/set-up-on-this-mac";
 import { credentialFormForChannel } from "@/desktop/this-mac";
-import { BackIcon } from "@/ui/icons";
+import { BackIcon, WarningIcon } from "@/ui/icons";
 
 /** One channel's settings, in plain words.
  *
@@ -55,6 +60,7 @@ export function SurfaceManage({ pod, surface, onBack, onSaved, onLeave }: {
         />
         {detail.isPending && <p className="smanage__quiet" role="status">Reading its settings…</p>}
         {detail.isError && <p className="smanage__quiet" role="alert">Couldn’t read its settings. <button className="linkish" onClick={() => void detail.refetch()}>Try again</button></p>}
+        {detail.data && <RunsAs pod={pod} surface={detail.data} onLeave={onLeave} onMoved={() => { void detail.refetch(); void setup.refetch(); }} />}
         {detail.data && <SurfaceForm key={detail.data.id} pod={pod} surface={detail.data} listed={surface} bot={bot} onSaved={onSaved} onLeave={onLeave} />}
     </div>;
 }
@@ -86,6 +92,58 @@ function Health({ setup, pending, failed, checking, platform, onCheck }: {
         {setup && <SetupActions actions={setup.actions ?? []} />}
         {setup && !setup.ready && <SetUpOnThisMac form={credentialFormForChannel(platform)} />}
     </>;
+}
+
+/** The pod connector this channel runs as, whose account that is, and —
+ *  when it runs as nobody now (its account withdrawn, expired, or the
+ *  connector gone) — the way to move it onto another shared connector of the
+ *  same app, one PATCH, without disconnecting anything. */
+function RunsAs({ pod, surface, onMoved, onLeave }: { pod: Pod; surface: AgentSurfaceResponse; onMoved: () => void; onLeave?: () => void }) {
+    const cache = useQueryClient();
+    const view = readConnection(surface);
+    const connectors = useQuery({ queryKey: ["pod-connectors", pod.id], queryFn: () => source.listPodConnectors(pod.id), enabled: Boolean(view), staleTime: 30_000 });
+    /* Which app the channel is on when neither its connection nor its
+       connector says: its platform's, as the Channels list reads it. */
+    const connectable = useQuery({
+        queryKey: ["connectable", pod.id], queryFn: () => source.listConnectable(pod.id),
+        enabled: Boolean(view) && !view?.connectorId, staleTime: 5 * 60_000,
+    });
+    const [chosen, setChosen] = useState("");
+    const move = useMutation({
+        mutationFn: (slug: string) => source.updateSurface(pod.id, surface.name, { pod_connector: slug }),
+        onSuccess: () => {
+            setChosen("");
+            void cache.invalidateQueries({ queryKey: ["surface-detail", pod.id, surface.name] });
+            void cache.invalidateQueries({ queryKey: ["surfaces", 2, pod.id] });
+            onMoved();
+        },
+    });
+    if (!view) return null;
+    const list = connectors.data ?? [];
+    const current = list.find((one) => one.slug === view.podConnector);
+    const trouble = connectors.isSuccess ? connectionTrouble(view, current) : "";
+    const platform = String(surface.platform ?? "").toUpperCase();
+    const app = surfaceApp(view, current, connectable.data?.find((one) => one.platform === platform)?.connectorId ?? "");
+    const choices = rebindChoices(view, list, app);
+    const offer = connectors.isSuccess && needsRebind(view, current);
+    return (
+        <section className="sconn" aria-label="Which account it runs as">
+            <span>{connectionLine(view)}{view.ownerGone ? " (no longer in " + pod.name + ")" : ""}</span>
+            {trouble && <span className="sconn__trouble" role="status"><WarningIcon size={13} /> {trouble}</span>}
+            {offer && (choices.length ? (
+                <form className="sconn__move" onSubmit={(event) => { event.preventDefault(); if (chosen) move.mutate(chosen); }}>
+                    <select aria-label="Run it as another shared connector" value={chosen} onChange={(event) => setChosen(event.target.value)}>
+                        <option value="">Run it as…</option>
+                        {choices.map((one) => <option key={one.slug} value={one.slug}>{connectorLabel(one)}</option>)}
+                    </select>
+                    <button className="btn" type="submit" disabled={!chosen || move.isPending}>{move.isPending ? "Moving…" : "Move it"}</button>
+                </form>
+            ) : (
+                <span>No other shared connector for this app is ready. <PlaceLink className="linkish" href={connectionsPlace(pod.id, view.podConnector)} onGo={onLeave}>Open connections</PlaceLink></span>
+            ))}
+            {move.isError && <ProblemLine as="small" error={move.error} fallback="It could not be moved." />}
+        </section>
+    );
 }
 
 /** What turning it off pauses, on each platform. */

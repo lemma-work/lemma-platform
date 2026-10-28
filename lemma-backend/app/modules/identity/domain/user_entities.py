@@ -39,7 +39,7 @@ class UserEntity(AggregateRoot):
     def normalize_email(cls, value: object) -> str:
         return normalize_identity_email(str(value))
 
-    def mark_signed_up(self) -> None:
+    def mark_signed_up(self, *, method: str | None = None) -> None:
         """Emit signed-up event for welcome email processing."""
         from app.modules.identity.domain.events import UserSignedUpEvent
 
@@ -48,6 +48,7 @@ class UserEntity(AggregateRoot):
                 user_id=self.id,
                 email=str(self.email),
                 first_name=self.first_name,
+                method=method,
             )
         )
 
@@ -80,13 +81,13 @@ class UserEntity(AggregateRoot):
                         value = f"+{digits}"
                 setattr(self, field, value)
 
-    def mark_email_verified(self) -> bool:
+    def mark_email_verified(self, *, signup_method: str | None = None) -> bool:
         """Mark the first verified transition and emit the one-time welcome event."""
         first_transition = not self.is_verified
         self.is_verified = True
         self.email_verified_at = self.email_verified_at or datetime.now(timezone.utc)
         if first_transition:
-            self.mark_signed_up()
+            self.mark_signed_up(method=signup_method)
         return first_transition
 
     def deactivate(self, reason: str) -> None:

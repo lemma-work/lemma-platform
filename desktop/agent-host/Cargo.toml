@@ -19,7 +19,7 @@ name = "lemma-agent-host"
 path = "src/main.rs"
 
 [dependencies]
-agent-client-protocol = { version = "=2.0.0", features = ["unstable_end_turn_token_usage"] }
+agent-client-protocol = { version = "=2.2.0", features = ["unstable_end_turn_token_usage"] }
 # The agent child is spawned through the protocol crate's escape hatch and
 # supervised here; see `SupervisedAgent` in acp.rs for why.
 async-process = "2.5"

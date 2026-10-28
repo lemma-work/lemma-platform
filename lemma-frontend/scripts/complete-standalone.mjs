@@ -1,11 +1,10 @@
 /* Turn `.next/standalone` into a tree that runs on its own.
  *
  * `LEMMA_STANDALONE=1 npm run build` has Next trace every route and copy what
- * those routes import. It cannot see the custom server: `server.mjs` and the
- * voice gateways beside it are not routes, nothing Next builds imports them,
- * and so neither they nor `ws` and `@google/genai` -- which only they use --
- * reach the standalone output. A tree without them starts Next's generated
- * `server.js`, which serves pages and answers every voice call with a 404.
+ * those routes import. It cannot see the custom server: `server.mjs` is not a
+ * route and nothing Next builds imports it, so it does not reach the
+ * standalone output. A tree without it starts Next's generated `server.js`,
+ * which knows nothing of the listen address the desktop app sets.
  *
  * So they are traced here with the same tracer Next uses, and copied beside
  * the server Next wrote. `public/` and `.next/static` are copied too: Next
@@ -36,7 +35,7 @@ if (!existsSync(path.join(target, 'server.js'))) {
    disagree with it about how a package resolves. */
 const { nodeFileTrace } = createRequire(import.meta.url)('next/dist/compiled/@vercel/nft');
 
-const entries = ['server.mjs', 'server/voice-gateway.mjs', 'server/live-gateway.mjs']
+const entries = ['server.mjs']
     .map((file) => path.join(project, file));
 const { fileList, warnings } = await nodeFileTrace(entries, {
     base: root,

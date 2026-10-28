@@ -74,6 +74,7 @@ def _spend(**limits) -> RunSpend:
             model_requests=limits.get("model_requests", 3),
             wall_clock_seconds=limits.get("wall_clock_seconds", 100.0),
             consecutive_tool_failures=limits.get("consecutive_tool_failures", 2),
+            repeated_identical_calls=limits.get("repeated_identical_calls", 0),
         )
     )
 
@@ -121,6 +122,96 @@ def test_a_success_clears_the_failing_streak():
     exhausted = spend.exhausted(elapsed_seconds=0.0)
     assert exhausted is not None
     assert exhausted.dimension is BudgetDimension.TOOL_FAILURES
+
+
+def test_the_same_call_with_the_same_result_is_a_loop_and_says_so():
+    """A run that wanted a tool it was not offered called the next one in the
+    list 1,399 times: no failure to count, far below the request ceiling."""
+    spend = _spend(model_requests=0, repeated_identical_calls=4)
+    for _ in range(3):
+        spend.record_tool_call(
+            tool="manage_process", args='{"action": "list"}', result="[]"
+        )
+
+    warning = spend.approaching(elapsed_seconds=0.0, at=0.5)
+    assert warning is not None
+    assert warning.dimension is BudgetDimension.REPEATED_CALLS
+    assert "search_tools" in warning.notice
+    assert spend.exhausted(elapsed_seconds=0.0) is None
+
+    spend.record_tool_call(
+        tool="manage_process", args='{"action": "list"}', result="[]"
+    )
+    exhausted = spend.exhausted(elapsed_seconds=0.0)
+    assert exhausted is not None
+    assert exhausted.dimension is BudgetDimension.REPEATED_CALLS
+
+
+def test_anything_different_starts_the_streak_again():
+    """Polling work that is still going repeats the call, and sooner or later
+    sees a new result: tool, arguments and result must all repeat."""
+    spend = _spend(model_requests=0, repeated_identical_calls=3)
+    spend.record_tool_call(tool="read", args='{"id": 1}', result='"running"')
+    spend.record_tool_call(tool="read", args='{"id": 1}', result='"running"')
+    spend.record_tool_call(tool="read", args='{"id": 1}', result='"done"')
+    spend.record_tool_call(tool="read", args='{"id": 2}', result='"done"')
+    spend.record_tool_call(tool="list", args='{"id": 2}', result='"done"')
+
+    assert spend.repeated_calls == 1
+    assert spend.exhausted(elapsed_seconds=0.0) is None
+
+
+async def test_the_node_loop_pauses_a_run_repeating_one_call():
+    """From the events a run already emits to the pause a person answers."""
+    import asyncio
+
+    from app.modules.agent.domain.harness_options import HarnessOptions
+    from app.modules.agent.domain.value_objects import (
+        AgentEvent,
+        AgentEventType,
+        MessageDraft,
+    )
+    from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import (
+        NodeLoop,
+    )
+    from app.modules.agent.tools.tool_errors import AgentInputRequired
+
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = NodeLoop(
+        run_context=lambda _history: None,
+        queue=queue,
+        streamer=None,
+        options=HarnessOptions(
+            model_name="test-model",
+            spend=_spend(model_requests=0, repeated_identical_calls=3),
+        ),
+        agent_run_id=uuid4(),
+        conversation_id=uuid4(),
+        final_output_message=lambda **_kwargs: None,
+    )
+
+    for n in range(3):
+        loop._remember_tool_call(
+            AgentEvent(
+                type=AgentEventType.MESSAGE,
+                data=MessageDraft.of_tool_call(
+                    tool_name="manage_process",
+                    tool_call_id=f"c{n}",
+                    tool_args={"action": "list"},
+                ),
+            )
+        )
+        loop._record_tool_outcome(
+            AgentEvent(
+                type=AgentEventType.MESSAGE,
+                data=MessageDraft.of_tool_return(
+                    tool_name="manage_process", tool_call_id=f"c{n}", tool_result=[]
+                ),
+            )
+        )
+
+    with pytest.raises(AgentInputRequired):
+        await loop._spend_a_model_request()
 
 
 def test_carrying_on_is_a_new_run_with_a_new_budget():

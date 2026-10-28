@@ -1,0 +1,66 @@
+<!--
+widget: show/chart
+description: Any chart a Vega-Lite spec describes -- bars, lines, areas, scatter, heatmaps, layered and faceted views -- with its data inline, a finding line above it, themed to the page.
+connector: none
+kind: view
+operations: none
+data: { title?, finding?, spec }
+version: 1
+-->
+<script type="application/json" data-lemma-sample>
+{
+  "title": "Nightly price for 15 people",
+  "finding": "The boutique hotel is about half the price of the beach resorts.",
+  "spec": {
+    "data": { "values": [
+      { "venue": "Casa Palacio", "price": 60000 },
+      { "venue": "La Cabana", "price": 62000 },
+      { "venue": "The Unseen", "price": 35000 }
+    ] },
+    "mark": "bar",
+    "encoding": {
+      "y": { "field": "venue", "type": "nominal", "sort": "-x", "title": null },
+      "x": { "field": "price", "type": "quantitative", "title": "Rupees a night" }
+    }
+  }
+}
+</script>
+<style>
+  .sc__title { margin: 0; font-size: 19px; line-height: 1.25; }
+  .sc__finding { margin: 6px 0 0; font-size: 15px; line-height: 1.4; }
+  .sc__body { margin-top: 12px; width: 100%; }
+</style>
+<section class="w" data-lemma-widget-version="1">
+  <div class="w-card">
+    <h2 class="sc__title" id="sc-title"></h2>
+    <p class="sc__finding" id="sc-finding" hidden></p>
+    <div class="sc__body" id="sc-body"></div>
+  </div>
+</section>
+<script type="module">
+  const d = lemma.data || {};
+  document.getElementById("sc-title").textContent = d.title || "";
+  if (d.finding) Object.assign(document.getElementById("sc-finding"), { textContent: d.finding, hidden: false });
+  const token = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+  const ink = token("--w-ink", "#1a1a1a"), muted = token("--w-ink-3", "#888"), line = token("--w-line-2", "#e5e5e5");
+  const accent = token("--w-accent", "#4f6bed");
+  try {
+    const { default: embed } = await import("https://cdn.jsdelivr.net/npm/vega-embed@6.26.0/+esm");
+    const spec = Object.assign({ $schema: "https://vega.github.io/schema/vega-lite/v5.json", width: "container" }, d.spec || {});
+    await embed("#sc-body", spec, {
+      actions: false,
+      renderer: "svg",
+      config: {
+        background: null,
+        font: "inherit",
+        mark: { color: accent },
+        axis: { labelColor: muted, titleColor: muted, gridColor: line, domainColor: line, tickColor: line },
+        legend: { labelColor: ink, titleColor: muted },
+        title: { color: ink },
+        view: { stroke: null },
+      },
+    });
+  } catch (error) {
+    lemma.fail((error && error.message) || "The chart could not be drawn.", "sc-body");
+  }
+</script>

@@ -25,6 +25,18 @@ class BundleJobExpiredError(PodBundleDomainError):
         super().__init__(message, code="POD_BUNDLE_EXPIRED", status_code=410)
 
 
+class BundleJobNotFoundError(PodBundleDomainError):
+    """No import of this id that the caller started.
+
+    An import is its starter's: its plan was computed with their authority
+    and lists their own accounts, so nobody else may read, apply, re-plan or
+    cancel it. Said as "not found" rather than "forbidden", so an id seen
+    elsewhere tells nobody else that the import exists."""
+
+    def __init__(self, message: str = "No such import in this pod."):
+        super().__init__(message, code="POD_BUNDLE_IMPORT_NOT_FOUND", status_code=404)
+
+
 class BundleInvalidError(PodBundleDomainError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
@@ -175,4 +187,25 @@ class GithubImportError(PodBundleDomainError):
             code=code,
             status_code=status_code,
             details=details,
+        )
+
+
+class BundleGrantsRefusedError(PodBundleDomainError):
+    """The plan holds grants the importer could not make themselves.
+
+    The bundle would hand an agent or a function permissions its importer
+    does not hold -- the escalation the conferral bound exists to stop (PS-ACCESS-010) -- so the
+    apply is refused while the pod is still untouched, with the code and the
+    list the permissions routes refuse with."""
+
+    def __init__(self, refused: list[str]):
+        super().__init__(
+            "This bundle grants permissions you could not use yourself, so you "
+            "may not grant them: "
+            + "; ".join(refused)
+            + ". Ask someone who holds them to import it, or remove those "
+            "grants from the bundle.",
+            code="CONFERRAL_EXCEEDS_HOLDER",
+            status_code=403,
+            details={"refused": refused},
         )

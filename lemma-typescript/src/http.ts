@@ -94,6 +94,98 @@ export class NetworkError extends Error {
   }
 }
 
+/**
+ * The codes a pod connector refuses with when it cannot run for this caller.
+ * Each names the pod connector in `details.pod_connector`; the two a person
+ * can fix themselves carry `details.connect_url`.
+ */
+export const CONNECTION_ERROR_CODES = [
+  "CONNECTION_REQUIRED",
+  "REAUTH_REQUIRED",
+  "CONNECTOR_NEEDS_ACCOUNT",
+  "CONNECTOR_UNAVAILABLE",
+  "CONNECTION_REQUIRES_PERSON",
+] as const;
+
+export type ConnectionErrorCode = (typeof CONNECTION_ERROR_CODES)[number];
+
+function detailString(details: unknown, key: string): string | null {
+  if (!details || typeof details !== "object") return null;
+  const value = (details as Record<string, unknown>)[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+/**
+ * A pod connector that cannot run for the caller, and where to fix it.
+ *
+ * Thrown for every code in `CONNECTION_ERROR_CODES`, whatever the status, so
+ * an app catches one class rather than reading codes:
+ *
+ * ```ts
+ * try { await client.connectors.pod.execute("gmail", "gmail_send_email", payload); }
+ * catch (error) {
+ *   if (error instanceof ConnectionRequiredError && error.connectUrl) error.connect();
+ *   else throw error;
+ * }
+ * ```
+ *
+ * `connectUrl` is null when the person reading cannot fix it themselves --
+ * a shared account only its owner can reconnect, an installation an admin
+ * turned off, a call with no member behind it.
+ */
+export class ConnectionRequiredError extends ApiError {
+  override name = "ConnectionRequiredError";
+  declare readonly code: ConnectionErrorCode;
+  /** Where to connect or reconnect: the pod's Connections page, on this connector. */
+  readonly connectUrl: string | null;
+  /** The pod connector's slug. */
+  readonly podConnector: string | null;
+  /** The catalog connector behind it, e.g. `gmail`, when the server named it. */
+  readonly connectorId: string | null;
+
+  constructor(status: number, message: string, code: ConnectionErrorCode, details?: unknown, rawResponse?: unknown) {
+    super(status, message, code, details, rawResponse);
+    this.connectUrl = detailString(details, "connect_url");
+    this.podConnector = detailString(details, "pod_connector");
+    this.connectorId = detailString(details, "connector_id");
+  }
+
+  /** Reconnecting an expired sign-in, as against connecting for the first time. */
+  get isReauth(): boolean {
+    return this.code === "REAUTH_REQUIRED";
+  }
+
+  /**
+   * Go and fix it: open `connectUrl`. Inside an embedded app the page leaves
+   * the frame for a new tab, since a pod app's frame may not navigate the
+   * window above it; elsewhere the current page goes there, and the
+   * Connections page returns the person once connected. Returns false when
+   * there is nowhere to go (no `connectUrl`, or no browser).
+   */
+  connect(options: { newTab?: boolean } = {}): boolean {
+    if (!this.connectUrl) return false;
+    const view = (globalThis as { window?: Window }).window;
+    if (!view) return false;
+    let framed = false;
+    try {
+      framed = view.top !== view;
+    } catch {
+      framed = true;
+    }
+    if (options.newTab || framed) {
+      view.open(this.connectUrl, "_blank", "noopener");
+      return true;
+    }
+    view.location.assign(this.connectUrl);
+    return true;
+  }
+}
+
+/** Whether a failure is a pod connector asking to be connected. */
+export function isConnectionRequiredError(error: unknown): error is ConnectionRequiredError {
+  return error instanceof ConnectionRequiredError;
+}
+
 /** Map an HTTP status to the most specific ApiError subclass. */
 export function apiErrorFromStatus(
   status: number,
@@ -103,6 +195,9 @@ export function apiErrorFromStatus(
   rawResponse?: unknown,
   retryAfterMsValue?: number,
 ): ApiError {
+  if (code && (CONNECTION_ERROR_CODES as readonly string[]).includes(code)) {
+    return new ConnectionRequiredError(status, message, code as ConnectionErrorCode, details, rawResponse);
+  }
   switch (status) {
     case 401: return new UnauthorizedError(status, message, code, details, rawResponse);
     case 403: return new ForbiddenError(status, message, code, details, rawResponse);

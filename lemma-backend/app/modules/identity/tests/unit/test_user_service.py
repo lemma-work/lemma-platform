@@ -192,3 +192,18 @@ async def test_update_user_rejects_another_profiles_unverified_mobile_number(
 
     user_repository_mock.get_id_by_mobile_digits.assert_awaited_once_with("14155552671")
     user_repository_mock.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_user_records_how_the_person_signed_up(
+    user_service: UserService,
+    user_repository_mock: AsyncMock,
+):
+    user = UserEntity(email="test+provider@example.com")
+    user_repository_mock.get_by_email.return_value = None
+    user_repository_mock.create.return_value = user
+
+    await user_service.create_user(user, signup_method="google")
+
+    (event,) = user_repository_mock.create.await_args.args[0].collect_events()
+    assert event.method == "google"

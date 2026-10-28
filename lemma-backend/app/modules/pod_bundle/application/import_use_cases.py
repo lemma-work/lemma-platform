@@ -30,7 +30,12 @@ from app.modules.pod_bundle.domain.errors import (
     BundleInvalidError,
     BundleJobConflictError,
     BundleJobExpiredError,
+    BundleJobNotFoundError,
     BundleTooLargeError,
+)
+from app.modules.pod_bundle.domain.connector_plan import (
+    ConnectorChoice,
+    resolve_connector_choices,
 )
 from app.modules.pod_bundle.domain.state import (
     BundleSource,
@@ -84,6 +89,29 @@ def _require_import_variables(
         raise BundleConfirmationRequiredError(
             "Required variables are missing.", details={"missing": missing}
         )
+
+
+def _resolve_connector_choices(
+    state: ImportState, requested: dict[str, ConnectorChoice] | None
+) -> dict[str, ConnectorChoice]:
+    """The importer's connector choices made whole, or why the apply is held.
+
+    Checked here, before anything is queued, so a connector that cannot be
+    declared stops the import while the pod is still untouched -- rather than
+    failing at its step after nothing, or worse after half the pod, landed."""
+    if state.plan is None:
+        return {}
+    resolved, blocking = resolve_connector_choices(
+        state.plan.connectors, requested or {}
+    )
+    if blocking:
+        raise BundleConfirmationRequiredError(
+            "Some of this bundle's connectors cannot be declared yet: "
+            + "; ".join(f"'{b.slug}': {b.reason}" for b in blocking)
+            + ".",
+            details={"blocking": [b.model_dump() for b in blocking]},
+        )
+    return resolved
 
 
 logger = get_logger(__name__)
@@ -282,10 +310,9 @@ class ImportUseCases:
         await self._authorize(
             pod_id=pod_id, user_id=user_id, action=Permissions.POD_READ
         )
-        state = await self._state_store.get_import(import_id)
-        if state is None or state.pod_id != pod_id:
-            raise BundleJobExpiredError()
-        return state
+        return await self._starters_import(
+            pod_id=pod_id, import_id=import_id, user_id=user_id
+        )
 
     async def apply_import(
         self,
@@ -295,15 +322,17 @@ class ImportUseCases:
         user_id: UUID,
         variables: dict[str, str] | None = None,
         confirm_destructive: bool = False,
+        connectors: dict[str, ConnectorChoice] | None = None,
     ) -> ImportState:
-        """Validate the plan is ready + confirmed, persist the resolved variables,
-        and queue the apply job with them (dedup key doubles as the guard)."""
+        """Validate the plan is ready + confirmed, persist the resolved variables
+        and connector choices, and queue the apply job with them (dedup key
+        doubles as the guard)."""
         await self._authorize(
             pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
         )
-        state = await self._state_store.get_import(import_id)
-        if state is None or state.pod_id != pod_id:
-            raise BundleJobExpiredError()
+        state = await self._starters_import(
+            pod_id=pod_id, import_id=import_id, user_id=user_id
+        )
         if state.plan is None or state.status not in (
             ImportStatus.AWAITING_CONFIRMATION,
             ImportStatus.FAILED,
@@ -318,6 +347,16 @@ class ImportUseCases:
                 details={"warnings": state.plan.warnings},
             )
         _require_import_variables(state, variables)
+        state.connector_choices = _resolve_connector_choices(state, connectors)
+        # Grants the importer could not make themselves: refused here, with the
+        # pod untouched, rather than by the last step of the apply. Imported
+        # here: only an apply needs it, not every process serving the routes.
+        from app.modules.pod_bundle.infrastructure.grant_planning import (
+            refuse_unconferrable_grants,
+        )
+
+        refuse_unconferrable_grants(state.plan)
+        await self._check_accounts(state, user_id=user_id, variables=variables)
 
         retrying_failed_job = state.status is ImportStatus.FAILED
         # Reset any FAILED step back to PENDING so a re-apply retries it; DONE
@@ -359,9 +398,9 @@ class ImportUseCases:
         await self._authorize(
             pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
         )
-        state = await self._state_store.get_import(import_id)
-        if state is None or state.pod_id != pod_id:
-            raise BundleJobExpiredError()
+        state = await self._starters_import(
+            pod_id=pod_id, import_id=import_id, user_id=user_id
+        )
         if state.status not in {
             ImportStatus.AWAITING_CONFIRMATION,
             ImportStatus.FAILED,
@@ -407,9 +446,9 @@ class ImportUseCases:
         await self._authorize(
             pod_id=pod_id, user_id=user_id, action=Permissions.POD_UPDATE
         )
-        state = await self._state_store.get_import(import_id)
-        if state is None or state.pod_id != pod_id:
-            raise BundleJobExpiredError()
+        state = await self._starters_import(
+            pod_id=pod_id, import_id=import_id, user_id=user_id
+        )
         if state.is_terminal:
             return state
         previous_status = state.status
@@ -468,6 +507,67 @@ class ImportUseCases:
         # and before commit. Force-aborting them could bypass that finalization
         # path and strand the job in CANCELLING.
         return accepted
+
+    async def _check_accounts(
+        self,
+        state: ImportState,
+        *,
+        user_id: UUID,
+        variables: dict[str, str] | None,
+    ) -> None:
+        """The accounts this apply would use, checked while the pod is still
+        untouched (``infrastructure/account_checks``): a narrow share is
+        refused, and a schedule naming an account the importer cannot use is
+        planned as skipped now that its import variable is known."""
+        from app.modules.pod_bundle.infrastructure.account_checks import (
+            ServiceAccountUsability,
+            refuse_narrow_shares,
+            skip_unusable_accounts,
+            steps_naming_an_account,
+        )
+
+        assert state.plan is not None, "checked by the caller"
+        shares = {
+            slug: choice.share_account_id
+            for slug, choice in state.connector_choices.items()
+            if choice.share_account_id is not None
+        }
+        if not shares and not steps_naming_an_account(state.plan.steps):
+            return
+        replacements = {
+            v.name: v.default for v in state.plan.variables if v.default is not None
+        }
+        replacements.update(variables or {})
+        async with uow_scope(self._uow_factory) as uow:
+            ctx = await AuthorizationDataService(uow.session).build_user_context(
+                user_id=user_id, pod_id=state.pod_id
+            )
+            async with context_scope(ctx):
+                await refuse_narrow_shares(uow, pod_id=state.pod_id, shares=shares)
+                await skip_unusable_accounts(
+                    state.plan.steps,
+                    state.warnings,
+                    replacements=replacements,
+                    check=ServiceAccountUsability(
+                        uow=uow, ctx=ctx, pod_id=state.pod_id
+                    ),
+                )
+
+    async def _starters_import(
+        self, *, pod_id: UUID, import_id: UUID, user_id: UUID
+    ) -> ImportState:
+        """The import, when ``user_id`` started it; 410 once it expired.
+
+        Bound to its starter: the plan was computed with their authority and
+        lists their own accounts, so another editor of the pod who learns the
+        id may neither read it nor apply it as though it were theirs.
+        """
+        state = await self._state_store.get_import(import_id)
+        if state is None or state.pod_id != pod_id:
+            raise BundleJobExpiredError()
+        if state.user_id != user_id:
+            raise BundleJobNotFoundError()
+        return state
 
     async def _authorize(self, *, pod_id: UUID, user_id: UUID, action) -> None:
         async with uow_scope(self._uow_factory) as uow:

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any
+from uuid import UUID
 
 import jsonschema
 from pydantic_ai.tools import RunContext, ToolDefinition
@@ -31,14 +32,16 @@ from app.modules.agent.tools.tool_payload_limits import bounded_tool_payload
 from app.modules.agent.tools.tool_errors import safe_error_text
 from app.core.domain.errors import DomainError
 from app.core.redaction import redact_text
-from app.modules.agent.domain.value_objects import to_json_value
+from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.tools.connectors.connector_access import (
+    ConnectorServices,
     connector_execution_only,
     connector_services,
     find_file_result,
 )
 from app.modules.agent.tools.connectors.grant_offer import connector_grant_offer
 from app.modules.agent.tools.connectors.models import (
+    ConnectConnectorRequest,
     DescribeConnectorOperationRequest,
     RunConnectorOperationRequest,
     SearchConnectorOperationsRequest,
@@ -113,12 +116,34 @@ def _no_pod() -> dict[str, Any]:
 connectors_toolset = FunctionToolset()
 
 
-def _connector_line(connector: Any) -> str:
-    mode = (
-        "your person's own account"
-        if connector.mode.value == "PER_MEMBER"
-        else "one shared account"
-    )
+#: What the person's own account on a per-member connector's installation is
+#: like, in the words a model repeats to them. Without it every listed
+#: connector read as working, and agents told people Gmail was connected when
+#: the first call was going to ask them to connect it.
+_STANDING = {
+    "CONNECTED": "connected",
+    "REAUTH_REQUIRED": "needs reconnecting: a call returns a connect_url",
+    None: "not connected yet: a call returns a connect_url",
+}
+
+
+def _standing(mode: str, auth_config_id: UUID, standing: dict[UUID, str]) -> str | None:
+    if mode != "PER_MEMBER":
+        return None
+    found = standing.get(auth_config_id)
+    return found if found in _STANDING else None
+
+
+def _connector_line(connector: Any, standing: dict[UUID, str]) -> str:
+    if connector.mode.value == "PER_MEMBER":
+        mode = (
+            "your person's own account, "
+            + _STANDING[
+                _standing(connector.mode.value, connector.auth_config_id, standing)
+            ]
+        )
+    else:
+        mode = "one shared account"
     purpose = f" -- {connector.purpose}" if connector.purpose else ""
     return f"- `{connector.slug}` ({connector.connector_id}, {mode}){purpose}"
 
@@ -132,15 +157,19 @@ def _offer_line(offer: Any) -> str:
     return f"- `{offer.name}` ({offer.connector_id}, {_OFFERED})"
 
 
-async def _usable(deps: BaseAgentContext) -> tuple[list[Any], list[Any]]:
-    """The pod's connectors this agent may use, and the person's own
-    installations the pod declares no connector of their own account for."""
+async def _usable(
+    deps: BaseAgentContext,
+) -> tuple[list[Any], list[Any], dict[UUID, str]]:
+    """The pod's connectors this agent may use, the person's own
+    installations the pod declares no connector of their own account for, and
+    how the person's account stands on each installation."""
     async with connector_services(deps) as services:
         usable = await services.pod_connectors.usable_connectors(
             services.ctx, deps.pod_id
         )
         offered = await services.reach.offered(services.ctx, deps.pod_id)
-    return usable, offered
+        standing = await services.reach.account_standing(services.ctx)
+    return usable, offered, standing
 
 
 async def _search_one(
@@ -155,6 +184,10 @@ async def _search_one(
     installations it names. Browsing an installation declares nothing;
     running one does (``slug_for``)."""
     offer = await services.reach.installation(services.ctx, deps.pod_id, connector)
+    if offer is None:
+        # Nothing connected yet: browse the installation or the catalog, so the
+        # schema is known before anybody signs in.
+        offer = await services.reach.unconnected(services.ctx, deps.pod_id, connector)
     if offer is not None:
         return await services.operations.discover_operations(
             offer.connector_id,
@@ -172,6 +205,8 @@ async def _describe_one(
     services: Any, deps: BaseAgentContext, connector: str, operation: str
 ) -> Any:
     offer = await services.reach.installation(services.ctx, deps.pod_id, connector)
+    if offer is None:
+        offer = await services.reach.unconnected(services.ctx, deps.pod_id, connector)
     if offer is not None:
         return await services.operations.get_operation_details(
             offer.connector_id,
@@ -197,10 +232,10 @@ async def _describe_usable_connectors(
     if ctx.deps is None or ctx.deps.pod_id is None:
         return tool_def
     try:
-        usable, offered = await _usable(ctx.deps)
+        usable, offered, standing = await _usable(ctx.deps)
     except DomainError:
         return tool_def
-    lines = [_connector_line(connector) for connector in usable]
+    lines = [_connector_line(connector, standing) for connector in usable]
     lines += [_offer_line(offer) for offer in offered]
     listing = (
         "\n".join(lines)
@@ -225,7 +260,7 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
     if deps.pod_id is None:
         return _no_pod()
     try:
-        usable, offered = await _usable(deps)
+        usable, offered, standing = await _usable(deps)
     except DomainError as exc:
         # Raising here would end the agent's run over something it could
         # simply report.
@@ -237,6 +272,10 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
             "mode": connector.mode.value,
             "purpose": connector.purpose,
             "status": connector.status.value,
+            # PER_MEMBER: CONNECTED, REAUTH_REQUIRED, or None -- not connected.
+            "your_account": _standing(
+                connector.mode.value, connector.auth_config_id, standing
+            ),
         }
         for connector in usable
     ]
@@ -366,6 +405,89 @@ def _validate_arguments(
     )
 
 
+async def _connect_answer(
+    services: ConnectorServices, deps: BaseAgentContext, name: str
+) -> JsonObject:
+    """What the agent hands its person for something not connected yet: a
+    link to sign in, or -- when nobody installed it and they may not --
+    who can.
+
+    A link to the pod's Connections page on Lemma's own address rather than
+    the provider's consent URL: it says what is being connected and to whom
+    before sending the person on, works in a browser that blocks pop-ups, and
+    installs Lemma's own app for the connector on the way when the
+    organization has none. Directions through the menus were the old answer,
+    and they were wrong as often as the menus moved.
+    """
+    unconnected = await services.reach.unconnected(services.ctx, deps.pod_id, name)
+    if unconnected is None:
+        return _error(
+            "CONNECTOR_NOT_FOUND",
+            f"Nothing called '{name}' is in this pod, this organization or the "
+            "connector catalog. `list_connectors` names what you may use.",
+            connector=name,
+        )
+    if unconnected.auth_config_id is None and not await services.reach.may_install(
+        services.ctx
+    ):
+        return _error(
+            "CONNECTOR_NOT_INSTALLED",
+            f"{name} is not installed in this organization, and your person may "
+            "not install it. An organization owner or editor adds it: "
+            f"organization menu -> Connectors -> Available -> {name} -> Connect.",
+            connector=name,
+            connector_id=unconnected.connector_id,
+        )
+    return _error(
+        "CONNECTION_REQUIRED",
+        f"Your person has not connected {name}. Give them `connect_url` to "
+        "sign in, then run this again -- it will run as their account.",
+        connector=name,
+        connector_id=unconnected.connector_id,
+        connect_url=services.reach.connect_url(deps.pod_id, name),
+    )
+
+
+@connectors_toolset.tool
+async def connect_connector(
+    ctx: RunContext[BaseAgentContext], request: ConnectConnectorRequest
+) -> JsonObject:
+    """Get the link your person opens to connect an app (Gmail, Notion, ...).
+
+    You do not need this before running an operation: `run_connector_operation`
+    answers with the same `connect_url` when something is not connected. Use it
+    when your person asks to connect something. Hand them `connect_url`
+    as it is; do not describe menus instead.
+    """
+    deps = ctx.deps
+    if deps.pod_id is None:
+        return _no_pod()
+    async with connector_services(deps) as services:
+        try:
+            declared = await services.pod_connectors.usable_connectors(
+                services.ctx, deps.pod_id
+            )
+            if any(one.slug == request.connector for one in declared):
+                return {
+                    "success": True,
+                    "connector": request.connector,
+                    "connect_url": services.reach.connect_url(
+                        deps.pod_id, request.connector
+                    ),
+                }
+            if await services.reach.installation(
+                services.ctx, deps.pod_id, request.connector
+            ):
+                return {
+                    "success": True,
+                    "connector": request.connector,
+                    "already_connected": True,
+                }
+            return await _connect_answer(services, deps, request.connector)
+        except DomainError as exc:
+            return _failure(exc, connector=request.connector)
+
+
 @connectors_toolset.tool(prepare=_describe_usable_connectors)
 async def run_connector_operation(
     ctx: RunContext[BaseAgentContext], request: RunConnectorOperationRequest
@@ -386,20 +508,29 @@ async def run_connector_operation(
     if deps.pod_id is None:
         return _no_pod()
 
+    installation = None
     try:
         # Phase 1, in a short scope: every DB read, the authorization check and
         # the credential resolution. The scope closes -- releasing the pooled
         # connection -- before anything reaches the provider.
         async with connector_services(deps) as services:
             # One of the person's own installations is declared as the pod's
-            # connector of their own account on its first run -- committed now,
-            # so a named agent refused it below can be offered the grant on it.
-            slug = await services.reach.slug_for(
+            # connector of their own account on its first run, in this scope's
+            # transaction: a refusal below rolls it back, so a refused call
+            # leaves no connector in the pod. The grant card a named agent is
+            # offered then names the installation, and approving declares it.
+            installation = await services.reach.installation(
                 services.ctx, deps.pod_id, request.connector
             )
-            if slug != request.connector:
-                await services.uow.commit()
+            if installation is not None:
+                slug = await services.reach.declare(
+                    services.ctx, deps.pod_id, installation
+                )
                 request = request.model_copy(update={"connector": slug})
+            elif await services.reach.unconnected(
+                services.ctx, deps.pod_id, request.connector
+            ):
+                return await _connect_answer(services, deps, request.connector)
             detail = await services.operations.pod_connector_operation(
                 services.ctx,
                 pod_id=deps.pod_id,
@@ -449,6 +580,7 @@ async def run_connector_operation(
             connector=request.connector,
             tool_name="run_connector_operation",
             args=request.model_dump(mode="json"),
+            auth_config_id=installation.auth_config_id if installation else None,
         )
         # Connector failures are information for the model (wrong argument,
         # account needs connecting), not a reason to end the run.

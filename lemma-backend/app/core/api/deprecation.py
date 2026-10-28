@@ -45,7 +45,11 @@ def _actor_kind(request: Request) -> str:
         return "function"
     claims = getattr(request.state, "delegation_claims", None)
     if claims is not None:
-        return str(getattr(claims, "workload_type", None) or "workload").lower()
+        # ``DelegationClaims.actor_type``: AGENT or FUNCTION. It used to read
+        # a ``workload_type`` the claims never had, so every delegated caller
+        # was logged as "workload" and the log could not say which to chase.
+        kind = getattr(claims, "actor_type", None)
+        return str(getattr(kind, "value", kind) or "workload").lower()
     return "person"
 
 

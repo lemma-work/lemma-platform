@@ -542,7 +542,13 @@ class DatastoreSettings(DocumentWorkSettings):
     )
     openai_compat_reranker_model: str = Field(
         default="qwen3-reranker-8b",
-        description="Rerank model used when reranker_mode='openai_compat'.",
+        description=(
+            "Rerank model used when reranker_mode='openai_compat', exactly as "
+            "the provider names it. Fireworks wants the full id "
+            "(`accounts/fireworks/models/qwen3-reranker-8b`): the short form "
+            "is answered with a 500 after a long wait, every search, and "
+            "search falls back to first-stage order."
+        ),
     )
     reranker_mode: Literal["off", "local", "openai_compat"] = Field(
         default="off",
@@ -553,11 +559,21 @@ class DatastoreSettings(DocumentWorkSettings):
             "(LEMMA_OPENAI_API_KEY required)."
         ),
     )
+    reranker_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description=(
+            "How long a hosted rerank may take before search keeps the "
+            "first-stage order instead. Reranking is best-effort, so this is "
+            "the most a slow reranker can add to a search."
+        ),
+    )
     reranker_retrieve_n: int = Field(
         default=50,
         description=(
             "First-stage candidate pool size to rerank down from when reranking "
-            "is active (retrieve N, rerank to the requested limit)."
+            "is active (retrieve N, rerank to the requested limit). Also the "
+            "most chunks one rerank call is sent."
         ),
     )
     local_reranker_model: str = Field(

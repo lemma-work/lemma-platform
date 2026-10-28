@@ -342,6 +342,11 @@ def test_every_legacy_connector_grant_becomes_a_pod_row_and_comes_back() -> None
             ids["bot_own"]: ("POD", "MIGRATED"),
             ids["owner_gmail"]: ("PERSONAL", "MIGRATED"),
         }
+        # Nobody has said any of them may go inside a sandbox.
+        with psycopg.connect(plain_url) as connection:
+            assert connection.execute(
+                "SELECT count(*) FROM pod_accounts WHERE allow_sandbox_use"
+            ).fetchone() == (0,)
         # The agent holds `connector.use` on the per-member connector and on
         # each pinned one, and no grant names a raw account any more.
         granted = {by_slug[slug][0] for slug in pins | {"gmail"}}

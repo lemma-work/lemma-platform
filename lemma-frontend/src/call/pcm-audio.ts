@@ -1,16 +1,16 @@
 "use client";
 
 // Raw PCM16 mic capture and playback. Uses ScriptProcessorNode rather than an
-// AudioWorklet — deprecated, but it needs no separate worklet file to serve,
-// which keeps this prototype to two files instead of three.
+// AudioWorklet — deprecated, but it needs no separate worklet file to serve.
 //
-// Playback is 24kHz for both models we speak to. Capture is not: Gemini Live
-// wants 16kHz and GPT-Live wants 24, so the rate is the caller's to name and
-// the transport it is talking to is what knows the answer.
+// Capture is 16kHz, the rate the call server takes from every caller; playback
+// is the rate the server names when the call is ready (24kHz for every engine
+// it has). Both are raw bytes: the call's socket carries binary frames.
 
 const DEFAULT_MIC_SAMPLE_RATE = 16000;
-const PLAYBACK_SAMPLE_RATE = 24000;
-const CAPTURE_BUFFER_SAMPLES = 2048;
+const DEFAULT_PLAYBACK_SAMPLE_RATE = 24000;
+// 64 ms at 16 kHz: small enough that a turn's end is not held back a frame.
+const CAPTURE_BUFFER_SAMPLES = 1024;
 const ANALYSER_FFT_SIZE = 256;
 
 function floatTo16BitPCM(input: Float32Array): Int16Array {
@@ -20,20 +20,6 @@ function floatTo16BitPCM(input: Float32Array): Int16Array {
         output[i] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
     }
     return output;
-}
-
-function base64FromInt16(pcm: Int16Array): string {
-    const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    return btoa(binary);
-}
-
-function int16FromBase64(base64: string): Int16Array {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return new Int16Array(bytes.buffer);
 }
 
 // Shared by mic and playback: a 0..1 RMS reader off a live AnalyserNode. Read
@@ -66,7 +52,7 @@ export interface MicStream {
 }
 
 export async function startMicPCMStream(
-    onChunk: (base64Pcm: string) => void,
+    onChunk: (pcm: Int16Array) => void,
     sampleRate: number = DEFAULT_MIC_SAMPLE_RATE,
 ): Promise<MicStream> {
     const mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -86,7 +72,7 @@ export async function startMicPCMStream(
 
     processor.onaudioprocess = (event) => {
         const input = event.inputBuffer.getChannelData(0);
-        onChunk(base64FromInt16(floatTo16BitPCM(input)));
+        onChunk(floatTo16BitPCM(input));
     };
 
     source.connect(analyser);
@@ -108,8 +94,8 @@ export async function startMicPCMStream(
 }
 
 export interface PCMPlayer {
-    /** Queue a base64 PCM16 chunk (24kHz mono) for gapless playback. */
-    push(base64Pcm: string): void;
+    /** Queue a PCM16 mono chunk for gapless playback. */
+    push(pcm: ArrayBuffer): void;
     /** Stop current and scheduled audio immediately on interruption. */
     clear(): void;
     /** Current playback output level, 0..1. Cheap — call from a rAF loop. */
@@ -118,8 +104,8 @@ export interface PCMPlayer {
     stop(): void;
 }
 
-export function createPCMPlayer(): PCMPlayer {
-    const audioContext = new AudioContext({ sampleRate: PLAYBACK_SAMPLE_RATE });
+export function createPCMPlayer(sampleRate: number = DEFAULT_PLAYBACK_SAMPLE_RATE): PCMPlayer {
+    const audioContext = new AudioContext({ sampleRate });
     /* A context built outside a user gesture starts suspended, and a suspended
        context accepts every scheduled buffer in silence — audio arriving and
        nothing playing, with no error anywhere to say so. The call starts on a
@@ -143,16 +129,17 @@ export function createPCMPlayer(): PCMPlayer {
     };
 
     return {
-        push(base64Pcm: string) {
+        push(bytes: ArrayBuffer) {
             if (stopped) return;
             /* Also on the way in: autoplay policy can suspend a context that
                was running, and the first chunk is when it matters. */
             wake();
-            const pcm = int16FromBase64(base64Pcm);
+            const pcm = new Int16Array(bytes, 0, Math.floor(bytes.byteLength / 2));
             const float32 = new Float32Array(pcm.length);
             for (let i = 0; i < pcm.length; i++) float32[i] = pcm[i] / 0x8000;
 
-            const buffer = audioContext.createBuffer(1, float32.length, PLAYBACK_SAMPLE_RATE);
+            if (!float32.length) return;
+            const buffer = audioContext.createBuffer(1, float32.length, sampleRate);
             buffer.copyToChannel(float32, 0);
 
             const source = audioContext.createBufferSource();

@@ -44,7 +44,11 @@ from app.modules.agent.events.turn_payloads import MemoryPassWork
 from app.modules.agent.infrastructure.harnesses.mock_model import build_mock_model
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.agent_memory_brief import AgentMemoryBriefBuilder
-from app.modules.agent.services.memory_pass import MemoryPass, MemoryPassOutcome
+from app.modules.agent.services.memory_pass import (
+    MemoryPass,
+    MemoryPassOutcome,
+    MemoryPassUnfinished,
+)
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
     append,
     finish,
@@ -85,9 +89,20 @@ def _uow_factory() -> SessionUnitOfWorkFactory:
     return SessionUnitOfWorkFactory(async_session_maker)
 
 
-def _scripted(turns: list[dict]) -> MemoryPass:
-    """A pass whose model answers with ``turns``, one per request."""
-    model = build_mock_model(SimpleNamespace(metadata={"mock_llm_script": turns}))
+FOUND = "- About the person: they run a 12-person design studio."
+
+
+def _scripted(turns: list[dict], *, found: str = FOUND) -> MemoryPass:
+    """A pass whose screen finds ``found``, and whose keeper answers with
+    ``turns``, one per request. The screen is the request offered no tools."""
+    keeper = build_mock_model(SimpleNamespace(metadata={"mock_llm_script": turns}))
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if not info.function_tools:
+            return ModelResponse(parts=[TextPart(found)])
+        return await keeper.function(messages, info)
+
+    model = FunctionModel(respond)
     return MemoryPass(_uow_factory(), model_for=lambda _resolved: model)
 
 
@@ -224,16 +239,20 @@ async def test_an_agent_without_memory_owes_no_pass(
 def _keeping(sent: list[str]) -> MemoryPass:
     """A pass whose model records what it was sent, keeps a note, and stops."""
 
-    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         if any(isinstance(message, ModelResponse) for message in messages):
             return ModelResponse(parts=[TextPart("Kept.")])
-        sent.extend(
+        prompts = [
             str(part.content)
             for message in messages
             if isinstance(message, ModelRequest)
             for part in message.parts
             if isinstance(part, UserPromptPart)
-        )
+        ]
+        sent.extend(prompts)
+        if not info.function_tools:
+            # The screen: what it found is the turn it was shown.
+            return ModelResponse(parts=[TextPart("\n".join(prompts))])
         return ModelResponse(
             parts=[
                 ToolCallPart(
@@ -274,6 +293,40 @@ async def test_a_retried_turn_is_kept_from_what_the_failed_run_was_asked(scenari
 
     assert outcome is MemoryPassOutcome.KEPT
     assert "12-person design studio" in "\n".join(sent)
+
+
+@pytest.mark.asyncio
+async def test_a_configured_pass_model_runs_the_pass_without_the_runs_settings(
+    scenario,
+):
+    """`AGENT_MEMORY_PASS_MODEL` moves the pass off the run's own model. The
+    run's generation settings are for the run's model, so the configured one
+    is sent none; the run's model is not asked at all."""
+    seeded = await seeded_conversation(scenario, toolsets=["MEMORY", "POD"])
+    run = await running_run(seeded)
+    await append(seeded, run, MessageDraft.of_text(ASKED, role=MessageRole.USER))
+    await finish(run, status=AgentRunStatus.COMPLETED)
+
+    settings_sent: list[object] = []
+
+    def configured(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        settings_sent.append(info.model_settings)
+        return ModelResponse(parts=[TextPart("nothing")])
+
+    def run_model(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        raise AssertionError("the run's own model was asked")
+
+    async def choose(fallback, _organization_id, _user_id):
+        assert fallback is run_side
+        return FunctionModel(configured)
+
+    run_side = FunctionModel(run_model)
+    outcome = await MemoryPass(
+        _uow_factory(), model_for=lambda _resolved: run_side, pass_model=choose
+    ).keep(conversation_id=seeded.conversation_id, run_id=run, user_id=seeded.user_id)
+
+    assert outcome is MemoryPassOutcome.NOTHING
+    assert settings_sent == [None]
 
 
 @pytest.mark.asyncio
@@ -351,3 +404,81 @@ async def test_a_pass_whose_model_fails_changes_neither_the_answer_nor_memory(
     ]
     assert answers == [ANSWER]
     assert await _read(pod, PATHS.personal_index) is None
+
+
+async def _a_finished_turn(scenario) -> tuple[object, UUID]:
+    seeded = await seeded_conversation(scenario, toolsets=["MEMORY", "POD"])
+    run = await running_run(seeded)
+    await append(seeded, run, MessageDraft.of_text(ASKED, role=MessageRole.USER))
+    await finish(run, status=AgentRunStatus.COMPLETED)
+    return seeded, run
+
+
+@pytest.mark.asyncio
+async def test_a_turn_with_nothing_to_keep_costs_one_request_with_no_memory_or_tools(
+    scenario,
+):
+    """Most turns hold nothing, and the pass used to learn that by sending the
+    memory brief, the tools and the whole turn -- several times over."""
+    seeded, run = await _a_finished_turn(scenario)
+    asked: list[AgentInfo] = []
+
+    def respond(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        asked.append(info)
+        return ModelResponse(parts=[TextPart("nothing")])
+
+    model = FunctionModel(respond)
+    outcome = await MemoryPass(_uow_factory(), model_for=lambda _r: model).keep(
+        conversation_id=seeded.conversation_id, run_id=run, user_id=seeded.user_id
+    )
+
+    assert outcome is MemoryPassOutcome.NOTHING
+    [screen] = asked
+    assert screen.function_tools == []
+    assert "## Your Memory" not in (screen.instructions or "")
+
+
+def _runs_out_of_steps(*, write_first: bool) -> MemoryPass:
+    """A keeper that never stops reading, after one write or none."""
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if not info.function_tools:
+            return ModelResponse(parts=[TextPart(FOUND)])
+        responses = sum(isinstance(message, ModelResponse) for message in messages)
+        if write_first and responses == 0:
+            call = ToolCallPart(
+                "pod_write_file",
+                {"path": PATHS.personal_index, "content": "- runs a studio\n"},
+            )
+        else:
+            call = ToolCallPart("pod_read_file", {"path": PATHS.personal_index})
+        return ModelResponse(parts=[call])
+
+    model = FunctionModel(respond)
+    return MemoryPass(_uow_factory(), model_for=lambda _resolved: model)
+
+
+@pytest.mark.asyncio
+async def test_a_keeper_that_runs_out_of_steps_keeps_what_it_wrote(scenario):
+    seeded, run = await _a_finished_turn(scenario)
+
+    outcome = await _runs_out_of_steps(write_first=True).keep(
+        conversation_id=seeded.conversation_id, run_id=run, user_id=seeded.user_id
+    )
+
+    assert outcome is MemoryPassOutcome.KEPT
+
+
+@pytest.mark.asyncio
+async def test_a_keeper_that_runs_out_of_steps_having_written_nothing_tries_again(
+    scenario,
+):
+    """Not a permanent failure: the work runtime retries an ordinary error."""
+    seeded, run = await _a_finished_turn(scenario)
+
+    with pytest.raises(MemoryPassUnfinished):
+        await _runs_out_of_steps(write_first=False).keep(
+            conversation_id=seeded.conversation_id,
+            run_id=run,
+            user_id=seeded.user_id,
+        )

@@ -27,6 +27,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, WebSocket, status
 from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser
+from app.core.app_pin import app_host_slug
 from app.core.request_context import create_inherited_task
 
 from app.core.config import settings
@@ -368,6 +369,14 @@ async def browser_view(
             "workspace.browser_view.origin_refused.denied",
             origin_hint=origin_refusal_hint(sent, allowed=origins),
         )
+        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
+        return
+    if app_host_slug(websocket) is not None:
+        # An app host is an allowed CORS origin, but this is the person's own
+        # sandbox -- their saved sign-ins -- outside any pod, and an app's page
+        # acts for its viewer only in its own pod (``core/app_pin``). Refused
+        # without looking the app up: no app host has any business here.
+        logger.warning("workspace.browser_view.app_origin_refused.denied")
         await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
         return
 

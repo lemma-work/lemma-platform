@@ -75,6 +75,8 @@ class PodConnectorAccount:
     #: The account itself, credentials included: the caller is about to use
     #: them. Secrets on it stay ``SecretStr`` until the point of use.
     account: AccountEntity
+    #: The pod account's owner allows its credential inside sandboxes.
+    allow_sandbox_use: bool = False
 
     @property
     def account_id(self) -> UUID:
@@ -121,6 +123,7 @@ def _present(resolved: ResolvedPodConnector) -> PodConnectorAccount:
         owner_user_id=resolved.pod_account.owner_user_id,
         auth_config_id=resolved.auth_config.id,
         connector_id=resolved.auth_config.connector_id,
+        allow_sandbox_use=resolved.pod_account.allow_sandbox_use,
         account=resolved.account,
     )
 

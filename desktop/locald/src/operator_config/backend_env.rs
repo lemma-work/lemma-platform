@@ -2,9 +2,11 @@
 
 use super::*;
 
-pub(crate) fn secret_environment() -> [(&'static str, &'static str); 21] {
+pub(crate) fn secret_environment() -> [(&'static str, &'static str); 22] {
     [
         ("integrations.deepgram_api_key", "DEEPGRAM_API_KEY"),
+        // A live call's voice. The API holds calls, so it is the one that reads it.
+        ("integrations.gemini_api_key", "GEMINI_API_KEY"),
         // Answers the backend's decisions, a live call's routing among them.
         // Storing it also sets DECISION_PROVIDER (`backend_environment`).
         ("integrations.typesafe_api_key", "TYPESAFE_API_KEY"),
@@ -50,12 +52,12 @@ pub(crate) fn secret_environment() -> [(&'static str, &'static str); 21] {
     ]
 }
 
-/// Secrets the frontend's own server reads, never the backend: a live call's
-/// voice runs through the workspace server's voice gateway (Gemini Live), not
-/// through the API. Routing what the caller says is a backend decision, so the
-/// TypeSafe key is the backend's (`secret_environment`).
-pub(crate) fn frontend_secret_environment() -> [(&'static str, &'static str); 1] {
-    [("integrations.gemini_api_key", "GEMINI_API_KEY")]
+/// Secrets the frontend's own server reads, never the backend. None today:
+/// live calls, the last thing the workspace server held a key for, moved to
+/// the API. Kept as the one place such a secret would be named, so a future
+/// one reaches the frontend's restart-on-change path rather than the backend.
+pub(crate) fn frontend_secret_environment() -> [(&'static str, &'static str); 0] {
+    []
 }
 
 /// The models the backend's side jobs run on, all on the system profile.

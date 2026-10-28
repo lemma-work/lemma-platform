@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .enums import COLUMN_TYPES, SURFACE_PLATFORMS, TOOLSETS, VISIBILITY_VALUES
-from .pod_bundle import FORMAT_VERSION, loads_jsonc, strip_jsonc
+from .pod_bundle import FORMAT_VERSION_WITHOUT_CONNECTORS, loads_jsonc, strip_jsonc
 
 
 class ScaffoldError(Exception):
@@ -223,7 +223,8 @@ WORKFLOW_JSON = """{
 SCHEDULE_JSON = """{
   "name": "__NAME__",
   "schedule_type": "TIME",          // TIME (cron) | DATASTORE (row events) | WEBHOOK (app events)
-  "config": { "cron": "0 9 * * *" },// TIME: cron | scheduled_at
+  "config": { "cron": "0 9 * * *" },// TIME: cron | scheduled_at, read in UTC unless...
+  // "config": { "cron": "0 9 * * 1-5", "timezone": "Europe/Berlin" },  // ...timezone (IANA) says otherwise
   // DATASTORE: { "table_name": "<table>", "operations": ["INSERT"] }   <- table_name, NOT "datastore"
   // WEBHOOK:   { "source": "<composio|github>" }  // refused at create if the
   //            deployment does not register it; not read at all when the
@@ -245,8 +246,7 @@ SCHEDULE_JSON = """{
   // DATASTORE only: also fire on rows people outside the pod added through a
   // table opened to them. Off by default; their content is untrusted.
   // "include_outside_rows": false,
-  // WEBHOOK only — the connector account and trigger this listens on.
-  // "account_id": "TODO-connector-account-uuid",
+  // WEBHOOK only — the connector trigger this listens on (with "pod_connector" above).
   // "connector_trigger_id": "TODO-connector-trigger-uuid",
   "is_active": false,               // flip to true once the target exists and you've imported it
   "visibility": "POD"
@@ -370,7 +370,11 @@ def init_pod(
     files.append(
         _write(
             directory / "pod.json",
-            _render(POD_JSON, NAME=slug, FORMAT_VERSION=str(FORMAT_VERSION)),
+            _render(
+                POD_JSON,
+                NAME=slug,
+                FORMAT_VERSION=str(FORMAT_VERSION_WITHOUT_CONNECTORS),
+            ),
             force=force,
         )
     )
@@ -580,7 +584,11 @@ def resource_example(resource_type: str, name: str = "example") -> str:
     exist' reference printed by `lemma <resource> schema`."""
     rt = resource_type.lower().rstrip("s")
     if rt == "pod":
-        return _render(POD_JSON, NAME=slugify(name), FORMAT_VERSION=str(FORMAT_VERSION))
+        return _render(
+            POD_JSON,
+            NAME=slugify(name),
+            FORMAT_VERSION=str(FORMAT_VERSION_WITHOUT_CONNECTORS),
+        )
     if rt == "table":
         return _render(TABLE_JSON, NAME=snakeify(name), RLS="true")
     if rt == "function":

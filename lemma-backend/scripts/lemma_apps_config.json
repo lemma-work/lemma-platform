@@ -6926,12 +6926,10 @@
     "kind": "http",
     "system_oauth": {
       "client_id_env": [
-        "CONNECTOR_GOOGLE_CLIENT_ID",
-        "GOOGLE_CLIENT_ID"
+        "CONNECTOR_GOOGLE_CLIENT_ID"
       ],
       "client_secret_env": [
-        "CONNECTOR_GOOGLE_CLIENT_SECRET",
-        "GOOGLE_CLIENT_SECRET"
+        "CONNECTOR_GOOGLE_CLIENT_SECRET"
       ]
     },
     "oauth2_config": {

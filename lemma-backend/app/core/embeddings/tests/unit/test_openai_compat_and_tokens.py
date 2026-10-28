@@ -26,9 +26,15 @@ class _EmbeddingClient:
     async def __aexit__(self, *_):
         return None
 
-    async def post(self, url: str, *, headers: dict, json: dict) -> httpx.Response:
+    async def post(
+        self, url: str, *, headers: dict, json: dict, timeout: float
+    ) -> httpx.Response:
         self.requests.append({"url": url, "headers": headers, "json": json})
         return next(self.responses)
+
+
+def _no_client_per_call(**_: object) -> httpx.AsyncClient:
+    raise AssertionError("a client per call pays a fresh TLS handshake each time")
 
 
 def _response(payload: dict, url: str = "https://embeddings.test/v1/embeddings"):
@@ -50,9 +56,10 @@ async def test_openai_compat_embedder_batches_and_orders_results(monkeypatch):
         ]
     )
     monkeypatch.setattr(
-        "app.core.embeddings.openai_compat_embedder.httpx.AsyncClient",
-        lambda **_: client,
+        "app.core.embeddings.openai_compat_embedder.get_shared_http_client",
+        lambda: client,
     )
+    monkeypatch.setattr(httpx, "AsyncClient", _no_client_per_call)
     monkeypatch.setattr(settings, "lemma_openai_api_key", SecretStr("test-key"))
     monkeypatch.setattr(settings, "lemma_openai_base_url", "https://embeddings.test/v1")
 
@@ -81,9 +88,10 @@ async def test_openai_compat_embedder_rejects_missing_credentials(monkeypatch):
 async def test_openai_compat_embedder_rejects_wrong_dimensions(monkeypatch):
     client = _EmbeddingClient([_response({"data": [{"index": 0, "embedding": [1.0]}]})])
     monkeypatch.setattr(
-        "app.core.embeddings.openai_compat_embedder.httpx.AsyncClient",
-        lambda **_: client,
+        "app.core.embeddings.openai_compat_embedder.get_shared_http_client",
+        lambda: client,
     )
+    monkeypatch.setattr(httpx, "AsyncClient", _no_client_per_call)
     monkeypatch.setattr(settings, "lemma_openai_api_key", SecretStr("test-key"))
 
     with pytest.raises(ValueError, match="expected 2"):

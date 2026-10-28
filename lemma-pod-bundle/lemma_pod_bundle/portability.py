@@ -13,7 +13,9 @@ thing in every pod that declares it; which account that is, is the importing
 pod's connector's decision and its account owners'. So a resource that still
 names an ``account_id`` is an exporter bug and fails the export, and a grant on
 a pod account -- which decides nothing for a workload, and is never portable --
-is left out of the bundle.
+is left out of the bundle. The pod connectors themselves travel as
+``connectors/<slug>/<slug>.json`` -- the catalog connector and the mode, never
+the installation or the shared account -- and a grant on one names its slug.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .apply_fields import GRANT_HOLDER_DIRS
 from .jsonc import loads_jsonc
 from .layout import POD_MEMBER_TOKEN, _read_json, _write_json
 
@@ -31,6 +34,12 @@ _PLACEHOLDER_RE = re.compile(r"\$\{[A-Za-z0-9_]+\}")
 _MEMBER_REF_FIELDS = frozenset({"assignee_pod_member_id"})
 # A key no exported resource may carry: an org account is never portable.
 _ACCOUNT_REF_FIELDS = frozenset({"account_id"})
+# A bundled pod connector names its catalog connector and nothing of the org it
+# came from: neither the installation it was mapped to nor the account a SHARED
+# one ran as. Both are the importer's choice in their own org.
+_CONNECTOR_ORG_REF_FIELDS = _ACCOUNT_REF_FIELDS | frozenset(
+    {"auth_config_id", "shared_pod_account_id", "pod_account_id", "shared_account"}
+)
 # Grants on these resource types are never exported (see the module docstring).
 _UNPORTABLE_GRANT_RESOURCE_TYPES = frozenset({"connector_account"})
 # An app's public slug is unique platform-wide, so it cannot be reused verbatim in
@@ -107,23 +116,32 @@ def _drop_unportable_grants(payload: object) -> bool:
     return True
 
 
-def _contains_account_ref(node: object) -> bool:
-    """True if ``node`` holds a value under an account-reference key anywhere."""
+def _contains_account_ref(
+    node: object, keys: frozenset[str] = _ACCOUNT_REF_FIELDS
+) -> bool:
+    """True if ``node`` holds a value under one of ``keys`` anywhere."""
     if isinstance(node, dict):
         for key, value in node.items():
-            if key in _ACCOUNT_REF_FIELDS and value:
+            if key in keys and value:
                 return True
-            if _contains_account_ref(value):
+            if _contains_account_ref(value, keys):
                 return True
         return False
     if isinstance(node, list):
-        return any(_contains_account_ref(item) for item in node)
+        return any(_contains_account_ref(item, keys) for item in node)
     return False
 
 
 def _assert_no_account_ids(bundle_root: Path) -> None:
     for resource_json in sorted(bundle_root.glob("*/*/*.json")):
         data = loads_jsonc(resource_json.read_text(encoding="utf-8"))
+        is_connector = resource_json.parent.parent.name == "connectors"
+        if is_connector and _contains_account_ref(data, _CONNECTOR_ORG_REF_FIELDS):
+            raise ValueError(
+                f"{resource_json.relative_to(bundle_root)} names an installation "
+                "or an account. A bundled connector names its catalog connector "
+                "and mode; the importer chooses both in their own organization."
+            )
         if _contains_account_ref(data):
             raise ValueError(
                 f"{resource_json.relative_to(bundle_root)} names an account_id. "
@@ -186,8 +204,8 @@ def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
             {"description": f"Pod member assigned in workflow '{owner}'"},
         ),
     )
-    for grant_glob in ("agents/*/*.json", "functions/*/*.json"):
-        drop_unportable_grants(grant_glob)
+    for holder in GRANT_HOLDER_DIRS:
+        drop_unportable_grants(f"{holder}/*/*.json")
     rewrite(
         "apps/*/*.json",
         _APP_SLUG_FIELDS,

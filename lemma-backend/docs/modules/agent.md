@@ -83,6 +83,18 @@ context; destructive operations require a standing grant or session approval.
 Agent Host runs are fenced by a per-run lease row, so a host that reconnects
 cannot double-dispatch a run already in flight.
 
+Every harness's events pass one place before anything reads them
+(`run_event_pump._split_message_event`): reasoning a model wrote into its text
+becomes a thought (`core/text/thinking_tags`, which also catches a block the
+prompt opened and only `</think>` closes, and on the live stream withdraws what
+it showed with a `stream_reset`), and an approval the agent asks for is
+preceded by its `message` to the person (`domain/approval_message`), so a run
+that stops for one never ends on a half sentence. A provider's tool call ids
+are not trusted to be unique: a response is executed and stored with one call
+per id (`domain/tool_call_ids`), and a call reusing an id the conversation
+already holds is stored under a new one, its return following it
+(`RunMessageWriter._unique_call_id`).
+
 Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served
 through signed, purpose-bound embed access.
@@ -108,6 +120,23 @@ the runs carried whole get their background -- an older run is reduced to its
 requests and answer -- so the read is bounded and moves in elision's blocks.
 A run answering a line in Lemma answers the lines whose words it read
 (`services/channel_answers`, recorded in `channel_line_answers`).
+
+Three kinds of message belong to no run and still reach the model, placed by
+sequence among the runs around them: notifications; what somebody outside
+the pod said while a person had them, with whatever they were told instead
+(`domain/held_turns`); and what a contact merge copied in from the person's
+conversation that lost its seat (`contracts/folded_history`). None is carried
+from after the turn being answered, nor, once older runs are cut from the
+history, from before what remains of it
+(`runtime_history.unattached_message_window`). The copies sit where the merge
+put them, after what the kept conversation held then, so each stretch of them
+is opened by a notice saying it is another chat's, and closed by one when
+anything follows it (a closing notice after everything else would read as the
+turn to answer). A copied message is read with no sending time, since its own
+is the merge's. They have
+their own bound, the newest `MAX_FOLDED_MESSAGES`, apart from the newest
+`MAX_UNATTACHED_MESSAGES` of the other two, and the opening notice says when
+it left some out (`domain/folded_turns`).
 
 Table summaries include primary keys, column types and write constraints,
 foreign keys, RLS, and visibility. Column descriptions are available through

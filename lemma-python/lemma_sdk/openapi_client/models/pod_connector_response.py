@@ -16,6 +16,7 @@ from ..models.pod_connector_visibility import PodConnectorVisibility
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.pod_connector_coverage import PodConnectorCoverage
     from ..models.shared_account_summary import SharedAccountSummary
 
 
@@ -36,9 +37,15 @@ class PodConnectorResponse:
         status (PodConnectorStatus):
         updated_at (datetime.datetime):
         visibility (PodConnectorVisibility):
+        can_use (bool | Unset): Whether the caller may run operations through it: what decides if connecting their own
+            account would let them use it. False for a viewer, and for anyone a RESTRICTED connector leaves out. Default:
+            False.
         connector_id (None | str | Unset):
         created_by_user_id (None | Unset | UUID):
         installation_name (None | str | Unset):
+        member_coverage (None | PodConnectorCoverage | Unset): Not filled in on listings, which stay cheap: read it from
+            `GET /pods/{pod_id}/connectors/{slug}/coverage`. Kept so a client reading it gets null rather than a missing
+            key.
         purpose (None | str | Unset):
         shared_account (None | SharedAccountSummary | Unset):
         shared_pod_account_id (None | Unset | UUID):
@@ -55,9 +62,11 @@ class PodConnectorResponse:
     status: PodConnectorStatus
     updated_at: datetime.datetime
     visibility: PodConnectorVisibility
+    can_use: bool | Unset = False
     connector_id: None | str | Unset = UNSET
     created_by_user_id: None | Unset | UUID = UNSET
     installation_name: None | str | Unset = UNSET
+    member_coverage: None | PodConnectorCoverage | Unset = UNSET
     purpose: None | str | Unset = UNSET
     shared_account: None | SharedAccountSummary | Unset = UNSET
     shared_pod_account_id: None | Unset | UUID = UNSET
@@ -65,6 +74,7 @@ class PodConnectorResponse:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.pod_connector_coverage import PodConnectorCoverage
         from ..models.shared_account_summary import SharedAccountSummary
 
         auth_config_id = str(self.auth_config_id)
@@ -87,6 +97,8 @@ class PodConnectorResponse:
 
         visibility = self.visibility.value
 
+        can_use = self.can_use
+
         connector_id: None | str | Unset
         if isinstance(self.connector_id, Unset):
             connector_id = UNSET
@@ -106,6 +118,14 @@ class PodConnectorResponse:
             installation_name = UNSET
         else:
             installation_name = self.installation_name
+
+        member_coverage: dict[str, Any] | None | Unset
+        if isinstance(self.member_coverage, Unset):
+            member_coverage = UNSET
+        elif isinstance(self.member_coverage, PodConnectorCoverage):
+            member_coverage = self.member_coverage.to_dict()
+        else:
+            member_coverage = self.member_coverage
 
         purpose: None | str | Unset
         if isinstance(self.purpose, Unset):
@@ -149,12 +169,16 @@ class PodConnectorResponse:
                 "visibility": visibility,
             }
         )
+        if can_use is not UNSET:
+            field_dict["can_use"] = can_use
         if connector_id is not UNSET:
             field_dict["connector_id"] = connector_id
         if created_by_user_id is not UNSET:
             field_dict["created_by_user_id"] = created_by_user_id
         if installation_name is not UNSET:
             field_dict["installation_name"] = installation_name
+        if member_coverage is not UNSET:
+            field_dict["member_coverage"] = member_coverage
         if purpose is not UNSET:
             field_dict["purpose"] = purpose
         if shared_account is not UNSET:
@@ -168,6 +192,7 @@ class PodConnectorResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.pod_connector_coverage import PodConnectorCoverage
         from ..models.shared_account_summary import SharedAccountSummary
 
         d = dict(src_dict)
@@ -190,6 +215,8 @@ class PodConnectorResponse:
         updated_at = isoparse(d.pop("updated_at"))
 
         visibility = PodConnectorVisibility(d.pop("visibility"))
+
+        can_use = d.pop("can_use", UNSET)
 
         def _parse_connector_id(data: object) -> None | str | Unset:
             if data is None:
@@ -227,6 +254,23 @@ class PodConnectorResponse:
             return cast(None | str | Unset, data)
 
         installation_name = _parse_installation_name(d.pop("installation_name", UNSET))
+
+        def _parse_member_coverage(data: object) -> None | PodConnectorCoverage | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                member_coverage_type_0 = PodConnectorCoverage.from_dict(data)
+
+                return member_coverage_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | PodConnectorCoverage | Unset, data)
+
+        member_coverage = _parse_member_coverage(d.pop("member_coverage", UNSET))
 
         def _parse_purpose(data: object) -> None | str | Unset:
             if data is None:
@@ -291,9 +335,11 @@ class PodConnectorResponse:
             status=status,
             updated_at=updated_at,
             visibility=visibility,
+            can_use=can_use,
             connector_id=connector_id,
             created_by_user_id=created_by_user_id,
             installation_name=installation_name,
+            member_coverage=member_coverage,
             purpose=purpose,
             shared_account=shared_account,
             shared_pod_account_id=shared_pod_account_id,

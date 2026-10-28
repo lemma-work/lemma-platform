@@ -454,7 +454,7 @@ async def get_app_root_asset(
         asset_path=None,
         request_etag=request.headers.get("if-none-match"),
     )
-    return app_asset_response(asset)
+    return app_asset_response(asset, sandboxed=True)
 
 
 @router.get(
@@ -480,7 +480,7 @@ async def get_app_asset(
         asset_path=asset_path,
         request_etag=request.headers.get("if-none-match"),
     )
-    return app_asset_response(asset)
+    return app_asset_response(asset, sandboxed=True)
 
 
 @router.get(
