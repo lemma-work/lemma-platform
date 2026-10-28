@@ -140,13 +140,16 @@ def test_widget_contract_survives_comment_bomb_in_linear_time():
     (``(?:<!--.*?-->\\s*)*<svg``) backtracks exponentially on input that opens a
     comment and never reaches an ``<svg>``. Widget content comes from the agent,
     so that input is reachable; 20k repetitions would not return this decade.
+
+    Bounded in CPU time: see the brace-free test below for why it is time at
+    all, and why not the wall clock.
     """
     import time
 
     bomb = "<!--" + "--><!--" * 20_000
-    started = time.perf_counter()
+    started = time.process_time()
     validate_widget_html(bomb)
-    assert time.perf_counter() - started < 1.0
+    assert time.process_time() - started < 1.0
 
 
 def test_widget_contract_rejects_unsubstituted_placeholder_text():
@@ -218,13 +221,18 @@ def test_widget_contract_scans_brace_free_text_in_linear_time():
     finds no ``{`` to stop at, which is quadratic in the length of brace-free
     text: 32KB took 4.7s and 128KB took 75s. Widget content is written by the
     agent, so a widget that long is ordinary, not adversarial.
+
+    Bounded in CPU time, because the regression is a regex: its cost is spent
+    inside one call that returns the same answer, so only time can see it. CPU
+    time is what this process actually ran, which a busy runner does not add to
+    by giving the processor to someone else -- the wall clock failed that way.
     """
     import time
 
     html = "<p>" + "a = 1 and b = 2. " * 8_000 + "</p>"
-    started = time.perf_counter()
+    started = time.process_time()
     assert validate_widget_html(html) == []
-    assert time.perf_counter() - started < 1.0
+    assert time.process_time() - started < 1.0
 
 
 def test_widget_contract_accepts_media_query_inside_style_tag():
