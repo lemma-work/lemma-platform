@@ -66,6 +66,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | `agent.surface.channels` | List Surface Channels |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | `agent.surface.setup` | Get Surface Setup |
 | GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | `agent.surface.telegram_managed.get` | Get Telegram Managed Bot Setup |
+| GET | `/pods/{pod_id}/telegram-identity-links/{code}` | `telegram_identity_link.get` | Get Identity Link |
 | GET | `/pods/{pod_id}/web-widgets` | `agent.web_widget.list` | List Widgets |
 | GET | `/public/web/{public_key}/challenge` | `public.web.challenge.read` | Web Challenge |
 | GET | `/public/web/{public_key}/history` | `public.web.history.read` | Web Read History |
@@ -90,6 +91,9 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
 | POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
+| POST | `/pods/{pod_id}/telegram-identity-links` | `telegram_identity_link.create` | Create Identity Link |
+| POST | `/pods/{pod_id}/telegram-identity-links/{code}/confirm` | `telegram_identity_link.confirm` | Confirm Identity Link |
+| POST | `/pods/{pod_id}/telegram-identity-links/{code}/decline` | `telegram_identity_link.decline` | Decline Identity Link |
 | POST | `/pods/{pod_id}/web-widgets` | `agent.web_widget.create` | Create Widget |
 | POST | `/pods/{pod_id}/web-widgets/{widget_id}/secret` | `agent.web_widget.reissue` | Reissue Widget |
 | POST | `/public/web/{public_key}/code` | `public.web.code.send` | Web Send Code |

@@ -89,7 +89,10 @@ from app.modules.agent_surfaces.services.message_claims import SurfaceEventDedup
 from app.modules.agent_surfaces.services.card_retirement import (
     retire_superseded_cards,
 )
-from app.modules.agent_surfaces.services.group_log import RosterReads, roster_reads
+from app.modules.agent_surfaces.services.live_group_roster import (
+    RosterReads,
+    roster_reads,
+)
 from app.modules.agent_surfaces.services.run_background import (
     reply_all_audience,
     run_background,

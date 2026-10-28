@@ -97,14 +97,21 @@ def platform_binding_key(
     actor = event.sender_external_user_id
     if not actor:
         raise PrivateDeliveryUnavailable("The platform did not identify the sender")
+    return binding_key_of(
+        event.platform.value,
+        event.tenant_id,
+        installation_id=installation_id,
+        actor=actor,
+    )
+
+
+def binding_key_of(
+    platform: str, tenant_id: str | None, *, installation_id: UUID | None, actor: str
+) -> str:
+    """The key a verified identity is kept under, from its parts."""
     return hashlib.sha256(
         json.dumps(
-            [
-                event.platform.value,
-                event.tenant_id or "",
-                str(installation_id or "shared"),
-                actor,
-            ],
+            [platform, tenant_id or "", str(installation_id or "shared"), actor],
             separators=(",", ":"),
         ).encode()
     ).hexdigest()

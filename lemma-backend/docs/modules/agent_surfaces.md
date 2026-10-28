@@ -277,10 +277,21 @@ observer renders them on the surface and a submission resumes the run.
   share their own contact; proven, the account stays resolved whatever their
   handle later says. A managed bot's creator is not bound by opening the setup
   link -- a link can leak -- and is recognised the same way, by a contact share
-  in the new bot. Someone with no verified number cannot be recognised on a
-  pod's own bot: they verify their number in account settings first, or sign up
-  through the shared bot, whose email-code step verifies the contact they
-  share. A number a profile merely lists does not match by
+  in the new bot. Someone with no verified number proves their Telegram account
+  from their signed-in Lemma session instead (`services/telegram_identity_link`,
+  `/pods/{pod_id}/telegram-identity-links`): a one-time, ten-minute code opened
+  as `/start lk_<code>` in a private chat with the bot, then confirmed back in the
+  same session after it shows them the account that opened it. Nothing binds
+  before that confirm, so a forwarded link gives whoever opened it nothing; a
+  code minted from a group's people for somebody the pod took for a stranger
+  ("This is me") works only from that person's account and is spent by any
+  other. The binding (`surface_verified_identities.session_proved_at`) holds on
+  every bot, without a phone and through a phone change, and the group log
+  reads it as well as the cache, so the member's lines in groups are theirs.
+  When somebody new speaks in a Telegram group and their first name is a
+  member's, that member is told once, in their own chat, to check
+  (`services/link_nudges`) -- the name decides who is asked, never who anybody
+  is. A number a profile merely lists does not match by
   default: it would hand the number's real owner's messages -- and the agent's
   replies, sent from the shared number -- to whoever typed it. That sender goes
   through signup instead. A deployment can accept that risk with
