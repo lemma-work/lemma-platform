@@ -233,6 +233,17 @@ def _delta(part: object, index: int) -> object:
 
 # -- Storage, as the runner keeps it ----------------------------------------
 
+#: The events that end a run, on which the pump carries what is left.
+_RUN_ENDINGS = frozenset(
+    {
+        AgentEventType.COMPLETED,
+        AgentEventType.WAITING,
+        AgentEventType.STOPPED,
+        AgentEventType.ERROR,
+        AgentEventType.REJECTED,
+    }
+)
+
 
 def _jsonb(value: object) -> object:
     """A value as a JSONB column hands it back: keys by length, then bytes."""
@@ -290,7 +301,13 @@ class Storage:
         )
 
     def store(self, events: Sequence[AgentEvent], *, run_id: UUID) -> None:
-        """As the event pump does: rows, and log steps covering them."""
+        """As the event pump does: rows, and log steps covering them.
+
+        The answer a run closes on is written after the step that logged it;
+        when the run ends, the last step carries it, as the pump's
+        ``_carry_the_rest`` does. Left uncarried, the next run would take it
+        in again as a second copy of the response.
+        """
         written: list[UUID] = []
         for event in events:
             if event.type is AgentEventType.MESSAGE and isinstance(
@@ -301,6 +318,9 @@ class Storage:
                 assert isinstance(event.data, RunStepDraft)
                 self._append(event.data, run_id, covers=[*event.data.covers, *written])
                 written = []
+            elif event.type in _RUN_ENDINGS and written and self.log:
+                self._carry(written, self.log[-1].seq)
+                written = []
 
     def _append(self, draft: RunStepDraft, run_id: UUID, *, covers: list[UUID]) -> None:
         seq = (self.log[-1].seq if self.log else 0) + 1
@@ -308,6 +328,9 @@ class Storage:
             self.log = []
             self.checkpoints.append(run_id)
         self.log.append(ReplayStep(seq, draft.kind, run_id, draft.messages))
+        self._carry(covers, seq)
+
+    def _carry(self, covers: Sequence[UUID], seq: int) -> None:
         carried = set(covers)
         self.rows = [
             row.model_copy(update={"run_step_seq": seq})
@@ -694,6 +717,31 @@ async def test_every_request_starts_with_the_one_before(protocol: Protocol) -> N
     assert not breaks, "\n\n".join(str(item) for item in breaks)
 
 
+def _responses(messages: Sequence[ModelMessage]) -> list[str]:
+    """Each response in ``messages`` by what it said, ignoring when."""
+    return [
+        repr(message.parts)
+        for message in messages
+        if isinstance(message, ModelResponse)
+    ]
+
+
+@pytest.mark.anyio
+async def test_no_response_is_replayed_twice() -> None:
+    """A run's closing answer is logged with its step and written as a row
+    after it; replayed as both, every later request paid for it twice."""
+    played = await _play()
+
+    for sent in played.sent:
+        said = _responses(sent.messages)
+        assert len(said) == len(set(said)), f"run {sent.run} replays a response twice"
+        assert all(
+            message.model_name
+            for message in sent.messages
+            if isinstance(message, ModelResponse)
+        ), "a response the model never sent"
+
+
 @pytest.mark.anyio
 async def test_the_run_context_part_stays_at_its_turn() -> None:
     """Each run's context is written once, just before its turn, and stays."""
@@ -793,7 +841,7 @@ async def test_a_history_of_pasted_text_compacts_once_and_shrinks() -> None:
     trigger = await _fixed_tokens(agent, conversation) + 3_000
 
     pasted = "the contract says " * 1_200
-    for turn in range(3):
+    for turn in range(4):
         run_id = uuid4()
         storage.user(f"Paste {turn}: {pasted}", run_id=run_id)
         await _run(
@@ -805,7 +853,7 @@ async def test_a_history_of_pasted_text_compacts_once_and_shrinks() -> None:
             trigger_tokens=trigger,
         )
 
-    assert model.summaries == [2], "compacted once, in the run that crossed"
+    assert model.summaries == [3], "compacted once, in the run that crossed"
     last = model.sent[-1]
     assert _carries_summary(last)
     breaks = await _breaks(

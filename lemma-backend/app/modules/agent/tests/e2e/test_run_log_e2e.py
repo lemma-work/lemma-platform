@@ -96,6 +96,22 @@ async def test_each_step_is_logged_and_the_next_run_replays_it(pod: TurnPod) -> 
     texts = _user_texts(added)
     assert any("Thanks." in text for text in texts)
     assert not any("List the tables." in text for text in texts)
+    # The answer each run closed on is logged once: its row, written after
+    # the step, is carried by that step rather than taken in again.
+    # Each run logged the two responses its model made, and no copy of the
+    # first run's answer.
+    for run in (first, second):
+        said = [
+            message
+            for _, _, by, messages in steps
+            if by == run
+            for message in messages
+            if message["kind"] == "response"
+        ]
+        assert [message["model_name"] is not None for message in said] == [
+            True,
+            True,
+        ], f"run {run} logged a response its model never sent"
     # Every row the runs wrote, or took in, is carried by a step.
     uncarried = await rows(
         "SELECT role, kind, text, agent_run_id FROM agent_messages "
