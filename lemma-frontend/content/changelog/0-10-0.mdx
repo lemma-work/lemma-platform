@@ -1,0 +1,137 @@
+---
+title: 0.10.0
+description: Hire a teammate and give it a space, chats that hold people inside and outside the pod, pod connectors with authorization closed by default, voice calls, and Desktop's coding agents with Lemma's tools.
+published: 2026-10-25
+tags:
+  - release
+---
+
+## What changes for API, SDK and CLI users
+
+This is what makes 0.10 a minor rather than a patch: one family of routes is
+gone, a handful of response fields and enum values are gone, and a workload
+reaches only what it was given.
+
+**Notifications are messages in a chat.** The
+`/pods/{pod_id}/notifications` routes — list, unread count, create, read,
+read-all, acknowledge and respond — are removed, along with their schemas. A
+notification now lands in the recipient's one conversation with the agent, and
+is read through the chats API (`/pods/{pod_id}/channels`) and the inbox
+(`GET /pods/{pod_id}/inbox`). To notify a member from code, use
+`POST /pods/{pod_id}/members/{member}/notices`.
+
+**Workloads are closed by default.** Agents, functions, workflows and pod apps
+act as one actor, and reach a table, a file, a connector account or another pod
+only when the pod grants it. Connectors belong to a pod: a pod installs a
+connector (`/pods/{pod_id}/connectors`) and holds its own accounts
+(`/pods/{pod_id}/connector-accounts`), and an operation runs through
+`POST /pods/{pod_id}/connectors/{slug}/operations/{operation_name}/execute`. A
+pod's SQL stays inside that pod, and an agent's token is never exchanged for a
+person's session.
+
+**Deprecated, still served.** The organization-level
+`POST /organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute`
+keeps working through pod connectors, with the same checks. Every response from
+it carries `Deprecation` and `Sunset` headers; the Python SDK raises a
+`LemmaDeprecationWarning`, and the TypeScript SDK and the CLI say so once. Move
+to the pod route before the sunset date the header names.
+
+**Fields and values that are gone.** `account_id` leaves
+`OperationExecutionRequest` (along with `pod_id`), `AgentSurfaceResponse` and
+`TelegramManagedBotSetupResponse`. `metadata` leaves the agent runtime profile
+responses, `telegram_username` leaves `UserResponse`, and `connector` and
+`connector_kind` leave `VariableSpecResponse`. `RuntimeModelCapability` drops
+`AUDIO` and `STRUCTURED_OUTPUT`, `RuntimeProfileProtocol` drops `AZURE_OPENAI`
+and `GOOGLE_VERTEX`, and `RuntimeProfileStatus` drops `REAUTH_REQUIRED`.
+
+Smaller things you may meet. A duplicate widget or install name is a `409`, not
+a `500`. A connector whose provider rejects its API key answers `424`, so a pod
+app no longer signs its user out over it, and any other provider `4xx` is
+reported as the provider's answer with its reason quoted. A session that cannot
+be checked is a `503`, not a `401`. `lemma` gains `channels` for chats and
+`decisions` for asking a closed question about any evidence, in one call, from
+the API and both SDKs too.
+
+If you use `lemma-sdk` for Python or TypeScript, or the `lemma` CLI, upgrade the
+package; the generated clients carry every change above.
+
+If you host Lemma yourself: the worker no longer runs on FastStream and streaq.
+Background work moved to Postgres work tables, so `WORKER_CONCURRENCY`,
+`WORKER_LANES`, `WORKER_BULK_CONCURRENCY`, `WORKER_SHUTDOWN_GRACE_PERIOD_SECONDS`
+and `WORKER_QUEUE_NAME` are ignored. A worker drains each class of work on
+`SIGTERM` within its grace — up to 90 seconds for an interactive turn — so give
+its container a stop grace above that; the Compose file uses 120 seconds.
+Migrations run on start as always.
+
+## Hire a teammate, and give it a space
+
+The workspace is built around the teammates you hire. Each one has a face in
+the sidebar, a space of its own, and an About page of tiles: what it remembers,
+what it is waiting on you for, its schedules, apps and connections, each with a
+page of its own. Hiring has a just-exploring way in, and a template install
+carries on from sign-up to the template. Places that start empty say what goes
+in them, and a short tour shows where everything is.
+
+A space can be added to Claude, ChatGPT or any MCP client with one link. In
+ChatGPT, a pod's records show as a table and its apps open inside the chat.
+
+## Chats, inside and outside the pod
+
+Channels became chats: one list, one timeline per place, and one conversation
+per person and agent. Shared chats work the way Slack's do, a group run knows
+who is in the room, and a word meant for one person stays private. Lemma can
+create a pod's own Slack app so the person only clicks Allow, add itself from
+"Add to Slack" with no setup first, and stand a Slack surface down — saying how
+to bring it back — when Slack removes the app. A Slack workspace the
+organization holds makes its people contacts.
+
+Everyone outside the pod is a contact. Contacts, web chat and forms are tables
+opened to people outside the pod, a page can read a table the pod marked Public
+as the visitor the chat answers, and a follow-up reaches a web chat contact's
+verified email. What a contact said while held for a person, or what a merge of
+two contacts folded in, reaches the agent's next run.
+
+One pod can ask another, as the person or over a connection, and schedule
+filters, workflow questions and call routing are asked through decisions.
+
+## Voice calls
+
+Agents can hold voice calls. The call runs on the API with a coordinator agent
+and a canvas both sides see, captions arrive once, the transcript stays in
+view, a failure is audible rather than silent, and Gemini Live runs on Vertex
+AI.
+
+## Agents that answer first
+
+Everyday requests finish while the person waits. A run answers first and keeps
+its memory after the turn, a worker is warm before its first turn, and text
+streams every 50 milliseconds. Runs are faster and cheaper — no request cap,
+honest timeouts, cacheable prompts — and a run woken later gets the tools it is
+told about, while a call repeated in a loop pauses the run to ask. Agents have
+a library of widgets that act on the real thing rather than only display it,
+and a live Gmail inbox widget shows unread mail in one turn.
+
+## Desktop
+
+Claude Code, Codex and OpenCode on Desktop get Lemma's tools from their first
+prompt, including in Claude Code's Don't Ask mode, and an approved delete goes
+through. Effort is picked per model, and a resumed session is sent what was
+written between its turns. A run queued behind a full computer waits and says
+so. Coding agents load nothing personal unless you turn on your own skills and
+settings.
+
+You can chat with your agents on Telegram from Desktop with no email needed.
+The Desktop VM resolves names through the Mac, so VPNs and DNS filters such as
+WARP work, and a fresh install fetches its sandbox images on first start.
+
+## Under the floor
+
+Background work — file processing, record triggers, workflows, functions,
+agents, surfaces and pod bundles — runs on Postgres work tables, and record
+changes are read from a per-pod change log. Spend limits keep each window as a
+running total instead of summing the ledger on every model request. File search
+no longer scans every pod's files, the datastore event outbox is pruned, and
+the frontend stops fetching every screen when a pod opens.
+
+Every open security alert is closed: JSON-LD is escaped properly, and every
+vulnerable dependency is lifted to a patched release.

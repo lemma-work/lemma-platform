@@ -3204,6 +3204,7 @@
         "type": "object"
       },
       "AuthConfigUpdateSchema": {
+        "additionalProperties": false,
         "properties": {
           "config": {
             "anyOf": [
@@ -7589,7 +7590,7 @@
               }
             ],
             "deprecated": true,
-            "description": "Deprecated: name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
+            "description": "Deprecated -- do not send; name `pod_connector` instead. Still accepted, as the pod connector that serves this account to you.",
             "title": "Account Id"
           },
           "agent_name": {
@@ -7606,7 +7607,7 @@
           },
           "config": {
             "additionalProperties": true,
-            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
+            "description": "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
             "title": "Config",
             "type": "object"
           },
@@ -14915,12 +14916,25 @@
                 "type": "null"
               }
             ],
-            "description": "The pod agent to call; empty calls the pod's default agent.",
+            "description": "The pod agent to call in a new conversation; empty calls the pod's default agent. A call in an existing chat is with that chat's agent.",
             "title": "Agent Name"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hold the call in this chat -- your own, in this pod -- so the call, the agent's work and the transcript are that one chat; a call already held there is picked up again. Empty starts a new conversation.",
+            "title": "Conversation Id"
           },
           "display_name": {
             "default": "your teammate",
-            "description": "What the agent is called on the call.",
+            "description": "What the agent is called in a new call's title.",
             "maxLength": 120,
             "minLength": 1,
             "title": "Display Name",
@@ -14936,7 +14950,7 @@
                 "type": "null"
               }
             ],
-            "description": "The call conversation's title.",
+            "description": "A new call conversation's title; an existing chat keeps its own.",
             "title": "Title"
           }
         },
@@ -16655,6 +16669,7 @@
         "type": "string"
       },
       "PodAccountUpdateRequest": {
+        "additionalProperties": false,
         "properties": {
           "allow_sandbox_use": {
             "anyOf": [
@@ -16818,14 +16833,34 @@
       "PodConnectorCreateRequest": {
         "properties": {
           "auth_config_id": {
-            "description": "The organization installation this connector uses.",
-            "format": "uuid",
-            "title": "Auth Config Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The organization installation this connector uses. Give this or `connector_id`.",
+            "title": "Auth Config Id"
+          },
+          "connector_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A catalog connector (`gmail`) instead of an installation: its organization default, or -- when the organization has none and you may install connectors -- Lemma's own app for it, installed now.",
+            "title": "Connector Id"
           },
           "mode": {
             "$ref": "#/components/schemas/PodConnectorMode",
-            "description": "PER_MEMBER: each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`."
+            "default": "PER_MEMBER",
+            "description": "PER_MEMBER (the default): each call uses the acting member's own account. SHARED: every call uses the one account set as `shared_pod_account_id`."
           },
           "purpose": {
             "anyOf": [
@@ -16860,20 +16895,22 @@
             "title": "Shared Pod Account Id"
           },
           "slug": {
-            "description": "Pod-local name apps, agents and bundles address it by, e.g. `gmail` or `support-inbox`.",
-            "title": "Slug",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pod-local name apps, agents and bundles address it by, e.g. `gmail` or `support-inbox`. Left out: the installation's name, made free in this pod.",
+            "title": "Slug"
           },
           "visibility": {
             "$ref": "#/components/schemas/PodConnectorVisibility",
             "default": "POD"
           }
         },
-        "required": [
-          "slug",
-          "auth_config_id",
-          "mode"
-        ],
         "title": "PodConnectorCreateRequest",
         "type": "object"
       },
@@ -17069,7 +17106,8 @@
         "type": "string"
       },
       "PodConnectorUpdateRequest": {
-        "description": "Fields left out are unchanged; `shared_pod_account_id: null` clears it.",
+        "additionalProperties": false,
+        "description": "Fields left out are unchanged; `shared_pod_account_id: null` clears it.\nIts slug and installation are fixed: a different one is a different\nconnector, which apps, agents and bundles already address.",
         "properties": {
           "mode": {
             "anyOf": [
@@ -19656,6 +19694,7 @@
               }
             ],
             "deprecated": true,
+            "description": "Deprecated and always null; see `pod_connector`.",
             "title": "Account Id"
           },
           "agent_id": {
@@ -19831,6 +19870,31 @@
               }
             ],
             "title": "Name"
+          },
+          "next_fire_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "TIME schedules: the next instant it fires, in UTC. Absent while paused, after a one-time schedule has fired, and for other types.",
+            "title": "Next Fire At"
+          },
+          "next_fire_at_local": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`next_fire_at` read in the schedule's `config.timezone` (UTC when it sets none), as an ISO 8601 time with its offset.",
+            "title": "Next Fire At Local"
           },
           "paused_by_failures": {
             "description": "True when the failure breaker paused this schedule, as opposed to a person pausing it. Reactivating resets the failure count.",
@@ -24278,7 +24342,7 @@
                 "type": "null"
               }
             ],
-            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
+            "description": "Replaces the whole config. Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` without an offset are read in `timezone`, an IANA name such as `Europe/Berlin`; **without `timezone` they are UTC**. The response's `next_fire_at` says when it will next fire. Any type may set `max_concurrent_runs`: at most that many of the schedule's runs in flight at once, from 1 to 1000; a fire that finds it full is skipped and recorded as skipped, not queued. DATASTORE may set `bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk write or an import does to the trigger. Both default to `skip` (the changes are recorded as skipped, aggregated); the pod setting `triggers.bulk_writes_default` changes the default for `bulk_writes`.",
             "title": "Config"
           },
           "filter_instruction": {
@@ -27807,7 +27871,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.9.0"
+    "version": "0.10.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -36776,7 +36840,7 @@
     },
     "/pods/{pod_id}/calls": {
       "post": {
-        "description": "Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.",
+        "description": "Open a live voice call with a pod agent, in the chat named by `conversation_id` or in a new conversation. The call is held in that conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.",
         "operationId": "call.open",
         "parameters": [
           {
@@ -36829,7 +36893,17 @@
                 }
               }
             },
-            "description": "The agent was not found."
+            "description": "The agent, or the conversation, was not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "That conversation cannot hold a call."
           },
           "422": {
             "content": {
@@ -36839,7 +36913,7 @@
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "The caller cannot run the model the agent runs on."
           },
           "503": {
             "content": {
@@ -40819,6 +40893,7 @@
         }
       },
       "post": {
+        "description": "Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER.",
         "operationId": "pod.connector.create",
         "parameters": [
           {

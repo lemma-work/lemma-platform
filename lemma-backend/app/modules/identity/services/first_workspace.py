@@ -112,7 +112,10 @@ async def ensure_first_workspace(
             )
         if organization_id is None:
             organization_id, entry = await _join_or_create_organization(
-                uow, organization_service=organization_service, user=user
+                uow,
+                organization_service=organization_service,
+                user=user,
+                full_name=full_name,
             )
 
     await lock_workspace_selection(uow.session, f"organization:{organization_id}")
@@ -164,6 +167,7 @@ async def _join_or_create_organization(
     *,
     organization_service: OrganizationService,
     user: User,
+    full_name: str | None,
 ) -> tuple[UUID, WorkspaceEntry]:
     """No invitation and no membership: their company's organization, or a new one."""
     email = user.email
@@ -192,7 +196,9 @@ async def _join_or_create_organization(
     if organization is None:
         organization = await organization_service.create_organization(
             OrganizationEntity(
-                name=organization_name_candidate(email=email, work_domain=work_domain),
+                name=organization_name_candidate(
+                    email=email, work_domain=work_domain, full_name=full_name
+                ),
                 slug="",
                 join_policy=OrganizationJoinPolicy.EMAIL_DOMAIN
                 if work_domain

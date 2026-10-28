@@ -697,6 +697,11 @@ var LemmaUI = (() => {
               this.clearStreamingTool();
               continue;
             }
+            if (parsed.tokenKind === "stream_reset") {
+              this.clearStreamingText();
+              this.clearStreamingThinking();
+              continue;
+            }
             if (parsed.token) {
               if (parsed.tokenKind === "tool") {
                 this.streamingToolToken += parsed.token;

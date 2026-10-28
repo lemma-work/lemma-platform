@@ -212,14 +212,14 @@ def test_the_python_step_calls_uv_by_its_real_path(monkeypatch) -> None:
 
     script = "\n".join(build_templates.workspace_template().commands)
 
-    assert build_templates.UV_BIN == "/usr/local/lib/lemma-uv-bin"
+    assert build_templates.UV == "/usr/local/lib/lemma-uv-bin"
     assert (
-        f"install -m 0755 /tmp/uv-x86_64-unknown-linux-gnu/uv {build_templates.UV_BIN}"
+        f"install -m 0755 /tmp/uv-x86_64-unknown-linux-gnu/uv {build_templates.UV}"
         in script
     )
-    assert f"{build_templates.UV_BIN} python install" in script
-    assert f"{build_templates.UV_BIN} sync --project" in script
-    assert f"{build_templates.UV_BIN} cache clean" in script
+    assert f"{build_templates.UV} python install" in script
+    assert f"{build_templates.UV} sync --project" in script
+    assert f"{build_templates.UV} cache clean" in script
 
 
 def _docker_steps(monkeypatch) -> tuple[_RecordingTemplate, str]:

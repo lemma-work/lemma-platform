@@ -18,6 +18,7 @@ import httpx
 
 from app.modules.datastore.config import datastore_settings
 from app.core.config import reveal_secret, settings
+from app.core.net.http_client import get_shared_http_client
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.file_entities import DatastoreFileSearchResult
 from app.core.concurrency.offload import run_blocking
@@ -93,8 +94,11 @@ class OpenAICompatReranker:
     any provider that exposes a ``/rerank`` endpoint (e.g. Fireworks).
     """
 
-    def __init__(self, model: str | None = None):
+    def __init__(
+        self, model: str | None = None, *, client: httpx.AsyncClient | None = None
+    ):
         self.model = model or datastore_settings.openai_compat_reranker_model
+        self._client = client
 
     async def rerank(
         self,
@@ -114,32 +118,72 @@ class OpenAICompatReranker:
         url = f"{settings.lemma_openai_base_url.rstrip('/')}/rerank"
         documents = [result.content or "" for result in results]
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    url,
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json={
-                        "model": self.model,
-                        "query": query,
-                        "documents": documents,
-                        "top_n": top_n,
-                    },
-                )
-                response.raise_for_status()
-                payload = response.json()
-        except Exception:
-            logger.debug(
-                "datastore.reranker.openai_compat_reranker_keeping_first.diagnostic"
+            # The process-wide client, so the connection to the provider stays
+            # warm: a client per call paid a fresh TCP and TLS handshake on
+            # every search. The timeout is the whole of what a slow reranker
+            # may add to one; past it the first-stage order stands.
+            client = self._client or get_shared_http_client()
+            response = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": self.model,
+                    "query": query,
+                    "documents": documents,
+                    "top_n": top_n,
+                },
+                timeout=datastore_settings.reranker_timeout_seconds,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPError, ValueError:
+            # Warning, not debug: a reranker that always fails or always times
+            # out makes every search slower and no better, and at debug that
+            # is invisible where it happens.
+            logger.warning(
+                "datastore.reranker.openai_compat_failed.degraded",
+                documents=len(documents),
+                exc_info=True,
             )
             return list(results)[:top_n]
 
         ranked: list[DatastoreFileSearchResult] = []
-        for item in payload.get("results", []):
-            index = item.get("index")
-            if index is None or index >= len(results):
+        for index in _ranked_indexes(payload):
+            if index >= len(results):
                 continue
             ranked.append(results[index])
         return ranked[:top_n] if ranked else list(results)[:top_n]
+
+
+def _ranked_indexes(payload: object) -> list[int]:
+    """Document indexes, most relevant first, from either rerank response shape.
+
+    Cohere-style endpoints answer ``{"results": [...]}``; Fireworks answers in
+    the OpenAI list shape, ``{"data": [...]}``. Reading only the first made
+    every successful rerank from the second a silent no-op. Entries are sorted
+    by ``relevance_score`` when they carry one, rather than trusting the
+    provider to have sorted them.
+    """
+    if not isinstance(payload, dict):
+        return []
+    entries = payload.get("results")
+    if not isinstance(entries, list):
+        entries = payload.get("data")
+    if not isinstance(entries, list):
+        return []
+    indexes: list[int] = []
+    scores: list[float] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("index"), int):
+            continue
+        indexes.append(entry["index"])
+        score = entry.get("relevance_score")
+        if isinstance(score, (int, float)):
+            scores.append(float(score))
+    if len(scores) == len(indexes):
+        order = sorted(range(len(indexes)), key=scores.__getitem__, reverse=True)
+        return [indexes[position] for position in order]
+    return indexes
 
 
 def create_reranker():

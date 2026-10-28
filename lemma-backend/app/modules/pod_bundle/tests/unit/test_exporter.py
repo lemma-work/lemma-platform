@@ -21,6 +21,11 @@ from lemma_pod_bundle import extract_bundle
 
 import app.modules.pod_bundle.infrastructure.exporter as exporter_mod
 from app.modules.agent.contracts import AgentKind
+from app.modules.pod_bundle.infrastructure.bundle_contents import (
+    archived_resource_count,
+    resource_count,
+)
+from app.modules.pod_bundle.infrastructure.bundle_identity import read_bundle_id
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
 from app.modules.pod_bundle.infrastructure.exporter_surfaces import export_surfaces
 
@@ -396,6 +401,56 @@ async def test_export_produces_expected_layout(patched_exporter, tmp_path):
     # Progress advanced to completion.
     assert progress[-1] == (progress[-1][1], progress[-1][1])
     assert progress[-1][1] >= 1
+
+
+async def test_an_export_names_itself_inside_the_archive(patched_exporter, tmp_path):
+    """An import sees only the archive. The export's id inside it is the one
+    thing that says which export an import came from."""
+    bundle_id = uuid4()
+
+    async def on_progress(_done, _total):
+        return None
+
+    _, zip_bytes, _ = await patched_exporter.export(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        include=None,
+        ctx=object(),
+        uow=object(),
+        on_progress=on_progress,
+        bundle_id=bundle_id,
+    )
+    stamped = extract_bundle(zip_bytes, tmp_path / "stamped")
+    assert read_bundle_id(stamped) == bundle_id
+
+    _, unnamed_bytes, _ = await _run_export(patched_exporter)
+    assert read_bundle_id(extract_bundle(unnamed_bytes, tmp_path / "plain")) is None
+
+
+async def test_an_exported_archive_counts_as_its_import_will_count_it(
+    patched_exporter, tmp_path
+):
+    """The export reports the archive it packed, the import the tree it
+    extracts. Over a real export the two agree, and neither is zero."""
+    _filename, zip_bytes, _progress = await _run_export(patched_exporter)
+    exported = archived_resource_count(zip_bytes)
+    assert exported > 0
+    assert exported == resource_count(extract_bundle(zip_bytes, tmp_path / "out"))
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["not-a-uuid", 42, None, {"id": "x"}],
+    ids=["text", "number", "null", "object"],
+)
+def test_a_bundle_id_that_is_not_one_is_no_identity(tmp_path, value):
+    """A bundle is a file anyone can edit; what it claims can never fail an
+    import, only fail to join one."""
+    (tmp_path / "pod.json").write_text(json.dumps({"name": "p", "bundle_id": value}))
+    assert read_bundle_id(tmp_path) is None
+    (tmp_path / "pod.json").write_text("{ not json")
+    assert read_bundle_id(tmp_path) is None
+    assert read_bundle_id(tmp_path / "missing") is None
 
 
 async def test_a_bundle_without_connectors_is_written_as_format_3(

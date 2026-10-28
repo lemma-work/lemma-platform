@@ -49,7 +49,9 @@ class UserCachePort(Protocol):
 
 
 class OrganizationRepositoryPort(Protocol):
-    async def create(self, entity: OrganizationEntity) -> OrganizationEntity: ...
+    async def create(
+        self, entity: OrganizationEntity, *, created_by_user_id: UUID | None = None
+    ) -> OrganizationEntity: ...
 
     async def get(self, id: UUID) -> Optional[OrganizationEntity]: ...
 

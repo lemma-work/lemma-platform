@@ -15,7 +15,7 @@ Authorization reads two ledgers, and a delegated call has to satisfy **both**:
    workload does for that member** (§2).
 2. **Workload grants** — a named agent/function/workflow starts with **zero** access
    and holds a list of explicit resource grants. Grants are **name-based** (a table
-   name, a folder path, a connector id, another agent/function name), so they export
+   name, a folder path, a pod connector slug, another agent/function name), so they export
    and re-import into any pod.
 
 A grant is a `{resource_type, resource_name, permission_ids}` object living in the
@@ -60,7 +60,7 @@ their very next request. (Ground truth:
 **Headless runs** — a run with no invoking person — are authorized on the workload's
 grants alone, because there is no second set to intersect with. In practice almost
 nothing is person-less: a `TIME`, `WEBHOOK`, or `DATASTORE` fire runs as a real person
-(the schedule's configured user, or the changed row's owner — see
+(the schedule's owner, or for a change to an RLS row that row's owner — see
 `schedules-and-triggers.md`), so **the ceiling applies to automation too**. Design for
 it: a schedule owned by a viewer is a schedule that cannot write.
 
@@ -83,7 +83,9 @@ No workload — the default pod agent included — performs a **destructive** ac
 default. Destructive = `pod.delete`, `pod.role.manage`, `pod.member.manage`,
 `datastore.table.delete`, `datastore.record.delete`, `folder.delete`,
 `function.delete`, `agent.delete`, `workflow.delete`, `app.delete`,
-`schedule.delete`.
+`schedule.delete`, and `pod.connector.manage` (removing a pod connector stops
+everything that runs through it; pointing a SHARED one at an account decides
+whose credential the pod's calls go out under).
 Deleting rows is `datastore.record.delete`, its own permission: a grant of
 `datastore.record.write` writes rows but never deletes them. (File deletes via
 `folder.write` are **not** destructive.)
@@ -191,7 +193,9 @@ Some permissions imply weaker ones, so you don't list both:
 - **`execute ⊃ read`** for agents, functions, and workflows — `function.execute` alone
   lets a workload both discover and run the function; you never also grant
   `function.read`.
-- **write/delete ⊃ read** within the table, folder, and app families.
+- **write/delete ⊃ read** within the folder and app families, and for a table's
+  own `datastore.table.update` / `.delete`. Rows are not: `datastore.record.write`
+  does **not** imply `datastore.record.read` — grant both (`tickets:read,write`).
 
 Redundant ids in an exported bundle (e.g. both read and execute) are harmless — they
 just aren't necessary.

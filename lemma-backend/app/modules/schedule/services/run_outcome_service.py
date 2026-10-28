@@ -8,11 +8,14 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter
+from app.core.origin import Origin, OriginKind
 from app.modules.schedule.config import schedule_settings
 from app.modules.schedule.domain.events.schedule import ScheduleRunCompleted
 from app.modules.schedule.domain.schedule import (
     ScheduleEntity,
+    ScheduleRunEntity,
     ScheduleRunStatus,
+    ScheduleType,
 )
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.repositories.schedule_run_repository import (
@@ -26,6 +29,30 @@ from app.core.observability.product_metrics import (
 from app.modules.schedule.services.paused_notice import stage_paused_notice
 
 logger = get_logger(__name__)
+
+#: What fired a schedule, as the platform's origin: a clock, a table write, or a
+#: webhook from outside the pod.
+_FIRED_BY: dict[ScheduleType, OriginKind] = {
+    ScheduleType.TIME: OriginKind.SCHEDULE,
+    ScheduleType.DATASTORE: OriginKind.DATA_TRIGGER,
+    ScheduleType.WEBHOOK: OriginKind.CONNECTOR,
+}
+
+
+def schedule_run_origin(
+    schedule: ScheduleEntity, schedule_run: ScheduleRunEntity
+) -> Origin | None:
+    """How the run being recorded arrived, named on its outcome event.
+
+    The outcome is recorded by a work item, which starts with no origin bound,
+    so the event would otherwise carry none -- and ``schedule_run.completed``,
+    which only an automated origin may raise, never fired at all. A redrive is
+    a person asking for the run again, which the schedule's type does not
+    describe: it carries no origin rather than a wrong one.
+    """
+    if getattr(schedule_run, "redrive_of_run_id", None) is not None:
+        return None
+    return Origin(_FIRED_BY.get(schedule.schedule_type, OriginKind.SCHEDULE))
 
 
 class ScheduleRunOutcomeService:
@@ -70,6 +97,7 @@ class ScheduleRunOutcomeService:
 
         # In the same transaction as the outcome it reports, and after the
         # schedule is loaded so the pod is known without a second read.
+        origin = schedule_run_origin(schedule, schedule_run)
         self.uow.collect_events(
             [
                 ScheduleRunCompleted(
@@ -80,6 +108,8 @@ class ScheduleRunOutcomeService:
                     # The run's own owner first: for a datastore trigger that is
                     # the row owner, who is not the schedule owner.
                     user_id=getattr(schedule_run, "user_id", None) or schedule.user_id,
+                    origin=origin.kind.value if origin else None,
+                    origin_platform=None,
                 )
             ]
         )
@@ -220,7 +250,9 @@ class ScheduleRunOutcomeService:
         reactivate. See
         ``test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedule``.
         """
-        count = await self.run_repository.consecutive_terminal_failures(schedule.id)
+        count = await self.run_repository.consecutive_terminal_failures(
+            schedule.id, since=schedule.failures_reset_at
+        )
         await self.schedule_repository.set_consecutive_failures(schedule.id, count)
         threshold = schedule_settings.schedule_max_consecutive_failures
         if threshold <= 0 or count < threshold:

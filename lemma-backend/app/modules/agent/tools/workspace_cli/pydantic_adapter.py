@@ -161,7 +161,7 @@ async def view_image(
 async def list_machines(
     ctx: RunContext[BaseAgentContext],
     request: ListMachinesRequest,
-) -> Any:
+) -> machine_tools.ListMachinesResult:
     """
     The machines you may run commands on: your usual one, the pod's shared
     machines you are allowed, with each one's size, whether it has Docker,
@@ -174,7 +174,7 @@ async def list_machines(
 async def expose_port(
     ctx: RunContext[BaseAgentContext],
     request: ExposePortRequest,
-) -> Any:
+) -> machine_tools.ExposePortResult:
     """
     Turn a port on the machine into a preview URL people can open, e.g. a dev
     server you started (`npm run dev` on 5173). The URL is its own origin, so
@@ -188,7 +188,7 @@ async def expose_port(
 async def sync_files(
     ctx: RunContext[BaseAgentContext],
     request: SyncFilesRequest,
-) -> Any:
+) -> machine_tools.SyncFilesResult:
     """
     Copy files between the machine and the pod's files without downloading
     them yourself: `to_pod` puts a file or a folder's files into a pod folder
@@ -201,7 +201,7 @@ async def sync_files(
 async def reset_machine(
     ctx: RunContext[BaseAgentContext],
     request: ResetMachineRequest,
-) -> Any:
+) -> machine_tools.ResetMachineResult:
     """
     Free a machine's disk or stop stray work: `processes`, `runs` (finished
     runs' folders), `caches`, `docker`. Says how much space came back. Logins

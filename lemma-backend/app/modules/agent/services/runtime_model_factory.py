@@ -26,7 +26,7 @@ from pydantic_ai import UsageLimits
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.models import Model
 from pydantic_ai.models.wrapper import WrapperModel
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.core.bounded import BoundedDict
@@ -38,6 +38,9 @@ from app.modules.agent.services.model_stream_budget import (
 )
 from app.modules.agent.services.openai_schema_compat import (
     openai_compatible_model_profile,
+)
+from app.modules.agent.services.openai_tool_call_extras import (
+    ToolCallExtrasChatModel,
 )
 
 logger = get_logger(__name__)
@@ -202,7 +205,7 @@ async def close_agent_provider_clients() -> None:
             )
 
 
-class _UsageOnlyStreamOptionsChatModel(OpenAIChatModel):
+class _UsageOnlyStreamOptionsChatModel(ToolCallExtrasChatModel):
     """An OpenAI-compatible chat model that keeps `stream_options` to the spec.
 
     pydantic-ai's ``openai_continuous_usage_stats`` does two unrelated things:

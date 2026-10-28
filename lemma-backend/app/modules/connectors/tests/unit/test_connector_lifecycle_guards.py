@@ -115,7 +115,9 @@ def _service(**overrides) -> ConnectorService:
         "connector_repository": AsyncMock(get=AsyncMock(return_value=_connector())),
         "auth_config_repository": AsyncMock(),
         "account_repository": AsyncMock(),
-        "connect_request_repository": AsyncMock(),
+        "connect_request_repository": AsyncMock(
+            get_reusable_pending=AsyncMock(return_value=None)
+        ),
         "auth_provider_registry": Mock(),
         "redirect_uri_builder": Mock(build=Mock(return_value="https://cb")),
         "organization_access": AsyncMock(

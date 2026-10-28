@@ -4,6 +4,8 @@ import { LoadingIndicator } from "@/ui/loading";
 import { CheckCircleIcon, CodeIcon, ConnectorIcon, ExternalIcon, TableIcon, WarningIcon } from "@/ui/icons";
 import { source } from "@/data";
 import { completionPath, hereWith, openAuthorization } from "./round-trip";
+import { consentLabel } from "./consent";
+import { SignInLink } from "./sign-in-link";
 import { Fields, NOT_A_LOGIN } from "./fields";
 import {
     useConnector, useConnectorRefresh, useCreateAccount, useCreateInstall, useDeleteInstall, useRefreshOperations,
@@ -224,10 +226,11 @@ function AddOne({ orgId, kind, entry, onBack, onClose, onDone }: {
                     {signIn && (
                         <p className="connect-lead">This server signs in through a browser. Nobody can use it until someone does.</p>
                     )}
+                    {signIn && <SignInLink url={signIn} app={name || entry.title} opened={null} />}
                     <div className="record-form__actions">
                         {signIn && (
                             <button className="btn btn--primary" onClick={() => { openAuthorization(signIn, entry.title); onDone(); }}>
-                                Sign in <ExternalIcon size={13} />
+                                {consentLabel(signIn, name || entry.title)} <ExternalIcon size={13} />
                             </button>
                         )}
                         <button className={"btn" + (signIn ? "" : " btn--primary")} onClick={onDone}>Done</button>

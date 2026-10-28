@@ -1,6 +1,6 @@
 """Schedule API schemas."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Literal
 from uuid import UUID
@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, Field, computed_field, model_validator
 
 from app.modules.schedule.config import schedule_settings
+from app.modules.schedule.domain.cron import resolve_zone
 from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR
 from app.modules.schedule.domain.schedule import (
     MCP_EVENT_SOURCE,
@@ -21,7 +22,11 @@ from app.modules.schedule.domain.schedule import (
 _CONFIG = (
     "Settings for the schedule's type: `cron`/`scheduled_at`/`timezone` for "
     "TIME, `source` for WEBHOOK, `table_name`/`operations`/`when` for "
-    "DATASTORE. Any type may set `max_concurrent_runs`: at most that many of "
+    "DATASTORE. A TIME schedule's `cron` (5 fields) and a `scheduled_at` "
+    "without an offset are read in `timezone`, an IANA name such as "
+    "`Europe/Berlin`; **without `timezone` they are UTC**. The response's "
+    "`next_fire_at` says when it will next fire. "
+    "Any type may set `max_concurrent_runs`: at most that many of "
     "the schedule's runs in flight at once, from 1 to 1000; a fire that finds "
     "it full is skipped and recorded as skipped, not queued. DATASTORE may set "
     "`bulk_writes` and `import_writes` to `skip`, `each` or `batch`: what a bulk "
@@ -78,12 +83,15 @@ class CreateScheduleRequest(BaseModel):
             "again on every fire and renewal, as the schedule's owner."
         ),
     )
+    # Still accepted until the account-addressing sunset, as the pod connector
+    # serving that account to the caller. The description says plainly not to
+    # send it: agents reading the schema took it for a field to fill.
     account_id: UUID | None = Field(
         default=None,
         deprecated=True,
         description=(
-            "Deprecated: name `pod_connector` instead. Still accepted, as the "
-            "pod connector that serves this account to you."
+            "Deprecated -- do not send; name `pod_connector` instead. Still "
+            "accepted, as the pod connector that serves this account to you."
         ),
     )
     connector_trigger_id: str | None = Field(
@@ -216,7 +224,11 @@ class ScheduleResponse(BaseModel):
     )
     # Deprecated, and always null: a schedule names a pod connector now. Kept
     # because clients generated before that read it as a required key.
-    account_id: UUID | None = Field(default=None, deprecated=True)
+    account_id: UUID | None = Field(
+        default=None,
+        deprecated=True,
+        description="Deprecated and always null; see `pod_connector`.",
+    )
     connector_trigger_id: str | None
     filter_instruction: str | None
     filter_output_schema: dict | None
@@ -229,6 +241,23 @@ class ScheduleResponse(BaseModel):
     last_fire_status: ScheduleFireStatus | None = None
     last_error: str | None = None
     consecutive_failures: int = 0
+    next_fire_at: datetime | None = Field(
+        default=None,
+        description=(
+            "TIME schedules: the next instant it fires, in UTC. Absent while "
+            "paused, after a one-time schedule has fired, and for other types."
+        ),
+    )
+    # A plain optional field filled from the two above, not a computed one: a
+    # computed field is required in the published schema, and a client
+    # generated from it would refuse every response from an older server.
+    next_fire_at_local: str | None = Field(
+        default=None,
+        description=(
+            "`next_fire_at` read in the schedule's `config.timezone` (UTC when "
+            "it sets none), as an ISO 8601 time with its offset."
+        ),
+    )
     paused_reason: str | None = Field(
         default=None,
         description=(
@@ -248,6 +277,19 @@ class ScheduleResponse(BaseModel):
     )
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="after")
+    def _read_next_fire_in_its_zone(self) -> "ScheduleResponse":
+        if self.next_fire_at is None:
+            self.next_fire_at_local = None
+            return self
+        zone = (self.config or {}).get("timezone")
+        try:
+            local = resolve_zone(zone if isinstance(zone, str) else None)
+        except ValueError:
+            local = timezone.utc
+        self.next_fire_at_local = self.next_fire_at.astimezone(local).isoformat()
+        return self
 
     # A breaker pause and a deliberate one were indistinguishable on the wire:
     # ``is_active`` goes false either way, and the pod overview drops inactive

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.authorization.permissions import Permissions, equivalent_permission_ids
 from app.modules.pod.domain.pod_entities import PodMemberEntity
@@ -68,6 +68,14 @@ async def pod_members_among(uow, pod_id: UUID, user_ids: Iterable[UUID]) -> set[
         .limit(len(wanted))
     )
     return set(found)
+
+
+async def pod_member_count(uow, pod_id: UUID) -> int:
+    """How many people are in this pod right now."""
+    counted = await uow.session.scalar(
+        select(func.count()).select_from(PodMember).where(PodMember.pod_id == pod_id)
+    )
+    return int(counted or 0)
 
 
 async def pod_member_user_id(uow, *, pod_id: UUID, pod_member_id: UUID) -> UUID | None:
@@ -293,6 +301,7 @@ async def refuse_pod_role_beyond_inviter(
 __all__ = [
     "add_pod_member",
     "pod_invitation_details",
+    "pod_member_count",
     "pod_member_id",
     "pod_member_holds",
     "pod_name",

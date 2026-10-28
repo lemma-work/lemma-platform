@@ -250,3 +250,93 @@ fn local_mode_still_denies_a_local_destination_that_is_not_ours() {
         NavigationDisposition::Deny
     );
 }
+
+/// What "Connect to your own Lemma server" keeps from what a person types.
+///
+/// Only an origin, over HTTPS, except a server on this computer by its loopback
+/// name. Never `*.localhost`: that is this installation's own workspace, whose
+/// alias ports serve pod apps' code, and a typed address must not be what
+/// grants those the shell's commands.
+#[test]
+fn a_typed_server_address_is_kept_as_its_https_origin() {
+    for (typed, kept) in [
+        ("lemma.example.com", "https://lemma.example.com"),
+        (
+            "  https://Lemma.Example.com/auth?x=1 ",
+            "https://lemma.example.com",
+        ),
+        (
+            "https://lemma.example.com:8443/",
+            "https://lemma.example.com:8443",
+        ),
+        ("agentbox.work", "https://agentbox.work"),
+        ("http://localhost:3000", "http://localhost:3000"),
+        ("http://127.0.0.1:3000/x", "http://127.0.0.1:3000"),
+        ("http://[::1]:3000", "http://[::1]:3000"),
+    ] {
+        assert_eq!(normalize_server_url(typed).as_deref(), Ok(kept), "{typed}");
+    }
+    for refused in [
+        "",
+        "   ",
+        "http://lemma.example.com",
+        "http://app.lemma.localhost:63288",
+        "https://app.lemma.localhost:63288",
+        "https://anything.localhost",
+        "ftp://lemma.example.com",
+        "https://person:secret@lemma.example.com",
+        "https://",
+    ] {
+        assert!(
+            normalize_server_url(refused).is_err(),
+            "{refused:?} was accepted"
+        );
+    }
+}
+
+/// The saved server is read back only while it is still one the app would
+/// accept; anything else falls back to Lemma Cloud rather than being trusted.
+#[test]
+fn a_saved_server_is_read_back_only_when_it_is_still_acceptable() {
+    assert_eq!(
+        configured_hosted_server(&json!({HOSTED_SERVER_KEY: "https://agentbox.work"})).as_deref(),
+        Some("https://agentbox.work")
+    );
+    assert_eq!(configured_hosted_server(&json!({})), None);
+    assert_eq!(
+        configured_hosted_server(&json!({HOSTED_SERVER_KEY: "http://evil.example"})),
+        None
+    );
+    assert_eq!(
+        configured_hosted_server(&json!({HOSTED_SERVER_KEY: 7})),
+        None
+    );
+}
+
+#[test]
+fn only_a_page_carrying_lemmas_site_config_is_a_lemma_server() {
+    assert!(is_lemma_site_config(
+        r#"window.__LEMMA_SITE__={"apiUrl":"https://api.agentbox.work"};"#
+    ));
+    assert!(!is_lemma_site_config(
+        r#"<!DOCTYPE html><script>window.location.href="/lander"</script>"#
+    ));
+}
+
+/// A connected server gets the shipped workspace commands under a name of its
+/// own, so connecting a second server in the same run is not refused as a
+/// duplicate -- and Lemma Cloud, already named by the shipped file, gets none.
+#[test]
+fn each_connected_server_gets_its_own_workspace_capability() {
+    assert!(hosted_workspace_capability("https://lemma.work").is_none());
+    let first: Value =
+        serde_json::from_str(&hosted_workspace_capability("https://agentbox.work").unwrap())
+            .unwrap();
+    let second: Value =
+        serde_json::from_str(&hosted_workspace_capability("https://lemma.example.com").unwrap())
+            .unwrap();
+    assert_ne!(first["identifier"], second["identifier"]);
+    assert_eq!(first["remote"]["urls"], json!(["https://agentbox.work"]));
+    assert_eq!(first["permissions"], json!(shipped_workspace_permissions()));
+    assert_eq!(first["webviews"], json!(["main"]));
+}

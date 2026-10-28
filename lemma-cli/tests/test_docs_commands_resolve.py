@@ -6,8 +6,11 @@ is the second file a new user reads. Prose cannot be kept true by review; this
 walks the real command tree instead, which is the same drift-guard shape as
 ``test_lazy_groups.py`` and ``test_global_flag_hoisting.py``.
 
-Scope is deliberate: the markdown files in ``lemma-cli/`` only. A guard over
-docs this package does not own would fail for someone else's edit.
+Scope: the markdown files in ``lemma-cli/``, and the skills in the repo-root
+``lemma-skills/``. This package vendors those skills into its wheel and installs
+them with ``lemma skills install``, so a command they teach that does not exist
+is this package's defect too. Where ``lemma-skills/`` is absent (an sdist), only
+the package's own docs are checked.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ import lemma_cli.app  # noqa: F401 - registers the `tui` group alongside the cor
 from lemma_cli.cli_core.app import app
 
 DOCS_DIR = Path(__file__).resolve().parent.parent
+SKILLS_DIR = DOCS_DIR.parent / "lemma-skills"
 
 
 # Typer 0.26 ships its own click shim (``typer._click``), so its groups and
@@ -98,20 +102,33 @@ def _resolve(tokens: list[str]) -> str | None:
     return None
 
 
+def _markdown_files() -> list[tuple[str, Path]]:
+    files = [(path.name, path) for path in sorted(DOCS_DIR.glob("*.md"))]
+    if SKILLS_DIR.is_dir():
+        files += [
+            (str(path.relative_to(SKILLS_DIR.parent)), path)
+            for path in sorted(SKILLS_DIR.rglob("*.md"))
+        ]
+    return files
+
+
 def _documented_commands() -> list[tuple[str, int, str]]:
     found: list[tuple[str, int, str]] = []
-    for markdown in sorted(DOCS_DIR.glob("*.md")):
+    for name, markdown in _markdown_files():
         for number, raw in enumerate(markdown.read_text().splitlines(), start=1):
             line = raw.strip().removeprefix("$ ").strip()
             if not line.startswith("lemma ") and line != "lemma":
                 continue
             # Trailing `# comment` explanations are the house style in these files.
             line = line.split("#", 1)[0].strip()
+            # A continued line is checked up to the backslash: its first half
+            # still names the command and the options given there.
+            line = line.removesuffix("\\").strip()
             # Shell plumbing (pipes, redirects, &&) is out of scope: the point is
             # the command name, not the shell line it sits in.
             if any(character in line for character in "|<>&;`$()"):
                 continue
-            found.append((markdown.name, number, line))
+            found.append((name, number, line))
     return found
 
 

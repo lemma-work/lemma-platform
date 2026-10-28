@@ -47,6 +47,7 @@ from lemma_pod_bundle.normalize import (
 )
 from lemma_pod_bundle.portability import _extract_portable_variables
 
+from app.modules.pod_bundle.infrastructure.bundle_identity import stamp_bundle_id
 from app.modules.pod_bundle.infrastructure.exporter_agents import export_agents
 from app.modules.pod_bundle.infrastructure.machine_bundle import export_machines
 from app.modules.pod_bundle.infrastructure.exporter_connectors import (
@@ -166,6 +167,7 @@ class BundleExporter:
         ctx: Context,
         uow: SqlAlchemyUnitOfWork,
         on_progress: ProgressCallback,
+        bundle_id: UUID | None = None,
     ) -> tuple[str, bytes, list[str]]:
         """Assemble the bundle and return ``(bundle_filename, zip_bytes, warnings)``.
 
@@ -252,12 +254,10 @@ class BundleExporter:
                 await on_progress(done, total)
             # Written once the connectors are: a bundle with none stays the
             # format a reader of 3 reads whole.
-            _write_json(
-                root / "pod.json",
-                _normalize_pod_payload(
-                    pod_dict, format_version=bundle_format_version(root)
-                ),
+            pod_payload = _normalize_pod_payload(
+                pod_dict, format_version=bundle_format_version(root)
             )
+            _write_json(root / "pod.json", stamp_bundle_id(pod_payload, bundle_id))
 
             # --- tables (+ optional data) -------------------------------------
             if "tables" in selected:

@@ -12,6 +12,10 @@ from e2b import Template, default_build_logger, wait_for_port
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 UV_VERSION = "0.11.31"
+# The real uv binary. Build steps call it by this path: the shim that takes the
+# name `uv` on PATH is copied in after them, and a template that copies no shim
+# at all has no `uv` on PATH (see `_install_uv_command`).
+UV = "/usr/local/lib/lemma-uv-bin"
 #: The interpreter `Dockerfile.workspace`'s `python:3.14.6-slim` carries. The
 #: overlay is built `--no-deps` against one third-party closure, so the two
 #: fabrics' interpreters should be the same release, not merely the same minor.
@@ -30,12 +34,6 @@ DEFAULT_MEMORY_MB = 2048
 #: its smallest size is larger than a plain workspace's.
 DEFAULT_DOCKER_CPU_COUNT = 4
 DEFAULT_DOCKER_MEMORY_MB = 8192
-#: Where `_install_uv_command` puts the real uv binary. The name `uv` on PATH is
-#: the `lemma-uv` shim, which is copied in near the end of the workspace
-#: template, so any build step before that must call the binary by this path --
-#: a bare `uv` there is `command not found` on a from-scratch build, which a
-#: warm layer cache hides.
-UV_BIN = "/usr/local/lib/lemma-uv-bin"
 
 
 def _positive_int_environment(name: str, *, default: int) -> int:
@@ -88,7 +86,7 @@ def _install_uv_command() -> str:
         # disagreeing about where a package goes, and the one the prompt
         # recommends being the broken one. Measured on a live sandbox, not
         # inferred.
-        f"install -m 0755 /tmp/{directory}/uv {UV_BIN} && "
+        f"install -m 0755 /tmp/{directory}/uv {UV} && "
         f"install -m 0755 /tmp/{directory}/uvx /usr/local/bin/uvx && "
         f"rm -rf /tmp/{archive} /tmp/{directory}"
     )
@@ -279,11 +277,11 @@ def workspace_template():
             "/build/lemma-backend/sandbox-images/templates/workspace-python",
         )
         .run_cmd(
-            f"UV_PYTHON_INSTALL_DIR=/opt/python {UV_BIN} python install {PYTHON_VERSION} && "
+            f"UV_PYTHON_INSTALL_DIR=/opt/python {UV} python install {PYTHON_VERSION} && "
             "UV_PYTHON_INSTALL_DIR=/opt/python "
             "UV_PROJECT_ENVIRONMENT=/opt/lemma-python "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
-            f"{UV_BIN} sync --project /build/lemma-backend/sandbox-images/templates/workspace-python "
+            f"{UV} sync --project /build/lemma-backend/sandbox-images/templates/workspace-python "
             f"--python {PYTHON_VERSION} "
             "--locked --no-dev --no-editable && "
             "printf '%s\\n' "
@@ -338,7 +336,7 @@ def workspace_template():
             "test -x /opt/lemma-python/bin/lemma && "
             "ln -sf /opt/lemma-python/bin/lemma /usr/local/bin/lemma && "
             "/usr/local/bin/lemma --version && "
-            f"{UV_BIN} cache clean && "
+            f"{UV} cache clean && "
             "rm -rf /build/lemma-python /build/lemma-pod-bundle "
             "/build/lemma-cli /build/lemma-skills /build/lemma-backend",
             user="root",
@@ -583,9 +581,9 @@ def function_template():
             f"{_install_uv_command()} && "
             "UV_PROJECT_ENVIRONMENT=/opt/lemma-function "
             "UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy "
-            f"{UV_BIN} sync --project /build/lemma-backend/sandbox-images/templates/function-python "
+            f"{UV} sync --project /build/lemma-backend/sandbox-images/templates/function-python "
             "--locked --no-dev --no-editable && "
-            f"{UV_BIN} cache clean && "
+            f"{UV} cache clean && "
             "rm -rf /build/lemma-python /build/lemma-backend",
             user="root",
         )

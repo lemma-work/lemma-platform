@@ -191,7 +191,7 @@ def _check_seed_rows(data_path: Path, table: str, already_seeded: int) -> int:
 
 
 #: What `app_builder._ensure_app` gives an app whose manifest omits visibility.
-_IMPORTED_APP_DEFAULT_VISIBILITY = "PUBLIC"
+_IMPORTED_APP_DEFAULT_VISIBILITY = "POD"
 
 
 def _resolved_app_visibility(payload: Mapping[str, object]) -> str:
@@ -481,12 +481,11 @@ class PlanBuilder:
     def _app_step(self, bundle_dir: Path, existing: set[str]) -> PlanStep:
         """An APP step, carrying the visibility the app will be created with.
 
-        An imported app takes the app default (PUBLIC) when its manifest is
-        silent, which serves its HTML/JS on a guessable host to anyone. That is
-        deliberate — an app is a shell whose data calls are authorized on their
-        own — but the plan is where the importer is supposed to see what will
-        happen, and it said nothing about this at all. An UPDATE leaves the
-        existing app's visibility alone, so it claims nothing.
+        An imported app takes the app default (POD) when its manifest is
+        silent, and whatever the manifest says otherwise -- which may be
+        PUBLIC, serving its HTML/JS on a guessable host to anyone. The plan is
+        where the importer is supposed to see what will happen. An UPDATE
+        leaves the existing app's visibility alone, so it claims nothing.
         """
         name = bundle_dir.name
         step = self._simple_step(StepKind.APP, name, existing)

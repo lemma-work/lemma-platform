@@ -21,11 +21,15 @@ is the status quo, not a regression this introduced.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Protocol
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
+
+from opentelemetry import trace
 
 from app.core.bounded import BoundedDict
 from app.core.log.log import get_logger
@@ -52,12 +56,14 @@ from sandbox_runtime import runtime_install
 from sandbox_runtime.paths import RUNTIME_OVERLAY_ROOT
 from sandbox_runtime.errors import SandboxError
 from sandbox_runtime.protocol import (
+    ProcessOutputChunk,
     ProcessOutputSnapshot,
     ProcessState,
     WorkloadKind,
 )
 
 logger = get_logger(__name__)
+_tracer = trace.get_tracer(__name__)
 
 #: Where the overlay lives. Outside `/home/user` on purpose: this is platform
 #: code, not the user's, and putting it in their project root would put it in
@@ -82,6 +88,10 @@ _INSTALL_BUDGET_SECONDS = 180.0
 
 #: One round trip. A probe that has to retry is a sandbox with worse problems.
 _PROBE_BUDGET_SECONDS = 20.0
+
+#: How many of the installer's output chunks a failure report keeps -- its
+#: tail, which is where an error is.
+_RETAINED_OUTPUT_CHUNKS = 64
 
 #: How many sandboxes' installed versions one process remembers. Generous
 #: next to any real fleet, and an eviction costs a probe rather than a
@@ -323,8 +333,17 @@ class WorkspaceRuntimeBundleMixin:
         try:
             if await self._installed_version(client, user_id) == bundle.version:
                 return True
-            await self._deliver(client, user_id, bundle)
-            await self._run_installer(client, user_id, bundle)
+            # Separate spans: on a new sandbox these are most of the first
+            # tool call's wait, and the upload and the installer's unzip and
+            # smoke test are fixed in different places.
+            with _tracer.start_as_current_span(
+                "lemma.workspace.runtime_bundle.deliver"
+            ):
+                await self._deliver(client, user_id, bundle)
+            with _tracer.start_as_current_span(
+                "lemma.workspace.runtime_bundle.install"
+            ):
+                await self._run_installer(client, user_id, bundle)
         except _SANDBOX_FAILURES as exc:
             # Deliberately swallowed, and deliberately logged in full. The
             # sandbox keeps the image's copy of the first-party code, so the
@@ -378,12 +397,27 @@ class WorkspaceRuntimeBundleMixin:
         putting 1.6 MB of base64 there were a reasonable thing to do.
         """
         deadline_at = _deadline(_INSTALL_BUDGET_SECONDS)
-        await client.write_file(
-            user_id,
-            INSTALLER_PATH,
-            Path(runtime_install.__file__).read_bytes(),
-            deadline_at=deadline_at,
+        # Together: they are independent files, and this is on the path of a
+        # new sandbox's first tool call, which otherwise waits out two
+        # sequential round trips to the sandbox. Both land before the installer
+        # runs either way.
+        await asyncio.gather(
+            client.write_file(
+                user_id,
+                INSTALLER_PATH,
+                Path(runtime_install.__file__).read_bytes(),
+                deadline_at=deadline_at,
+            ),
+            self._deliver_archive(client, user_id, bundle, deadline_at),
         )
+
+    async def _deliver_archive(
+        self,
+        client: _ManagerClient,
+        user_id: UUID,
+        bundle: RuntimeBundle,
+        deadline_at: datetime,
+    ) -> None:
         await client.write_file(
             user_id,
             ARCHIVE_PATH,
@@ -434,8 +468,17 @@ class WorkspaceRuntimeBundleMixin:
         operation_id: UUID,
         deadline_at: datetime,
     ) -> ProcessOutputSnapshot | None:
-        """Wait on the process's own completion, never on the clock."""
+        """Wait on the process's own completion, never on the clock.
+
+        Returns the final state with the output read on the way: each read
+        starts after the last, so keeping only the final one dropped whatever
+        the installer printed before it exited -- its error included, and
+        every failure was reported as "no output". A bounded tail, since only
+        the end of it is ever reported (`_tail`) and an installer may print for
+        the whole install budget.
+        """
         after = 0
+        chunks: deque[ProcessOutputChunk] = deque(maxlen=_RETAINED_OUTPUT_CHUNKS)
         while datetime.now(timezone.utc) < deadline_at:
             snapshot = await client.read_process_output(
                 WorkloadKind.WORKSPACE,
@@ -445,9 +488,10 @@ class WorkspaceRuntimeBundleMixin:
                 after_sequence=after,
                 wait_seconds=5,
             )
+            chunks.extend(snapshot.chunks)
             after = snapshot.next_sequence
             if snapshot.state in TERMINAL_PROCESS_STATES:
-                return snapshot
+                return replace(snapshot, chunks=tuple(chunks))
         return None
 
     async def _ensure_browser_proxy(

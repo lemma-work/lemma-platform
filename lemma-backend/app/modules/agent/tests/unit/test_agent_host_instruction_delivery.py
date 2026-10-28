@@ -175,6 +175,47 @@ async def test_instructions_count_as_delivered_only_once_the_host_prompted(
     assert repository.stored["instructions_digest"] == "abc"
 
 
+@pytest.mark.anyio
+async def test_how_far_a_prompt_ran_is_recorded_only_once_it_landed(
+    repository: _Repository,
+) -> None:
+    """``seen_through`` rides the same promise as the instructions: kept
+    pending at dispatch, promoted only by a checkpoint that proves the prompt
+    landed, and never taken from another run's."""
+    conversation_id, harness_id = uuid4(), uuid4()
+    other_run, dispatched_run = uuid7(), uuid7()
+    uow = TestASessionIdIsNotProofThePromptLanded._uow(conversation_id, harness_id)
+
+    await memory.record_pending_instructions(
+        uow,
+        conversation_id=conversation_id,
+        run_id=dispatched_run,
+        digest="abc",
+        seen_through=41,
+    )
+    await memory.remember_provider_session(
+        uow, _checkpoint(dispatched_run, "sess-1", AgentHostRunState.FAILED)
+    )
+    assert "prompted_through" not in repository.stored
+
+    await memory.remember_provider_session(uow, _checkpoint(other_run, "sess-1"))
+    assert "prompted_through" not in repository.stored
+    assert repository.stored["pending_prompt"]["seen_through"] == 41
+
+    await memory.remember_provider_session(uow, _checkpoint(dispatched_run, "sess-1"))
+    assert repository.stored["prompted_through"] == 41
+    assert repository.stored["prompted_run_id"] == str(dispatched_run)
+    assert "pending_prompt" not in repository.stored
+
+    # Every later heartbeat of the same run lands again, with nothing pending:
+    # the mark it promoted stays.
+    for state in (AgentHostRunState.RUNNING, AgentHostRunState.SUCCEEDED):
+        await memory.remember_provider_session(
+            uow, _checkpoint(dispatched_run, "sess-1", state)
+        )
+        assert repository.stored["prompted_through"] == 41
+
+
 class TestASessionIdIsNotProofThePromptLanded:
     """The host writes `provider_session_id` in `before_prompt` -- *before*
     `session/prompt` is sent -- and the journal then attaches it to every
@@ -318,3 +359,76 @@ async def test_a_heartbeat_that_changes_nothing_takes_no_lock(
 
     assert locked_by_the_first == 1
     assert repository.locked_reads == locked_by_the_first
+
+
+class TestHowFarTheSessionHasRead:
+    """A resumed turn sends what was written in no run since the session's
+    last turn (``turn_messages``), so Lemma has to know which turn that was:
+    the newest run whose prompt landed, which the run the binding names --
+    the newest to report the session at all -- need not be."""
+
+    @staticmethod
+    async def _last_run(uow, conversation_id, harness_id):
+        session = await memory.resumed_session(
+            uow,
+            conversation_id=conversation_id,
+            harness_id=harness_id,
+            capabilities={"load_session": True},
+        )
+        assert session is not None
+        return session.last_run_id
+
+    @pytest.mark.anyio
+    async def test_a_run_counts_once_its_prompt_has_landed(
+        self, repository: _Repository
+    ) -> None:
+        conversation_id, harness_id = uuid4(), uuid4()
+        first, second = uuid7(), uuid7()
+        uow = TestASessionIdIsNotProofThePromptLanded._uow(conversation_id, harness_id)
+
+        await memory.remember_provider_session(
+            uow, _checkpoint(first, "sess-1", AgentHostRunState.DISPATCHING)
+        )
+        assert await self._last_run(uow, conversation_id, harness_id) is None
+
+        await memory.remember_provider_session(uow, _checkpoint(first, "sess-1"))
+        assert await self._last_run(uow, conversation_id, harness_id) == first
+
+        # Failed before its prompt was sent: the session holds the first
+        # run's turn and nothing of this one's, whichever run it names.
+        for state in (AgentHostRunState.DISPATCHING, AgentHostRunState.FAILED):
+            await memory.remember_provider_session(
+                uow, _checkpoint(second, "sess-1", state)
+            )
+        assert repository.stored["run_id"] == str(second)
+        assert await self._last_run(uow, conversation_id, harness_id) == first
+
+    @pytest.mark.anyio
+    async def test_a_new_session_has_read_nothing(
+        self, repository: _Repository
+    ) -> None:
+        conversation_id, harness_id = uuid4(), uuid4()
+        first, second = uuid7(), uuid7()
+        uow = TestASessionIdIsNotProofThePromptLanded._uow(conversation_id, harness_id)
+
+        await memory.remember_provider_session(uow, _checkpoint(first, "sess-1"))
+        await memory.remember_provider_session(
+            uow, _checkpoint(second, "sess-2", AgentHostRunState.DISPATCHING)
+        )
+
+        assert await self._last_run(uow, conversation_id, harness_id) is None
+
+    @pytest.mark.anyio
+    async def test_a_binding_from_before_this_was_kept_names_no_run(
+        self, repository: _Repository
+    ) -> None:
+        """So such a session is sent all the history carries in no run, none
+        of which it was ever sent."""
+        harness_id = uuid4()
+        repository.stored = {
+            "harness_id": str(harness_id),
+            "session_id": "sess-1",
+            "run_id": str(uuid7()),
+        }
+
+        assert await self._last_run(object(), uuid4(), harness_id) is None

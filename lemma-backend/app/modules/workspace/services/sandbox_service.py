@@ -412,10 +412,14 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             storage_generation=storage_generation,
         )
         try:
-            created = await self._provider.create(spec)
-            await self._provider.wait_ready(
-                created, kind=sandbox.kind, deadline_at=deadline_at
-            )
+            # Two spans, so a slow first use says whether the provider was slow
+            # to boot the machine or the agent inside it was slow to answer.
+            with tracer.start_as_current_span("lemma.sandbox.provider_create"):
+                created = await self._provider.create(spec)
+            with tracer.start_as_current_span("lemma.sandbox.wait_ready"):
+                await self._provider.wait_ready(
+                    created, kind=sandbox.kind, deadline_at=deadline_at
+                )
         except ProviderNotReady as exc:
             await self._fail(instance.id, str(exc))
             raise SandboxNotReady(str(exc), retry_after_ms=exc.retry_after_ms) from exc

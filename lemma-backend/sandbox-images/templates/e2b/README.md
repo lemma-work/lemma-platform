@@ -95,10 +95,13 @@ destroyed after the configured idle period.
 
 The backend picks a template per machine size from JSON maps keyed
 `{cpu}x{memory_mb}` -- the same spelling `--size` takes and the build prints as
-`size_key`. A size with no entry is served from the single template setting:
+`size_key`. The size the default template was built at needs no entry; any
+other size with no entry is served from the single template setting, with a
+warning:
 
 ```text
 E2B_WORKSPACE_TEMPLATE         default lemma-workspace
+E2B_WORKSPACE_TEMPLATE_SIZE    the size it was built at, default 1x2048
 E2B_WORKSPACE_SIZE_TEMPLATES   e.g. {"2x4096": "lemma-workspace-2x4"}
 E2B_DOCKER_TEMPLATE            default lemma-workspace-docker
 E2B_DOCKER_SIZE_TEMPLATES      e.g. {"8x16384": "lemma-workspace-docker-8x16"}

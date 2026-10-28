@@ -44,6 +44,7 @@ from app.modules.connectors.domain.auth_config import AuthConfigStatus
 from app.modules.connectors.domain.errors import (
     AccountNotFoundError,
     ConnectorNotFoundError,
+    InstallationNotFoundError,
     OrganizationConnectorsNotFoundError,
 )
 from app.modules.connectors.domain.pod_connector import (
@@ -56,7 +57,6 @@ from app.modules.connectors.domain.pod_connector import (
 )
 from app.modules.connectors.domain.pod_connector_errors import (
     PodAccountNotFoundError,
-    PodConnectorConflictError,
     PodConnectorNotFoundError,
     PodConnectorValidationError,
 )
@@ -78,6 +78,10 @@ from app.modules.connectors.services.pod_connector_notices import (
     tell_editors_connectors_lost_their_account,
 )
 from app.modules.connectors.services.pod_connector_resolution import acting_person
+from app.modules.connectors.services.pod_connector_use import (
+    can_use,
+    slug_to_declare,
+)
 
 
 def withdraw_sandbox_borrowers_after_commit(
@@ -143,14 +147,20 @@ class PodConnectorService:
         self, ctx: Context, pod_id: UUID, data: PodConnectorCreateRequest
     ) -> PodConnectorResponse:
         await ctx.require(Permissions.POD_CONNECTOR_MANAGE, ResourceRef.pod(pod_id))
-        auth_config = await self.auth_configs.get(data.auth_config_id)
+        # A `connector_id` was resolved to an installation by the controller.
+        auth_config = (
+            await self.auth_configs.get(data.auth_config_id)
+            if data.auth_config_id is not None
+            else None
+        )
         if auth_config is None or auth_config.organization_id != ctx.organization_id:
-            raise ConnectorNotFoundError(str(data.auth_config_id))
-        if await self.pod_connectors.get_by_slug(pod_id, data.slug) is not None:
-            raise PodConnectorConflictError(data.slug)
+            raise InstallationNotFoundError(str(data.auth_config_id))
+        slug = await slug_to_declare(
+            self.pod_connectors, pod_id, auth_config, requested=data.slug
+        )
         connector = PodConnectorEntity(
             pod_id=pod_id,
-            slug=data.slug,
+            slug=slug,
             auth_config_id=auth_config.id,
             mode=data.mode,
             required=data.required,
@@ -269,21 +279,19 @@ class PodConnectorService:
                 display_name=account.display_name if account else None,
                 email=account.email if account else None,
             )
+        status = connector_status(
+            connector,
+            installation_active=auth_config is not None
+            and auth_config.status is AuthConfigStatus.ACTIVE,
+            shared_account=shared,
+        )
         return PodConnectorResponse(
             **connector.model_dump(),
             installation_name=auth_config.name if auth_config else None,
             connector_id=auth_config.connector_id if auth_config else None,
             shared_account=summary,
-            can_use=await ctx.can(
-                Permissions.CONNECTOR_USE,
-                ResourceRef.connector(connector.pod_id, connector.id),
-            ),
-            status=connector_status(
-                connector,
-                installation_active=auth_config is not None
-                and auth_config.status is AuthConfigStatus.ACTIVE,
-                shared_account=shared,
-            ),
+            can_use=await can_use(ctx, connector, status, shared),
+            status=status,
         )
 
     # -- pod accounts ---------------------------------------------------------

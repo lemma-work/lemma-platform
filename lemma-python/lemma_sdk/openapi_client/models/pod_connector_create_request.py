@@ -18,31 +18,49 @@ T = TypeVar("T", bound="PodConnectorCreateRequest")
 class PodConnectorCreateRequest:
     """
     Attributes:
-        auth_config_id (UUID): The organization installation this connector uses.
-        mode (PodConnectorMode):
-        slug (str): Pod-local name apps, agents and bundles address it by, e.g. `gmail` or `support-inbox`.
+        auth_config_id (None | Unset | UUID): The organization installation this connector uses. Give this or
+            `connector_id`.
+        connector_id (None | str | Unset): A catalog connector (`gmail`) instead of an installation: its organization
+            default, or -- when the organization has none and you may install connectors -- Lemma's own app for it,
+            installed now.
+        mode (PodConnectorMode | Unset):
         purpose (None | str | Unset): Shown to members when they are asked to connect.
         required (bool | Unset): PER_MEMBER: ask every member who has no account to connect one. Default: False.
         shared_pod_account_id (None | Unset | UUID): SHARED only: a pod account its owner has already shared with the
             pod.
+        slug (None | str | Unset): Pod-local name apps, agents and bundles address it by, e.g. `gmail` or `support-
+            inbox`. Left out: the installation's name, made free in this pod.
         visibility (PodConnectorVisibility | Unset):
     """
 
-    auth_config_id: UUID
-    mode: PodConnectorMode
-    slug: str
+    auth_config_id: None | Unset | UUID = UNSET
+    connector_id: None | str | Unset = UNSET
+    mode: PodConnectorMode | Unset = UNSET
     purpose: None | str | Unset = UNSET
     required: bool | Unset = False
     shared_pod_account_id: None | Unset | UUID = UNSET
+    slug: None | str | Unset = UNSET
     visibility: PodConnectorVisibility | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        auth_config_id = str(self.auth_config_id)
+        auth_config_id: None | str | Unset
+        if isinstance(self.auth_config_id, Unset):
+            auth_config_id = UNSET
+        elif isinstance(self.auth_config_id, UUID):
+            auth_config_id = str(self.auth_config_id)
+        else:
+            auth_config_id = self.auth_config_id
 
-        mode = self.mode.value
+        connector_id: None | str | Unset
+        if isinstance(self.connector_id, Unset):
+            connector_id = UNSET
+        else:
+            connector_id = self.connector_id
 
-        slug = self.slug
+        mode: str | Unset = UNSET
+        if not isinstance(self.mode, Unset):
+            mode = self.mode.value
 
         purpose: None | str | Unset
         if isinstance(self.purpose, Unset):
@@ -60,25 +78,33 @@ class PodConnectorCreateRequest:
         else:
             shared_pod_account_id = self.shared_pod_account_id
 
+        slug: None | str | Unset
+        if isinstance(self.slug, Unset):
+            slug = UNSET
+        else:
+            slug = self.slug
+
         visibility: str | Unset = UNSET
         if not isinstance(self.visibility, Unset):
             visibility = self.visibility.value
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
-        field_dict.update(
-            {
-                "auth_config_id": auth_config_id,
-                "mode": mode,
-                "slug": slug,
-            }
-        )
+        field_dict.update({})
+        if auth_config_id is not UNSET:
+            field_dict["auth_config_id"] = auth_config_id
+        if connector_id is not UNSET:
+            field_dict["connector_id"] = connector_id
+        if mode is not UNSET:
+            field_dict["mode"] = mode
         if purpose is not UNSET:
             field_dict["purpose"] = purpose
         if required is not UNSET:
             field_dict["required"] = required
         if shared_pod_account_id is not UNSET:
             field_dict["shared_pod_account_id"] = shared_pod_account_id
+        if slug is not UNSET:
+            field_dict["slug"] = slug
         if visibility is not UNSET:
             field_dict["visibility"] = visibility
 
@@ -87,11 +113,39 @@ class PodConnectorCreateRequest:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        auth_config_id = UUID(d.pop("auth_config_id"))
 
-        mode = PodConnectorMode(d.pop("mode"))
+        def _parse_auth_config_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                auth_config_id_type_0 = UUID(data)
 
-        slug = d.pop("slug")
+                return auth_config_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        auth_config_id = _parse_auth_config_id(d.pop("auth_config_id", UNSET))
+
+        def _parse_connector_id(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        connector_id = _parse_connector_id(d.pop("connector_id", UNSET))
+
+        _mode = d.pop("mode", UNSET)
+        mode: PodConnectorMode | Unset
+        if isinstance(_mode, Unset):
+            mode = UNSET
+        else:
+            mode = PodConnectorMode(_mode)
 
         def _parse_purpose(data: object) -> None | str | Unset:
             if data is None:
@@ -123,6 +177,15 @@ class PodConnectorCreateRequest:
             d.pop("shared_pod_account_id", UNSET)
         )
 
+        def _parse_slug(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        slug = _parse_slug(d.pop("slug", UNSET))
+
         _visibility = d.pop("visibility", UNSET)
         visibility: PodConnectorVisibility | Unset
         if isinstance(_visibility, Unset):
@@ -132,11 +195,12 @@ class PodConnectorCreateRequest:
 
         pod_connector_create_request = cls(
             auth_config_id=auth_config_id,
+            connector_id=connector_id,
             mode=mode,
-            slug=slug,
             purpose=purpose,
             required=required,
             shared_pod_account_id=shared_pod_account_id,
+            slug=slug,
             visibility=visibility,
         )
 

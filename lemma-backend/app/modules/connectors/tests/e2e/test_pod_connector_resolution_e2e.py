@@ -163,8 +163,15 @@ async def test_the_deprecated_execute_never_runs_as_somebody_else(scenario, db_s
     )
     await db_session.commit()
 
+    # Her own account is marked, and it is still hers that is tried -- a mark
+    # is not terminal, and an API key whose install names no target is tried
+    # again (`reauth_recovery`). The provider accepting it clears the mark.
     expired = await _run_installation(world, world.alice, pod_id=world.pod_id)
-    assert expired.json()["code"] == "REAUTH_REQUIRED", expired.text
+    assert expired.status_code == 200, expired.text
+    assert expired.json()["result"] == {"ran_as": "alice-key"}
+    db_session.expire_all()
+    recovered = await db_session.get(Account, UUID(alice_account))
+    assert recovered.status == "CONNECTED"
 
     # No account of their own at all: told to connect one, not served by Bob's.
     none = await _run_installation(world, world.editor, pod_id=world.pod_id)

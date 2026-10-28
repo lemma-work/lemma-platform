@@ -165,3 +165,29 @@ def test_register_cli_uses_managed_loopback_origins(monkeypatch) -> None:
         "auth_url": "http://app.lemma.localhost:52123/auth",
         "make_active": True,
     }
+
+
+def test_main_reports_admin_error_without_a_traceback(monkeypatch, capsys):
+    def boom() -> None:
+        raise stack_app.AdminError("release manifest is missing images: workspace")
+
+    monkeypatch.setattr(stack_app, "app", boom)
+    monkeypatch.setattr(stack_app, "enrich_path", lambda: None)
+    try:
+        stack_app.main()
+    except SystemExit as exc:
+        assert exc.code == 1
+        assert exc.__cause__ is None and exc.__suppress_context__
+    else:
+        raise AssertionError("main() must exit non-zero on AdminError")
+    assert "missing images" in capsys.readouterr().err
+
+
+def test_reported_version_is_the_package_version():
+    import tomllib
+
+    from lemma_stack import __version__
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    declared = tomllib.loads(pyproject.read_text())["project"]["version"]
+    assert __version__ == declared

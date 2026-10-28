@@ -59,12 +59,28 @@ async def bootstrap_pod_schema(conn, schema_name: str, *, grant: bool) -> None:
         await grant_at_birth(conn, schema_name)
 
 
+#: Which DDL version each pod schema carries; see ``pod_schema_migrations``.
+#: Defined here because dropping a schema has to forget its row.
+VERSIONS_TABLE = "public.lemma_pod_schema_versions"
+
+
 async def drop_pod_schema(conn, schema_name: str) -> None:
-    """Drop one pod schema, everything in it, and its query role."""
+    """Drop one pod schema, everything in it, its query role, and its version.
+
+    The version row goes in the same transaction. Left behind, it outlives the
+    schema it describes: whatever walks the versions table -- change-log
+    retention does, every hour -- then addresses tables that are gone, and a
+    schema of the same name made again would be taken as already migrated.
+    """
     if not POD_SCHEMA_RE.fullmatch(schema_name):
         raise ValueError(f"not a pod schema: {schema_name!r}")
     await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
     await drop_pod_role(conn, schema_name)
+    if await conn.scalar(text(f"SELECT to_regclass('{VERSIONS_TABLE}') IS NOT NULL")):
+        await conn.execute(
+            text(f"DELETE FROM {VERSIONS_TABLE} WHERE schema_name = :name"),
+            {"name": schema_name},
+        )
 
 
 class PodSchemaCatalog:
