@@ -146,7 +146,7 @@ test("a failed Test says whether the key was refused or the list could not be re
 
 test("voice is offered only when the pod's server has a voice engine", async () => {
     const { voiceConfigured } = await import("../src/call/voice-config.ts");
-    const answering = (body: unknown) => async () => body;
+    const answering = (body: { engines?: unknown }) => async () => body;
     assert.equal(await voiceConfigured("pod", answering({ engines: ["gemini_live"] })), true);
     assert.equal(await voiceConfigured("pod", answering({ engines: [] })), false);
     assert.equal(await voiceConfigured("pod", answering({})), false);

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readSnapshot, type SectionPayload, type ThisMacSnapshot } from "../src/desktop/this-mac.ts";
+import { readSnapshot, type OperatorAi, type SectionPayload, type ThisMacSnapshot } from "../src/desktop/this-mac.ts";
 import {
     AI_PRESETS, CAPABILITIES, aiDraftFrom, aiDraftProblem, aiSectionPayload, capabilityStatus, checklistDismissed,
     dismissChecklist, emailDraftFrom, emailDraftProblem, emailPayloads, needsKey, needsSetup, presetFor, probeKey,
@@ -120,7 +120,7 @@ test("the AI save carries the whole profile, and the key only when one was typed
     assert.equal(payload.section.name, "ai");
     assert.equal(payload.expected_revision, 7);
     assert.deepEqual(payload.secrets, {});
-    const value = payload.section.value as Record<string, unknown>;
+    const value = payload.section.value as OperatorAi;
     assert.deepEqual(Object.keys(value).sort(), [
         "allow_private_network", "base_url", "default_model", "fast_model", "image_model",
         "last_validated_at_unix_ms", "models", "protocol", "vision_models",
@@ -129,7 +129,7 @@ test("the AI save carries the whole profile, and the key only when one was typed
     assert.equal(value.last_validated_at_unix_ms, 5);
     assert.deepEqual(aiSectionPayload(base, draft, { action: "replace", value: "sk" }).secrets, { "ai.api_key": { action: "replace", value: "sk" } });
     // A model no longer listed is not sent: the daemon would refuse the save.
-    assert.equal((aiSectionPayload(base, { ...draft, fastModel: "gone" }, undefined).section.value as Record<string, unknown>).fast_model, "");
+    assert.equal((aiSectionPayload(base, { ...draft, fastModel: "gone" }, undefined).section.value as OperatorAi).fast_model, "");
 });
 
 /* ── email ─────────────────────────────────────────────────────────── */

@@ -31,6 +31,9 @@ npm test
 npm run build
 ```
 
+`typecheck` checks the app, then the tests through `tests/tsconfig.json`;
+`npm test` strips the tests' types without checking them.
+
 Build runs lint, naming and design checks before compiling. Some tests bind
 local WebSocket ports. Design conventions are in [DESIGN.md](DESIGN.md).
 

@@ -53,9 +53,14 @@ from app.modules.agent_surfaces.tests.e2e.surface_work_support import (
     scalar,
 )
 
+# Both tests count queued ``work_items``; a running session worker (started by
+# any earlier module in the shard) claims and finishes them first -- the day of
+# webhooks counted 3 queued ingests of 1,040 stored messages, and 0 of 262
+# platform updates. Held, the rows stay where the request left them.
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.slow,
+    pytest.mark.drives_work,
     pytest.mark.usefixtures("clean_surface_work"),
 ]
 
@@ -91,6 +96,9 @@ async def test_a_day_of_slack_webhooks_is_classified_in_the_request(
         test_pod["id"],
         config={"type": "SLACK", "account_id": str(account.id)},
     )
+    # End the read the helper's refresh opened: the day below takes minutes,
+    # and an e2e session idle in a transaction for 60s is closed under it.
+    await db_session.commit()
     deliveries = slack_webhook_mix(DAY)
     expected = Counter(EXPECTED[d.kind] for d in deliveries)
     latencies: list[float] = []
@@ -140,7 +148,6 @@ async def test_a_day_of_slack_webhooks_is_classified_in_the_request(
     assert p99 < 0.3
 
 
-@pytest.mark.drives_work
 async def test_a_flooded_pod_does_not_hold_back_another_pods_ingest(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,

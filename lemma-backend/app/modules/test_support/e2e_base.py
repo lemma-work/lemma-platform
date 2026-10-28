@@ -844,6 +844,27 @@ def _seed_system_model_pricing() -> None:
     )
 
 
+#: The callback port, picked once per pytest process.
+#:
+#: "Session-scoped" is per fixture *definition*, not per process: every e2e
+#: conftest re-exports `e2e_settings` under its own name, so pytest registers
+#: one definition per conftest and runs each once -- `e2e_settings` runs again
+#: for every module directory the run enters. It used to pick a fresh port each
+#: time, while the session worker keeps the port it was born with, so from the
+#: second directory on the worker's sandboxes called back to a port nothing
+#: listened on any more.
+_CALLBACK_PORT: int | None = None
+
+
+def _session_callback_port() -> int:
+    global _CALLBACK_PORT
+    if _CALLBACK_PORT is None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            _CALLBACK_PORT = int(sock.getsockname()[1])
+    return _CALLBACK_PORT
+
+
 @pytest.fixture(scope="session")
 def e2e_settings(test_database_url, test_redis_url, supertokens_container, worker_id):
     from app.core.config import settings
@@ -900,9 +921,7 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     # each test, so both API- and worker-driven sandboxes get the same explicit,
     # reachable URL. Production code intentionally performs no localhost or
     # container-hostname rewriting.
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        callback_port = int(sock.getsockname()[1])
+    callback_port = _session_callback_port()
     callback_url = os.getenv(
         "WORKSPACE_E2E_DOCKER_API_URL",
         f"http://host.docker.internal:{callback_port}",
@@ -1194,6 +1213,10 @@ async def sandbox_reachable_backend(e2e_settings):
                     os.environ[key] = value
 
 
+#: The session worker subprocess of this pytest process, by database URL.
+_SESSION_WORKERS: dict[str, subprocess.Popen] = {}
+
+
 @pytest_asyncio.fixture(scope="session")
 async def worker(e2e_settings, sandbox_reachable_backend):
     """Run the real streaq worker process used in production.
@@ -1211,6 +1234,17 @@ async def worker(e2e_settings, sandbox_reachable_backend):
     import redis.asyncio as redis
 
     from app.core.config import settings
+
+    # One worker per process, however many conftests re-export this fixture.
+    # Each re-export is its own session-scoped definition, so without this
+    # every module directory started another worker and none of them stopped
+    # until the run ended: by the function tests a dozen were claiming from
+    # the same work table, and whichever won a job ran it with the settings it
+    # was born with -- see `_session_callback_port`.
+    shared = _SESSION_WORKERS.get(e2e_settings.database_url)
+    if shared is not None and shared.poll() is None:
+        yield shared
+        return
 
     # Worker lifespans may reconcile persisted state before any function-scoped
     # db_manager fixture runs. Build the schema once before starting the
@@ -1362,9 +1396,11 @@ async def worker(e2e_settings, sandbox_reachable_backend):
         )
 
         register_session_worker(proc.pid, e2e_settings.database_url)
+        _SESSION_WORKERS[e2e_settings.database_url] = proc
         try:
             yield proc
         finally:
+            _SESSION_WORKERS.pop(e2e_settings.database_url, None)
             unregister_session_worker(proc.pid)
             proc.terminate()
             try:
