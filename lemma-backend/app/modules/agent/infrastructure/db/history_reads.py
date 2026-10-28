@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Select, and_, func, or_, select, union_all
+from sqlalchemy import ScalarSelect, Select, and_, func, or_, select, union_all
 
 from app.modules.agent.domain.entities import (
     AgentRun as AgentRunEntity,
@@ -63,31 +63,7 @@ class HistoryReads(UnitOfWorkRepository):
         result. See the module docstring for why the total and the resumed
         run come back with it.
         """
-        # One statement: the run's conversation, its newest runs, how many it
-        # has, and each run's message count -- a run start reads this first.
-        conversation_id = (
-            select(AgentRunModel.conversation_id)
-            .where(AgentRunModel.id == agent_run_id)
-            .scalar_subquery()
-        )
-        message_count = (
-            select(func.count())
-            .where(MessageModel.agent_run_id == AgentRunModel.id)
-            .correlate(AgentRunModel)
-            .scalar_subquery()
-        )
-        found = (
-            await self.session.execute(
-                select(
-                    AgentRunModel,
-                    func.count().over().label("total_runs"),
-                    message_count.label("message_count"),
-                )
-                .where(AgentRunModel.conversation_id == conversation_id)
-                .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
-                .limit(limit)
-            )
-        ).all()
+        found = (await self.session.execute(window_of_run(agent_run_id, limit))).all()
         if not found:
             return RuntimeHistoryWindow(runs=[], total_runs=0, current_run=None)
         found.reverse()
@@ -99,24 +75,30 @@ class HistoryReads(UnitOfWorkRepository):
             (entity for entity in entities if entity.id == agent_run_id), None
         )
         if current_run is None:
-            # Older than the window. It is still the run being executed, and the
-            # runner refuses the whole request when it cannot find it, so it is
-            # fetched on its own -- one extra statement on the rare path rather
-            # than a wider window on every one.
-            resumed = (
-                (
-                    await self.session.execute(
-                        select(AgentRunModel).where(AgentRunModel.id == agent_run_id)
-                    )
-                )
-                .scalars()
-                .first()
-            )
-            if resumed is not None:
-                current_run = (await self._with_message_digests([resumed]))[0]
+            current_run = await self._resumed_run(agent_run_id)
         return RuntimeHistoryWindow(
             runs=entities, total_runs=total_runs, current_run=current_run
         )
+
+    async def _resumed_run(self, agent_run_id: UUID) -> AgentRunEntity | None:
+        """The run being executed, when it is older than the window.
+
+        The runner refuses the whole request when it cannot find it, so it is
+        fetched on its own -- one extra statement on the rare path rather than
+        a wider window on every one.
+        """
+        resumed = (
+            (
+                await self.session.execute(
+                    select(AgentRunModel).where(AgentRunModel.id == agent_run_id)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if resumed is None:
+            return None
+        return (await self._with_message_digests([resumed]))[0]
 
     async def _with_message_digests(
         self, rows: list[AgentRunModel]
@@ -324,6 +306,43 @@ def _newest_unattached_ids(
     if before_sequence is not None:
         query = query.where(MessageModel.sequence < before_sequence)
     return query.order_by(MessageModel.sequence.desc()).limit(limit)
+
+
+def window_of_run(agent_run_id: UUID, limit: int) -> Select:
+    """The newest ``limit`` runs of the run's conversation, in one statement.
+
+    Each row also carries how many runs the conversation has (a window count,
+    taken before the limit) and its own message count; the run's conversation
+    is found inside the statement. Newest first: the caller reverses it.
+    """
+    return (
+        select(
+            AgentRunModel,
+            func.count().over().label("total_runs"),
+            _message_count().label("message_count"),
+        )
+        .where(AgentRunModel.conversation_id == _conversation_of(agent_run_id))
+        .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+        .limit(limit)
+    )
+
+
+def _conversation_of(agent_run_id: UUID) -> ScalarSelect[UUID]:
+    return (
+        select(AgentRunModel.conversation_id)
+        .where(AgentRunModel.id == agent_run_id)
+        .scalar_subquery()
+    )
+
+
+def _message_count() -> ScalarSelect[int]:
+    """A run's message count, correlated to the run row it is selected with."""
+    return (
+        select(func.count())
+        .where(MessageModel.agent_run_id == AgentRunModel.id)
+        .correlate(AgentRunModel)
+        .scalar_subquery()
+    )
 
 
 def _digested(row: AgentRunModel, message_count: int) -> AgentRunEntity:

@@ -12,11 +12,12 @@ calls run to the end and the run ends on ``DeferredToolRequests``.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, cast
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 from pydantic_ai import BinaryContent, CallDeferred, ToolReturn
 from pydantic_ai.tools import GenerateToolJsonSchema, RunContext, Tool, ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset
@@ -115,26 +116,40 @@ def _function_schema(
             is_async=True,
         )
 
-    async def signature(**_kwargs: object) -> None: ...
-
-    annotations = {"ctx": RunContext[ToolContext], spec.argument: spec.parameters}
-    signature.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
-        [
-            inspect.Parameter(
-                name, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
-            )
-            for name, annotation in annotations.items()
-        ]
-    )
-    signature.__annotations__ = annotations
-    signature.__name__ = spec.name
-    derived = function_schema(signature, GenerateToolJsonSchema, takes_ctx=True)
     return dataclasses.replace(
-        derived,
+        _derived_schema(spec.name, spec.argument, spec.parameters),
         function=call,
         description=spec.description,
         json_schema=spec.json_schema,
     )
+
+
+@functools.lru_cache(maxsize=1024)
+def _derived_schema(
+    name: str, argument: str, parameters: type[BaseModel]
+) -> FunctionSchema:
+    """The validator pydantic-ai derives for a tool taking ``parameters``.
+
+    Built once per worker process: deriving it builds a pydantic core schema,
+    the costliest part of assembling a run's tools, and it depends on nothing
+    but the request model. Bounded: the built-in tools' request models are a
+    fixed set; a pod function's arguments come as a JSON schema, not a model.
+    """
+
+    async def signature(**_kwargs: object) -> None: ...
+
+    annotations = {"ctx": RunContext[ToolContext], argument: parameters}
+    signature.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        [
+            inspect.Parameter(
+                param, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=annotation
+            )
+            for param, annotation in annotations.items()
+        ]
+    )
+    signature.__annotations__ = annotations
+    signature.__name__ = name
+    return function_schema(signature, GenerateToolJsonSchema, takes_ctx=True)
 
 
 def _describing(
