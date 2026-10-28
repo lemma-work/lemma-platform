@@ -7,6 +7,7 @@ manages channels), a user (writes in channels, sees no contacts) and a viewer
 
 from __future__ import annotations
 
+import asyncio
 from uuid import UUID, uuid4
 
 import pytest
@@ -26,7 +27,9 @@ from app.modules.channels.contracts import (
     source_for,
 )
 from app.modules.contacts.contracts import IdentityKind, IdentityStrength, open_contact
+from app.modules.test_support.e2e.builders import E2EScenario
 from app.modules.test_support.e2e_authz import auth_headers
+from app.modules.test_support.e2e_base import extend_module_identity
 
 
 class Pod:
@@ -59,17 +62,48 @@ class _As:
         return request
 
 
+@pytest.fixture(scope="module")
+async def channel_world(e2e_settings, module_identity):
+    """The organization, pod and three members, made once for the module.
+
+    Three sign-ups and an organization were most of every channels test's
+    setup. They are made once here and join the module identity's snapshot,
+    so each test starts from exactly these rows and nothing an earlier test
+    wrote -- the reset that gave a test its own pod now gives it this one.
+    """
+    owner = module_identity.user
+
+    async def build(client):
+        client.headers.update(auth_headers(owner))
+        scenario = E2EScenario(
+            owner_client=client, async_client=client, owner_user=owner
+        )
+        await scenario.create_org_with_pod(name_prefix="Channels v2")
+        # Signed up together: no sign-up depends on another.
+        people = await asyncio.gather(
+            *(scenario.create_user(f"chv2-{name}") for _, name in _SEATS)
+        )
+        for (role, _), person in zip(_SEATS, people, strict=True):
+            await scenario.add_user_to_pod(user=person, role=role)
+        # SuperTokens ids; the rows' own ids are found by the snapshot.
+        return (scenario.organization, scenario.pod, people), [p["id"] for p in people]
+
+    return await extend_module_identity(e2e_settings.database_url, build)
+
+
+_SEATS = (("POD_EDITOR", "editor"), ("POD_USER", "user"), ("POD_VIEWER", "viewer"))
+
+
 @pytest.fixture
-async def pod(scenario) -> Pod:
-    await scenario.create_org_with_pod(name_prefix="Channels v2")
+async def pod(scenario, channel_world, module_identity, db_manager) -> Pod:
+    del db_manager  # ordering only: the reset restores the world first
+    # The world is the module user's; a module binding `fixed_test_user` to a
+    # fresh user would hand these tests someone else's pod.
+    assert scenario.owner_user["id"] == module_identity.user["id"]
+    organization, pod_row, people = channel_world
+    scenario.organization, scenario.pod = organization, pod_row
     p = Pod(scenario)
-    for role, name in (
-        ("POD_EDITOR", "editor"),
-        ("POD_USER", "user"),
-        ("POD_VIEWER", "viewer"),
-    ):
-        person = await scenario.create_user(f"chv2-{name}")
-        await scenario.add_user_to_pod(user=person, role=role)
+    for (_, name), person in zip(_SEATS, people, strict=True):
         setattr(p, name, person)
     return p
 

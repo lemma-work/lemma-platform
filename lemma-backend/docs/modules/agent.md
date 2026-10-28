@@ -48,13 +48,13 @@ to continue; nothing is replayed
 | `agent_host_pairings` | Single-use pairing codes a user authorizes; consuming one deletes the row, so presence is the whole validity check and a replayed code looks like one that never existed |
 | `agent_hosts`, `agent_host_harnesses` | Paired Agent Host installations and their harness snapshots |
 | `agent_host_commands`, `agent_host_run_leases` | Durable command handout and the single dispatch fence per run |
-| `agent_host_sessions` | One row per conversation: the provider session an Agent Host conversation talks to (session, harness, host, the run that bound it), the host's working directory, the instructions digest delivered, the instructions and prompt still pending, and how far into the conversation the session has been sent (`agent_host/control/session_memory`). Was the conversation's `agent_host_provider_session_id` metadata key until migration 0065 |
-| `agent_host_run_records` | One row per run: what it decided once and every later context build reads back -- where its commands execute, whether its agent's own shell replaces Lemma's command tools, and the final answer its tool recorded (`agent_host/control/run_records`). Were the run's `execution`, `host_native_commands` and `final_answer` metadata keys until migration 0065 |
+| `agent_host_sessions` | One row per conversation: the provider session an Agent Host conversation talks to (session, harness, host, the run that bound it), the host's working directory, the instructions digest delivered, the instructions and prompt still pending, and how far into the conversation the session has been sent (`agent_host/control/session_memory`). Was the conversation's `agent_host_provider_session_id` metadata key until migration 0066 |
+| `agent_host_run_records` | One row per run: what it decided once and every later context build reads back -- where its commands execute, whether its agent's own shell replaces Lemma's command tools, and the final answer its tool recorded (`agent_host/control/run_records`). Were the run's `execution`, `host_native_commands` and `final_answer` metadata keys until migration 0066 |
 | `agent_conversations` | Pod thread, the agent it belongs to (the pod's assistant is a row like any other), parent/subagent and workspace metadata |
 | `agent_messages` | User/assistant/tool messages and structured parts |
 | `agent_runs` | One execution attempt, status, usage, errors, stop state, harness metadata |
 | `agent_pauses` | One row per pausing tool call — the `Pause` aggregate (`domain/pauses`): its kind (question, approval, sign-in, budget, Agent Host permission, wait), status, deadline, resolution, the typed host request or budget, a wait's type, token, wake time and spec, and the one-shot execution claim of an approved tool; a partial unique index allows one PENDING wait per conversation |
-| `agent_conversation_waits`, `agent_approval_decisions` | No longer written: kept one release after `agent_pauses` absorbed them (migration 0065) |
+| `agent_conversation_waits`, `agent_approval_decisions` | No longer written: kept one release after `agent_pauses` absorbed them (migration 0066) |
 | `agent_feedback` | Feedback a run leaves through its tools |
 
 ### Repositories
@@ -71,6 +71,7 @@ unit of work it shares a transaction with:
 | `queued_messages.QueuedMessages` | Messages sent while a run was working: counting, claiming, steering, withdrawing |
 | `history_reads.HistoryReads` | The runs and run-less messages a prompt is built from |
 | `pauses.Pauses` | Every pause: opened with its call, one `pending()` read of what a conversation or run is waiting on, endings written fenced on the status they were read with, the execution claim, and the pending-interactions inbox |
+| `calls.Calls` | A call's conversations (by the `call` mark each carries, at any depth), its canvas since the conversation became a call, its earlier connections' transcripts and the relays sent while nobody listened; `contracts/calls` holds the call in a chat and marks it live or not |
 
 There is no port in front of them: each has one implementation, and their
 tests run against Postgres. Every turn transaction takes the conversation's row
@@ -166,6 +167,18 @@ realtime frames, and records usage. Tool calls receive a delegated workload
 context; destructive operations require a standing grant or session approval.
 Agent Host runs are fenced by a per-run lease row, so a host that reconnects
 cannot double-dispatch a run already in flight.
+
+Every harness's events pass one place before anything reads them
+(`run_event_pump._split_message_event`): reasoning a model wrote into its text
+becomes a thought (`core/text/thinking_tags`, which also catches a block the
+prompt opened and only `</think>` closes, and on the live stream withdraws what
+it showed with a `stream_reset`), and an approval the agent asks for is
+preceded by its `message` to the person (`domain/approval_message`), so a run
+that stops for one never ends on a half sentence. A provider's tool call ids
+are not trusted to be unique: a response is executed and stored with one call
+per id (`domain/tool_call_ids`), and a call reusing an id the conversation
+already holds is stored under a new one, its return following it
+(`RunMessageWriter._unique_call_id`).
 
 Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served

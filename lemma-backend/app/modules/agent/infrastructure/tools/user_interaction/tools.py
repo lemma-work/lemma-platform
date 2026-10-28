@@ -310,9 +310,10 @@ async def request_approval(
     what that call was refused (never more, and never beyond what the user may do
     themselves), and returns its result here. On denial nothing runs.
     """
-    # `payload` and `permission_ids` are rendered on the card from the
-    # persisted call, and nothing else: an approval lends what the server
-    # recorded refusing the call for (``approval.denials``), never these.
+    # `payload`, `message` and `permission_ids` are read from the persisted
+    # call: by the card, and before it (``domain/approval_message``). An
+    # approval lends what the server recorded refusing the call for
+    # (``approval.denials``), never these.
     tool_name, args = request.tool_name, request.args
     deps = ctx
     if deps.agent_run_id is None:

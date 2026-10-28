@@ -343,7 +343,7 @@ function status(overrides: Partial<AgentHostStatus> = {}): AgentHostStatus {
     return {
         available: true, running: true, desired_running: true, paired: true,
         targets: [target()], uptime_seconds: 10, last_error: null, log: null, restart_circuit_open: false,
-        host_execution: null, ...overrides,
+        host_execution: null, own_settings: null, ...overrides,
     };
 }
 

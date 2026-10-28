@@ -1,7 +1,7 @@
 """What the Agent Host keeps per conversation and per run, in its own tables.
 
 Both were keys of the conversation's and the run's metadata JSON until
-migration 0065: ``agent_host_provider_session_id`` on the conversation, and
+migration 0066: ``agent_host_provider_session_id`` on the conversation, and
 ``execution``, ``host_native_commands`` and ``final_answer`` on the run. The
 keys stay in the JSON for one release; nothing reads or writes them.
 """

@@ -250,7 +250,9 @@ class ScheduleRunOutcomeService:
         reactivate. See
         ``test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedule``.
         """
-        count = await self.run_repository.consecutive_terminal_failures(schedule.id)
+        count = await self.run_repository.consecutive_terminal_failures(
+            schedule.id, since=schedule.failures_reset_at
+        )
         await self.schedule_repository.set_consecutive_failures(schedule.id, count)
         threshold = schedule_settings.schedule_max_consecutive_failures
         if threshold <= 0 or count < threshold:

@@ -104,6 +104,22 @@ class Messages(UnitOfWorkRepository):
             )
         return model.to_entity()
 
+    async def tool_call(
+        self, *, conversation_id: UUID, tool_call_id: str
+    ) -> MessageEntity | None:
+        """The conversation's first stored call under ``tool_call_id``, or None."""
+        row = await self.session.scalar(
+            select(MessageModel)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.tool_call_id == tool_call_id,
+                MessageModel.kind == MessageKind.TOOL_CALL.value,
+            )
+            .order_by(MessageModel.sequence.asc())
+            .limit(1)
+        )
+        return row.to_entity() if row is not None else None
+
     async def notification_keyed(
         self, conversation_id: UUID, *, key: str, value: str
     ) -> MessageEntity | None:

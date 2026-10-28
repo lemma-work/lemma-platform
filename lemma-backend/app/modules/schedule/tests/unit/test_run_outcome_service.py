@@ -75,7 +75,7 @@ async def test_fifth_target_failure_deactivates_and_notifies_schedule_owner(
 
     assert changed is True
     service.run_repository.consecutive_terminal_failures.assert_awaited_once_with(
-        schedule.id
+        schedule.id, since=schedule.failures_reset_at
     )
     service.schedule_repository.set_consecutive_failures.assert_awaited_once_with(
         schedule.id, 5
@@ -153,7 +153,7 @@ async def test_dispatch_dead_letter_counts_without_target_outcome():
     await service.record_dispatch_dead_letter(schedule)
 
     service.run_repository.consecutive_terminal_failures.assert_awaited_once_with(
-        schedule.id
+        schedule.id, since=schedule.failures_reset_at
     )
     service.schedule_repository.set_consecutive_failures.assert_awaited_once_with(
         schedule.id, 2

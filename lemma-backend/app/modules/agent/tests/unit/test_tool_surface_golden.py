@@ -170,7 +170,9 @@ def _scenarios() -> dict[str, dict[str, Any]]:
     task = _conversation(type=ConversationType.TASK)
     slack_task = _conversation(type=ConversationType.TASK)
     contact = _conversation(contact_id=CONTACT)
-    call = _conversation(call=CallMark(call_id=CONVERSATION, role=CallRole.COORDINATOR))
+    call = _conversation(
+        call=CallMark(call_id=CONVERSATION, role=CallRole.COORDINATOR, live=True)
+    )
     child = _conversation(origin=ConversationOrigin.SUBAGENT)
     host = HostWorkspace(sandbox_id=SANDBOX, root="/Users/someone/project")
     return {
@@ -288,15 +290,19 @@ def _stubbed_loads(monkeypatch: pytest.MonkeyPatch) -> None:
             )
         }
 
-    async def usable_connectors(_deps: object) -> tuple[list[Any], list[Any]]:
+    async def usable_connectors(
+        _deps: object,
+    ) -> tuple[list[Any], list[Any], dict[Any, str]]:
+        auth_config_id = UUID("00000000-0000-4000-8000-0000000000aa")
         connector = SimpleNamespace(
             slug="github",
             connector_id="github",
             mode=SimpleNamespace(value="PER_MEMBER"),
             purpose="Issues and pull requests",
+            auth_config_id=auth_config_id,
         )
         offer = SimpleNamespace(name="gmail", connector_id="gmail")
-        return [connector], [offer]
+        return [connector], [offer], {auth_config_id: "CONNECTED"}
 
     monkeypatch.setattr(connectors_adapter, "_usable", usable_connectors)
     monkeypatch.setattr(agent_tools, "get_functions_by_ids", functions_by_ids)

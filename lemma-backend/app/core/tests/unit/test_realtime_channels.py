@@ -241,3 +241,49 @@ async def test_realtime_reconnect_flapping_emits_one_transition_pair() -> None:
         ("warning", "dependency.degraded"),
         ("info", "dependency.recovered"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_reconnect_while_redis_is_still_down_does_not_end_the_listener() -> (
+    None
+):
+    """Redis still being down when the listener reconnects is one more failure
+    to back off from. It used to escape the loop, end the listener for good --
+    every subscriber stopped hearing anything -- and fail the app's shutdown."""
+
+    class _OnceThenMessage:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def listen(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise RedisConnectionError("lost")
+            yield {"type": "message", "channel": "conversation:1", "data": "back"}
+
+    pubsub = _OnceThenMessage()
+    adapter = RedisChannelAdapter(client=_FakeRedis())  # type: ignore[arg-type]
+    adapter._ensure_pubsub = AsyncMock(return_value=pubsub)  # type: ignore[method-assign]
+    adapter._reconnect = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[RedisConnectionError("still down"), None]
+    )
+
+    await adapter._listen()
+
+    assert adapter._reconnect.await_count == 2
+    assert pubsub.calls == 2, "the listener went back to listening once Redis was up"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_survives_a_listener_that_ended_on_a_lost_connection() -> None:
+    import asyncio
+
+    adapter = RedisChannelAdapter(client=_FakeRedis())  # type: ignore[arg-type]
+
+    async def ended() -> None:
+        raise RedisConnectionError("Error 61 connecting to 127.0.0.1:56379")
+
+    adapter._listener_task = asyncio.ensure_future(ended())
+    await asyncio.sleep(0)
+
+    await adapter.disconnect()

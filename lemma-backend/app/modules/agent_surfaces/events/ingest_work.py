@@ -18,6 +18,13 @@ memo), so it neither drops the message as a duplicate nor saves its files
 twice. Attempts exhausted: the row goes FAILED and the sender of a direct
 message is asked, once, to send it again (a ``surface_deliveries`` row).
 
+Two refusals are not attempts at all, because no retry changes them: the
+surface's own connector running as nothing (its account needs reconnecting, was
+unshared, or its installation is disabled), and the person being over their
+usage limit. Each finishes the row FAILED on the first try, with the reason
+named, rather than three tries, a dead item and a "send it again" that sending
+it again cannot help.
+
 Also replays a ready onboarding's held message (``onboarding_pending_id``).
 """
 
@@ -71,10 +78,16 @@ from app.modules.agent_surfaces.infrastructure.repositories.inbound_message_repo
 )
 from app.modules.agent_surfaces.services.message_claims import claims_owned_by
 from app.modules.agent_surfaces.services.surface_deliveries import stage_delivery
-from app.modules.agent_surfaces.services.turn_starter import PROCESSING_FAILED_REPLY
+from app.modules.agent_surfaces.services.surface_problems import note_problem
+from app.modules.agent_surfaces.services.turn_starter import (
+    PROCESSING_FAILED_REPLY,
+    USAGE_LIMIT_REPLY,
+)
 from app.modules.connectors.contracts.pod_connectors import (
+    PodConnectorRefusal,
     standing_resolutions_once,
 )
+from app.modules.usage.contracts import UsageLimitExceededError
 
 logger = get_logger(__name__)
 
@@ -251,6 +264,19 @@ async def _start(
     )
     try:
         await starter.execute_chat(context)
+    except UsageLimitExceededError as limited:
+        if finish.completed:
+            raise
+        # Over the limit now is over it on every retry until it resets, so the
+        # person is told why, once (``tell_sender`` holds the reply window),
+        # instead of being asked to send again after three failed tries.
+        logger.info(
+            "agent_surfaces.ingest.usage_limit_reached.refused",
+            item_id=str(finish.ctx.item.id),
+            platform=str(context.platform),
+        )
+        await starter.tell_sender(context, USAGE_LIMIT_REPLY)
+        await finish.conclude(InboundStatus.FAILED, f"usage_limit: {limited.message}")
     except Exception:
         if not finish.completed:
             raise
@@ -282,6 +308,12 @@ async def _ingest_row(
         await repository.mark(row_id, InboundStatus.INGESTING)
         request = request_of(row)
         pod_id = row.pod_id
+        platform = row.platform
+        surface_ids = (
+            [row.surface_id]
+            if row.surface_id is not None
+            else [UUID(str(item)) for item in row.receiver_surface_ids or []]
+        )
     finish = _Finish(ctx, row_id=row_id, pod_id=pod_id)
     with claims_owned_by(str(row_id)):
         # A tap that arrived through a receiver (Socket Mode, polling) never
@@ -295,11 +327,33 @@ async def _ingest_row(
             if handled:
                 await finish.conclude(InboundStatus.DROPPED, "interaction")
                 return
-        context = await context_for_delivery(
-            request,
-            onboarding_handler=ChatOnboardingCoordinator(uow_factory).handle,
-            uow_factory=uow_factory,
-        )
+        try:
+            context = await context_for_delivery(
+                request,
+                onboarding_handler=ChatOnboardingCoordinator(uow_factory).handle,
+                uow_factory=uow_factory,
+            )
+        except PodConnectorRefusal as refused:
+            # The surface runs as nothing until a person fixes its connector,
+            # and nothing can be sent on a credential that does not work, so
+            # there is no one in the chat to tell and no retry that would help.
+            # Its members are told on the surface instead (``surface_problems``),
+            # which clears itself once a send goes through again. The surface
+            # stays ACTIVE: resolution is asked on every message, so the first
+            # one after the reconnect is answered with nothing to switch back on.
+            logger.warning(
+                "agent_surfaces.ingest.surface_connector_refused.degraded",
+                inbound_message_id=str(row_id),
+                platform=platform,
+                code=refused.code,
+            )
+            for surface_id in surface_ids:
+                await note_problem(surface_id, refused.message)
+            await finish.conclude(
+                InboundStatus.FAILED,
+                f"surface_connector_refused: {refused.code}: {refused.message}",
+            )
+            return
         if context is None:
             await finish.conclude(InboundStatus.DROPPED, "nothing to answer")
             return

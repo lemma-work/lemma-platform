@@ -9,9 +9,11 @@ ahead of a person's turn. One at a time per pod (``memory_pod_key``): every
 agent in a pod shares ``/memory/AGENTS.md``, and two passes rewriting it at
 once would each drop what the other added.
 
-Retried once. A model or network blip is worth another try; a refusal that
-would only repeat -- the person over their usage limit, the model no longer
-configured, the pass running past its own limits -- is not.
+Retried once. A model or network blip is worth another try, and so is a
+keeper that ran out of steps before writing anything (``MemoryPassUnfinished``;
+one that wrote something has kept it). A refusal that would only repeat -- the
+person over their usage limit, the model no longer configured, the turn too
+long to read within the pass's own limits -- is not.
 """
 
 from __future__ import annotations

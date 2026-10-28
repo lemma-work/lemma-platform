@@ -1,18 +1,25 @@
 """A live call, as the agent module sees it.
 
-A call is a conversation. Its agent run is the call's coordinator: it hears the
-caller's turns as messages, hands work to sub-agents, and decides what the voice
-says and what the call's canvas shows. Its sub-agents are in the call too: they
-draw on the same canvas, and only the coordinator speaks.
+A call happens in a conversation: a new one when it is started from nowhere,
+otherwise the chat it was started from, so the call, the agent's work and the
+transcript are one chat. The conversation's agent run is the call's
+coordinator: it hears the caller's turns as messages, hands work to
+sub-agents, and decides what the voice says and what the call's canvas shows.
+Its sub-agents are in the call too: they draw on the same canvas, and only the
+coordinator speaks.
 
 The mark is the conversation's ``call`` column, copied to every sub-agent the
-coordinator spawns, so a run knows it is in a call without a lookup.
+coordinator spawns, so a run knows it is in a call without a lookup. ``live`` is
+true only while a socket holds the call: the coordinator's brief and its voice
+tool go with it, so a chat a call happened in reads as a chat again once the
+call is over.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
@@ -32,12 +39,32 @@ class CallMark:
     #: The call's own conversation: the coordinator's.
     call_id: UUID
     role: CallRole
+    #: A socket holds the call right now.
+    live: bool = False
+    #: When this conversation first became a call. Its canvas is what was shown
+    #: since: a chat's own earlier displays were never on a call's screen.
+    since: datetime | None = None
+    #: Seconds the call has been held over all its connections, so its time
+    #: limit holds across a reconnect.
+    held_seconds: float = 0.0
 
-    def to_json(self) -> dict[str, str]:
-        return {"call_id": str(self.call_id), "role": self.role.value}
+    def to_json(self) -> dict[str, object]:
+        stored: dict[str, object] = {
+            "call_id": str(self.call_id),
+            "role": self.role.value,
+            "live": self.live,
+            "held_seconds": round(self.held_seconds, 1),
+        }
+        if self.since is not None:
+            stored["since"] = self.since.isoformat()
+        return stored
 
     def for_worker(self) -> CallMark:
-        return CallMark(call_id=self.call_id, role=CallRole.WORKER)
+        return replace(self, role=CallRole.WORKER)
+
+    @property
+    def live_coordinator(self) -> bool:
+        return self.live and self.role is CallRole.COORDINATOR
 
     @classmethod
     def from_json(cls, raw: object) -> CallMark | None:
@@ -45,30 +72,53 @@ class CallMark:
         if not isinstance(raw, Mapping):
             return None
         try:
+            since = raw.get("since")
             return cls(
                 call_id=UUID(str(raw.get("call_id"))),
                 role=CallRole(str(raw.get("role"))),
+                # Absent on a mark written before ``live`` existed: not held. A
+                # call that connects to it again sets it.
+                live=bool(raw.get("live", False)),
+                since=datetime.fromisoformat(since) if isinstance(since, str) else None,
+                held_seconds=float(raw.get("held_seconds") or 0.0),
             )
-        except ValueError:
+        except ValueError, TypeError:
             return None
 
 
-def coordinator_brief(*, agent_display_name: str) -> str:
-    """The conversation instructions of a call's coordinator."""
-    return f"""\
-You are {agent_display_name}, on a live voice call with the person who owns this \
-conversation. A separate voice model does the talking. You are the mind behind it.
+def coordinator_brief() -> str:
+    """What the coordinator is told while its conversation's call is live.
+
+    In the run's context, not the conversation's instructions: a call can
+    happen in any chat, and the chat must read as itself again once it ends.
+    """
+    return """\
+## You are on a live voice call
+The person who owns this conversation is talking to you through a separate voice \
+model. The voice does the talking; you are the mind behind it. This conversation \
+is the call: everything before the call is still yours to use.
 
 How the call reaches you:
-- Each message prefixed "[caller]" is what the person just said out loud, \
-transcribed, so expect speech-recognition errors and fragments. Lines marked \
-"earlier on the call" are context you already handled or that needed no work.
-- Messages prefixed "[canvas]" or "[call]" are notes from the call itself.
+- A message prefixed "[caller]" is what the person just said out loud, \
+transcribed, so expect speech-recognition errors and fragments.
+- Lines under "Said on the call since your last turn (not sent to you)" are what \
+the person and the voice said that was not passed to you. Read them: the person \
+may have asked for something there, and the voice may have promised something. \
+Act on any request or promise that still needs doing.
+- A message prefixed "[canvas]" or "[call]" is a note from the call itself. A \
+message with no prefix was typed by the person: answer it as usual.
+
+What the voice knows:
+- The voice tells the person their request is with you as soon as it reaches \
+you, and that you are working while you have a run going. It knows nothing else \
+about your work unless you relay it.
+- So for EVERY "[caller]" turn, send `relay_to_voice` at least once: what is now \
+underway, the answer, or that nothing will be done and why. Silence leaves the \
+voice telling the person you are still on it.
 
 How you answer:
-- Nobody reads your written replies during the call. The person only hears what \
-you send with `relay_to_voice`, and only sees what you put on the canvas. Keep your \
-final written answer to one line.
+- The person hears only what you send with `relay_to_voice` and sees only what you \
+put on the canvas. Keep your final written answer to one line.
 - `relay_to_voice(text, urgency)`: facts for the voice, written as notes, not a \
 script. `context` lets the voice know something without saying it now (use it for \
 progress and for state it should be able to answer about). `when_idle` has it said \
@@ -88,14 +138,14 @@ and put what is worth seeing on the canvas.
 
 The canvas:
 - The person sees a shared canvas beside the call; the newest item takes the \
-screen. Keep it useful and alive: when a topic opens, show something that anchors \
-it -- a plan as a diagram, the file being discussed, a picture, a chart of the \
-numbers. When a finding arrives, show it as the voice says it.
+screen and they can page back. Keep it useful and alive: when a topic opens, show \
+something that anchors it -- a plan as a diagram, the file being discussed, a \
+picture, a chart of the numbers. When a finding arrives, show it as the voice says it.
 - Everything anyone in the call shows with `display_resource` is on the canvas: \
 pod files (images, PDFs, documents), tables, apps and widgets. For a visual, \
 give data to a `show` widget rather than writing HTML: \
 `display_resource(type="WIDGET", path="/skills/lemma-widget/library/show/diagram.html", \
-data={{"title": ..., "mermaid": ...}})`; `show/chart` takes a Vega-Lite `spec` with \
+data={"title": ..., "mermaid": ...})`; `show/chart` takes a Vega-Lite `spec` with \
 its data inline, `show/note` takes `markdown`, `show/image` takes an https `url`. \
 At most one new item every several seconds unless asked. Sub-agents can show \
 things too: ask them for the visual in their brief.

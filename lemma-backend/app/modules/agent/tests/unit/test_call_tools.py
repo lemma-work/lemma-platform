@@ -24,9 +24,21 @@ pytestmark = pytest.mark.unit
 
 
 def test_a_call_mark_round_trips_and_a_worker_inherits_the_call() -> None:
-    mark = CallMark(call_id=uuid4(), role=CallRole.COORDINATOR)
+    from datetime import UTC, datetime
+
+    mark = CallMark(
+        call_id=uuid4(),
+        role=CallRole.COORDINATOR,
+        live=True,
+        since=datetime(2026, 10, 26, tzinfo=UTC),
+        held_seconds=42.5,
+    )
     assert CallMark.from_json(mark.to_json()) == mark
-    assert mark.for_worker() == CallMark(call_id=mark.call_id, role=CallRole.WORKER)
+    assert mark.for_worker().role is CallRole.WORKER
+    assert mark.for_worker().call_id == mark.call_id
+    # A mark from before ``live`` existed is not a held call.
+    legacy = {"call_id": str(mark.call_id), "role": "coordinator"}
+    assert CallMark.from_json(legacy).live is False  # type: ignore[union-attr]
     assert CallMark.from_json({"call_id": "nope", "role": "coordinator"}) is None
     assert CallMark.from_json("x") is None
     assert CallMark.from_json(None) is None
@@ -49,8 +61,12 @@ async def test_only_the_coordinator_gets_the_voice_and_nothing_else_is_added() -
         )
         return {spec.name for spec in specs} & {"relay_to_voice"}
 
-    coordinator = CallMark(call_id=uuid4(), role=CallRole.COORDINATOR)
+    call_id = uuid4()
+    coordinator = CallMark(call_id=call_id, role=CallRole.COORDINATOR, live=True)
     assert await voice_tools(coordinator) == {"relay_to_voice"}
+    # Once the call is over, the chat has no voice to relay to.
+    ended = CallMark(call_id=call_id, role=CallRole.COORDINATOR, live=False)
+    assert await voice_tools(ended) == set()
     # Its sub-agents show things with `display_resource` like any run.
     assert await voice_tools(coordinator.for_worker()) == set()
     assert await voice_tools(None) == set()
@@ -60,12 +76,30 @@ def test_the_canvas_is_what_runs_already_show() -> None:
     assert CANVAS_TOOL_NAMES == {"display_resource"}
     # Both briefs point at the one way of showing things, and at the `show`
     # widgets for visuals given as data.
-    for brief in (coordinator_brief(agent_display_name="Ria"), worker_canvas_note()):
+    for brief in (coordinator_brief(), worker_canvas_note()):
         assert "display_resource" in brief and "fallback" in brief
         assert "show_on_canvas" not in brief
-    assert "/skills/lemma-widget/library/show/" in coordinator_brief(
-        agent_display_name="Ria"
-    )
+    assert "/skills/lemma-widget/library/show/" in coordinator_brief()
+
+
+def test_the_coordinator_is_briefed_for_the_call_only_while_it_is_live() -> None:
+    """In the run's context, so a call can be held in any chat and the chat
+    reads as itself again once the call ends."""
+    from app.modules.agent.services.context_brief.lines import call_brief
+
+    call_id = uuid4()
+
+    def chat(live: bool, role: CallRole = CallRole.COORDINATOR) -> SimpleNamespace:
+        mark = CallMark(call_id=call_id, role=role, live=live)
+        return SimpleNamespace(call=mark)
+
+    brief = call_brief(chat(live=True))
+    assert brief.startswith("## You are on a live voice call")
+    # Every turn gets a status relay, so the voice never assumes work.
+    assert "for EVERY" in brief and "relay_to_voice" in brief
+    assert call_brief(chat(live=False)) == ""
+    assert call_brief(chat(live=True, role=CallRole.WORKER)) == ""
+    assert call_brief(SimpleNamespace(call=None)) == ""
 
 
 async def test_a_relay_is_acknowledged_as_recorded_not_as_said() -> None:

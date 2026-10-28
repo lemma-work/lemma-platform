@@ -148,6 +148,19 @@ def run_trigger_of(agent_run: object) -> RunTrigger | None:
     return trigger if isinstance(trigger, RunTrigger) else None
 
 
+def call_brief(conversation) -> str:
+    """The coordinator's brief, while a live call is held in this conversation.
+
+    Per run rather than in the conversation's instructions: a call can happen
+    in any chat, and the chat must read as itself again once the call ends.
+    """
+    from app.modules.agent.domain.calls import CallMark, coordinator_brief
+
+    mark = getattr(conversation, "call", None)
+    live = isinstance(mark, CallMark) and mark.live_coordinator
+    return coordinator_brief() if live else ""
+
+
 def run_framing(
     conversation,
     *,

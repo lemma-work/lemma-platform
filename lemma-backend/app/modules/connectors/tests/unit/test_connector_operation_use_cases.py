@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from app.modules.connectors.domain.connector import AuthProvider, ConnectorKind
@@ -23,6 +24,9 @@ from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
 )
 from app.modules.connectors.domain.errors import (
+    ConnectorReauthRequiredError,
+    OAuthWorkflowError,
+    OperationExecutionAccessDeniedError,
     OperationExecutionInfrastructureError,
     OperationExecutionTimeoutError,
     OperationExecutionUnauthorizedError,
@@ -81,6 +85,7 @@ async def test_resolve_runs_in_phase1_and_execute_runs_after_release(events):
         input_schema=None,
         payload={},
         requested_output_path=None,
+        account_reauth_pending=False,
     )
     response_sentinel = SimpleNamespace(result={"ok": True})
 
@@ -127,22 +132,30 @@ async def test_resolve_runs_in_phase1_and_execute_runs_after_release(events):
     assert execute_evt[1] == "uow2" and execute_evt[2] is resolved_sentinel
 
 
-async def test_unauthorized_execution_flags_account_for_reauth(events):
+def _credentials(**values: str) -> SimpleNamespace:
+    """What `get_account_credentials` returns: a model the saga dumps."""
+    return SimpleNamespace(model_dump=lambda **_: dict(values))
+
+
+async def test_a_credential_nothing_can_renew_rejected_twice_is_flagged(events):
     account_id = uuid4()
     user_id = uuid4()
     org_id = uuid4()
     resolved = ResolvedConnectorExecution(
         connector_id="airtable",
         operation_execution_name="AIRTABLE_LIST_BASES",
-        kind=ConnectorKind.COMPOSIO,
-        provider=AuthProvider.COMPOSIO.value,
-        third_party_credentials={"connection_id": "ca_x"},
+        kind=ConnectorKind.HTTP,
+        provider=AuthProvider.LEMMA.value,
+        third_party_credentials={"api_key": "k"},
         payload={},
         account_id=account_id,
         account_user_id=user_id,
         organization_id=org_id,
     )
     connector_service = AsyncMock()
+    # A plain secret: the forced refresh has nothing to renew it with and hands
+    # back what was stored.
+    connector_service.get_account_credentials.return_value = _credentials(api_key="k")
 
     class _FakeService:
         def __init__(self, uow):
@@ -289,6 +302,9 @@ async def test_a_rejected_credential_alone_never_trips_the_breaker(monkeypatch):
     class _FakeService:
         def __init__(self, uow):
             self.connector_service = AsyncMock()
+            self.connector_service.get_account_credentials.return_value = _credentials(
+                connection_id="ca_x"
+            )
 
         async def resolve_pod_connector_execution(self, ctx, **kwargs):
             return resolved
@@ -309,3 +325,201 @@ async def test_a_rejected_credential_alone_never_trips_the_breaker(monkeypatch):
         )
 
     assert recorded == []
+
+
+# -- which failures may mark an account ---------------------------------------
+#
+# The mark refuses every later call through the account, so only a definitive
+# rejection of the credential may set it. A production account was disabled
+# whole by a 403 on one operation, and another by a token endpoint that failed
+# once; neither ever recovered.
+
+
+def _bigquery(*, reauth_pending: bool = False) -> ResolvedConnectorExecution:
+    return ResolvedConnectorExecution(
+        connector_id="googlebigquery",
+        operation_execution_name="GOOGLEBIGQUERY_QUERY",
+        kind=ConnectorKind.COMPOSIO,
+        provider=AuthProvider.COMPOSIO.value,
+        third_party_credentials={"connection_id": "ca_x"},
+        payload={},
+        account_id=uuid4(),
+        account_user_id=uuid4(),
+        organization_id=uuid4(),
+        account_reauth_pending=reauth_pending,
+    )
+
+
+async def _run(resolved, *, fails_with, connector_service, attempts=None):
+    attempts = attempts if attempts is not None else []
+
+    class _FakeService:
+        def __init__(self, uow):
+            self.connector_service = connector_service
+
+        async def resolve_pod_connector_execution(self, ctx, **kwargs):
+            return resolved
+
+        async def execute_resolved(self, _resolved):
+            attempts.append(_resolved)
+            failure = fails_with(len(attempts))
+            if failure is not None:
+                raise failure
+            return SimpleNamespace(result={"ok": True})
+
+    uc = ConnectorOperationUseCases(uow_factory=object(), service_builder=_FakeService)
+    return await uc.execute_pod_connector_operation(
+        pod_id=uuid4(),
+        slug="bigquery",
+        operation_name="GOOGLEBIGQUERY_QUERY",
+        payload={},
+        user_id=resolved.account_user_id,
+        request=object(),
+    )
+
+
+async def test_a_403_is_the_operations_failure_and_never_marks_the_account():
+    resolved = _bigquery()
+    connector_service = AsyncMock()
+    denied = OperationExecutionAccessDeniedError(
+        "", details={"upstream_status": 403, "upstream_message": "no dataset access"}
+    )
+
+    with pytest.raises(OperationExecutionAccessDeniedError) as raised:
+        await _run(
+            resolved, fails_with=lambda _: denied, connector_service=connector_service
+        )
+
+    # The provider's own permission answer, not a "reconnect".
+    assert raised.value.code == "OPERATION_EXECUTION_ACCESS_DENIED"
+    assert raised.value.status_code == 403
+    connector_service.mark_account_reauth_required.assert_not_awaited()
+    # A permission refusal is no reason to try a refresh either.
+    connector_service.get_account_credentials.assert_not_awaited()
+
+
+async def test_a_withdrawn_grant_on_the_refresh_marks_the_account():
+    resolved = _bigquery()
+    connector_service = AsyncMock()
+    connector_service.get_account_credentials.side_effect = (
+        ConnectorReauthRequiredError(reason="composio_expired")
+    )
+
+    with pytest.raises(OperationExecutionUnauthorizedError):
+        await _run(
+            resolved,
+            fails_with=lambda _: OperationExecutionUnauthorizedError("unauthorized"),
+            connector_service=connector_service,
+        )
+
+    connector_service.mark_account_reauth_required.assert_awaited_once_with(
+        resolved.account_id, resolved.account_user_id, resolved.organization_id
+    )
+
+
+@pytest.mark.parametrize(
+    "refresh_failure",
+    [
+        OAuthWorkflowError("token endpoint answered 503"),
+        httpx.ConnectTimeout("token endpoint timed out"),
+        TimeoutError(),
+    ],
+    ids=["provider-5xx", "network", "timeout"],
+)
+async def test_a_refresh_that_merely_failed_never_marks_the_account(refresh_failure):
+    resolved = _bigquery()
+    connector_service = AsyncMock()
+    connector_service.get_account_credentials.side_effect = refresh_failure
+
+    with pytest.raises(OperationExecutionUnauthorizedError):
+        await _run(
+            resolved,
+            fails_with=lambda _: OperationExecutionUnauthorizedError("unauthorized"),
+            connector_service=connector_service,
+        )
+
+    connector_service.mark_account_reauth_required.assert_not_awaited()
+
+
+async def test_a_401_after_the_issuer_renewed_the_credential_does_not_mark_it():
+    """A refresh the issuer granted proves the grant is alive.
+
+    A 401 that survives it is about this call -- an endpoint that answers 401
+    where it means 403, a resource the token's audience does not cover -- and
+    marking the account would refuse every operation that does work.
+    """
+    resolved = _bigquery()
+    connector_service = AsyncMock()
+    connector_service.get_account_credentials.return_value = _credentials(
+        access_token="fresh", connection_id="ca_x"
+    )
+    attempts: list[ResolvedConnectorExecution] = []
+
+    with pytest.raises(OperationExecutionUnauthorizedError):
+        await _run(
+            resolved,
+            fails_with=lambda _: OperationExecutionUnauthorizedError("unauthorized"),
+            connector_service=connector_service,
+            attempts=attempts,
+        )
+
+    assert len(attempts) == 2
+    assert attempts[1].third_party_credentials["access_token"] == "fresh"
+    connector_service.mark_account_reauth_required.assert_not_awaited()
+
+
+# -- a marked account the provider accepts is unmarked -------------------------
+
+
+def _marked_account_service() -> tuple[AsyncMock, SimpleNamespace]:
+    from app.modules.connectors.domain.account import AccountStatus
+
+    account = SimpleNamespace(status=AccountStatus.REAUTH_REQUIRED)
+    connector_service = AsyncMock()
+    connector_service.account_repository.get.return_value = account
+    return connector_service, account
+
+
+async def test_a_successful_call_clears_a_mark_resolution_let_through():
+    from app.modules.connectors.domain.account import AccountStatus
+
+    resolved = _bigquery(reauth_pending=True)
+    connector_service, account = _marked_account_service()
+
+    result = await _run(
+        resolved, fails_with=lambda _: None, connector_service=connector_service
+    )
+
+    assert result.result == {"ok": True}
+    connector_service.account_repository.get.assert_awaited_once_with(
+        resolved.account_id
+    )
+    assert account.status is AccountStatus.CONNECTED
+    connector_service.account_repository.update.assert_awaited_once_with(account)
+    connector_service.uow.commit.assert_awaited()
+
+
+async def test_a_403_clears_a_mark_too_because_the_provider_knew_the_caller():
+    from app.modules.connectors.domain.account import AccountStatus
+
+    resolved = _bigquery(reauth_pending=True)
+    connector_service, account = _marked_account_service()
+
+    with pytest.raises(OperationExecutionAccessDeniedError):
+        await _run(
+            resolved,
+            fails_with=lambda _: OperationExecutionAccessDeniedError("denied"),
+            connector_service=connector_service,
+        )
+
+    assert account.status is AccountStatus.CONNECTED
+    connector_service.mark_account_reauth_required.assert_not_awaited()
+
+
+async def test_a_healthy_account_pays_no_extra_read_on_success():
+    resolved = _bigquery(reauth_pending=False)
+    connector_service = AsyncMock()
+
+    await _run(resolved, fails_with=lambda _: None, connector_service=connector_service)
+
+    connector_service.account_repository.get.assert_not_awaited()

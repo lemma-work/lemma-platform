@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from uuid import UUID, uuid4
 
 import pytest
@@ -1284,7 +1285,11 @@ async def test_the_shell_and_python_share_the_conversations_one_directory(
         grouped: dict[str, list[dict]] = {}
         for item in messages.json()["items"]:
             if item["kind"] == "TOOL_RETURN":
-                grouped.setdefault(item["tool_call_id"], []).append(item["tool_result"])
+                # The second turn replays the script's ids, which the first
+                # turn already used; the writer stores them as `<id>-<run>`,
+                # so group by the id the script gave.
+                script_id = re.sub(r"-[0-9a-f]{12}$", "", item["tool_call_id"])
+                grouped.setdefault(script_id, []).append(item["tool_result"])
         return grouped
 
     returns = await _returns_by_id()

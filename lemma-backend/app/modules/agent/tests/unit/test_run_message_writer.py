@@ -32,6 +32,9 @@ class _Repository:
     async def get(self, *, conversation_id, tool_call_id):  # noqa: ARG002
         return None
 
+    async def tool_call(self, *, conversation_id, tool_call_id):  # noqa: ARG002
+        return None
+
     async def close_by_return(self, *, conversation_id, tool_call_id):  # noqa: ARG002
         self.closed.append(tool_call_id)
 

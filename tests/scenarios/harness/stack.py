@@ -870,8 +870,6 @@ DECIDED_BY_THE_STACK = (
     "ENABLE_RESEND_POLLING_MODE",
     # Where sandboxes run. `WORKSPACE_PROVIDER` is pinned to docker below, and a
     # stray hosted-provider key would send function runs somewhere else.
-    "AGENTBOX_API_KEY",
-    "AGENTBOX_API_URL",
     "E2B_API_KEY",
     # Whether documents are converted. PS-DATA-041 is specifically about what a
     # deployment does when conversion is unavailable, so it has to be.

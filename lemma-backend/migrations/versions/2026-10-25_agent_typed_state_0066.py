@@ -79,10 +79,11 @@ backfills touch only rows whose JSON carries one of the keys.
 The downgrade drops the columns and indexes. The JSON was never changed, so
 the code before this reads exactly what it wrote.
 
-An open pull request also claims 0065; whichever merges second is renumbered.
+An open pull request (#1046, `outcome_weeks`) also claims 0066; whichever
+merges second is renumbered.
 
-Revision ID: 0065_agent_typed_state
-Revises: 0064_grants_every_install
+Revision ID: 0066_agent_typed_state
+Revises: 0065_schedule_reset_and_author
 """
 
 from __future__ import annotations
@@ -91,8 +92,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0065_agent_typed_state"
-down_revision = "0064_grants_every_install"
+revision = "0066_agent_typed_state"
+down_revision = "0065_schedule_reset_and_author"
 branch_labels = None
 depends_on = None
 
@@ -549,14 +550,14 @@ def _report(conn, table: str, unmapped: dict[str, str]) -> None:
     for key, found in zip(unmapped, row, strict=True):
         if found:
             _log().warning(
-                "0065: %d %s rows hold a %r the backfill could not read; "
+                "0066: %d %s rows hold a %r the backfill could not read; "
                 "left at the column's default.",
                 found,
                 table,
                 key,
             )
         else:
-            _log().info("0065: every %s %r read.", table, key)
+            _log().info("0066: every %s %r read.", table, key)
 
 
 # -- agent_pauses ---------------------------------------------------------------
@@ -801,7 +802,7 @@ def _backfill_pauses(conn) -> None:
     decisions = conn.execute(sa.text(_DECISIONS)).rowcount
     open_calls = conn.execute(sa.text(_OPEN_CALLS)).rowcount
     _log().info(
-        "0065: agent_pauses backfilled from %d waits, %d approval decisions and "
+        "0066: agent_pauses backfilled from %d waits, %d approval decisions and "
         "%d open pausing calls.",
         waits,
         decisions,
@@ -811,13 +812,13 @@ def _backfill_pauses(conn) -> None:
         found = conn.execute(sa.text(count_sql)).scalar_one()
         if found:
             _log().warning(
-                "0065: %d %s could not be carried into agent_pauses; the old "
+                "0066: %d %s could not be carried into agent_pauses; the old "
                 "table keeps them.",
                 found,
                 source,
             )
         else:
-            _log().info("0065: every one of the %s carried into agent_pauses.", source)
+            _log().info("0066: every one of the %s carried into agent_pauses.", source)
 
 
 #: The downgrade's way back: what the old code reads, from what the new wrote.
@@ -964,7 +965,7 @@ def _backfill_agent_host_tables(conn) -> None:
     sessions = conn.execute(sa.text(_SESSIONS_BACKFILL)).rowcount
     records = conn.execute(sa.text(_RUN_RECORDS_BACKFILL)).rowcount
     _log().info(
-        "0065: backfilled %d agent_host_sessions and %d agent_host_run_records.",
+        "0066: backfilled %d agent_host_sessions and %d agent_host_run_records.",
         sessions,
         records,
     )
@@ -1114,7 +1115,7 @@ def _create_surface_table() -> None:
 def _backfill_surface_table(conn) -> None:
     _report(conn, "agent_conversations", _SURFACE_UNMAPPED)
     surfaces = conn.execute(sa.text(_SURFACE_BACKFILL)).rowcount
-    _log().info("0065: backfilled %d surface_conversation_state rows.", surfaces)
+    _log().info("0066: backfilled %d surface_conversation_state rows.", surfaces)
 
 
 def upgrade() -> None:
@@ -1131,13 +1132,13 @@ def upgrade() -> None:
     messages = conn.execute(sa.text(_MESSAGE_BACKFILL)).rowcount
     send_copies = conn.execute(sa.text(_CLIENT_ID_DUPLICATES)).rowcount
     _log().info(
-        "0065: backfilled %d conversations, %d runs, %d messages.",
+        "0066: backfilled %d conversations, %d runs, %d messages.",
         conversations,
         runs,
         messages,
     )
     _log().info(
-        "0065: %d later client_message_id copies dropped from the column; "
+        "0066: %d later client_message_id copies dropped from the column; "
         "the JSON keeps them.",
         send_copies,
     )

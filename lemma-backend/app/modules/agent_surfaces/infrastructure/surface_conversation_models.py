@@ -1,6 +1,6 @@
 """What this module keeps about each conversation it answers on a platform.
 
-Keys of the agent conversation's metadata JSON until migration 0065, which
+Keys of the agent conversation's metadata JSON until migration 0066, which
 backfilled this table from them (``domain/conversation_surface``). ``models.py``
 re-exports it, so importing that file registers the table for
 ``migrations/env.py``.

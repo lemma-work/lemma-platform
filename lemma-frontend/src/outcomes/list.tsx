@@ -100,7 +100,7 @@ export function OutcomesList({ org, pods, activity, plans, queue, go }: {
             <div className="ox-sec"><h2>What should it own?</h2><span className="ox-vs">Start a new Lemma from one of these, or say your own</span></div>
             <div className="ox-cards">
                 {STARTERS.map((starter) => (
-                    <article key={starter.name} className="ox-card">
+                    <article key={starter.name} className="ox-card" aria-label={starter.name}>
                         <p className="ox-card__top"><span className="ox-tag">{starter.team}</span><span className="ox-tag">{starter.kind}</span></p>
                         <p className="ox-card__name">{starter.name}</p>
                         <p className="ox-card__owns">Owns: {starter.outcome.charAt(0).toLowerCase() + starter.outcome.slice(1)}.</p>
@@ -110,7 +110,7 @@ export function OutcomesList({ org, pods, activity, plans, queue, go }: {
                             <dt>Works in</dt><dd>{starter.works}</dd>
                         </dl>
                         <div className="ox-card__acts">
-                            <button type="button" className="ox-btn ox-btn--primary" disabled={busy !== null} onClick={() => start(starter.name, starter.outcome, kindOfStarter(starter))}>{busy === starter.name ? "Starting…" : "Own this"}</button>
+                            <button type="button" className="ox-btn ox-btn--primary" disabled={busy !== null} onClick={() => start(starter.name, starter.outcome, kindOfStarter(starter))} aria-label={busy === starter.name ? undefined : "Own " + starter.name}>{busy === starter.name ? "Starting…" : "Own this"}</button>
                         </div>
                     </article>
                 ))}

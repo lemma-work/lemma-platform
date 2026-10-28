@@ -10,6 +10,7 @@ for the person the run acts for -- never an account the run's metadata names.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -65,7 +66,10 @@ class TestWhatTheDeliverySays:
 def _schedule(*, pod_connector_slug: str | None = None, name: str | None = None):
     """The fields `_conversation_metadata` reads off a schedule row."""
     return SimpleNamespace(
-        pod_connector_slug=pod_connector_slug, name=name, schedule_type="TIME"
+        id=uuid4(),
+        pod_connector_slug=pod_connector_slug,
+        name=name,
+        schedule_type="TIME",
     )
 
 
@@ -93,8 +97,10 @@ class TestWhatTheScheduleAdds:
     def test_every_schedule_started_run_says_which_schedule_started_it(self):
         """That a schedule started it is the conversation's origin, which the
         agent module sets from ``source="SCHEDULE"``; this says which."""
-        metadata = _conversation_metadata(_schedule(name="daily-invoices"), None)
+        schedule = _schedule(name="daily-invoices")
+        metadata = _conversation_metadata(schedule, None)
         assert "started_by" not in metadata
+        assert metadata["schedule_id"] == str(schedule.id)
         assert metadata["schedule_name"] == "daily-invoices"
         assert metadata["schedule_type"] == "TIME"
 

@@ -8,6 +8,9 @@ Three of these matter more than the rest and are worth naming:
 
 * ``test_a_provider_that_never_starts_is_retried_as_a_drop`` -- a stalled first
   chunk is a transient failure, and its error routes into ``drive_with_retry``.
+* ``test_a_provider_that_never_sends_headers_is_given_up_on_quickly`` -- the
+  wait for headers is inside the first-chunk bound; outside it, only the
+  per-chunk read timeout ended the request, minutes later.
 * ``test_an_over_long_answer_is_not_mistaken_for_a_dropped_connection`` -- an
   answer past the whole-response budget would take as long again, so it is a
   different error with a different, stricter retry.
@@ -177,6 +180,89 @@ async def test_the_whole_response_budget_counts_from_when_the_request_was_sent()
     assert raised.value.elapsed_seconds >= 0.2
     # Only the time left after the slow start was spent on the body.
     assert body.delivered < 10
+
+
+def _slow_headers(seconds: float, body: _Body):
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        del request
+        await asyncio.sleep(seconds)
+        return httpx2.Response(200, stream=body)
+
+    return httpx2.MockTransport(respond)
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_never_sends_headers_is_given_up_on_quickly() -> None:
+    """Accepted the request and never answered: not even headers.
+
+    Seen in development on 2026-10-28: a glm-5.3-flash request waited the full
+    180s read timeout for headers while the first-chunk bound was 60s, and the
+    retry then answered in a second. The bound has to cover the headers too,
+    and what it raises has to be the retryable kind.
+    """
+    body = _Body(chunks=3, gap=0.0)
+    transport = ModelStreamBudgetTransport(
+        _slow_headers(5.0, body), first_chunk_seconds=0.05, total_seconds=10.0
+    )
+
+    async with httpx2.AsyncClient(transport=transport) as client:
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(httpx2.ReadTimeout) as raised:
+            await client.post("https://provider.example/v1/chat/completions")
+        waited = asyncio.get_running_loop().time() - started
+
+    assert waited < 1.0
+    assert "no response headers" in str(raised.value)
+    assert not isinstance(raised.value, ModelResponseBudgetExceeded)
+    assert is_retryable_stream_error(raised.value) is True
+
+
+@pytest.mark.asyncio
+async def test_headers_that_take_past_the_whole_budget_are_an_over_long_answer() -> (
+    None
+):
+    """With only the total bound set, a header wait past it is that bound firing."""
+    body = _Body(chunks=3, gap=0.0)
+    transport = ModelStreamBudgetTransport(
+        _slow_headers(5.0, body), first_chunk_seconds=None, total_seconds=0.05
+    )
+
+    async with httpx2.AsyncClient(transport=transport) as client:
+        with pytest.raises(ModelResponseBudgetExceeded):
+            await client.post("https://provider.example/v1/chat/completions")
+
+
+@pytest.mark.asyncio
+async def test_the_first_chunk_bound_counts_from_when_the_request_was_sent() -> None:
+    """Slow headers then a slow first chunk: together they are one wait.
+
+    Counted from the headers, each half could take the whole bound and the
+    request still stalled for twice as long as the bound says.
+    """
+    body = _Body(chunks=3, gap=0.0, lead_in=0.15)
+    transport = ModelStreamBudgetTransport(
+        _slow_headers(0.15, body), first_chunk_seconds=0.2, total_seconds=10.0
+    )
+
+    async with httpx2.AsyncClient(transport=transport) as client:
+        with pytest.raises(httpx2.ReadTimeout) as raised:
+            await client.post("https://provider.example/v1/chat/completions")
+
+    assert "no response body" in str(raised.value)
+    assert body.delivered == 0
+
+
+@pytest.mark.asyncio
+async def test_slow_headers_inside_the_bound_are_untouched() -> None:
+    body = _Body(chunks=3, gap=0.0)
+    transport = ModelStreamBudgetTransport(
+        _slow_headers(0.05, body), first_chunk_seconds=1.0, total_seconds=5.0
+    )
+
+    async with httpx2.AsyncClient(transport=transport) as client:
+        response = await client.post("https://provider.example/v1/chat/completions")
+
+    assert response.content == b"data: token\n\n" * 3
 
 
 @pytest.mark.asyncio

@@ -6,11 +6,12 @@ them again would only re-judge what was already kept. The agent's reply before
 the turn comes along: "yes, always do it that way" means nothing without what
 it answers.
 
-Bounded, because it is a prompt. What the person said and what the agent
-answered are where most of what is worth keeping is said, so they are kept
-whole up to a generous cap. The work in between -- tool calls and what they
-returned -- is cut short step by step, and past a total the remaining steps
-are counted rather than shown.
+Bounded, because it is a prompt, and the pass costs what it reads. What the
+person said is where most of what is worth keeping is said, so it is kept whole
+up to a generous cap. The agent's answer is context, not material -- the pass
+never keeps the answer -- so it is cut shorter. The work in between -- tool
+calls and what they returned -- is cut short step by step, and past a small
+total the remaining steps are counted rather than shown.
 """
 
 from __future__ import annotations
@@ -25,14 +26,16 @@ from app.modules.agent.domain.value_objects import MessageKind, MessageRole
 from app.modules.agent.domain.pauses import CALL_NAMES
 from app.modules.agent.domain.state_kinds import PauseKind
 
-#: One message the person sent or the agent answered.
+#: One message the person sent.
 WORDS_MAX_CHARS = 6000
+#: One message the agent answered with.
+ANSWER_MAX_CHARS = 2000
 #: The agent's reply before the turn: context for it, not part of it.
 REPLY_BEFORE_MAX_CHARS = 1500
 #: One tool call's arguments, or one tool's result.
-STEP_MAX_CHARS = 400
+STEP_MAX_CHARS = 240
 #: All the steps of the turn together.
-WORK_MAX_CHARS = 6000
+WORK_MAX_CHARS = 2400
 #: Messages of one run read at all. Past it the turn is cut at the end, which
 #: keeps what the person said at its start.
 TURN_MESSAGES_MAX = 300
@@ -144,7 +147,7 @@ def _words(message: TurnMessage) -> str | None:
     if message.role is MessageRole.USER:
         return "The person said:\n" + _quoted(message.body or "", WORDS_MAX_CHARS)
     if message.role is MessageRole.ASSISTANT:
-        return "The agent said:\n" + _quoted(message.body or "", WORDS_MAX_CHARS)
+        return "The agent said:\n" + _quoted(message.body or "", ANSWER_MAX_CHARS)
     return None
 
 
@@ -169,6 +172,7 @@ def _cut(text: str, limit: int) -> str:
 
 
 __all__ = [
+    "ANSWER_MAX_CHARS",
     "REPLY_BEFORE_MAX_CHARS",
     "STEP_MAX_CHARS",
     "TURN_MESSAGES_MAX",

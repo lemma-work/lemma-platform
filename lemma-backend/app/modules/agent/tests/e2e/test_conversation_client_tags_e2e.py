@@ -1,6 +1,6 @@
 """A conversation's metadata is its client's tags, and nothing the server decides on.
 
-Before migration 0065, the keys that decided what a conversation was -- a
+Before migration 0066, the keys that decided what a conversation was -- a
 sub-agent (and so which tools its runs get), a workflow's step (and so who
 waits on it), the directory its agent works in -- were metadata keys a client
 could PATCH. They are columns now, which no request reaches. A client sending

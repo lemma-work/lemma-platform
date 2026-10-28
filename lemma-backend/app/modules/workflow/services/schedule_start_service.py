@@ -128,6 +128,7 @@ def _conversation_metadata(
     run's own brief.
     """
     started: FiringMetadata = {
+        "schedule_id": str(schedule.id),
         "schedule_type": getattr(
             schedule.schedule_type, "value", str(schedule.schedule_type)
         ),

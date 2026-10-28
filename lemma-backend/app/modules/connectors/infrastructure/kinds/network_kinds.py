@@ -19,7 +19,10 @@ from app.modules.connectors.domain.kinds import (
     ExecutionRequest,
     ResolvedInstall,
 )
-from app.modules.connectors.infrastructure.adapters.mcp_executor import McpExecutor
+from app.modules.connectors.infrastructure.adapters.mcp_executor import (
+    McpExecutor,
+    StoredToolSchemas,
+)
 from app.modules.connectors.infrastructure.adapters.openapi_http_executor import (
     OpenApiHttpExecutor,
 )
@@ -120,6 +123,10 @@ class McpKindExecutor:
             third_party_credentials=request.credentials,
             connection_config=request.config,
             deadline_seconds=request.deadline_seconds,
+            tool_schemas=StoredToolSchemas(
+                input_schema=request.operation.input_schema,
+                output_schema=request.operation.output_schema,
+            ),
         )
 
 

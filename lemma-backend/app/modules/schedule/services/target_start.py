@@ -320,11 +320,16 @@ def conversation_metadata(
 
     That a schedule opened it is the conversation's ``origin``, set by the
     agent module, and how a run tells that nobody is waiting on it, so it does
-    not reach for ``ask_user`` at six in the morning. A webhook source's
-    repository context, when present, becomes the run's checkout, cloned
-    through the pod's `github` connector.
+    not reach for ``ask_user`` at six in the morning. ``schedule_id`` is what
+    a list of a pod's runs groups them by, since the name can be edited and
+    the title is derived from it. A webhook source's repository context, when
+    present, becomes the run's checkout, cloned through the pod's `github`
+    connector.
     """
-    started: dict[str, JsonValue] = {"schedule_type": schedule.schedule_type.value}
+    started: dict[str, JsonValue] = {
+        "schedule_id": str(schedule.id),
+        "schedule_type": schedule.schedule_type.value,
+    }
     if schedule.name:
         started["schedule_name"] = schedule.name
     repo = metadata.get("repo")

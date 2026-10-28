@@ -1,6 +1,6 @@
 """The typed-state columns of conversations, runs and messages.
 
-Each was a key of the row's metadata JSON until migration 0065. The column
+Each was a key of the row's metadata JSON until migration 0066. The column
 shapes and the conversions between a row and the entity's typed fields
 (``Conversation``, ``RunState``, ``MessageState`` document each field) live
 here, apart from ``conversation``, which holds the three mapped classes that

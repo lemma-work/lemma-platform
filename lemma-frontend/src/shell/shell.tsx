@@ -54,7 +54,7 @@ import { PAGE_TEMPLATES, makePage } from "@/docpages/templates";
 import { renamePage } from "@/docpages/rename";
 import { recordMove } from "@/docpages/moves";
 import { moveComments } from "@/docpages/comments/store";
-import { NOWHERE, TEAMMATES, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
+import { NOWHERE, TEAMMATES, isAlwaysListed, isNewPlace, readAddress, tabFromId, writeAddress } from "./address";
 import { podAccess, readLastPods, rememberPod, type LastPods } from "./pod-access";
 import { NotYours } from "./not-yours";
 import { Mark } from "./mark";
@@ -392,7 +392,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         /* `first_name`/`last_name`, not `name` — there is no `name` on the
            account, and reading one gave the arrival screen nothing to work
            with, so it fell back to the local part of an address and offered
-           to call somebody's workspace "deepakjha0196+99's Personal". */
+           to call somebody's workspace "ada+99's Personal". */
         queryFn: () => lemma().users.current() as Promise<{ id?: string; email?: string; first_name?: string; last_name?: string; created_at?: string } | undefined>,
         enabled: source.label !== "sample",
         staleTime: 5 * 60_000,
@@ -512,38 +512,16 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const openConversationId =
         conversationId ?? (history.data && history.data.length > 0 ? history.data[0].id : null);
 
-    /* A call is with a teammate, not with whatever is on screen — so the pod
-       it started in is frozen for its duration. Without this, walking into
-       another pod mid-call would re-point the call's own conversation at a
-       pod the person is not talking to. */
-    const [callPod, setCallPod] = useState<{ id: string; name: string; teammate: string } | null>(null);
-    const callIn = callPod ?? { id: pod?.id ?? "", name: pod?.name ?? "", teammate: pod?.teammate?.name ?? "" };
-    const huddle = useHuddle({
-        pod: { id: callIn.id, name: callIn.name },
-        teammate: callIn.teammate,
-        conversationId: openConversationId,
-    });
+    /* A call is with a teammate, not with whatever is on screen: the pod and
+       teammate it was placed with are the call's own, held by the huddle for
+       as long as it lasts, so walking into another pod mid-call neither
+       re-points it nor relabels it. */
+    const huddle = useHuddle();
+    const callIn = huddle.target
+        ? { id: huddle.target.pod.id, name: huddle.target.pod.name, teammate: huddle.target.teammate }
+        : { id: pod?.id ?? "", name: pod?.name ?? "", teammate: pod?.teammate?.name ?? "" };
     const callConversationId = huddle.callConversationId;
-    useEffect(() => {
-        if (!callConversationId || callIn.id !== pod?.id) return;
-        // Adopt the regular conversation created from an empty/new pane.
-        if (!openConversationId || openConversationId === NEW_CONVERSATION) {
-            setConversationId(callConversationId);
-        }
-        void refreshConversationLists(queryClient, callIn.id);
-    }, [callConversationId, queryClient, pod?.id, callIn.id, openConversationId]);
-
-    const { start: openCall, end: closeCall } = huddle;
-    const { inCall, expand: openCallScreen } = huddle;
-    const startCall = useCallback(() => {
-        if (!pod) return;
-        /* A call already on belongs to the pod it was placed in, wherever the
-           button was pressed: reopened, never re-labelled with this pod. */
-        if (inCall) { openCallScreen(); return; }
-        setCallPod({ id: pod.id, name: pod.name, teammate: pod.teammate.name });
-        void openCall();
-    }, [pod, openCall, inCall, openCallScreen]);
-    const endCall = useCallback(() => { closeCall(); setCallPod(null); }, [closeCall]);
+    const endCall = huddle.end;
     /* Offered only once the server says it can place one: a voice engine is
        a server setting, which no settings page here configures. The sample
        pod has no server to ask. */
@@ -629,7 +607,9 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
     const docAsk = useMemo(() => chatResource && pod ? { label: pod.name, ask: chat.ask } : null, [chatResource !== null, pod?.name, chat.ask]);  
     const paneProps = (id: string) => ({
         hidden: !isVisible(id),
-        onStage: !(hiring || huddle.expanded || stranger || atTeam),
+        // The call screen sits beside the chat rather than over it, so the
+        // chat stays on stage during a call.
+        onStage: !(hiring || stranger || atTeam),
         "data-side": id === layout.right ? "right" : "left",
         inert: sheetLowered && id === layout.right,
     });
@@ -984,8 +964,14 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
         /* A channel lives in Channels, whichever page linked to it. */
         if (rebuilt) openTab(rebuilt, rebuilt.kind === "channel" ? "space:chats" : undefined);
         /* Only a tab that will exist: one that never arrives would hold the
-           mirror still for good. */
-        if (known || rebuilt) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
+           mirror still for good. The conversation is one that will, and it is
+           the link people are sent most: it arrives with the pod's tab list,
+           and until then the shell draws Home in its place. Not waiting for it
+           let the mirror write that stand-in over the link -- `/home` for a
+           moment, long enough for the tour to be offered over the chat, and
+           on a slow enough load the address the conversation never came back
+           from. */
+        if (known || rebuilt || isAlwaysListed(wanted)) pendingTab.current = wanted === "profile" ? "space:about" : wanted;
     }, [pathname, address, pod, allTabs, openTab, selection.id, setConversationId, preview]);
 
     /** The address bar, kept in step with where you actually are.
@@ -1089,10 +1075,34 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
             if (!pod) return;
             setExpandedTab(null);
             setPeekedTab(null);
+            /* Choosing a tab replaces whatever a link was still waiting for.
+               A conversation link waits out the pod's tab list, and a tab
+               picked meanwhile would otherwise never be the pending one, so
+               the mirror would hold the address on the link for good. */
+            if (pendingTab.current !== tabId) pendingTab.current = null;
             setTabs((previous) => ({ ...previous, [pod.id]: tabId }));
         },
         [pod],
     );
+
+    /* A call continues the chat it is started from -- that chat is where the
+       call's turns, the teammate's work and the transcript land -- and one
+       started from home starts a new conversation. Once it is placed, the
+       chat it is held in is opened, once: not again on every navigation,
+       which snapped a person back to the call whenever they opened a new chat. */
+    const { start: placeCall } = huddle;
+    const startCall = useCallback(async (fromHome = false) => {
+        if (!pod) return;
+        const placed = await placeCall({
+            pod: { id: pod.id, name: pod.name },
+            teammate: pod.teammate.name,
+            conversationId: fromHome ? null : openConversationId,
+        });
+        if (!placed) return;
+        setConversationId(placed);
+        pickTab("conversation");
+        void refreshConversationLists(queryClient, pod.id);
+    }, [pod, placeCall, openConversationId, setConversationId, pickTab, queryClient]);
 
     /* The one door from a framed view into the conversation.
      *
@@ -1478,7 +1488,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                 )}
             </aside>
 
-            <main className="main" inert={mobileOpen} ref={mainRef}>
+            <main className={`main${huddle.expanded ? " main--calling" : ""}`} inert={mobileOpen} ref={mainRef}>
                 {sidebarHidden && <button className="desktop-nav-toggle icon-button" aria-label="Show sidebar" title="Show sidebar" onClick={() => { setSidebarHidden(false); setCollapsed(false); }}><SidebarIcon size={21} /></button>}
                 <button className="mobile-nav-toggle icon-button" aria-label="Open navigation" aria-expanded={mobileOpen} aria-controls="app-sidebar" onClick={() => setMobileOpen(true)}><MenuIcon size={22} /></button>
                 {settings && <SettingsModal
@@ -1570,21 +1580,23 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                     </div>
                 )}
                 {huddle.expanded && (
-                    <div className="settings-view">
+                    <div className="settings-view call-stage">
                         <CallScreen
                             teammate={callIn.teammate}
                             podId={callIn.id}
                             status={huddle.status}
                             error={huddle.error}
+                            notice={huddle.notice}
                             muted={huddle.muted}
                             thinking={huddle.thinking}
                             level={huddle.level}
                             canvas={huddle.canvas}
+                            showing={huddle.showing}
                             transcript={huddle.transcript}
                             onMute={huddle.toggleMute}
                             onEnd={endCall}
                             onCollapse={huddle.collapse}
-                            onLooking={huddle.looking}
+                            onShow={huddle.show}
                             onRenderFailed={huddle.renderFailed}
                             /* Opening lands on the stage, which is behind the
                                call screen — so step back to the bar first, or
@@ -1600,6 +1612,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         teammate={callIn.teammate}
                         status={huddle.status}
                         error={huddle.error}
+                        notice={huddle.notice}
                         muted={huddle.muted}
                         thinking={huddle.thinking}
                         level={huddle.level}
@@ -1620,7 +1633,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                         ["--field-ink" as string]: pressSlot(identityGenes(pod.id).tone).ink,
                     } : undefined}
                     /* The same test the panes read as `onStage`. */
-                    hidden={Boolean(hiring || huddle.expanded || stranger || atTeam)}
+                    hidden={Boolean(hiring || stranger || atTeam)}
                 >
                 {!pod ? (access.state === "loading" || (!podId && pods.isPending) ? <WorkspaceLoading embedded /> :
                     access.state === "error" || access.state === "missing" ? (
@@ -1898,10 +1911,13 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                                 onOpenApp={(name) => pickTab("app:" + name)}
                                                 onOpenFile={openFile}
                                                 onOpenTable={openTable}
-                                                onVoice={voiceReady ? startCall : undefined}
+                                                onVoice={voiceReady ? () => void startCall() : undefined}
                                                 callError={huddle.error}
+                                                /* While the call is held here: reattach to the run each
+                                                   time the call connects or work starts, so the teammate
+                                                   and its sub-agents are seen working, live. */
                                                 callRefresh={callConversationId === openConversationId
-                                                    ? `${huddle.active}:${huddle.thinking}:${huddle.expanded}`
+                                                    ? `live:${huddle.liveEpoch}:${huddle.active}`
                                                     : huddle.settled?.callId === openConversationId ? `settled:${huddle.settled.count}` : ""}
                                             />
                                         ) : (
@@ -1939,7 +1955,7 @@ export function AppShell({ demoStep, demoRevision, onPreviewPainted }: { demoSte
                                             onOpenRun={openRun}
                                             onOpenConversation={(id) => { setConversationId(id); pickTab("conversation"); }}
                                             onAbout={() => openAbout(null)}
-                                            onCall={voiceReady ? startCall : undefined}
+                                            onCall={voiceReady ? () => void startCall(true) : undefined}
                                             onAsk={(text, files, model) => startChat(text, model ? { agent_runtime: { profile_id: model.runtimeId, model_name: model.model || null } } : undefined, files)}
                                         />
                                     ) : tab.view === "about" ? (

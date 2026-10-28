@@ -41,6 +41,7 @@ def schedule_firing(
         for key, value in (raw if isinstance(raw, dict) else {}).items()
         if key in _FIRING_FACTS
     }
+    facts.setdefault("schedule_id", conversation_metadata.get("schedule_id"))
     facts.setdefault("schedule_name", conversation_metadata.get("schedule_name"))
     facts.setdefault("trigger_type", schedule_type)
     return ScheduleFiring.from_json(facts)

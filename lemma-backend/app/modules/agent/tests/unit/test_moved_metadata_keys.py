@@ -1,7 +1,7 @@
 """No code reads or writes a metadata key that has a typed column now.
 
 A conversation's, run's or message's behaviour-driving metadata keys moved to
-columns (migration 0065). The JSON still holds them for one release, so a
+columns (migration 0066). The JSON still holds them for one release, so a
 reader that went back to the key would keep working -- on rows written before
 the move -- and quietly read nothing on every row written after it. This holds
 every ``conversation_metadata``, ``run_metadata`` and ``message_metadata``

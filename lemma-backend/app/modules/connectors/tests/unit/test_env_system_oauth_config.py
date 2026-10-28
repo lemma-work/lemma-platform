@@ -87,13 +87,16 @@ def test_system_default_availability_tracks_env_presence(
 ):
     app = _native_app("google_calendar")
 
-    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
-    monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("CONNECTOR_GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("CONNECTOR_GOOGLE_CLIENT_SECRET", raising=False)
+    # The login client is never borrowed: it is not verified for app scopes.
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "login-client-id")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "login-client-secret")
     assert adapter.has_default_oauth_config(app) is False
     assert adapter.get_default_oauth_config(app) is None
 
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "sys-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sys-client-secret")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_ID", "sys-client-id")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_SECRET", "sys-client-secret")
     assert adapter.has_default_oauth_config(app) is True
 
     config = adapter.get_default_oauth_config(app)
@@ -109,8 +112,8 @@ def test_unknown_app_has_no_system_default(
     adapter: EnvSystemOAuthConfigAdapter,
     monkeypatch,
 ):
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "sys-client-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sys-client-secret")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_ID", "sys-client-id")
+    monkeypatch.setenv("CONNECTOR_GOOGLE_CLIENT_SECRET", "sys-client-secret")
 
     app = _native_app("not-a-real-app")
     assert adapter.has_default_oauth_config(app) is False

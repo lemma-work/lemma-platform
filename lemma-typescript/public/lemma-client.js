@@ -10278,7 +10278,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.9.0";
+  var SDK_VERSION = "0.10.1";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var APP_HEADER_NAME = "X-Lemma-App";
   var KNOWN_CLIENTS = [
@@ -10834,7 +10834,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.9.0",
+    VERSION: "0.10.1",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -14469,6 +14469,7 @@ var LemmaClient = (() => {
     }
     /**
      * Declare A Pod Connector
+     * Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER.
      * @param podId
      * @param requestBody
      * @returns PodConnectorResponse Successful Response
@@ -19840,7 +19841,7 @@ var LemmaClient = (() => {
   var CallsService = class {
     /**
      * Open a call
-     * Open a live voice call with a pod agent. The call is a conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.
+     * Open a live voice call with a pod agent, in the chat named by `conversation_id` or in a new conversation. The call is held in that conversation: its agent coordinates the call, hands work to sub-agents and shows things on the call's canvas. Connect to `/pods/{pod_id}/calls/{call_id}/socket` to talk.
      * @param podId
      * @param requestBody
      * @returns CallResponse Successful Response
@@ -19857,8 +19858,9 @@ var LemmaClient = (() => {
         mediaType: "application/json",
         errors: {
           403: `The caller may not run this agent.`,
-          404: `The agent was not found.`,
-          422: `Validation Error`,
+          404: `The agent, or the conversation, was not found.`,
+          409: `That conversation cannot hold a call.`,
+          422: `The caller cannot run the model the agent runs on.`,
           503: `No voice engine is configured.`
         }
       });

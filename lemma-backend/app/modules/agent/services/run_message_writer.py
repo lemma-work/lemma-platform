@@ -17,13 +17,16 @@ rule hold for every harness, including ones not written yet.
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.core.text.thinking_tags import has_thinking_tokens, split_thinking_segments
 from app.modules.agent.domain.entities import Message
+from app.modules.agent.domain.pauses import CALL_NAMES
 from app.modules.agent.domain.state_kinds import PauseKind
+from app.modules.agent.domain.tool_call_ids import call_signature
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -126,6 +129,27 @@ def _opens_with_its_call(draft: MessageDraft) -> bool:
     )
 
 
+def _is_wait(draft: MessageDraft) -> bool:
+    return draft.tool_name == CALL_NAMES[PauseKind.WAIT] or (
+        draft.pause is not None and draft.pause.kind is PauseKind.WAIT
+    )
+
+
+def _restates(earlier: Message, draft: MessageDraft, agent_run_id: UUID) -> bool:
+    """Whether ``earlier`` is this same call, stored before by this same run.
+
+    A pause keeps its id within its run whatever its arguments: its card and
+    decision row were written under that id as it was raised.
+    """
+    if earlier.agent_run_id != agent_run_id:
+        return False
+    if _opens_with_its_call(draft):
+        return True
+    return earlier.tool_name == draft.tool_name and call_signature(
+        earlier.tool_name, earlier.tool_args
+    ) == call_signature(draft.tool_name, draft.tool_args)
+
+
 class RunMessageWriter:
     def __init__(self, uow_factory: UnitOfWorkFactory):
         self.uow_factory = uow_factory
@@ -164,8 +188,8 @@ class RunMessageWriter:
             )
             if existing is not None:
                 return existing
-            draft = await self._unique_pause_id(
-                pauses,
+            draft = await self._unique_call_id(
+                uow,
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 draft=draft,
@@ -199,43 +223,64 @@ class RunMessageWriter:
             )
 
     @staticmethod
-    async def _unique_pause_id(
-        repository: Pauses,
+    async def _unique_call_id(
+        uow: SqlAlchemyUnitOfWork,
         *,
         conversation_id: UUID,
         agent_run_id: UUID,
         draft: MessageDraft,
     ) -> MessageDraft:
-        """A pausing call whose id an earlier run already used, renamed.
+        """A call whose id the conversation already holds, renamed.
 
-        A pause is addressed by its tool call id for as long as it is open --
-        the card, the decision row, the return -- and those lookups are per
-        conversation. The model's provider picks the id, and one that numbers
-        its calls (``call_0``) hands a later run the id of a question already
-        answered: the new card vanished behind the old return, and a decision
-        adopted the old one. So a clash is renamed here, once, the way calls
-        recorded over MCP already get an id of Lemma's own. The pause is
-        resolved and replayed under the stored id; only this run's in-memory
-        state knew the provider's, and the pump translates its WAITING event.
+        A call is paired with its return by tool call id, per conversation --
+        the transcript's cards, a pause's decision row, the synthesized return
+        a run's ending writes -- and the model's provider picks the id. One
+        that numbers its calls (``call_0``, ``functions.exec:0``) hands a later
+        call the id of one already answered: the new call showed the old
+        result, a new card vanished behind an old return, a decision adopted
+        the old pause. So a clash is renamed here, once, the way calls recorded
+        over MCP already get an id of Lemma's own. Only this run's in-memory
+        state knows the provider's id; the pump translates what still carries
+        it -- the call's return, a pause's WAITING event.
 
-        Not ``wait_for``: its wait row keeps the id the tool was called with,
-        and the wake writes the return under that.
+        The same call stored again by the run that stored it (an Agent Host
+        replaying its own record) keeps its id, as before. Not ``wait_for``:
+        its wait row keeps the id the tool was called with, and the wake writes
+        the return under that.
         """
-        if not _opens_with_its_call(draft) or not draft.tool_call_id:
+        if (
+            draft.kind is not MessageKind.TOOL_CALL
+            or _is_wait(draft)
+            or not draft.tool_call_id
+        ):
             return draft
-        earlier = await repository.get(
+        messages = Messages(uow)
+        earlier = await messages.tool_call(
             conversation_id=conversation_id, tool_call_id=draft.tool_call_id
         )
-        answered = await repository.tool_return(
-            conversation_id=conversation_id, tool_call_id=draft.tool_call_id
+        # A pause answered already under this id is never reopened under it,
+        # even by the run that raised it.
+        answered = _opens_with_its_call(draft) and (
+            await Pauses(uow).tool_return(
+                conversation_id=conversation_id, tool_call_id=draft.tool_call_id
+            )
+            is not None
         )
-        if answered is None and (earlier is None or earlier.run_id == agent_run_id):
+        if not answered and (
+            earlier is None or _restates(earlier, draft, agent_run_id)
+        ):
             return draft
         renamed = f"{draft.tool_call_id}-{agent_run_id.hex[-12:]}"
+        if await messages.tool_call(
+            conversation_id=conversation_id, tool_call_id=renamed
+        ):
+            # The provider reused the id more than once in this run.
+            renamed = f"{draft.tool_call_id}-{uuid4().hex[:12]}"
         logger.info(
-            "agent.run_message_writer.pause_id_renamed.observed",
+            "agent.run_message_writer.call_id_renamed.observed",
             conversation_id=str(conversation_id),
             agent_run_id=str(agent_run_id),
+            tool_name=draft.tool_name,
         )
         return draft.model_copy(update={"tool_call_id": renamed})
 

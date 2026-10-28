@@ -28,10 +28,10 @@ scopes data*:
   - `workflows run` — the human who called it.
   - A **`TIME`** or **`WEBHOOK`** schedule — the schedule's configured user.
   - A **`DATASTORE`** schedule on an **RLS** table — the **owner of the row that
-    changed**, not the schedule's creator. (A datastore fire that somehow carries
-    no owner is an error, not a fallback.)
-  - A **`DATASTORE`** schedule on a **shared** table — no row has an owner there,
-    so it falls back to the schedule's creator.
+    changed**, not the schedule's creator (unless the schedule sets
+    `run_as: "SCHEDULE_OWNER"`).
+  - A **`DATASTORE`** schedule on a **shared** table, a batched bulk-write fire, or
+    a row nobody in the pod owns — the schedule's creator.
 
   **`FUNCTION` and `AGENT` nodes run as that identity** — they are workloads
   delegated to the run owner, exactly like a directly invoked function or agent.
@@ -71,7 +71,7 @@ model from `pod-model.md`.
 ## Core Concepts
 
 - **Definition**: named graph — `nodes`, `edges`, `start`, description. Graphs are validated at save time (single entry node, no dangling edges/rule targets, reachable nodes, compilable expressions); invalid graphs are rejected with the full issue list.
-- **Run**: one execution. Carries status, current node, run context, step history, and `active_wait` (what it's waiting on) when status is `WAITING`.
+- **Run**: one execution. Carries status, current node, run context, step history, and `active_wait` (what it's waiting on) whenever it is suspended — on a person (`WAITING`) or on platform work (still `RUNNING`).
 - **Name the runs** with `run_title` on the workflow: up to four JMESPath expressions over the run context, joined with ` · ` — `"run_title": ["intake.candidate_name", "intake.role"]`. Every run list and the in-progress board show it, so set it on any workflow whose runs take days or pass between people; without it they all read "Waiting on a person". It is evaluated on every read, so a part filled in by a later form appears once that form is answered, and editing it retitles runs already in flight.
 - **Runs have no arbitrary start input object.** `workflows run` creates the run; if the entry node is a FORM, `--data` submits that entry form. Trigger payloads (schedule/event/datastore) are injected by the platform under `start.*`.
 - **Run context** (what every expression resolves against):
@@ -173,7 +173,7 @@ Design notes: keep forms small and decision-oriented; assign to pod members (not
 }
 ```
 
-Create and test the agent first; give it an `output_schema` when downstream nodes consume the result. While the agent works the run is `WAITING` with `active_wait.wait_type == "AGENT"` and the conversation id in `active_wait.external_ref`. A periodic sweep recovers runs whose completion events were lost.
+Create and test the agent first; give it an `output_schema` when downstream nodes consume the result. While the agent works the run stays `RUNNING` with `active_wait.wait_type == "AGENT"` and the conversation id in `active_wait.external_ref`. A periodic sweep recovers runs whose completion events were lost.
 
 The agent runs **as the run's owner** (delegated identity) and under **its own
 grants** — so its `POD` reads/writes are RLS-scoped to the run owner, and the agent
@@ -423,13 +423,13 @@ lemma workflows runs cancel <run-id>          # kill a stuck/unwanted run
 
 Workflow definition commands: `lemma workflows list | get | create | update | update-graph | delete`. Run commands live under `lemma workflows runs <verb>`; `run` (create + auto-submit to the entry form) stays top-level like `agents run` / `functions run`.
 
-Run statuses: `RUNNING → WAITING ⇄ RUNNING → COMPLETED | FAILED | CANCELLED`. What a run is waiting on is `active_wait.wait_type` (`HUMAN`, `AGENT`, `FUNCTION`, `TIME`, `DECISION`); only `HUMAN` makes it `WAITING`, the others keep it `RUNNING`.
+Run statuses: `RUNNING → WAITING ⇄ RUNNING → COMPLETED | FAILED | CANCELLED`. What a run is waiting on is `active_wait.wait_type` (`HUMAN`, `AGENT`, `FUNCTION`, `TIME`, `DECISION`, or `QUEUED` — held back by the workflow's concurrency limit); only `HUMAN` makes it `WAITING`, the others keep it `RUNNING`.
 
 Debugging a run, in order:
 
 1. `runs get` → check `status`, `current_node_id`, `failed_node_id`, `error`. Missing-path failures name the exact expression and input.
 2. Read `step_history` — every executed node with status, output, error, timestamps. This shows exactly which mapping or condition misbehaved.
-3. A run stuck in `WAITING`: read `active_wait` — `HUMAN` shows the form node and assignee, `AGENT` carries the conversation id in `external_ref` (inspect with `lemma conversations messages`), `FUNCTION` the function run id, `TIME` the wake time, `DECISION` the question and evidence being asked (`payload`). Forms are completed via the app/frontend or `runs submit-form --data`.
+3. A run that is not moving: read `active_wait` — `HUMAN` shows the form node and assignee, `AGENT` carries the conversation id in `external_ref` (inspect with `lemma conversations messages`), `FUNCTION` the function run id, `TIME` the wake time, `DECISION` the question and evidence being asked (`payload`). Forms are completed via the app/frontend or `runs submit-form --data`.
 4. Wrong branch taken: read the DECISION node's output in `step_history` (`matched_condition` shows which rule fired, `null` means the default edge) and re-check rule conditions against the context — remember literals need backticks (`` == `true` ``, `` > `0` ``). For a `question`, the output's `answer` and `route` say what was answered and where it went; tighten the `instruction`, the option descriptions or the `examples` rather than the routes.
 
 ## Limits & Gotchas

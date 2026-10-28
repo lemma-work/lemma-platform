@@ -55,7 +55,11 @@ from app.modules.agent.infrastructure.tools.tool_errors import result_is_failure
 
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.tool_call_ids import first_per_call_id
+from app.modules.agent.domain.tool_call_ids import (
+    call_signature,
+    unique_per_call_id,
+    unparsed_signature,
+)
 from app.modules.agent.domain.value_objects import (
     AnswerKind,
     AgentEvent,
@@ -82,6 +86,41 @@ def _tool_call_id_of(event: AgentEvent) -> str | None:
     if not isinstance(draft, MessageDraft) or draft.kind is not MessageKind.TOOL_CALL:
         return None
     return draft.tool_call_id
+
+
+def _tool_call_signature(event: AgentEvent) -> str | None:
+    draft = event.data
+    assert isinstance(draft, MessageDraft)
+    return call_signature(draft.tool_name, draft.tool_args)
+
+
+def _raw_tool_call_signature(event: AgentEvent) -> str:
+    draft = event.data
+    assert isinstance(draft, MessageDraft)
+    return unparsed_signature(draft.tool_name, draft.tool_args)
+
+
+def _under_call_id(event: AgentEvent, call_id: str) -> AgentEvent:
+    draft = event.data
+    assert isinstance(draft, MessageDraft)
+    return event.model_copy(
+        update={"data": draft.model_copy(update={"tool_call_id": call_id})}
+    )
+
+
+def unique_stored_calls(events: list[AgentEvent]) -> list[AgentEvent]:
+    """The stored half of `UniqueToolCallIdsCapability`, by the same rule: a
+    call the provider repeated under one id is stored once, as it runs once,
+    and a different call under a taken id is stored under the id it ran under.
+    """
+    kept, _repeats = unique_per_call_id(
+        events,
+        call_id=_tool_call_id_of,
+        signature=_tool_call_signature,
+        raw_signature=_raw_tool_call_signature,
+        renamed=_under_call_id,
+    )
+    return kept
 
 
 def _canonical(value: object) -> str:
@@ -392,9 +431,7 @@ class NodeLoop[DepsT]:
                 await self.queue.put(("event", event))
                 return True
             await self.queue.put(("event", event))
-        # The stored half of `UniqueToolCallIdsCapability`: a call the
-        # provider repeated under one id is stored once, as it runs once.
-        buffered, _repeats = first_per_call_id(buffered, _tool_call_id_of)
+        buffered = unique_stored_calls(buffered)
         settled, self._undecided = settle_response_answers(buffered)
         for held in settled:
             self._remember_tool_call(held)

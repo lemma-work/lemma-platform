@@ -333,6 +333,10 @@ class RequestApprovalArguments(FlatArguments):
     )
     title: str = Field(description="Short user-facing title for the approval card.")
     reason: str | None = Field(default=None, description="Why this needs approval.")
+    message: str | None = Field(
+        default=None,
+        description="Your whole reply above the card: what you did, what this does, why.",
+    )
     payload: JsonObject | None = Field(
         default=None, description="Extra structured detail for rendering or audit."
     )

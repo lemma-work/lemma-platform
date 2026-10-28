@@ -119,6 +119,10 @@ type ReplySink = Callable[[SurfaceReplyContext], Awaitable[bool]]
 
 _COULD_NOT_READ = "I couldn't read that message. Could you send it again?"
 PROCESSING_FAILED_REPLY = "I couldn't process that message. Please send it again."
+USAGE_LIMIT_REPLY = (
+    "I can't answer this right now: the usage limit for this account has been "
+    "reached. Please try again once it resets."
+)
 
 
 class SurfaceTurnStarter:

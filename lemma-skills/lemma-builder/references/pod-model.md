@@ -30,7 +30,7 @@ was granted and what the person it is acting for could do, never the union.
 1. **Zero access by default.** A freshly created agent or function can touch
    *nothing* — no tables, no folders, no connectors. Every resource is granted
    explicitly. Grants are **name-based and portable** (a table name, a folder
-   path like `/knowledge`, a connector id) so they survive export/import into any
+   path like `/knowledge`, a pod connector slug) so they survive export/import into any
    pod. A missing grant surfaces at runtime as `MISSING_WORKLOAD_RESOURCE_GRANT`.
 2. **Delegated identity, bounded by the invoker.** When a function or agent runs, it
    acts **as the user who invoked it**, not as some service account. So row-level
@@ -39,12 +39,12 @@ was granted and what the person it is acting for could do, never the union.
    a ceiling on the workload, not a promotion for the person — a `VIEWER` running an
    agent granted `datastore.record.write` still cannot write, and gets
    `DELEGATION_EXCEEDS_INVOKER`. Automation is not exempt: a schedule fires as a real
-   person (its configured user, or the changed row's owner), so a schedule owned by a
+   person (its owner, or for a change to an RLS row that row's owner), so a schedule owned by a
    viewer is a schedule that cannot write.
 3. **Destructive actions are gated.** No workload — not even the default pod agent
-   that otherwise mirrors your permissions — can delete tables/agents/functions/
-   workflows/apps/schedules, manage members/roles, or manage connector accounts by
-   default. Unlock it with either an **explicit grant** of that permission on the
+   that otherwise mirrors your permissions — can delete rows, tables, folders,
+   agents, functions, workflows, apps, schedules or the pod, manage members/roles,
+   or change the pod's connectors by default. Unlock it with either an **explicit grant** of that permission on the
    workload (standing authority — needed for schedules and webhooks that run
    unattended) or a live **`request_approval`** the user answers with "approve for
    session" (works for the rest of that conversation). Denied attempts surface as
@@ -149,10 +149,12 @@ surfaces ◀── converse ──▶ humans   (its agent can also start workflo
   The table-event source is what makes **reactive choreography** possible — one workload
   writes a row, a `DATASTORE` schedule fires, another workload picks it up. This is the
   backbone of complex pods (mind the trigger-loop guardrail in `schedules-and-triggers.md`).
-- **Connectors** are org-global capabilities (gmail, slack…): a **connector**
-  (catalog entry) → an org **auth-config** → each user's **account** → executable
-  **operations** / **triggers**. Workloads execute operations via the invoking
-  user's connected account (delegated), never touching raw credentials.
+- **Connectors** reach third-party apps (gmail, slack…): a catalog **connector** →
+  the org's **installation** of it → a **pod connector** the pod declares under a
+  slug → executable **operations** / **triggers**. The pod connector's mode decides
+  the account a call runs as: the invoking member's own (`PER_MEMBER`) or one
+  account its owner shared with the pod (`SHARED`). Workloads are granted the slug
+  (`connector:<slug>:use`), never an account, and never touch raw credentials.
 - **Apps / widgets / surfaces** are the human interfaces over the same tables, files,
   agents, and workflows — pod-authenticated, so each sees exactly what RLS allows.
   **Surfaces** are *conversational*: a human chats with **one** pod agent on Slack /
@@ -211,10 +213,11 @@ Corollaries that prevent common mistakes:
 
 A pod is a **local folder bundle**, imported progressively (upsert by resource
 name). Folder name **must equal** the resource's `name`. Import is
-dependency-ordered: **tables → files → functions → agents → workflows →
-schedules → connectors/surfaces → app → seed**. Workload **grants** and surfaces
-*do* travel in bundles. **Connector** auth-configs and accounts never do — set them
-up by CLI and record the commands in the README. **File bytes and table rows** travel
+dependency-ordered: **pod connectors → tables → functions → agents → workflows →
+schedules → surfaces → apps → files → grants → rows**. Workload **grants**,
+surfaces and **pod connectors** (`connectors/<slug>/`: catalog id + mode) *do*
+travel in bundles. The org's installations and each member's connected accounts
+never do — record in the README who has to connect what. **File bytes and table rows** travel
 only when you ask for them by name on the way out (`pods export --folder /knowledge
 --data-table tickets`) and switch them on at the way in (`pods import --with-files
 --with-data`); a re-runnable `seed/` script is still the better demo path.

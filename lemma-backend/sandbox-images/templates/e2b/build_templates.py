@@ -30,6 +30,18 @@ DEFAULT_CPU_COUNT = 1
 DEFAULT_MEMORY_MB = 2048
 
 
+def parse_size(label: str) -> tuple[int, int]:
+    """``{cpu}x{memory_mb}``, the key the backend maps sizes to templates by."""
+    cpu, sep, memory = label.partition("x")
+    try:
+        cpu_count, memory_mb = int(cpu), int(memory)
+    except ValueError as exc:
+        raise ValueError(f"size must be {{cpu}}x{{memory_mb}}, got {label!r}") from exc
+    if not sep or cpu_count < 1 or memory_mb < 1:
+        raise ValueError(f"size must be {{cpu}}x{{memory_mb}}, got {label!r}")
+    return cpu_count, memory_mb
+
+
 def _positive_int_environment(name: str, *, default: int) -> int:
     raw = os.environ.get(name)
     if raw is None:
@@ -564,9 +576,12 @@ def build(
     *,
     target: str,
     name_suffix: str = "",
+    size: str | None = None,
 ) -> dict[str, dict[str, str]]:
     if not os.environ.get("E2B_API_KEY"):
         raise RuntimeError("E2B_API_KEY is required")
+    if size is not None and target != "workspace":
+        raise ValueError("--size sizes a workspace template; pass --target workspace")
     selected = {
         "workspace": (
             workspace_template,
@@ -596,6 +611,15 @@ def build(
             ),
         ),
     }
+    if size is not None:
+        # The name is the key `E2B_WORKSPACE_SIZE_TEMPLATES` maps the size to.
+        cpu_count, memory_mb = parse_size(size)
+        selected["workspace"] = (
+            workspace_template,
+            f"lemma-workspace-{cpu_count}x{memory_mb}",
+            cpu_count,
+            memory_mb,
+        )
     names = tuple(selected) if target == "all" else (target,)
     result: dict[str, dict[str, str]] = {}
     for name in names:
@@ -631,10 +655,20 @@ def main() -> None:
             "leave this empty."
         ),
     )
+    parser.add_argument(
+        "--size",
+        default=None,
+        help=(
+            "Build a workspace template for one plan size, `{cpu}x{memory_mb}` "
+            "(e.g. 2x4096), named lemma-workspace-{size}. Without it the "
+            "workspace template is built at E2B_WORKSPACE_CPU_COUNT x "
+            "E2B_WORKSPACE_MEMORY_MB, 1x2048 by default."
+        ),
+    )
     args = parser.parse_args()
     print(
         json.dumps(
-            build(target=args.target, name_suffix=args.name_suffix),
+            build(target=args.target, name_suffix=args.name_suffix, size=args.size),
             indent=2,
             sort_keys=True,
         )

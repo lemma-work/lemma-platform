@@ -18,6 +18,9 @@ export type CallFrame =
     | { type: "transcript"; speaker: "caller" | "voice"; text: string; final: boolean }
     | { type: "clear" }
     | { type: "work"; running: boolean }
+    /** Something the person should know that the voice is also saying: a
+     *  request the team cannot take, and why. The call stays up. */
+    | { type: "notice"; text: string }
     | { type: "canvas.item"; item: CanvasFrameItem; replay?: boolean }
     | { type: "ended"; reason: string | null };
 
@@ -27,13 +30,17 @@ export interface CallStart {
     /** What came before the call, for the voice's brief. */
     context: string;
     engine?: string;
+    /** Whether the microphone is muted, so a rejoin keeps it muted. */
+    muted?: boolean;
 }
 
 export interface CallSocketHandlers {
     onFrame(frame: CallFrame): void;
     onAudio(pcm: ArrayBuffer): void;
-    /** The socket closed: `reason` is a sentence for the person, or null for an ordinary end. */
-    onClose(reason: string | null): void;
+    /** The socket closed: `reason` is a sentence for the person, or null for an
+     *  ordinary end. `dropped` is a close neither side chose -- the network,
+     *  a server restart -- after which the same call can be joined again. */
+    onClose(reason: string | null, dropped: boolean): void;
 }
 
 export function callSocketUrl(apiUrl: string, podId: string, callId: string, token: string | null): string {
@@ -55,16 +62,30 @@ const CLOSE_REASONS: Record<number, string> = {
     4503: "The voice is not available right now.",
 };
 
+/** What a close means: an ordinary end (no reason), the server refusing or
+ *  ending the call on purpose (its sentence, not to be retried), or a drop
+ *  nobody chose, after which the same call can be joined again. */
+export function closeOutcome(code: number, reason = ""): { reason: string | null; dropped: boolean } {
+    if (code === 1000 || code === 1005) return { reason: null, dropped: false };
+    const refused = CLOSE_REASONS[code];
+    if (refused) return { reason: refused, dropped: false };
+    return { reason: reason || "The call dropped.", dropped: true };
+}
+
 export function openCallSocket(url: string, start: CallStart, handlers: CallSocketHandlers): CallConnection {
     const socket = new WebSocket(url);
     socket.binaryType = "arraybuffer";
     let ended = false;
-    const end = (reason: string | null) => {
+    const end = (reason: string | null, dropped = false) => {
         if (ended) return;
         ended = true;
-        handlers.onClose(reason);
+        handlers.onClose(reason, dropped);
     };
-    socket.onopen = () => socket.send(JSON.stringify({ type: "start", ...start }));
+    let opened = false;
+    socket.onopen = () => {
+        opened = true;
+        socket.send(JSON.stringify({ type: "start", ...start }));
+    };
     socket.onmessage = (event) => {
         if (event.data instanceof ArrayBuffer) {
             handlers.onAudio(event.data);
@@ -77,8 +98,19 @@ export function openCallSocket(url: string, start: CallStart, handlers: CallSock
         if (typed.type === "ended") end(typed.reason);
         else handlers.onFrame(typed);
     };
-    socket.onclose = (event) => end(event.code === 1000 || event.code === 1005 ? null : CLOSE_REASONS[event.code] ?? (event.reason || "The call dropped."));
-    socket.onerror = () => end("The call could not connect.");
+    socket.onclose = (event) => {
+        /* Never opened: the server or the network is not there yet -- often
+           a rejoin started right after a drop. Worth another try, which the
+           caller bounds. */
+        if (!opened) { end("The call could not connect.", true); return; }
+        const outcome = closeOutcome(event.code, event.reason);
+        end(outcome.reason, outcome.dropped);
+    };
+    /* No verdict here. An unclean drop fires `error` and then `close`; ending
+       on `error` latched "could not connect" and the close that says it was a
+       drop -- one the call can rejoin -- was never heard. A socket that never
+       opened closes too, as 1006, and is told apart there. */
+    socket.onerror = () => undefined;
     return new CallConnection(socket);
 }
 

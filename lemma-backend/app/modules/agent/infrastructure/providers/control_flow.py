@@ -45,4 +45,6 @@ def is_control_flow_exception(exc: BaseException) -> bool:
 
 def is_usage_limit(exc: BaseException) -> bool:
     """A run or background call stopped at its usage limit."""
-    return isinstance(exc, UsageLimitExceeded)
+    from app.modules.agent.domain.background import BackgroundLimitReached
+
+    return isinstance(exc, UsageLimitExceeded | BackgroundLimitReached)

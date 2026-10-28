@@ -42,6 +42,7 @@ _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
 _MEMORY_PROMPT_PATH = _PROMPT_DIR / "memory.md"
 _MEMORY_AFTER_TURN_PROMPT_PATH = _PROMPT_DIR / "memory_after_turn.md"
 _MEMORY_PASS_PROMPT_PATH = _PROMPT_DIR / "memory_pass.md"
+_MEMORY_SCREEN_PROMPT_PATH = _PROMPT_DIR / "memory_screen.md"
 #: memory.md's sections, and the one that differs between a run that saves
 #: memory itself and one whose memory is kept after it ends.
 _MEMORY_SECTION_HEADING = "### "
@@ -241,6 +242,15 @@ def load_memory_pass_prompt() -> str:
         raise ValueError(f"memory.md has no '{_MEMORY_TIMING_SECTION}' section")
     rules = "\n\n".join(body.strip() for body in sections.values())
     return f"{_read_required_prompt(_MEMORY_PASS_PROMPT_PATH)}\n\n{rules}"
+
+
+def load_memory_screen_prompt() -> str:
+    """What the memory pass's first, cheap read of a turn is told.
+
+    No memory and no tools: most turns hold nothing to keep, and saying so
+    should not cost a read of everything the agent already remembers.
+    """
+    return _read_required_prompt(_MEMORY_SCREEN_PROMPT_PATH)
 
 
 def _replace_section(text: str, replacement: str, *, title: str) -> str:

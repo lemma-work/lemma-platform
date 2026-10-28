@@ -12,14 +12,17 @@ from collections.abc import Callable, Sequence
 from typing import Any, cast
 
 from pydantic_ai import Agent as PydanticAIAgent
-from pydantic_ai import BinaryContent, UsageLimits
-from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai import BinaryContent, UsageLimits, capture_run_messages
+from pydantic_ai.agent import AgentRunResult
+from pydantic_ai.exceptions import ModelHTTPError, UsageLimitExceeded
+from pydantic_ai.messages import ModelMessage
 from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserContent
 from pydantic_ai.models import Model
 
 from app.modules.agent.domain.background import (
     BackgroundAnswer,
     BackgroundCall,
+    BackgroundLimitReached,
     BackgroundLimits,
     PromptPart,
     ToolReturnRecord,
@@ -95,8 +98,29 @@ class PydanticAIModelProvider:
         )
         limits = _usage_limits(cast(Model | str, model), call.limits)
         prompt = _prompt(call.prompt)
+        with capture_run_messages() as sent:
+            try:
+                result = await self._ask(agent, call, prompt, limits)
+            except UsageLimitExceeded as exceeded:
+                # What ran before the limit stands: a call that writes may have
+                # kept something, and says so by its returns.
+                raise BackgroundLimitReached(
+                    str(exceeded), tool_returns=_tool_returns(sent)
+                ) from exceeded
+        return BackgroundAnswer(
+            output=str(result.output if result.output is not None else ""),
+            tool_returns=_tool_returns(result.all_messages()),
+        )
+
+    @staticmethod
+    async def _ask(
+        agent: PydanticAIAgent[Any, Any],
+        call: BackgroundCall,
+        prompt: str | list[UserContent],
+        limits: UsageLimits,
+    ) -> AgentRunResult[Any]:
         try:
-            result = await agent.run(
+            return await agent.run(
                 prompt,
                 deps=call.deps,
                 usage_limits=limits,
@@ -115,7 +139,7 @@ class PydanticAIModelProvider:
                 raise
             if call.on_plain_retry is not None:
                 call.on_plain_retry(error.status_code)
-            result = await agent.run(
+            return await agent.run(
                 prompt,
                 deps=call.deps,
                 usage_limits=limits,
@@ -123,16 +147,16 @@ class PydanticAIModelProvider:
                     call.plain_model_settings
                 ),
             )
-        return BackgroundAnswer(
-            output=str(result.output if result.output is not None else ""),
-            tool_returns=[
-                ToolReturnRecord(tool_name=part.tool_name, content=part.content)
-                for message in result.all_messages()
-                if isinstance(message, ModelRequest)
-                for part in message.parts
-                if isinstance(part, ToolReturnPart)
-            ],
-        )
+
+
+def _tool_returns(messages: Sequence[ModelMessage]) -> list[ToolReturnRecord]:
+    return [
+        ToolReturnRecord(tool_name=part.tool_name, content=part.content)
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
 
 
 def _usage_limits(model: Model | str, limits: BackgroundLimits) -> UsageLimits:

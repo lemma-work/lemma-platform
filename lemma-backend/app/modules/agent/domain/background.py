@@ -71,3 +71,15 @@ class BackgroundAnswer:
 
     output: str
     tool_returns: list[ToolReturnRecord] = field(default_factory=list)
+
+
+class BackgroundLimitReached(RuntimeError):
+    """The call ran into its ``BackgroundLimits`` before it answered.
+
+    Carries the tool returns made before the limit: a call that writes (the
+    memory pass) may have kept something already.
+    """
+
+    def __init__(self, message: str, *, tool_returns: list[ToolReturnRecord]) -> None:
+        super().__init__(message)
+        self.tool_returns = tool_returns

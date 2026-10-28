@@ -1,4 +1,4 @@
-"""Migration 0065 carries the Agent Host's metadata keys into its own tables.
+"""Migration 0066 carries the Agent Host's metadata keys into its own tables.
 
 Seeded at 0064 with a conversation bound to a provider session (every field
 the binding can hold), one whose binding is not an object, and runs carrying

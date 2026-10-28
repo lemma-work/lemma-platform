@@ -32,7 +32,10 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.tools.authority import approver_context
 from app.modules.agent.domain.context import ToolContext
-from app.modules.connectors.contracts.pod_connectors import get_pod_connector
+from app.modules.connectors.contracts.pod_connectors import (
+    ensure_pod_connector_for_installation,
+    get_pod_connector,
+)
 
 logger = get_logger(__name__)
 
@@ -68,10 +71,22 @@ async def confer_offered_grant(
         raise _refused("This approval offers no grant Lemma can give this agent.")
     slug = str(offer.get("connector") or "")
     async with uow_factory() as uow:
-        connector = await get_pod_connector(uow, pod_id=deps.pod_id, slug=slug)
-        if connector is None or str(connector.id) != offer.get("pod_connector_id"):
-            raise _refused(f"The pod no longer has the connector {slug!r}.")
         approver = await approver_context(uow, deps)
+        if offer.get("auth_config_id"):
+            # The refused call's own declaration was rolled back with it, so
+            # the connector is declared now -- as the approver, whose account
+            # on the installation is what lets it be.
+            connector = await ensure_pod_connector_for_installation(
+                uow,
+                approver,
+                pod_id=deps.pod_id,
+                auth_config_id=UUID(str(offer["auth_config_id"])),
+            )
+            slug = connector.slug
+        else:
+            connector = await get_pod_connector(uow, pod_id=deps.pod_id, slug=slug)
+            if connector is None or str(connector.id) != offer.get("pod_connector_id"):
+                raise _refused(f"The pod no longer has the connector {slug!r}.")
         await assert_can_confer_grants(
             approver,
             [

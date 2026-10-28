@@ -1,4 +1,4 @@
-"""Migration 0065 carries every pause into ``agent_pauses``.
+"""Migration 0066 carries every pause into ``agent_pauses``.
 
 Seeded at 0064 with one of each: an open question, approval, budget pause,
 Agent Host permission and sign-in; decisions that resolved, superseded,
@@ -27,8 +27,8 @@ from app.core.test_utils import get_postgres_container, get_postgres_url
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
 BACKEND = Path(__file__).resolve().parents[5]
-BEFORE = "0064_grants_every_install"
-REVISION = "0065_agent_typed_state"
+BEFORE = "0065_schedule_reset_and_author"
+REVISION = "0066_agent_typed_state"
 
 
 def _migrate(database_url: str, direction: str, revision: str) -> str:

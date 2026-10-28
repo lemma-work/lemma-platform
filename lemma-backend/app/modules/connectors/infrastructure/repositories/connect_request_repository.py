@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Optional
+from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import ColumnElement, select, update
 
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -62,6 +63,44 @@ class ConnectRequestRepository(
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
+
+    async def get_reusable_pending(
+        self,
+        *,
+        user_id: UUID,
+        auth_config_id: UUID,
+        return_to: str | None,
+        purpose: str | None,
+        not_before: datetime,
+    ) -> Optional[ConnectRequestEntity]:
+        """This person's newest unfinished sign-in on this install, started
+        after ``not_before`` to come back to the same place for the same
+        purpose -- never a follow-up leg, which is bound to one account."""
+        stmt = (
+            select(ConnectRequest)
+            .where(
+                ConnectRequest.user_id == user_id,
+                ConnectRequest.auth_config_id == auth_config_id,
+                ConnectRequest.status == ConnectRequestStatus.PENDING.value,
+                ConnectRequest.created_at >= not_before,
+                ConnectRequest.authorization_url.is_not(None),
+                ~ConnectRequest.attributes.has_key("followup_account_id"),
+                _attribute_is("return_to", return_to),
+                _attribute_is("purpose", purpose),
+            )
+            .order_by(ConnectRequest.created_at.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        instance = result.scalars().first()
+        return instance.to_entity() if instance else None
+
+
+def _attribute_is(key: str, value: str | None) -> ColumnElement[bool]:
+    """``attributes[key]`` equals ``value``, or is absent when ``value`` is None."""
+    if value is None:
+        return ~ConnectRequest.attributes.has_key(key)
+    return ConnectRequest.attributes[key].astext == value
 
 
 def _state_matches(state: str):

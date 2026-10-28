@@ -19,6 +19,7 @@ needs connecting -- none of those is the agent's grant to give.
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.session_approvals import record_grant_offer
@@ -57,9 +58,15 @@ async def connector_grant_offer(
     connector: str | None,
     tool_name: str,
     args: dict[str, Any],
+    auth_config_id: UUID | None = None,
 ) -> dict[str, Any] | None:
     """The ``needs_approval`` result that asks to give the agent this connector,
-    or None when ``exc`` is not that refusal (the caller reports it as is)."""
+    or None when ``exc`` is not that refusal (the caller reports it as is).
+
+    ``auth_config_id`` is the person's own installation the refused call would
+    have declared as a connector: the declaration was rolled back with the
+    refusal, so the offer names the installation and approving declares it.
+    """
     if (
         not _is_connector_grant_refusal(exc)
         or deps.is_pod_default_agent
@@ -70,9 +77,15 @@ async def connector_grant_offer(
         return None
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         pod_connector = await get_pod_connector(uow, pod_id=deps.pod_id, slug=connector)
-    if pod_connector is None:
+    if pod_connector is not None:
+        per_member = pod_connector.mode.value == "PER_MEMBER"
+        target = {"pod_connector_id": str(pod_connector.id)}
+    elif auth_config_id is not None:
+        # Declared on approval, as a connector of each member's own account.
+        per_member = True
+        target = {"auth_config_id": str(auth_config_id)}
+    else:
         return None
-    per_member = pod_connector.mode.value == "PER_MEMBER"
     agent = deps.agent_name or "this agent"
     await record_grant_offer(
         session_id=str(deps.conversation_id),
@@ -82,7 +95,7 @@ async def connector_grant_offer(
         offer={
             "kind": Permissions.CONNECTOR_USE,
             "pod_id": str(deps.pod_id),
-            "pod_connector_id": str(pod_connector.id),
+            **target,
             "connector": connector,
             "per_member": per_member,
         },

@@ -15,7 +15,6 @@ from __future__ import annotations
 from enum import StrEnum
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.domain.calls import CallRole
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.outsiders import Audience
@@ -200,9 +199,11 @@ def _marked_specs(
     )
 
     specs: list[ToolSpec] = []
-    if conversation.call is not None and conversation.call.role is CallRole.COORDINATOR:
+    if conversation.call is not None and conversation.call.live_coordinator:
         # By the call mark, not a declared toolset: an agent gets the voice by
-        # being called. Its sub-agents show things; only it speaks.
+        # being called, and only while a socket holds the call -- a chat a call
+        # happened in has no voice to relay to once it is over. Its sub-agents
+        # show things; only it speaks.
         specs.extend(call.SPECS)
     if surface is ToolSurface.AGENT_HOST and final_answer_expected(
         agent=agent, conversation=conversation
