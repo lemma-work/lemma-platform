@@ -362,14 +362,57 @@ pub(crate) fn download_disposition(
 /// never happened look exactly like a link that was never clicked -- nothing
 /// moves, nothing is said, and the only thing left to suspect is the link.
 pub(crate) fn open_external(url: &str) {
-    #[cfg(target_os = "macos")]
-    let mut command = Command::new("/usr/bin/open");
     #[cfg(target_os = "windows")]
-    let mut command = Command::new("explorer.exe");
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = Command::new("xdg-open");
-    if let Err(error) = command.arg(url).spawn() {
-        append_install_log(&format!("could not open {url} in the browser: {error}"));
+    {
+        // Not `explorer.exe <url>`: Explorer parses its own command line and,
+        // given a URL it does not take as one -- the hosted sign-in link, with
+        // its query string -- opens its default folder instead, which on a
+        // OneDrive-backed machine is OneDrive's Documents. ShellExecuteW is the
+        // documented way to send a URL to the default browser. Off this thread:
+        // it may wait on the shell, and every caller is a UI handler.
+        let url = url.to_owned();
+        std::thread::spawn(move || {
+            if let Err(error) = shell_open(&url) {
+                append_install_log(&format!("could not open {url} in the browser: {error}"));
+            }
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let mut command = Command::new("/usr/bin/open");
+        #[cfg(not(target_os = "macos"))]
+        let mut command = Command::new("xdg-open");
+        if let Err(error) = command.arg(url).spawn() {
+            append_install_log(&format!("could not open {url} in the browser: {error}"));
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn shell_open(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (verb, target) = (wide("open"), wide(url));
+    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call, and
+    // the remaining pointers are null, which ShellExecuteW accepts.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Success is any value above 32; at or below it is an error code.
+    if result as isize > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecuteW returned {}", result as isize))
     }
 }
 

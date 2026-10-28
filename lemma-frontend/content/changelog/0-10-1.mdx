@@ -15,3 +15,10 @@ platform's runtime has. 0.10.1 holds that dependency at the last release that
 ships for every platform, so this is the first Desktop build with everything
 in [0.10.0](/changelog/0-10-0). The SDKs and the CLI move to 0.10.1 with it and
 change nothing for their users.
+
+## Signing in from Desktop on Windows
+
+Signing in to Lemma Cloud from the Windows app opened a folder -- often
+OneDrive's Documents -- instead of the sign-in page. The app handed the link to
+Explorer, which does not treat a link with a query string as one; it now goes
+to the default browser the way Windows documents.

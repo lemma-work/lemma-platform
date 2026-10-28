@@ -109,7 +109,12 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSColor", "NSColorSpace"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Storage_FileSystem",
+    # ShellExecuteW: the one documented way to hand a URL to the default browser.
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
