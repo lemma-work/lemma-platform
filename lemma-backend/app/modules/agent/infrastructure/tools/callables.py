@@ -216,6 +216,13 @@ class AgentCallableToolFactory:
             ResourcePermissionGrantModel.grantee_type == "AGENT",
             ResourcePermissionGrantModel.grantee_id == agent_id,
         )
+        # Ordered: the callable tools are built in grant order, and the tool
+        # array is the front of every request's cached prefix.
+        stmt = stmt.order_by(
+            ResourcePermissionGrantModel.resource_type,
+            ResourcePermissionGrantModel.resource_id,
+            ResourcePermissionGrantModel.permission_id,
+        )
         rows = list((await uow.session.execute(stmt)).all())
         return grant_summary_of(rows, agent_id=agent_id)
 

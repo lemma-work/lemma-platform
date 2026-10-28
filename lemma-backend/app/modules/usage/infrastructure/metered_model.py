@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import replace
 from decimal import Decimal
 from datetime import datetime
@@ -96,6 +96,10 @@ class MeteredModel(WrapperModel):
         self.runtime_profile = dict(profile)
         self.source = source
         self.retry_stream_connections = retry_stream_connections
+        #: Once a request of this run went out with the local tool search, the
+        #: rest do too: switching back would rewrite the tool array, the front
+        #: of every later request's cached prefix. One model per run.
+        self._local_tool_search = False
 
     async def request(
         self,
@@ -204,9 +208,9 @@ class MeteredModel(WrapperModel):
             ) and not _compound_billing(effective)
 
         priceable = priceable_as(parameters)
-        local_search = None if priceable else _with_local_tool_search(parameters)
-        if local_search is not None and not priceable_as(local_search):
-            local_search = None
+        local_search = (
+            None if priceable else _local_alternative_for(parameters, priceable_as)
+        )
         # Admitted as the request it would be under a limit: the gateway only
         # asks about priceability when one applies, and then it is the local
         # shape that is sent.
@@ -215,8 +219,9 @@ class MeteredModel(WrapperModel):
         )
         if limited:
             effective["max_tokens"] = output_ceiling
-            if local_search is not None:
-                parameters, priceable = local_search, True
+        if local_search is not None and (limited or self._local_tool_search):
+            parameters, priceable = local_search, True
+            self._local_tool_search = True
         dispatch = Dispatch(effective, request_id, occurred_at, parameters, position)
         try:
             yield dispatch
@@ -230,6 +235,17 @@ class MeteredModel(WrapperModel):
                 await meter.after(receipt)
                 if limited and dispatch.responded and receipt.cost is None:
                     meter.require_reconciliation = True
+
+
+def _local_alternative_for(
+    parameters: ModelRequestParameters,
+    priceable_as: Callable[[ModelRequestParameters], bool],
+) -> ModelRequestParameters | None:
+    """``parameters`` with the local tool search, if that makes them priceable."""
+    local_search = _with_local_tool_search(parameters)
+    if local_search is None or not priceable_as(local_search):
+        return None
+    return local_search
 
 
 class Dispatch:

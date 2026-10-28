@@ -2469,11 +2469,11 @@ async def test_ask_user_option_icons_ride_along_without_touching_the_pause():
 
 
 @pytest.mark.asyncio
-async def test_an_agent_host_run_is_served_the_question_tool():
-    """An Agent Host run reaches its tools only through this list, so the
-    tool that answers a question waiting on the person -- a member's message,
-    a workflow's form -- has to be in it; the in-process harness gets it from
-    its capability and must not see it twice."""
+async def test_every_run_is_served_the_question_tool_once():
+    """The tool that answers a question waiting on the person -- a member's
+    message, a workflow's form -- is in every member run's list, open question
+    or not: one that came and went with the questions rewrote the front of the
+    cached prefix. Once, on every harness."""
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -2485,7 +2485,7 @@ async def test_an_agent_host_run_is_served_the_question_tool():
         pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id
     )
 
-    async def tool_names(surface: ToolSurface) -> set[str]:
+    async def tool_names(surface: ToolSurface) -> list[str]:
         specs = await specs_for(
             agent=agent,
             conversation=conversation,
@@ -2497,14 +2497,14 @@ async def test_an_agent_host_run_is_served_the_question_tool():
             surface=surface,
             uow_factory=None,  # type: ignore[arg-type]
         )
-        return {spec.name for spec in specs}
+        return [spec.name for spec in specs]
 
-    assert "answer_question" in await tool_names(ToolSurface.AGENT_HOST)
-    assert "answer_question" not in await tool_names(ToolSurface.IN_PROCESS)
+    assert (await tool_names(ToolSurface.AGENT_HOST)).count("answer_question") == 1
+    assert (await tool_names(ToolSurface.IN_PROCESS)).count("answer_question") == 1
 
 
 @pytest.mark.asyncio
-async def test_the_runner_decides_by_harness_which_runs_get_the_question_tool():
+async def test_every_harness_gets_the_question_tool():
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -2530,6 +2530,4 @@ async def test_the_runner_decides_by_harness_which_runs_get_the_question_tool():
         )
         return "answer_question" in {spec.name for spec in specs}
 
-    assert await has_answer(HarnessKind.LEMMA) is False
-    remote = [kind for kind in HarnessKind if kind != HarnessKind.LEMMA]
-    assert remote and all([await has_answer(kind) for kind in remote])
+    assert all([await has_answer(kind) for kind in HarnessKind])

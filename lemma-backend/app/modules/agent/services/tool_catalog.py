@@ -49,7 +49,7 @@ class ToolSurface(StrEnum):
     """Where a run's tools are served, which decides a few of them."""
 
     #: The pydantic-ai harness in this worker: ``final_answer`` is its output
-    #: type, and ``answer_question`` only rides when a question is open.
+    #: type.
     IN_PROCESS = "in_process"
     #: A coding agent over the run's MCP relay: everything is a tool.
     AGENT_HOST = "agent_host"
@@ -228,11 +228,10 @@ def _seen_and_placed(
     if surface is not ToolSurface.RERUN and ctx.host_execution_mode is not None:
         specs = _for_host_execution(specs, native=ctx.host_execution_mode == "native")
     # Answering what was asked of somebody is theirs to do, in their own
-    # thread; a stranger's turn must not do it for them. In process it rides
-    # only while a question is open.
-    if not audience.answers_outsiders and (
-        surface is not ToolSurface.IN_PROCESS or ctx.open_questions
-    ):
+    # thread; a stranger's turn must not do it for them. Always there
+    # otherwise, open question or not: a tool that comes and goes with the
+    # questions rewrites the front of every request's cached prefix.
+    if not audience.answers_outsiders:
         specs.extend(answer.SPECS)
     return specs
 

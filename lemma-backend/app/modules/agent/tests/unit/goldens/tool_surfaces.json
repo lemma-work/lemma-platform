@@ -294,6 +294,7 @@
     "tool:web_fetch@3d8b721a73c7",
     "tool:write_todos@42ac7f15d152",
     "tool:relay_to_voice@ec5d02c7c1f4",
+    "tool:answer_question@0335f8d34166",
     "tool:browser_sign_in@01520ed502f0",
     "tool:spawn_subagent@5c524ece6b3c",
     "tool:interact_subagent@6848ea08a9ba",
@@ -314,6 +315,7 @@
    "instructions": "instructions:@3bc44f6370bb",
    "output_tools": [],
    "tool_visibility": {
+    "answer_question": "visible",
     "ask_a_person": "deferred",
     "ask_teammate": "deferred",
     "ask_user": "visible",
@@ -435,12 +437,14 @@
     "tool:pod_search_files@87a002037c1d",
     "tool:write_todos@42ac7f15d152",
     "tool:function_summarize-report@ad1575956e0d",
-    "tool:agent_fact-checker@55a90366f97c"
+    "tool:agent_fact-checker@55a90366f97c",
+    "tool:answer_question@0335f8d34166"
    ],
    "instructions": "instructions:@4fff0f4ccfde",
    "output_tools": [],
    "tool_visibility": {
     "agent_fact-checker": "visible",
+    "answer_question": "visible",
     "ask_a_person": "visible",
     "ask_teammate": "visible",
     "ask_user": "visible",
@@ -530,13 +534,15 @@
     "tool:slack_get_recent_channel_messages@5941d4b9b68e",
     "tool:slack_search_current_channel@5b3f4dbb6c37",
     "tool:view_image@9096f4b7b00c",
-    "tool:browser@8a2d73f0e84b"
+    "tool:browser@8a2d73f0e84b",
+    "tool:answer_question@0335f8d34166"
    ],
    "instructions": "instructions:@b9c0ce980f83",
    "output_tools": [
     "tool:final_result@973d9968ea1c"
    ],
    "tool_visibility": {
+    "answer_question": "visible",
     "ask_a_person": "visible",
     "ask_teammate": "visible",
     "ask_user": "visible",
@@ -693,6 +699,7 @@
     "tool:web_search@b4eb369278ca",
     "tool:web_fetch@3d8b721a73c7",
     "tool:write_todos@42ac7f15d152",
+    "tool:answer_question@0335f8d34166",
     "tool:browser_sign_in@01520ed502f0",
     "tool:spawn_subagent@5c524ece6b3c",
     "tool:interact_subagent@6848ea08a9ba",
@@ -715,6 +722,7 @@
     "tool:final_result@7457472f4a30"
    ],
    "tool_visibility": {
+    "answer_question": "visible",
     "ask_a_person": "deferred",
     "ask_teammate": "deferred",
     "ask_user": "visible",
@@ -788,11 +796,13 @@
     "tool:pod_get_file_url@e9c435b44f88",
     "tool:pod_search_files@87a002037c1d",
     "tool:write_todos@42ac7f15d152",
-    "tool:function_summarize-report@ad1575956e0d"
+    "tool:function_summarize-report@ad1575956e0d",
+    "tool:answer_question@0335f8d34166"
    ],
    "instructions": "instructions:@232ce266a4a0",
    "output_tools": [],
    "tool_visibility": {
+    "answer_question": "visible",
     "ask_user": "visible",
     "browser_sign_in": "visible",
     "connect_connector": "visible",

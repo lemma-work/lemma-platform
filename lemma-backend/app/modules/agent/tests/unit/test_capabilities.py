@@ -791,6 +791,8 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "display_resource",
     "request_approval",
     "ask_user",
+    # Always there, open question or not: see `tool_catalog._seen_and_placed`.
+    "answer_question",
     "write_todos",
     # The pod's own data and files. Visible on purpose, and it is the one entry
     # here that costs real prefix budget: ten schemas in every pod-default
