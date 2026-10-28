@@ -300,6 +300,7 @@ class AgentRunnerService:
                 context_window=context_budget.window,
                 runtime_profile=snapshot,
                 lease_alive=self.lease_alive,
+                run_index=session.run_index,
                 extra={
                     "runtime_credentials": runtime_credentials,
                 },

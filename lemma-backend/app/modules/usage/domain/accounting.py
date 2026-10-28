@@ -113,6 +113,25 @@ class BudgetWindow(BaseModel):
         return hashlib.sha256(json.dumps(described).encode()).hexdigest()
 
 
+#: The run-context metadata key a harness names its run's place in its
+#: conversation under; ``MeteredModel`` reads it back for the receipt.
+RUN_INDEX_METADATA_KEY = "lemma_run_index"
+
+
+class RequestPosition(BaseModel):
+    """Where a model request sits: which run of its conversation, which step of
+    its run. What a prompt-cache hit ratio is read against -- the first request
+    of a later run re-reads what the previous run cached, a later step re-reads
+    its own run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: 1 for a conversation's first run.
+    run_index: int | None = Field(default=None, ge=1)
+    #: pydantic-ai's ``run_step``: 1 for a run's first model request.
+    step_index: int | None = Field(default=None, ge=0)
+
+
 class RequestReceipt(BaseModel):
     """One immutable provider outcome, replayable after a lost commit response."""
 
@@ -122,6 +141,25 @@ class RequestReceipt(BaseModel):
     counts: TokenCounts
     cost: Decimal | None = Field(default=None, ge=0)
     occurred_at: datetime
+    position: RequestPosition | None = None
+
+    def cache_report(self) -> dict[str, float | int | None]:
+        """The request's prompt-cache use, as its usage record states it."""
+        counts = self.counts
+        return {
+            "input_tokens": counts.input_tokens,
+            "cache_read_tokens": counts.cache_read_tokens,
+            "cache_write_tokens": counts.cache_write_tokens,
+            # pydantic-ai's input count includes cache reads and writes on
+            # every provider, so this is the share read back.
+            "hit_ratio": (
+                round(counts.cache_read_tokens / counts.input_tokens, 4)
+                if counts.input_tokens
+                else None
+            ),
+            "run_index": self.position.run_index if self.position else None,
+            "step_index": self.position.step_index if self.position else None,
+        }
 
 
 class AccountingConflictError(UsageDomainError):

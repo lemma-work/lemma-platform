@@ -170,6 +170,7 @@ def _settle(
         "receipt_digest": digest,
         "usage": receipt.counts.model_dump(mode="json"),
         "request_count": receipt.counts.request_count,
+        "cache": receipt.cache_report(),
         "pricing_missing": cost is None,
         "metering_state": "UNCONFIRMED"
         if receipt.counts.unconfirmed_requests

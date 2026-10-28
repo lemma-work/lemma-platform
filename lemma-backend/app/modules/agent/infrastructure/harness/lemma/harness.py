@@ -52,22 +52,25 @@ from app.modules.agent.domain.prompt.templates import build_agent_instruction_pa
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.message_state import MessageState
 from app.modules.agent.domain.value_objects import (
-    AnswerKind,
     AgentEvent,
     AgentEventType,
     HarnessKind,
     JsonObject,
     MessageDraft,
-    to_json_value,
 )
 from app.modules.agent.infrastructure.harness.lemma.capabilities import (
     LeaseGate,
     harness_capabilities,
 )
+from app.modules.agent.infrastructure.harness.lemma.cache_telemetry import (
+    CacheTelemetry,
+)
 from app.modules.agent.infrastructure.harness.lemma.history_parts import (
     RunNoticeCapability,
+)
+from app.modules.agent.infrastructure.harness.lemma.final_answer_output import (
+    final_output_message,
 )
 from app.modules.agent.infrastructure.harness.lemma.run_options import (
     final_answer_output,
@@ -87,7 +90,10 @@ from app.modules.agent.infrastructure.harness.lemma.provider_error_log import (
     log_model_http_error,
 )
 from app.modules.agent.config import agent_settings
-from app.modules.usage.contracts.metering import with_external_stream_retries
+from app.modules.usage.contracts.metering import (
+    RUN_INDEX_METADATA_KEY,
+    with_external_stream_retries,
+)
 from app.modules.agent.infrastructure.providers.model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
     provider_model_settings,
@@ -95,10 +101,6 @@ from app.modules.agent.infrastructure.providers.model_factory import (
 from app.modules.agent.infrastructure.providers.summarization import (
     lazy_compaction_target,
 )
-from app.modules.agent.infrastructure.tools.final_answer.final_answer_text import (
-    final_answer_text,
-)
-from app.modules.agent.infrastructure.tools.final_answer.tools import FinalAgentResult
 from app.modules.agent.domain.tools import AgentInputRequired
 from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
@@ -360,6 +362,7 @@ class PydanticAIHarness:
         )
         if options.lease_alive is not None:
             capabilities.append(LeaseGate(options.lease_alive))
+        capabilities.append(CacheTelemetry(run_index=options.run_index))
         output_type = final_answer_output(agent, conversation)
         pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
             model,
@@ -389,6 +392,8 @@ class PydanticAIHarness:
                 model_settings=provider_model_settings(attempt_settings),
                 usage_limits=harness_usage_limits(),
                 conversation_id=str(conversation.id),
+                # Read back by the metered model for each request's receipt.
+                metadata={RUN_INDEX_METADATA_KEY: options.run_index},
             )
 
         # pydantic-ai's agent.iter() enters anyio cancel scopes that are bound to
@@ -516,50 +521,9 @@ class PydanticAIHarness:
         tool_name: str | None,
         tool_call_id: str | None,
     ) -> MessageDraft | None:
-        if output is None:
-            return None
-
-        structured_output = to_json_value(output)
-        metadata: JsonObject = {"structured_output": structured_output}
-        if tool_name:
-            metadata["tool_name"] = tool_name
-            metadata["final_answer_tool_name"] = tool_name
-        if tool_call_id:
-            metadata["tool_call_id"] = tool_call_id
-
-        if isinstance(output, FinalAgentResult):
-            metadata["final_answer_status"] = output.status
-            if output.error:
-                metadata["final_answer_error"] = output.error
-            if output.output is not None:
-                metadata["structured_output"] = output.output
-            content_text = self._final_answer_text(
-                output.output,
-                fallback=output.error,
-            )
-            if not content_text:
-                content_text = output.error or output.status
-        else:
-            content_text = self._final_answer_text(structured_output)
-
-        if not content_text:
-            return None
-
-        return MessageDraft.of_text(
-            content_text,
-            metadata=metadata,
-            state=MessageState(answer=AnswerKind.FINAL),
+        return final_output_message(
+            output=output, tool_name=tool_name, tool_call_id=tool_call_id
         )
-
-    def _final_answer_text(
-        self,
-        data: object,
-        *,
-        fallback: str | None = None,
-    ) -> str:
-        # Shared with the Agent Host normalizer so identical structured output
-        # reads identically on a surface, whichever harness produced it.
-        return final_answer_text(data, fallback=fallback)
 
 
 def _runtime_profile_model[DepsT](options: HarnessOptions) -> Model:

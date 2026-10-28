@@ -70,4 +70,7 @@ class HarnessOptions:
     #: tool call; a run on the work runtime stops when it says no. None for a
     #: run nothing leases (a test, the API's own).
     lease_alive: Callable[[], bool] | None = None
+    #: The run's place in its conversation, 1 for the first: what each model
+    #: request's prompt-cache report is read against. None when unknown.
+    run_index: int | None = None
     extra: JsonObject = field(default_factory=dict)

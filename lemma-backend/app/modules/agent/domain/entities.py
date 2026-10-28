@@ -372,3 +372,16 @@ class RuntimeHistoryWindow:
     @property
     def dropped_by_window(self) -> int:
         return self.total_runs - len(self.runs)
+
+    @property
+    def current_run_index(self) -> int | None:
+        """The current run's place in its conversation, 1 for the first run.
+
+        None when the run is older than the window: its place is not known
+        without counting, and nothing that reads it needs it that badly.
+        """
+        current = self.current_run
+        for index, run in enumerate(self.runs):
+            if current is not None and run.id == current.id:
+                return self.dropped_by_window + index + 1
+        return None

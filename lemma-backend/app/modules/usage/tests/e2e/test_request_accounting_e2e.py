@@ -17,6 +17,7 @@ from app.modules.usage.domain.accounting import (
     AccountingConflictError,
     BudgetWindow,
     MeteringIdentity,
+    RequestPosition,
     RequestReceipt,
     TokenCounts,
 )
@@ -203,6 +204,40 @@ async def test_missing_provider_usage_is_audited_without_inventing_cost(
     assert records[0].record_metadata is not None
     assert records[0].record_metadata["usage"] == receipt.counts.model_dump(mode="json")
     await gateway.begin(uuid4(), now)
+
+
+async def test_a_settled_request_records_its_cache_use_and_position(
+    db_manager: DatabaseManager,
+) -> None:
+    user_id, request_id = uuid4(), uuid4()
+    now = datetime.now(timezone.utc)
+    gateway = gateway_for(db_manager, user_id)
+    await gateway.begin(request_id, now)
+    await gateway.record(
+        RequestReceipt(
+            request_id=request_id,
+            counts=TokenCounts(
+                request_count=1,
+                input_tokens=8_000,
+                output_tokens=20,
+                cache_read_tokens=6_000,
+            ),
+            cost=Decimal("0.01"),
+            occurred_at=now,
+            position=RequestPosition(run_index=2, step_index=1),
+        )
+    )
+    (record,) = await records_for(db_manager, user_id)
+    assert record.cached_input_tokens == 6_000
+    assert record.record_metadata is not None
+    assert record.record_metadata["cache"] == {
+        "input_tokens": 8_000,
+        "cache_read_tokens": 6_000,
+        "cache_write_tokens": 0,
+        "hit_ratio": 0.75,
+        "run_index": 2,
+        "step_index": 1,
+    }
 
 
 async def test_late_receipt_charges_dispatch_week_without_blocking_new_week(

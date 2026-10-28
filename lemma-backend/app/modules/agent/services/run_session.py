@@ -160,6 +160,8 @@ class RunSession:
     grants: AgentGrantSummary | None = None
     #: Where agent_surfaces last heard the conversation, if anywhere.
     surface: ConversationSurface | None = None
+    #: The run's place in its conversation (``RuntimeHistoryWindow``).
+    run_index: int | None = None
 
     # -- Loading ------------------------------------------------------------
 
@@ -232,7 +234,9 @@ class RunSession:
                     )
                 surface = await conversation_surface(uow, conversation.id)
                 record_history_size(span, runs=runs, sent=messages)
-        return cls.of(conversation, agent, agent_run, messages, surface)
+        session = cls.of(conversation, agent, agent_run, messages, surface)
+        session.run_index = window.current_run_index
+        return session
 
     @classmethod
     async def for_resume(
