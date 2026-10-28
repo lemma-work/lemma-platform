@@ -10,6 +10,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -28,6 +29,12 @@ class ContactModel(UUIDAuditBase):
     __table_args__ = (
         Index("ix_contacts_pod_created", "pod_id", "created_at"),
         Index("ix_contacts_merged_into", "merged_into_id"),
+        # One person or the other: a contact is never both another contact
+        # and a member at once.
+        CheckConstraint(
+            "merged_into_id IS NULL OR merged_into_user_id IS NULL",
+            name="ck_contacts_merged_once",
+        ),
         # What the organization's contact limit counts, before every turn.
         Index(
             "ix_contacts_answered",
@@ -45,6 +52,15 @@ class ContactModel(UUIDAuditBase):
     #: the survivor forgets the contacts that became it.
     merged_into_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("contacts.id", ondelete="CASCADE"), nullable=True
+    )
+    #: The member this contact proved to be (``services/member_folds``): the
+    #: row stays, holding no handles, so a line or a conversation still naming
+    #: it says it was this person, outside the pod, then.
+    merged_into_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "users.id", ondelete="SET NULL", name="fk_contacts_merged_into_user"
+        ),
+        nullable=True,
     )
     #: When an agent first answered them: what the organization's contact
     #: limit counts, so a crowded group nobody spoke to the bot in costs nothing.

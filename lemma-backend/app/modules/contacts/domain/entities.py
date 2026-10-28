@@ -90,6 +90,8 @@ class Contact(BaseModel):
     created_at: datetime
     identities: tuple[ContactHandle, ...] = ()
     merged_into_id: UUID | None = None
+    #: The member this contact proved to be, once they did.
+    merged_into_user_id: UUID | None = None
     answered_at: datetime | None = None
 
     @property
