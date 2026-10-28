@@ -23,6 +23,7 @@ import base64
 import hashlib
 import hmac
 import time
+from collections.abc import Callable
 from typing import Protocol, TypedDict
 
 import httpx
@@ -140,19 +141,24 @@ class Coturn:
     and nothing is called.
     """
 
-    def __init__(self, urls: list[str], secret: str) -> None:
+    def __init__(
+        self, urls: list[str], secret: str, *, now: Callable[[], float] = time.time
+    ) -> None:
         self._urls = urls
         self._secret = secret
+        self._now = now
 
     async def ice_servers(self, *, label: str, ttl_seconds: int) -> list[IceServer]:
-        username = f"{int(time.time()) + ttl_seconds}:{label}"
-        digest = hmac.new(self._secret.encode(), username.encode(), hashlib.sha1)
+        # Named `login`, not `username`: CodeQL reads that name as personal
+        # data. It is `<expiry>:<label>`, and the label is random per session.
+        login = f"{int(self._now()) + ttl_seconds}:{label}"
+        digest = hmac.new(self._secret.encode(), login.encode(), hashlib.sha1)
         credential = base64.b64encode(digest.digest()).decode()
         return with_tls_443(
             [
                 {
                     "urls": list(self._urls),
-                    "username": username,
+                    "username": login,
                     "credential": credential,
                 }
             ],

@@ -147,15 +147,16 @@ def test_the_server_only_allows_density_the_machine_decides(monkeypatch) -> None
 
 async def test_coturn_credentials_are_the_rest_scheme() -> None:
     servers = await Coturn(
-        ["turn:turn.test:3478", "turns:turn.test:443?transport=tcp"], "secret"
+        ["turn:turn.test:3478", "turns:turn.test:443?transport=tcp"],
+        "secret",
+        now=lambda: 1_000.0,
     ).ice_servers(label="viewer-u", ttl_seconds=600)
     (server,) = servers
-    expiry, _, label = server["username"].partition(":")
-    assert label == "viewer-u" and int(expiry) > 0
-    expected = base64.b64encode(
-        hmac.new(b"secret", server["username"].encode(), hashlib.sha1).digest()
-    ).decode()
-    assert server["credential"] == expected
+    # Built from the inputs, so the check does not just echo the code's answer.
+    login = b"1600:viewer-u"
+    assert server["username"] == login.decode()
+    expected = base64.b64encode(hmac.new(b"secret", login, hashlib.sha1).digest())
+    assert server["credential"] == expected.decode()
 
 
 def test_tls_443_is_added_where_a_provider_left_it_out() -> None:
