@@ -153,7 +153,13 @@ def _fake_client(captured: dict):
             self.pod_id = pod_id
 
         def pod_connectors(self):
-            return {"items": [{"slug": slug} for slug in _POD_CONNECTORS]}
+            captured.setdefault("listed_pods", []).append(self.pod_id)
+            return {
+                "items": [
+                    {"slug": slug, "mode": "PER_MEMBER", "status": "READY", "id": "x"}
+                    for slug in _POD_CONNECTORS
+                ]
+            }
 
         def pod_operation(self, connector, operation):
             captured.setdefault("op_gets", []).append((connector, operation))
@@ -177,7 +183,9 @@ def _fake_client(captured: dict):
             ]
             return {"items": hits[:limit]}
 
-        def declare_pod_connector(self, slug, auth_config_id, mode, **extra):
+        def declare_pod_connector(
+            self, slug=None, auth_config_id=None, mode="PER_MEMBER", **extra
+        ):
             captured["declare"] = {
                 "slug": slug,
                 "auth_config_id": auth_config_id,
@@ -588,6 +596,22 @@ def test_pod_list_and_pod_operations_read_the_selected_pods_connectors(monkeypat
     assert captured["pod_searches"] == [("gmail", "send", 3)]
 
 
+def test_pod_list_shows_slugs_and_takes_another_pod(monkeypatch):
+    """Its help promised slug, mode and status; the generic table showed
+    status and id. And it was the one pod command without `--pod`."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+    other = "22222222-2222-2222-2222-222222222222"
+
+    listed = runner.invoke(app, ["connectors", "pod-list", "--pod", other])
+
+    assert listed.exit_code == 0, listed.output
+    for slug in _POD_CONNECTORS:
+        assert slug in listed.stdout
+    assert "PER_MEMBER" in listed.stdout
+    assert captured["listed_pods"] == [other]
+
+
 def test_pod_add_declares_an_installation_under_a_slug(monkeypatch):
     captured: dict = {}
     _patch(monkeypatch, _fake_client(captured))
@@ -931,3 +955,55 @@ def test_execute_still_reports_a_name_that_is_neither_slug_nor_install(monkeypat
     assert result.exit_code != 0
     assert "deprecated_execute" not in captured
     assert "execute" not in captured
+
+
+def test_pod_add_names_a_connector_nobody_installed_yet(monkeypatch):
+    """A new org has no installs: the catalog id goes to the server, which
+    installs Lemma's own app for it (or says who may) -- not a CLI refusal."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+
+    result = runner.invoke(app, ["connectors", "pod-add", "notes", "notion"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["declare"]["connector_id"] == "notion"
+    assert captured["declare"]["auth_config_id"] is None
+
+
+def test_run_and_execute_take_a_pod_of_their_own(monkeypatch):
+    """Every other pod command took `--pod`; the two that run operations did
+    not, so reaching another pod meant re-selecting it first."""
+    captured: dict = {}
+    _patch(monkeypatch, _fake_client(captured))
+    other = "22222222-2222-2222-2222-222222222222"
+
+    ran = runner.invoke(
+        app,
+        [
+            "connectors",
+            "run",
+            "gmail",
+            "gmail_list_messages",
+            "-d",
+            "{}",
+            "--pod",
+            other,
+        ],
+    )
+    assert ran.exit_code == 0, ran.output
+    assert captured["execute"]["pod_id"] == other
+
+    executed = runner.invoke(
+        app,
+        [
+            "connectors",
+            "operations",
+            "execute",
+            "gmail",
+            "gmail_list_messages",
+            "--pod",
+            other,
+        ],
+    )
+    assert executed.exit_code == 0, executed.output
+    assert captured["execute"]["pod_id"] == other

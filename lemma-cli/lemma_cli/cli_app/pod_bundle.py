@@ -153,7 +153,7 @@ from ..cli_core.io import list_items, to_plain
 from ..cli_core.payload import build_request
 from ..cli_core.state import err_console as console
 from .app_bundle import classify_app_source, deploy_app_bundle
-from .enums import SURFACE_PLATFORMS
+from .enums import SURFACE_PLATFORMS, canonical_columns
 from lemma_pod_bundle.limits import (
     MAX_APP_BYTES,
     MAX_APPS_TOTAL_BYTES,
@@ -2528,6 +2528,7 @@ def import_pod_bundle(
                 "remove them from the table's columns."
             )
         payload = _sanitize_table_payload_for_import(raw_payload)
+        payload["columns"] = canonical_columns(payload.get("columns") or [])
         existing = existing_tables.get(table_name)
         if existing is None:
             _progress_start("table", table_name, "creating")

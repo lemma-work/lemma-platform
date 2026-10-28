@@ -129,6 +129,17 @@ class Schedule(UUIDAuditBase):
     )
     # Why the platform turned it off; NULL while active or when a person did.
     paused_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # When a person last reactivated it. The breaker's streak is counted back
+    # from the run ledger and stops here, so failures from before a resume
+    # cannot switch it off again on the next one.
+    failures_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # The agent that created it -- a named agent's id, or the pod's id for its
+    # default assistant; NULL when a person did. That agent may delete it again
+    # for the same owner without the destructive-action approval. No foreign
+    # key: the pod default assistant is named by the pod's id.
+    created_by_workload_id: Mapped[UUID | None] = mapped_column(nullable=True)
 
     # Relationships
     user: Mapped[Any] = relationship("User", foreign_keys=[user_id])

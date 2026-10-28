@@ -154,6 +154,18 @@ export function deliverOutcome(
     return "nowhere";
 }
 
+/** Record that a sign-in went out by some way other than `openAuthorization`
+ *  — the fallback link followed by hand, or copied to another browser — so
+ *  the outcome is still listened for and a return to this tab still reads
+ *  the lists again. */
+export function noteRoundTrip(): void {
+    sentAt = Date.now();
+    rememberWaiting(sentAt);
+    /* The top of the connect funnel, however the sign-in went out: what comes
+       back is the backend's `connector.connected`. */
+    captureEvent("connector.authorization_opened");
+}
+
 /** Open the provider in a new tab the completion page can report back to.
  *
  *  Not `noopener` — that nulls `window.opener`, and the outcome can then only
@@ -180,11 +192,7 @@ export function deliverOutcome(
 export function openAuthorization(url: string, what: string): boolean {
     /* Set whether or not the tab opens: a refused one is followed by a link
        the person opens by hand, and that is still a round trip. */
-    sentAt = Date.now();
-    rememberWaiting(sentAt);
-    /* The top of the connect funnel, wherever it was started from: what comes
-       back is the backend's `connector.connected`. */
-    captureEvent("connector.authorization_opened");
+    noteRoundTrip();
     if (isDesktop()) {
         openExternal(url);
         return true;

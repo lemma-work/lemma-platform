@@ -20,7 +20,7 @@ test('interruption stops playing and queued buffers before scheduling replacemen
     Object.defineProperty(globalThis, 'AudioContext', {value:FakeContext,configurable:true});
     context.after(() => {if(previous)Object.defineProperty(globalThis,'AudioContext',previous);else Reflect.deleteProperty(globalThis,'AudioContext');});
     const player = createPCMPlayer();
-    const chunk = Buffer.alloc(4800).toString('base64');
+    const chunk = new ArrayBuffer(4800);
     player.push(chunk); player.push(chunk);
     assert.equal(sources[0].when, 10);
     assert.equal(sources[1].when, 10.1);

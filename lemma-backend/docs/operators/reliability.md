@@ -45,7 +45,10 @@ effort. Nothing durable reads them.
 - the classes named in `WORK_CLASSES` (empty means all of them). An
   ingestion-only or receivers-only deployment is the same command with a
   different value;
-- every module's worker lifespans;
+- every module's worker lifespans. Among them, a worker whose classes include
+  agent turns (`interactive` or `automation`) imports what a turn uses and
+  starts building the tokenizer before it claims anything, so its first turn
+  does not do that on the event loop. Local mode skips it, as the API does;
 - the loop-lag watchdog, which refreshes the heartbeat file at
   `WORKER_HEARTBEAT_PATH`. Give the worker a liveness probe on that file's
   freshness;

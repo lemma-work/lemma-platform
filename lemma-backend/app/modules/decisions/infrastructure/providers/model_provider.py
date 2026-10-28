@@ -9,6 +9,12 @@ schema and hands back whatever dict it produced; nothing compares the two. The
 output validator does, and on a background decision the model gets one chance
 to correct itself. Someone waiting on an interactive one gets none: a second
 round-trip costs more than an unavailable answer they can retry.
+
+Nothing else is sent before or around the answer. The tokens are not counted
+ahead of the request: the request caps already bound the input, and on a
+provider that can count, counting is a second round-trip as slow as the first.
+And the model is asked not to think, where it can be asked: a closed question
+needs no reasoning, and a model that thinks by default spends seconds on it.
 """
 
 from __future__ import annotations
@@ -70,7 +76,8 @@ _BUDGETS = {
 }
 #: Per request. The request caps (64 KiB evidence, 32 KiB of examples, a 16 KiB
 #: schema and an 8,000-character instruction) stay inside it at a conservative
-#: two bytes per token.
+#: two bytes per token, which is why it is checked against what the provider
+#: reports rather than counted ahead of the request.
 _INPUT_TOKENS_PER_REQUEST = 64_000
 #: An answers object is small; the headroom is for models that reason first and
 #: count that toward output.
@@ -99,6 +106,7 @@ class ModelDecisionProvider:
             UsageLimits,
         )
         from pydantic_ai.output import StructuredDict, ToolOutput
+        from pydantic_ai.settings import ModelSettings
 
         del timeout_seconds  # the service bounds the whole call
         budget = _BUDGETS[task.priority]
@@ -108,7 +116,6 @@ class ModelDecisionProvider:
                 request_limit=budget.requests,
                 input_tokens_limit=_INPUT_TOKENS_PER_REQUEST * budget.requests,
                 output_tokens_limit=_OUTPUT_TOKENS_PER_REQUEST * budget.requests,
-                count_tokens_before_request=True,
             ),
             user_id=caller.user_id,
             organization_id=caller.organization_id,
@@ -128,6 +135,9 @@ class ModelDecisionProvider:
                 StructuredDict(answer_schema(task.schema), name="answers")
             ),
             retries={"output": budget.output_retries},
+            # Dropped by pydantic-ai for a model whose profile cannot turn
+            # thinking off, so nothing is sent that such a model would refuse.
+            model_settings=ModelSettings(thinking=False),
         )
 
         @agent.output_validator

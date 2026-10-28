@@ -15,6 +15,7 @@ _NAME_TO_MODULE = {
     "AgentHosts": "agent_hosts",
     "WebLogins": "web_logins",
     "PodAgents": "agents",
+    "PodCalls": "calls",
     "PodConversations": "conversations",
     "PodDecisions": "decisions",
     "PodQueries": "data",
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from .agent_hosts import AgentHosts
     from .web_logins import WebLogins
     from .agents import PodAgents
+    from .calls import PodCalls
     from .conversations import PodConversations
     from .decisions import PodDecisions
     from .data import PodQueries, PodRecords, PodTables, Table
@@ -87,6 +89,7 @@ __all__ = [
     "AgentHosts",
     "WebLogins",
     "BoundConnectors",
+    "PodCalls",
     "BoundOrg",
     "BoundPods",
     "Orgs",

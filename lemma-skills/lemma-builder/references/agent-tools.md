@@ -12,7 +12,7 @@ Three toolsets carry them, and only one of them is a decision:
 | --- | --- | --- |
 | `USER_INTERACTION` | `ask_user`, `display_resource`, `request_approval` | **always on** — withholding `request_approval` doesn't make an agent safer, it removes the seam where a human gets to say no |
 | `WAIT` | `wait_for` | **always on**, but *deferred* — found via `search_tools`, not in the prompt prefix |
-| `SPEECH` | `say`, `listen` | **declared** — put `"SPEECH"` in the agent's `toolsets` |
+| `SPEECH` | `say`, `listen`, `list_voices` | **declared** — put `"SPEECH"` in the agent's `toolsets`; *deferred*, found via `search_tools` |
 
 Every tool returns at least `{ success, message?, error? }` (errors are non-fatal — a
 failed tool returns `success:false` with `error`, it does not crash the run); the
@@ -244,10 +244,10 @@ Name exactly one target:
 ```jsonc
 {
   "reason": "waiting for the nightly build",      // shown to the user while waiting
-  "seconds": 900,                                 // a plain gap; clamped to [30, 86400]
+  "seconds": 900,                                 // a plain gap; under 30 is rejected, over 86400 clamped
   "process_id": "abc",                            // ...or an exec_command process
   "subagent_run_id": "01f0...",                   // ...or a spawn_subagent run
-  "max_seconds": 3600,                            // ceiling for the latter two
+  "max_seconds": 3600,                            // ceiling for the latter two (default 15 min)
   "note_to_self": "post the result to #eng"       // handed back verbatim on wake
 }
 ```
@@ -260,7 +260,8 @@ write anything you need to the pod first.
 trigger-or-wait rule in `schedules-and-triggers.md`.
 
 **Waking proves nothing succeeded.** `woke_because` says which of `TIMER`,
-`TARGET_FINISHED`, `DEADLINE`, `TARGET_GONE` or `ANSWERED` ended the wait. A process
+`TARGET_FINISHED`, `DEADLINE`, `TARGET_GONE`, `TARGET_NEEDS_INPUT`,
+`TARGET_UNREADABLE`, `ANSWERED` or `CANCELLED` ended the wait. A process
 that finished may have failed, and a timer elapsing says nothing at all:
 that is all it means. An agent that treats a wake as confirmation will act on something
 that never occurred — prompt it to re-check.
@@ -271,9 +272,10 @@ Four constraints worth designing around:
   conversation, so a poll loop is the expensive way to wait. One sleep sized to the job
   beats several short ones. Below 30s the call is rejected rather than clamped — asking
   for a few seconds means the agent has mistaken this for `sleep()`.
-- **The sandbox does not survive.** The workspace container is reclaimed during the sleep,
-  so sandbox files, background processes, and the shell's cwd are gone on wake.
-  Anything needed afterwards must be written to the pod first.
+- **The sandbox may not survive a `seconds` wait.** Nothing holds it, so the workspace
+  container can be reclaimed during the sleep, and sandbox files, background processes,
+  and the shell's cwd are gone on wake. Anything needed afterwards must be written to
+  the pod first. (A `process_id` wait keeps it: the running process holds it.)
 - **24 hours, hard.** Partly because each wake replays the whole conversation, and partly
   because `reply_window_hours` is real — an agent that sleeps past a platform's reply
   window (WhatsApp's 24h rule) cannot deliver its own result on the surface it was asked
@@ -292,8 +294,9 @@ run on its own.
 modality** — only `say` when a spoken reply is genuinely wanted (e.g. the user sent a
 voice note and expects one back).
 
-**`say`** — request `{ text, output_file_path?, voice? }` → `{ success, message?, error?,
-audio_file_path }`. `output_file_path` defaults to `/me/speech/<id>.mp3`. Delivery is
+**`say`** — request `{ text, output_file_path?, language?, voice? }` → `{ success, message?, error?,
+audio_file_path }`. `voice` is a full voice name from `list_voices`; omit it and one is
+chosen for `language`. `output_file_path` defaults to `/me/speech/<id>.mp3`. Delivery is
 automatic: a native voice note on chat surfaces (OGG voice bubble on Telegram/WhatsApp,
 MP3 audio on Slack/others) and an audio player on the web app; the audio is also saved to
 the pod datastore.

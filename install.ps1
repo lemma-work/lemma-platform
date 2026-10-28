@@ -53,14 +53,21 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     $uvInstaller = Join-Path $env:TEMP "uv-installer.ps1"
     # Matches the curl flags install.sh uses: a bounded connect timeout and
     # retries, so a flaky network fails with a sentence rather than a raw
-    # WebException half a minute later.
-    try {
-        Invoke-RestMethod "https://astral.sh/uv/install.ps1" `
-            -OutFile $uvInstaller `
-            -TimeoutSec 20 `
-            -MaximumRetryCount 5 `
-            -RetryIntervalSec 2
-    } catch {
+    # WebException half a minute later. The retries are a loop because
+    # Invoke-RestMethod's own retry parameters are PowerShell 6.1+, and Windows
+    # PowerShell 5.1 -- what every stock Windows runs -- refuses them.
+    $downloaded = $false
+    for ($attempt = 1; $attempt -le 6 -and -not $downloaded; $attempt++) {
+        try {
+            Invoke-RestMethod "https://astral.sh/uv/install.ps1" `
+                -OutFile $uvInstaller `
+                -TimeoutSec 20
+            $downloaded = $true
+        } catch {
+            if ($attempt -lt 6) { Start-Sleep -Seconds 2 }
+        }
+    }
+    if (-not $downloaded) {
         Fail "could not download the uv installer; check your network and re-run"
     }
     & powershell -ExecutionPolicy Bypass -File $uvInstaller

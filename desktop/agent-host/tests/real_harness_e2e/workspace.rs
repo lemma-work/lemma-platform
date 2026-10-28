@@ -29,7 +29,7 @@ async fn real_harnesses_resume_in_the_saved_workspace_directory() {
     for agent in configured_agents() {
         let conversation = Uuid::new_v4();
         let saved = format!(
-            "/workspace/c/{}/{}",
+            "/home/user/lemma/c/{}/{}",
             Utc::now().format("%Y-%m-%d"),
             &conversation.simple().to_string()[..8]
         );

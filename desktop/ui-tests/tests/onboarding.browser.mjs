@@ -149,6 +149,33 @@ test('deployment choices disclose storage and execution before cloud sign-in', a
   assert.deepEqual(await deploymentCalls(page), [{ command: 'set_connection_mode', args: { mode: 'hosted' } }]);
 });
 
+test('connecting to your own server checks it in the shell and says why it was refused', async t => {
+  const page = await onboarding(t);
+  const form = page.locator('#server-form');
+  assert.equal(await form.isVisible(), false);
+  await page.getByRole('button', { name: 'Connect to your own Lemma server', exact: true }).click();
+  assert.equal(await form.isVisible(), true);
+  assert.equal(await page.locator('#server-url').evaluate(el => el === document.activeElement), true);
+
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  assert.match(await page.locator('#server-setup-error').innerText(), /Enter your Lemma server's address/);
+  assert.deepEqual(await deploymentCalls(page), [], 'an empty address must not reach the shell');
+
+  await page.evaluate(() => { window.__fixture.rejectServer = true; });
+  await page.locator('#server-url').fill('typo.example');
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  await page.getByText("doesn't look like a Lemma server", { exact: false }).waitFor();
+  assert.equal(await page.locator('#choose').isVisible(), true, 'a refused server leaves the chooser up');
+  assert.equal(await page.locator('.server-hint').isVisible(), false, 'the error takes the hint\'s place');
+
+  await page.evaluate(() => { window.__fixture.rejectServer = false; window.__fixture.calls = []; });
+  await page.locator('#server-url').fill('agentbox.work');
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  assert.deepEqual(await deploymentCalls(page), [
+    { command: 'set_connection_mode', args: { mode: 'hosted', server: 'agentbox.work' } },
+  ]);
+});
+
 for (const colorScheme of ['light', 'dark']) {
   for (const viewport of [{ width: 980, height: 680 }, { width: 1280, height: 860 }]) {
     test(`welcome fits ${viewport.width}×${viewport.height} in ${colorScheme} mode without scrolling`, async t => {

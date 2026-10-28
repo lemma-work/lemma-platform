@@ -190,7 +190,9 @@ async def test_a_named_agent_is_refused_with_what_a_grant_card_needs(
             payload={"amount": 21, "to_currency": "EUR"},
         ),
     )
-    assert "42" not in str(result), result
+    # Refused, not run. Not `"42" not in str(result)`: the refusal carries ids
+    # and a random slug, and any of them can contain "42".
+    assert result.get("success") is False, result
     declared = await _declared(db_session, pod_id, install.id)
     assert len(declared) == 1, "declared before the grant was asked"
 

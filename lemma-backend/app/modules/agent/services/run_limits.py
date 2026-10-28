@@ -49,6 +49,7 @@ def budget_for_run(run: object) -> RunSpend:
             model_requests=agent_settings.agent_run_budget_model_requests,
             wall_clock_seconds=wall_clock,
             consecutive_tool_failures=agent_settings.agent_run_budget_tool_failures,
+            repeated_identical_calls=agent_settings.agent_run_budget_repeated_calls,
         )
     )
 

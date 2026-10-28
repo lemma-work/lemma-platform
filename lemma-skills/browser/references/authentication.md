@@ -4,6 +4,12 @@ Login flows, session persistence, OAuth, 2FA, and authenticated browsing.
 
 **Related**: [session-management.md](session-management.md) for state persistence details, [SKILL.md](../SKILL.md) for quick start.
 
+> **In a Lemma workspace, none of the password or state-file patterns below apply.**
+> The default browser profile is durable and already signed in where the person
+> signed in; for a login wall call `browser_sign_in(origin, reason)` and never type
+> a password, `auth save`, or `state save` (see [SKILL.md](../SKILL.md) → *Login
+> walls*). This page is the upstream agent-browser guide, kept for reference.
+
 ## Contents
 
 - [Import Auth from Your Browser](#import-auth-from-your-browser)

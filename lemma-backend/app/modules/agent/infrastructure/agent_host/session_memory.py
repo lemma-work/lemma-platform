@@ -154,6 +154,7 @@ def _rebound(
     )
     binding_value.update(_host_directory_binding(stored, checkpoint, same_session))
     binding_value.update(_instruction_binding(stored, checkpoint, same_session))
+    binding_value.update(_prompted_binding(stored, checkpoint, same_session))
     return None if stored == binding_value else binding_value
 
 
@@ -194,6 +195,43 @@ def _instruction_binding(
     return result
 
 
+def _prompted_binding(
+    stored: JsonObject, checkpoint: AgentHostRunCheckpoint, same_session: bool
+) -> JsonObject:
+    # The newest run whose prompt this session is known to hold, which is not
+    # always the run the binding names: that one may have failed before its
+    # prompt was sent. Gated as the instructions' promotion is, and never
+    # carried into a different session. With it, how far into the conversation
+    # that prompt's history ran (`seen_through`), promoted from the run's
+    # pending prompt the same way.
+    if checkpoint.state in _STATES_PROVING_THE_PROMPT_LANDED:
+        return _landed_prompt(stored, str(checkpoint.run_id), same_session)
+    kept = ("prompted_run_id", "prompted_through") if same_session else ()
+    result: JsonObject = {key: stored[key] for key in kept if key in stored}
+    if "pending_prompt" in stored:
+        result["pending_prompt"] = stored["pending_prompt"]
+    return result
+
+
+def _landed_prompt(stored: JsonObject, run_id: str, same_session: bool) -> JsonObject:
+    result: JsonObject = {"prompted_run_id": run_id}
+    pending = stored.get("pending_prompt")
+    if isinstance(pending, dict) and pending.get("run_id") == run_id:
+        if isinstance(pending.get("seen_through"), int):
+            result["prompted_through"] = pending["seen_through"]
+        return result
+    if pending is not None:
+        # Another run's promise, still owed.
+        result["pending_prompt"] = pending
+    # Every heartbeat of a run that has landed lands again, with its promise
+    # already kept: what it recorded stays.
+    if same_session and stored.get("prompted_run_id") == run_id:
+        through = stored.get("prompted_through")
+        if isinstance(through, int):
+            result["prompted_through"] = through
+    return result
+
+
 def _binding_is_newer(stored: JsonObject, run_id: UUID, created_at: datetime) -> bool:
     previous_id = stored.get("run_id")
     previous_created_at = stored.get("run_created_at")
@@ -222,8 +260,13 @@ async def record_pending_instructions(
     conversation_id: UUID,
     run_id: UUID,
     digest: str,
+    seen_through: int | None = None,
 ) -> None:
     """Note which run is carrying which instructions, pending its delivery.
+
+    ``seen_through`` is the newest message of the history this run's prompt
+    was built from, kept pending the same way: what was written in no run
+    after it, the session has not been sent.
 
     A promise, not a record: :func:`remember_provider_session` turns it into one
     when the host reports that it actually prompted.
@@ -236,6 +279,11 @@ async def record_pending_instructions(
     )
     binding = dict(stored) if isinstance(stored, dict) else {}
     binding["pending_instructions"] = {"run_id": str(run_id), "digest": digest}
+    if seen_through is not None:
+        binding["pending_prompt"] = {
+            "run_id": str(run_id),
+            "seen_through": seen_through,
+        }
     await repository.set_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
@@ -266,13 +314,28 @@ async def instructions_already_delivered(
     return stored.get("instructions_digest") == digest
 
 
-async def resume_session_id(
+@dataclass(frozen=True, slots=True)
+class ResumedSession:
+    """The provider session a turn continues, and how far into it Lemma knows."""
+
+    session_id: str
+    #: The newest run whose prompt the session is known to hold. What it holds
+    #: of the conversation runs to that run's start: anything written in no run
+    #: since, it has never been sent. None when no prompt is known to have
+    #: landed in it, or it was bound before Lemma kept this.
+    last_run_id: UUID | None
+    #: The newest message of the history that run's prompt was built from:
+    #: exact where ``last_run_id`` is only its start. None where unknown.
+    seen_through: int | None = None
+
+
+async def resumed_session(
     uow: SqlAlchemyUnitOfWork,
     *,
     conversation_id: UUID,
     harness_id: UUID,
     capabilities: JsonObject,
-) -> str | None:
+) -> ResumedSession | None:
     """The provider session this conversation should continue in, if any.
 
     Absent on a conversation's first turn, when the conversation last spoke to
@@ -289,4 +352,35 @@ async def resume_session_id(
     if not isinstance(stored, dict) or stored.get("harness_id") != str(harness_id):
         return None
     session_id = stored.get("session_id")
-    return session_id if isinstance(session_id, str) and session_id else None
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    seen_through = stored.get("prompted_through")
+    return ResumedSession(
+        session_id=session_id,
+        last_run_id=_uuid(stored.get("prompted_run_id")),
+        seen_through=seen_through if isinstance(seen_through, int) else None,
+    )
+
+
+async def resume_session_id(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    conversation_id: UUID,
+    harness_id: UUID,
+    capabilities: JsonObject,
+) -> str | None:
+    """Just the id :func:`resumed_session` names."""
+    session = await resumed_session(
+        uow,
+        conversation_id=conversation_id,
+        harness_id=harness_id,
+        capabilities=capabilities,
+    )
+    return session.session_id if session is not None else None
+
+
+def _uuid(value: object) -> UUID | None:
+    try:
+        return UUID(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
