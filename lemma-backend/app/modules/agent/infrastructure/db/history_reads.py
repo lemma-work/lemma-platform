@@ -63,24 +63,38 @@ class HistoryReads(UnitOfWorkRepository):
         result. See the module docstring for why the total and the resumed
         run come back with it.
         """
+        # One statement: the run's conversation, its newest runs, how many it
+        # has, and each run's message count -- a run start reads this first.
         conversation_id = (
+            select(AgentRunModel.conversation_id)
+            .where(AgentRunModel.id == agent_run_id)
+            .scalar_subquery()
+        )
+        message_count = (
+            select(func.count())
+            .where(MessageModel.agent_run_id == AgentRunModel.id)
+            .correlate(AgentRunModel)
+            .scalar_subquery()
+        )
+        found = (
             await self.session.execute(
-                select(AgentRunModel.conversation_id).where(
-                    AgentRunModel.id == agent_run_id
+                select(
+                    AgentRunModel,
+                    func.count().over().label("total_runs"),
+                    message_count.label("message_count"),
                 )
+                .where(AgentRunModel.conversation_id == conversation_id)
+                .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
+                .limit(limit)
             )
-        ).scalar_one_or_none()
-        if conversation_id is None:
+        ).all()
+        if not found:
             return RuntimeHistoryWindow(runs=[], total_runs=0, current_run=None)
-
-        rows = list(
-            (await self.session.execute(newest_runs(conversation_id, limit))).scalars()
-        )
-        rows.reverse()
-        total_runs = int(
-            (await self.session.execute(run_count(conversation_id))).scalar_one()
-        )
-        entities = await self._with_message_digests(rows)
+        found.reverse()
+        total_runs = int(found[0].total_runs)
+        entities = [
+            _digested(row.AgentRunModel, int(row.message_count)) for row in found
+        ]
         current_run = next(
             (entity for entity in entities if entity.id == agent_run_id), None
         )
@@ -125,13 +139,7 @@ class HistoryReads(UnitOfWorkRepository):
                 )
             ).all()
         }
-        entities: list[AgentRunEntity] = []
-        for row in rows:
-            entity = row.to_entity()
-            entity.messages = []
-            entity.total_message_count = digests.get(row.id, 0)
-            entities.append(entity)
-        return entities
+        return [_digested(row, digests.get(row.id, 0)) for row in rows]
 
     async def attach_runtime_history_messages(
         self,
@@ -318,25 +326,9 @@ def _newest_unattached_ids(
     return query.order_by(MessageModel.sequence.desc()).limit(limit)
 
 
-def newest_runs(conversation_id: UUID, limit: int) -> Select:
-    """The newest ``limit`` runs of a conversation.
-
-    Ordered descending so the limit takes the newest, and reversed by the caller
-    -- the trims downstream read a list as chronological and the elision notice
-    is attached to its first element.
-    """
-    return (
-        select(AgentRunModel)
-        .where(AgentRunModel.conversation_id == conversation_id)
-        .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
-        .limit(limit)
-    )
-
-
-def run_count(conversation_id: UUID) -> Select:
-    """How many runs the conversation has, without reading any of them."""
-    return (
-        select(func.count())
-        .select_from(AgentRunModel)
-        .where(AgentRunModel.conversation_id == conversation_id)
-    )
+def _digested(row: AgentRunModel, message_count: int) -> AgentRunEntity:
+    """A run without its messages, carrying how many it has."""
+    entity = row.to_entity()
+    entity.messages = []
+    entity.total_message_count = message_count
+    return entity

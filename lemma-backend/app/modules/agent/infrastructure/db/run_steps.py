@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import ColumnElement, delete, func, select, update
 
 from app.modules.agent.domain.entities import Message as MessageEntity
 from app.modules.channels.contracts.backgrounds import BACKGROUND_KEY
@@ -99,14 +99,19 @@ class RunSteps(UnitOfWorkRepository):
         is one conversation's model history, which compaction keeps within the
         model's window, but a page is what a read asks for.
         """
-        checkpoint = await self.session.scalar(
-            select(func.coalesce(func.max(AgentRunStepModel.seq), 0)).where(
+        # The first page starts at the checkpoint in the same statement.
+        checkpoint = (
+            select(func.coalesce(func.max(AgentRunStepModel.seq), 0))
+            .where(
                 AgentRunStepModel.conversation_id == conversation_id,
                 AgentRunStepModel.kind == RunStepKind.COMPACTION,
             )
+            .scalar_subquery()
         )
-        steps: list[ReplayStep] = []
-        after = int(checkpoint or 0) - 1
+        steps = await self._page(conversation_id, after_seq=checkpoint - 1)
+        if len(steps) < _REPLAY_PAGE:
+            return steps
+        after = steps[-1].seq
         while True:
             page = await self._page(conversation_id, after_seq=after)
             steps.extend(page)
@@ -114,7 +119,9 @@ class RunSteps(UnitOfWorkRepository):
                 return steps
             after = page[-1].seq
 
-    async def _page(self, conversation_id: UUID, *, after_seq: int) -> list[ReplayStep]:
+    async def _page(
+        self, conversation_id: UUID, *, after_seq: int | ColumnElement[int]
+    ) -> list[ReplayStep]:
         rows = await self.session.scalars(
             select(AgentRunStepModel)
             .where(

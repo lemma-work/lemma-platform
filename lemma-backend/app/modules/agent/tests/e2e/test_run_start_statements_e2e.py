@@ -34,11 +34,13 @@ pytestmark = [pytest.mark.e2e]
 #: grants once, for its toolsets and its brief, where they were read twice; and
 #: one more reads where agent_surfaces heard the conversation, which was keys of
 #: the conversation's row before it was agent_surfaces' own table.
-#: Two more read the run log the model's history is replayed from: the latest
-#: checkpoint's place, and the steps from there (a third, the last logged
-#: run's status, only once there are steps). The session's single load takes
-#: them in with the hot path (PR B, A6).
-RUN_START_STATEMENTS = 18
+#: Two more read the run log the model's history is replayed from (18). Then
+#: the history window became one statement where it was four -- the run's
+#: conversation, its newest runs, their total and each run's message count --
+#: the log's checkpoint is found in the statement that reads the steps after
+#: it, and the brief's schedules come with their count: 13. (A third log read,
+#: the last logged run's status, only once there are steps.)
+RUN_START_STATEMENTS = 13
 
 
 @pytest.fixture
