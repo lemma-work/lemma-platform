@@ -2,6 +2,7 @@ package ticket
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -98,7 +99,7 @@ func TestNoKeyRefusesEverything(t *testing.T) {
 func TestFileSourceRereadsOnChange(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stream.json")
 	write := func(machine string, at time.Time) {
-		body := `{"key":"3031323334353637383961626364656630313233343536373839616263646566","machine":"` + machine + `"}`
+		body := `{"key":"` + hex.EncodeToString(key) + `","machine":"` + machine + `"}`
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
