@@ -391,11 +391,24 @@ pub(crate) fn open_external(url: &str) {
 
 #[cfg(target_os = "windows")]
 fn shell_open(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
     let (verb, target) = (wide("open"), wide(url));
+    // ShellExecute may hand the URL to a shell extension, which needs COM on
+    // the calling thread, and this thread is new: initialize it as the
+    // ShellExecute documentation says, and undo it only if it took.
+    // SAFETY: called once on this thread, paired with CoUninitialize below.
+    let com = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    };
     // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call, and
     // the remaining pointers are null, which ShellExecuteW accepts.
     let result = unsafe {
@@ -408,6 +421,10 @@ fn shell_open(url: &str) -> Result<(), String> {
             SW_SHOWNORMAL,
         )
     };
+    if com >= 0 {
+        // SAFETY: balances the successful CoInitializeEx above, on this thread.
+        unsafe { CoUninitialize() };
+    }
     // Success is any value above 32; at or below it is an error code.
     if result as isize > 32 {
         Ok(())
