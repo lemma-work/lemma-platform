@@ -28,6 +28,7 @@ from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
 from supertokens_python.recipe.session.interfaces import SessionContainer
 
 from app.core.live.connection import LiveConnection
+from app.core.live.handshake_origin import cookie_socket_refusal
 from app.core.live.limits import SLOT_REFRESH_SECONDS
 from app.core.live.pod_access import close_code_for
 from app.core.live.sessions import LiveSession, open_sockets
@@ -60,24 +61,29 @@ calls_made = meter.create_counter("lemma.live.calls")
 _TRANSIENT = (SQLAlchemyError, OSError, LiveUnavailable)
 
 
-async def _resolve_session(websocket: WebSocket) -> SessionContainer:
-    """A SuperTokens session from the handshake.
+def _handshake_token(websocket: WebSocket) -> tuple[str | None, bool]:
+    """The handshake's session token, and whether it came from a cookie.
 
     Tries, in order: ``Authorization: Bearer`` (CLI/SDK), the access-token
     cookie (browser cookie sessions), then an ``access_token`` query parameter
     (browsers cannot set headers on an upgrade).
     """
-    token: str | None = None
     authorization = websocket.headers.get("authorization") or ""
     scheme, _, raw = authorization.partition(" ")
     if scheme.lower() == "bearer" and raw.strip():
-        token = raw.strip()
-    if token is None:
-        token = (
-            websocket.cookies.get("sAccessToken")
-            or websocket.cookies.get("st-access-token")
-            or websocket.query_params.get("access_token")
-        )
+        return raw.strip(), False
+    cookie = websocket.cookies.get("sAccessToken") or websocket.cookies.get(
+        "st-access-token"
+    )
+    if cookie:
+        return cookie, True
+    return websocket.query_params.get("access_token"), False
+
+
+async def _resolve_session(websocket: WebSocket) -> tuple[SessionContainer, bool]:
+    """A SuperTokens session from the handshake, and whether it was the
+    cookie's -- the one credential a page gets by being opened."""
+    token, from_cookie = _handshake_token(websocket)
     if not token:
         raise PermissionError("The live socket requires a session token.")
     session = await get_session_without_request_response(
@@ -85,7 +91,7 @@ async def _resolve_session(websocket: WebSocket) -> SessionContainer:
     )
     if session is None:
         raise PermissionError("The live socket requires a session token.")
-    return session
+    return session, from_cookie
 
 
 def _session_of(session: SessionContainer) -> LiveSession:
@@ -106,7 +112,7 @@ async def accept_and_authenticate(websocket: WebSocket) -> LiveSession | None:
         # The client went away before the accept.
         return None
     try:
-        session = await _resolve_session(websocket)
+        session, from_cookie = await _resolve_session(websocket)
     except TryRefreshTokenError:
         await websocket.close(
             code=CLOSE_UNAUTHENTICATED,
@@ -122,6 +128,10 @@ async def accept_and_authenticate(websocket: WebSocket) -> LiveSession | None:
         )
         return None
     refusal = await _workload_refusal(websocket, session)
+    if refusal is None and from_cookie:
+        # No anti-CSRF check above: where the page that opened it is decides
+        # (``handshake_origin``), and an app's page stays in its own pod.
+        refusal = await cookie_socket_refusal(websocket)
     if refusal is not None:
         await websocket.close(code=CLOSE_FORBIDDEN, reason=refusal)
         return None

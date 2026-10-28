@@ -18,6 +18,7 @@ own account) and grants on the slug it answers with
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Collection
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID
@@ -67,18 +68,23 @@ def connector_grant_names(bundle_root: Path) -> dict[str, list[str]]:
 
 
 async def plan_connector_grants(
-    bundle_root: Path, directory: ConnectorDirectory
+    bundle_root: Path,
+    directory: ConnectorDirectory,
+    *,
+    bundled: Collection[str] = (),
 ) -> list[str]:
     """Refuse a bundle granting a connector nobody can declare; warn of the rest.
 
     Returns the plan's warnings: one per connector the import will declare.
     Raises before anything is written when a granted connector is neither
-    declared by the pod nor installed in the organization, naming each.
+    declared by the pod nor installed in the organization, naming each. A
+    connector the bundle declares itself (``bundled``, its ``connectors/``) is
+    ``connector_planning``'s, which declares it before any grant names it.
     """
     warnings: list[str] = []
     unknown: list[str] = []
     for name, holders in sorted(connector_grant_names(bundle_root).items()):
-        if await directory.declares(name):
+        if name in bundled or await directory.declares(name):
             continue
         who = ", ".join(holders)
         if await directory.installation_for(name) is None:

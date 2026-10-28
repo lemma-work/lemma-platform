@@ -29,12 +29,18 @@ Open `wss://<api>/pods/{pod_id}/live`, authenticated by any one of:
 `Authorization: Bearer <access token>` (CLI, SDK), the session cookie
 (browser), or `?access_token=<token>` (a browser cannot set headers on an
 upgrade). The server always accepts first and then authenticates, so a refusal
-is a close frame the client can read, never a failed upgrade:
+is a close frame the client can read, never a failed upgrade.
+
+A cookie session is read with no anti-CSRF check, so its handshake's `Origin`
+must be one HTTP CORS allows (the frontends and the app hosts) or the API's
+own; `Origin: null` and any other origin close with `4403`
+(`core/live/handshake_origin.py`). A socket from an app host stays in that
+app's pod, as its HTTP requests do (`core/app_pin.py`).
 
 | Close code | Meaning | Client should |
 | --- | --- | --- |
 | `4401` | No session, or it expired; or, on an open socket, the session it was opened with ended (signed out, revoked, expired) | Refresh the session, then reconnect |
-| `4403` | The caller may not read the pod (`pod.read`); or, on an open socket, no longer may -- checked as the socket refreshes its slot (every 30 s) and on `presence` | Stop |
+| `4403` | The caller may not read the pod (`pod.read`), or a cookie socket came from an origin it may not; or, on an open socket, no longer may -- checked as the socket refreshes its slot (every 30 s) and on `presence` | Stop |
 | `4404` | No such pod | Stop |
 | `4429` | The user already holds `LIVE_MAX_SOCKETS_PER_USER_PER_POD` sockets on this pod | Close another, or wait |
 | `1011` | Server error | Reconnect with backoff |

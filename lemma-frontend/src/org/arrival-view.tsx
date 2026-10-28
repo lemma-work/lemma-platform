@@ -3,11 +3,11 @@ import { WorkspaceLoading } from "@/shell/workspace-loading";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { source } from "@/data";
-import type { Invitation, Org } from "@/data";
+import type { Invitation, NewOrg, Org } from "@/data";
 import { ArrowRightIcon, GlobeIcon, LockIcon, OrgIcon, RefreshIcon, UserIcon, WarningIcon } from "@/ui/icons";
 import { LemmaLogo } from "@/ui/icons";
 import { AI_MATES, ORG } from "@/copy";
-import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, personalNameFor } from "./arrival";
+import { arrivalHeading, canOpenToDomain, defaultOrgKind, domainOf, freshTeamNameFor, isDomainTaken, personalNameFor } from "./arrival";
 import { isLocalDeployment } from "@/site/config";
 import { capitalised, useThisComputer } from "@/desktop/this-computer";
 import { ResumeInstall } from "@/site/import/resume-install";
@@ -49,8 +49,12 @@ export function ArrivalView({
        that out is by asking for the list again. */
     const [busy, setBusy] = useState<string | null>(null);
     const [problem, setProblem] = useState<string | null>(null);
+    /* The team they asked for, when it was refused because their company's
+       domain already belongs to another organization. Kept so the way out —
+       the same team, by invitation only — is one click, not a retyped form. */
+    const [domainTaken, setDomainTaken] = useState<NewOrg | null>(null);
     const enter = useMutation({
-        mutationFn: async (act: { id: string; run: () => Promise<unknown>; land: string | null }) => {
+        mutationFn: async (act: { id: string; run: () => Promise<unknown>; land: string | null; wanted?: NewOrg }) => {
             setBusy(act.id);
             await act.run();
             return act.land;
@@ -59,15 +63,24 @@ export function ArrivalView({
             onEntered(land ?? null);
             return queryClient.invalidateQueries({ queryKey: ["orgs"] });
         },
-        onError: (failure) => {
+        onError: (failure, act) => {
             setBusy(null);
+            if (act.wanted && isDomainTaken(failure)) {
+                setDomainTaken(act.wanted);
+                return;
+            }
             setProblem(failure instanceof Error ? failure.message : "Couldn’t complete organization setup. Try again.");
         },
     });
-    const go = (id: string, run: () => Promise<unknown>, land?: string | null) => {
+    const go = (id: string, run: () => Promise<unknown>, land?: string | null, wanted?: NewOrg) => {
         setProblem(null);
-        enter.mutate({ id, run, land: land ?? null });
+        setDomainTaken(null);
+        enter.mutate({ id, run, land: land ?? null, wanted });
     };
+    const make = (wanted: NewOrg) => go("make", () => source.createOrg(wanted), null, wanted);
+    /* A choice changed is a new question; the answer to the last one is no
+       longer about anything on the screen. */
+    const forget = () => { setProblem(null); setDomainTaken(null); };
 
     const waiting = invitations.isPending || suggested.isPending;
     /* A list that could not be read is not an empty one. Treating it as none
@@ -168,11 +181,24 @@ export function ArrivalView({
                                colleagues are already in" is how an org ends up
                                with one person in it. */
                             secondary={invites.length > 0 || matches.length > 0 || unread}
+                            /* Their company is already here, so a new team
+                               cannot also be the one their domain lets in. */
+                            domainHeld={matches.length > 0}
                             busy={busy === "make"}
-                            onMake={(wanted) => go("make", () => source.createOrg(wanted))}
+                            onChoose={forget}
+                            onMake={make}
                         />
 
-                        {problem && <p className="arrival__problem">{problem}</p>}
+                        {domainTaken && (
+                            <DomainTaken
+                                domain={domainOf(email)}
+                                joinable={matches.length > 0}
+                                busy={busy === "make"}
+                                onInviteOnly={() => make({ name: domainTaken.name, derived: domainTaken.derived })}
+                                onJustMe={() => make({ name: personalNameFor(name, email), derived: true })}
+                            />
+                        )}
+                        {problem && <p className="arrival__problem" role="alert">{problem}</p>}
                     </>
                 )}
             </div>
@@ -221,6 +247,41 @@ function MatchRow({ org, domain, busy, onJoin }: { org: Org; domain: string; bus
     );
 }
 
+/** A team refused because its domain already belongs to an organization.
+ *
+ *  Said as the ways forward, because "this email domain is already taken" on
+ *  its own was a dead end: nothing on the screen could act on it, and it
+ *  stayed there after switching to "Just me". Joining is offered by the row
+ *  above when the domain lets this person in; otherwise someone there invites
+ *  them. Either way they can still start now — a team people join by
+ *  invitation, or a workspace of their own. */
+function DomainTaken({ domain, joinable, busy, onInviteOnly, onJustMe }: {
+    domain: string;
+    joinable: boolean;
+    busy: boolean;
+    onInviteOnly: () => void;
+    onJustMe: () => void;
+}) {
+    const where = domain ? <code>@{domain}</code> : "your email domain";
+    return (
+        <div className="arrival__taken" role="alert">
+            <p>
+                <WarningIcon size={15} />
+                <span>
+                    An organization already uses {where}.{" "}
+                    {joinable ? "Join it above, or start without opening yours to it." : "Ask someone there to invite you, or start without opening yours to it."}
+                </span>
+            </p>
+            <div className="arrival__taken-acts">
+                <button className="btn btn--primary" disabled={busy} onClick={onInviteOnly}>
+                    {busy ? "Setting it up…" : "Create it invite-only"}
+                </button>
+                <button className="btn" disabled={busy} onClick={onJustMe}>Continue with just me</button>
+            </div>
+        </div>
+    );
+}
+
 /** Just you, or your team.
  *
  *  The question is asked rather than inferred, and the domain decides only the
@@ -239,7 +300,9 @@ export function MakeOne({
     busy,
     initialKind,
     inviteOnly = false,
+    domainHeld = false,
     taken = [],
+    onChoose,
     onMake,
 }: {
     email: string | null;
@@ -254,13 +317,24 @@ export function MakeOne({
      *  hold a domain, and for somebody making a second one it is usually held
      *  already — by their first. Who can join is changed later, in People. */
     inviteOnly?: boolean;
+    /** An organization on the page already holds this domain, so it is not
+     *  offered: asking for it could only be refused. */
+    domainHeld?: boolean;
     /** Names already in use by this person's organizations, so the one read
      *  off their email domain is not offered twice. */
     taken?: readonly string[];
-    onMake: (wanted: { name: string; emailDomain?: string; derived?: boolean }) => void;
+    /** Which kind they picked, so whatever was said about the last attempt
+     *  can be cleared rather than left on screen beside a different choice. */
+    onChoose?: (kind: "personal" | "team") => void;
+    onMake: (wanted: NewOrg) => void;
 }) {
     const domain = domainOf(email);
-    const canOpen = !inviteOnly && canOpenToDomain(email);
+    const mayOpen = !inviteOnly && !domainHeld && canOpenToDomain(email);
+    /* Whether the team lets in anyone at the domain. On by default where it
+       is safe, because that is what makes the next colleague's arrival work —
+       but a choice, not a consequence of having a company address. */
+    const [openToDomain, setOpenToDomain] = useState(true);
+    const canOpen = mayOpen && openToDomain;
     const local = isLocalDeployment();
     const machine = capitalised(useThisComputer());
     const suggestion = useMemo(() => freshTeamNameFor(email, taken), [email, taken]);
@@ -279,8 +353,9 @@ export function MakeOne({
         );
     }
 
-    const personalName = personalNameFor(name);
+    const personalName = personalNameFor(name, email);
     const ready = kind === "personal" || called.trim().length > 0;
+    const choose = (next: "personal" | "team") => { setKind(next); onChoose?.(next); };
 
     return (
         <div className="arrival__make">
@@ -290,7 +365,7 @@ export function MakeOne({
                 <button
                     className="arrival__kind"
                     aria-pressed={kind === "personal"}
-                    onClick={() => setKind("personal")}
+                    onClick={() => choose("personal")}
                 >
                     <UserIcon size={18} />
                     <b>Just me</b>
@@ -299,7 +374,7 @@ export function MakeOne({
                 <button
                     className="arrival__kind"
                     aria-pressed={kind === "team"}
-                    onClick={() => setKind("team")}
+                    onClick={() => choose("team")}
                 >
                     <OrgIcon size={18} />
                     <b>My team</b>
@@ -329,34 +404,35 @@ export function MakeOne({
                     {/* One element beside the mark, not a run of text and
                         tags: every text node in a flex row is its own flex
                         item, which laid this sentence out in columns. */}
-                    <p className="arrival__note">
-                        {canOpen ? <GlobeIcon size={14} /> : <LockIcon size={14} />}
-                        <span>
-                            {canOpen
-                                /* The one fact worth saying: what happens to
-                                   the next person from this company. The old
-                                   version of the other branch explained why
-                                   gmail.com cannot have the open policy, which
-                                   is a decision nobody asked about, in three
-                                   lines, on somebody's first screen. */
-                                ? <>Anyone with an <code>@{domain}</code> address can join without being invited.</>
-                                : inviteOnly
-                                    ? <>You add people by inviting them. You can open it to your email domain later, in People.</>
-                                    : <>You add people by inviting them.</>}
-                        </span>
-                    </p>
+                    {mayOpen ? (
+                        /* The one fact worth saying — what happens to the
+                           next person from this company — as a choice they
+                           can turn off, not a consequence of their address. */
+                        <label className="arrival__note arrival__open">
+                            <input
+                                type="checkbox"
+                                checked={openToDomain}
+                                onChange={(event) => setOpenToDomain(event.target.checked)}
+                            />
+                            <span>Let anyone with an <code>@{domain}</code> address join without being invited.</span>
+                        </label>
+                    ) : (
+                        <p className="arrival__note">
+                            <LockIcon size={14} />
+                            <span>
+                                {domainHeld && domain
+                                    ? <>An organization already uses <code>@{domain}</code>, so you add people to this one by inviting them.</>
+                                    : inviteOnly
+                                        ? <>You add people by inviting them. You can open it to your email domain later, in People.</>
+                                        : <>You add people by inviting them.</>}
+                            </span>
+                        </p>
+                    )}
                 </>
             ) : (
                 <p className="arrival__note">
                     <LockIcon size={14} />
-                    {/* The name only when there is a real one to say. It was
-                        announcing "deepakjha0196+99's Personal" to somebody
-                        who had not been asked for a name and would not have
-                        chosen that one. */}
-                    <span>
-                        Private to you.{" "}
-                        {personalName === "Personal" ? "You can invite people later." : <>It will be called <b>{personalName}</b>.</>}
-                    </span>
+                    <span>Private to you. It will be called <b>{personalName}</b>.</span>
                 </p>
             )}
 

@@ -45,7 +45,7 @@ export function AppIdeas({ name, onAsk, title = "App ideas" }: {
             {APP_CATEGORIES.map(entry => <button key={entry.id} aria-pressed={entry.id === category.id} onClick={() => setCategoryId(entry.id)}>{entry.name}</button>)}
         </div>
         <div className="app-catalog__grid" aria-label={`${category.name} app ideas`}>
-            {category.ideas.map((idea, index) => <article className="app-idea" key={category.id + idea.name}>
+            {category.ideas.map((idea, index) => <article className="app-idea" key={category.id + idea.name} aria-label={idea.name}>
                 <div className="app-idea__preview">
                     <Image src={`/app-ideas/${category.id}-collection.png`} alt={`Example ${idea.name.toLowerCase()} interface`} width={1536} height={1024} sizes="(max-width: 600px) 200vw, (max-width: 1100px) 100vw, 650px" style={{ left: index % 2 === 0 ? "0" : "-100%", top: index < 2 ? "0" : `${-100 * previewRowSplit / (1 - previewRowSplit)}%`, height: `${100 / (index < 2 ? previewRowSplit : 1 - previewRowSplit)}%` }} />
                 </div>

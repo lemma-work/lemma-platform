@@ -192,7 +192,27 @@ fn the_guest_image_asks_the_relay_first_and_keeps_the_gateway() {
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .collect();
-    assert_eq!(settings, ["[Resolve]", "DNS=127.0.0.2", "FallbackDNS="]);
+    assert_eq!(
+        settings,
+        [
+            "[Resolve]",
+            "DNS=127.0.0.2",
+            "FallbackDNS=",
+            "DNSStubListenerExtra=10.4.0.1",
+        ]
+    );
+    // Sandboxes are run with `--dns` naming this listener; the two must agree,
+    // or every sandbox asks an address nothing answers on.
+    assert!(
+        settings.contains(
+            &format!(
+                "DNSStubListenerExtra={}",
+                crate::host_dns::SANDBOX_DNS_ADDRESS
+            )
+            .as_str()
+        ),
+        "resolved's sandbox listener and guestd's --dns must name the same address"
+    );
     assert_eq!(
         crate::host_dns::HOST_DNS_ADDRESS,
         "127.0.0.2:53",

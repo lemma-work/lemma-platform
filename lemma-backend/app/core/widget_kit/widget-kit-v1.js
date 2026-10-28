@@ -6,6 +6,7 @@
  * `lemma.canCompose()` -> Promise<boolean>, draw a follow-up button only if true
  * `lemma.client()` -> Promise<LemmaClient>, authenticated, for anything else
  * `lemma.esc / num / money / pct / date` -> formatting for text that reaches the DOM
+ * `lemma.fail(message, where?)` -> say a widget could not draw, in place and to its host
  *
  * The browser SDK loads on the first call that needs it, so a widget that draws
  * data it already carries pays nothing for it. Failures reject with a sentence a
@@ -93,6 +94,40 @@
     date: function (value) {
       var d = new Date(value);
       return isNaN(d) ? "—" : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-    }
+    },
+    fail: fail
   };
+
+  /* A widget that cannot draw says so: in place, so the person is not left
+     looking at a blank frame, and to the page hosting it, so whoever showed
+     it can be told and fix it. Uncaught errors and rejected promises -- a CDN
+     library that would not load, a malformed spec -- are reported the same
+     way, so a widget that never calls `fail` still gets heard. */
+  var reported = {};
+  function report(message) {
+    var text = String(message || "This view could not be drawn.").slice(0, 500);
+    if (reported[text]) return;
+    reported[text] = true;
+    try { window.parent.postMessage({ type: "lemma-widget-error", message: text }, "*"); } catch (e) { /* no host */ }
+  }
+  function fail(message, target) {
+    var text = String(message || "This view could not be drawn.");
+    var el = typeof target === "string" ? document.getElementById(target) : target;
+    if (el) {
+      var note = document.createElement("p");
+      note.className = "lk-failed";
+      note.textContent = "Could not draw this: " + text;
+      el.replaceChildren(note);
+    }
+    report(text);
+  }
+  window.addEventListener("error", function (event) {
+    // A resize loop is the browser's housekeeping, not the widget failing.
+    if (/ResizeObserver loop/.test(event.message || "")) return;
+    report(event.message || (event.error && event.error.message));
+  });
+  window.addEventListener("unhandledrejection", function (event) {
+    var reason = event.reason;
+    report((reason && reason.message) || reason);
+  });
 })();

@@ -1,7 +1,7 @@
 import type { Tab } from "@/data";
 import { docTitle } from "@/library/doc-title";
 import { readableName } from "@/library/reading";
-import { isAboutSection, type AboutSection } from "@/space/about-sections";
+import { aboutSectionOf, type AboutSection } from "@/space/about-sections";
 
 /** The one segment every workspace URL hangs off. */
 export const ROOT = "/t";
@@ -120,7 +120,10 @@ export function readAddress(pathname: string): Address {
            a section that moved to Settings, say — still opens About. */
         case "about":
             if (rest.length > 2) return here(null);
-            return isAboutSection(rest[1]) ? here("space:about", { section: rest[1] }) : here("space:about");
+            {
+                const section = aboutSectionOf(rest[1]);
+                return section ? here("space:about", { section }) : here("space:about");
+            }
         /* The space's settings are sections of the teammate's page now. A link
            that still names the page they had opens the one that carries them
            rather than nothing, and the shell rewrites the address. */
@@ -225,6 +228,17 @@ function tailOf(address: Address): string[] {
  *  only that list has — so the shell matches those by id once it arrives,
  *  rather than inventing an app frame pointed at nothing.
  */
+/** The tabs every source's `listTabs` returns for every pod, whatever else it
+ *  lists. Not rebuilt from an id (`tabFromId`), but a link to one names a tab
+ *  that will be in the strip once it loads — so the shell can wait for it,
+ *  which it must not do for an `app:` tab that may never arrive.
+ */
+const ALWAYS_LISTED = new Set(["conversation", "library", "profile"]);
+
+export function isAlwaysListed(tabId: string): boolean {
+    return ALWAYS_LISTED.has(tabId);
+}
+
 export function tabFromId(tabId: string): Tab | null {
     if (tabId === "history") return { id: "history", kind: "history", label: "History" };
     if (tabId === "computer") return { id: "computer", kind: "computer", label: "Computer" };

@@ -30,18 +30,21 @@ status endpoint. What you have to get right is the trigger:
 - **The workflow's `start` block does not create the trigger.**
   `start: {type: "DATASTORE_EVENT"}` is a declaration; firing needs a separate
   **`Schedule`** row with `schedule_type: DATASTORE`, the `table_name`, and
-  `operations`. Create both.
-- **`operations` is mandatory on the schedule** (`["create"]`, `["update"]`, …).
-  It is optional on the workflow `start` model and defaults to "all" there —
-  that default does not carry over, and a schedule without it matches nothing.
+  `operations`. Create both — the schedule in one command:
+  `lemma schedules create --datastore tickets --on insert --workflow intake`.
+- **`operations` is mandatory on the schedule** (`["INSERT"]`, `["UPDATE"]`,
+  `["DELETE"]`, or several). It is optional on the workflow `start` model and
+  defaults to "all" there — that default does not carry over, and a schedule
+  without it is refused.
 - **Creating one needs `datastore.table.update` on the watched table**, not just
   record-write. A `POD_USER` who can add rows may still not be able to create the
   trigger.
 - **On a shared (non-RLS) table there is no row owner**, so the run falls back to
   the schedule's creator — every member's write runs as *that* person. If you
   want per-user scoping, the table must be RLS-on.
-- **There is no loop guard.** An agent writing back into the *watched* table
-  re-fires the trigger. Write results to a **different** table.
+- **A loop is capped, not prevented.** An agent writing back into the *watched*
+  table re-fires the trigger, until the daily fire cap pauses the schedule
+  (`paused_reason: fire_cap`). Write results to a **different** table.
 - **Grant the agent, not the node.** The workflow's AGENT node does not check
   `agent.execute`; what decides whether the agent can write the result table is
   the agent's own resource grants.

@@ -38,6 +38,7 @@
 .lk-table td { padding: 6px 8px 6px 0; border-top: 1px solid var(--lemma-widget-border, #eee8dc); }
 .lk-table td[data-kind="num"] { text-align: right; }
 .lk-empty { color: var(--lemma-widget-muted, #6b665c); }
+.lk-failed { margin: 0; font: 13px/1.45 var(--w-mono, ui-monospace, monospace); color: var(--w-warn, #8a5f0f); white-space: pre-wrap; }
 .lk-record dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
 .lk-record dt { color: var(--lemma-widget-muted, #6b665c); font-size: 12.5px; }
 .lk-record dd { margin: 0; }

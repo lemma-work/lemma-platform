@@ -23,14 +23,14 @@ from app.core.authorization.models import RoleModel
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.resource_actions import RESOURCE_ACTIONS
 from app.core.authorization.resource_names import resolve_resource_id_by_name
-from app.core.authorization.service import AuthorizationDataService
 from app.modules.identity.contracts.orm import OrganizationMember, User
 from app.modules.pod.api.schemas.pod_schemas import (
     ResourceAccessGrantRequest,
     ResourceAccessGrantResponse,
     ResourceAccessResponse,
 )
-from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
+from app.modules.pod.contracts.grantees import require_pod_grantee
+from app.modules.pod.infrastructure.models.pod_models import PodMember
 
 router = APIRouter(
     prefix="/pods/{pod_id}/resources/{resource_type}/{resource_name}/access",
@@ -132,8 +132,8 @@ async def replace_resource_access_grant(
         pod_id=pod_id,
         action="grant permissions you could not use on this resource",
     )
-    await _require_grantee(
-        uow,
+    await require_pod_grantee(
+        uow.session,
         pod_id=pod_id,
         grantee_type=normalized_grantee_type,
         grantee_id=grantee_id,
@@ -190,8 +190,8 @@ async def delete_resource_access_grant(
         resource_type=resource_type,
         resource_name=resource_name,
     )
-    await _require_grantee(
-        uow,
+    await require_pod_grantee(
+        uow.session,
         pod_id=pod_id,
         grantee_type=normalized_grantee_type,
         grantee_id=grantee_id,
@@ -258,39 +258,6 @@ def _normalize_grantee_type(grantee_type: str) -> str:
             detail="grantee_type must be ROLE or POD_MEMBER",
         )
     return normalized
-
-
-async def _require_grantee(
-    uow: UoWDep,
-    *,
-    pod_id: UUID,
-    grantee_type: str,
-    grantee_id: UUID,
-) -> None:
-    if grantee_type == "ROLE":
-        pod = await uow.session.get(Pod, pod_id)
-        if pod is None:
-            raise HTTPException(status_code=404, detail="Pod not found")
-        await AuthorizationDataService(uow.session).ensure_pod_system_roles(
-            organization_id=pod.organization_id,
-            pod_id=pod_id,
-        )
-        stmt = select(RoleModel.id).where(
-            RoleModel.pod_id == pod_id,
-            RoleModel.id == grantee_id,
-        )
-        role_id = (await uow.session.execute(stmt)).scalar_one_or_none()
-        if role_id is None:
-            raise HTTPException(status_code=404, detail="Role not found")
-        return
-
-    stmt = select(PodMember.id).where(
-        PodMember.pod_id == pod_id,
-        PodMember.id == grantee_id,
-    )
-    pod_member_id = (await uow.session.execute(stmt)).scalar_one_or_none()
-    if pod_member_id is None:
-        raise HTTPException(status_code=404, detail="Pod member not found")
 
 
 async def _resource_grant_responses(

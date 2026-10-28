@@ -57,7 +57,18 @@ def _list_all_from_tree(files):
     return list_all
 
 
+class _NoPodConnectors:
+    """A pod that declares no connectors, for fakes that predate them."""
+
+    @staticmethod
+    def pod_connectors(*_args, **_kwargs):
+        return {"items": []}
+
+
 class FakeClient(SimpleNamespace):
+    #: Export reads the pod's connectors; a fake that names none has none.
+    connectors = _NoPodConnectors()
+
     def pod(self, pod_id):
         files = getattr(self, "files", None)
         if (
@@ -399,6 +410,9 @@ def test_export_pod_bundle_skips_excluded_apps(tmp_path: Path):
     assert result["excluded"] == ["apps"]
     assert result["counts"]["apps"] == 0
     assert (tmp_path / "demo-pod" / "pod.json").exists()
+    # No pod connectors: format 3, which a reader of 3 reads whole.
+    pod = json.loads((tmp_path / "demo-pod" / "pod.json").read_text())
+    assert pod["format_version"] == 3
     assert list((tmp_path / "demo-pod" / "apps").iterdir()) == []
 
 
@@ -640,6 +654,10 @@ def test_import_pod_bundle_accepts_resource_collection_dir(tmp_path: Path):
                 "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
             }
         ),
+        # The grant names `slack`, which this pod already declares.
+        connectors=SimpleNamespace(
+            pod_connectors=lambda pod_id: {"items": [{"slug": "slack"}]}
+        ),
     )
 
     result = import_pod_bundle(client, pod_id="pod_123", source_dir=agents_root)
@@ -721,6 +739,10 @@ def test_import_pod_bundle_agent_update_strips_name_and_clears_absent_schemas(
             tree=lambda pod_id, root_path="/", files_per_directory=20: {
                 "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
             }
+        ),
+        # The grant names `slack`, which this pod already declares.
+        connectors=SimpleNamespace(
+            pod_connectors=lambda pod_id: {"items": [{"slug": "slack"}]}
         ),
     )
 
@@ -1155,6 +1177,10 @@ def test_an_older_bundle_carrying_kind_still_imports(tmp_path: Path):
             tree=lambda pod_id, root_path="/", files_per_directory=20: {
                 "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
             }
+        ),
+        # The grant names `slack`, which this pod already declares.
+        connectors=SimpleNamespace(
+            pod_connectors=lambda pod_id: {"items": [{"slug": "slack"}]}
         ),
     )
 
@@ -3567,8 +3593,15 @@ def test_plan_does_not_block_when_the_connector_check_cannot_run(tmp_path: Path)
         },
     )
 
+    client = _bare_pod_client()
+
+    def _unreachable(*_args, **_kwargs):
+        raise RuntimeError("connection reset")
+
+    client.connectors = SimpleNamespace(pod_connectors=_unreachable)
+
     result = import_pod_bundle(
-        _bare_pod_client(), pod_id="pod_1", source_dir=tmp_path, dry_run=True
+        client, pod_id="pod_1", source_dir=tmp_path, dry_run=True
     )
 
     assert result["errors"] == []

@@ -275,6 +275,20 @@ def test_schedule_create_refuses_an_agent_and_a_workflow_across_flag_and_payload
     assert "request" not in captured
 
 
+def test_schedule_create_refuses_two_triggers_rather_than_dropping_one(monkeypatch):
+    """`--webhook-source` replaced the config `--cron` built, so the schedule
+    came out a webhook and the cron vanished without a word."""
+    captured = _create_capture(monkeypatch)
+
+    result = _create(
+        "--agent", "a", "--cron", "0 9 * * *", "--webhook-source", "composio"
+    )
+
+    assert result.exit_code != 0
+    assert "--cron/--at" in result.output and "--webhook-source" in result.output
+    assert "request" not in captured
+
+
 def test_schedules_list_shows_the_target(monkeypatch):
     """The list had an `Agent Id` column and nothing for workflows, so a
     workflow-targeted schedule showed a blank target and you had to run

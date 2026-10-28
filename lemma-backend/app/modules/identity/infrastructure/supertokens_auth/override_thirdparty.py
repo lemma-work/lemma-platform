@@ -172,6 +172,7 @@ def override_thirdparty_functions(
                                 is_deleted=False,
                             ),
                             send_welcome=is_verified,
+                            signup_method=third_party_id,
                         )
                         await uow.commit()
 

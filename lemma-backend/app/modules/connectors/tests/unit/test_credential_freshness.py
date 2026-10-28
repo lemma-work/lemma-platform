@@ -141,7 +141,7 @@ class TestTheHotPath:
         credentials = await service._resolve_execution_credentials(account, teammate)
 
         connector_service.get_account_credentials.assert_awaited_once_with(
-            account.id, account.user_id, account.organization_id
+            account.id, account.user_id, account.organization_id, force_refresh=False
         )
         assert credentials["access_token"] == "fresh"
 
@@ -161,3 +161,27 @@ class TestTheHotPath:
 
         await service._resolve_execution_credentials(account, account.user_id)
         connector_service.get_account_credentials.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_an_account_marked_for_reauth_is_verified_by_a_refresh(self):
+        # The mark is no longer terminal: an account whose grant a refresh can
+        # vouch for is refreshed before use whatever its expiry says, and a
+        # successful refresh is what clears the mark.
+        from app.modules.connectors.domain.account import AccountStatus
+
+        connector_service = AsyncMock()
+        connector_service.get_account_credentials.return_value = {
+            "access_token": "fresh"
+        }
+        service = self._service(connector_service)
+        account = self._account(datetime.now(timezone.utc) + timedelta(hours=1))
+        account.status = AccountStatus.REAUTH_REQUIRED
+
+        credentials = await service._resolve_execution_credentials(
+            account, account.user_id
+        )
+
+        connector_service.get_account_credentials.assert_awaited_once_with(
+            account.id, account.user_id, account.organization_id, force_refresh=True
+        )
+        assert credentials["access_token"] == "fresh"

@@ -109,6 +109,12 @@ PRODUCERS: dict[str, Producer] = {
         f"{_PRODUCERS_E2E}"
         "::test_an_agent_writing_in_its_members_channel_plans_their_push",
     ),
+    "connectors/infrastructure/adapters/member_coverage.py:tell_through_channels": (
+        Producer(
+            Sends.PUSH,
+            f"{_PRODUCERS_E2E}::test_asking_a_member_to_connect_plans_their_push",
+        )
+    ),
     "agent/services/pause_questions.py:_ask": Producer(
         Sends.PUSH,
         f"{_PRODUCERS_E2E}::test_a_paused_run_asks_its_member_and_plans_their_push",

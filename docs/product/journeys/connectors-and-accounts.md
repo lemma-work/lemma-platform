@@ -78,7 +78,10 @@ rather than chosen per call. PS-CONN-031 says which is which.
   connected through it, and every pod connector declared on it, from being
   usable.
 - The system shall say what will stop working — which pods' connectors, and
-  how many accounts — before removing it, rather than after.
+  how many accounts — before removing it, rather than after. Pods the admin
+  cannot open are counted, never named or described; and when the system
+  could not read everything that stops, it says so rather than that nothing
+  does.
 
 **Contracts:** `connector.installation.impact`, `connector.auth_config.delete`, `connector.account.list`, `pod.connector.list`
 

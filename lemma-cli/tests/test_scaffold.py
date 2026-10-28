@@ -900,6 +900,9 @@ UNDOCUMENTED_SCAFFOLD_FIELDS: dict[str, set[str]] = {
     "function": {"icon_url"},
     "agent": {"icon_url"},
     "workflow": {"icon_url"},
+    # Deprecated: a schedule names its pod connector. Agents reading the
+    # scaffold took the commented-out line for a field to fill in.
+    "schedule": {"account_id"},
 }
 
 SCAFFOLD_REQUEST_MODELS: list[tuple[str, str, str]] = [

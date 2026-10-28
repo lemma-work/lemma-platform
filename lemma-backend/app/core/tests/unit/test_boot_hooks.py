@@ -51,6 +51,10 @@ ALLOWED_BOOT_HOOKS: dict[str, str] = {
     "worker:agent._report_system_model_pricing": (
         "compares the static model catalog with the static price table"
     ),
+    "worker:agent._warm_turn_imports": (
+        "imports a fixed list of modules and starts the tokenizer build in the "
+        "background; reads no stored data"
+    ),
     "worker:function._close_runtime_http_clients": (
         "shutdown only; closes HTTP clients"
     ),

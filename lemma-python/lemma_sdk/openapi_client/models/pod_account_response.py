@@ -29,10 +29,13 @@ class PodAccountResponse:
         pod_id (UUID):
         source (PodAccountSource):
         visibility (PodAccountVisibility):
+        allow_sandbox_use (bool | Unset):  Default: False.
         connector_id (None | str | Unset):
         display_name (None | str | Unset):
         email (None | str | Unset):
         last_used_at (datetime.datetime | None | Unset):
+        notice (None | str | Unset): Something the change did not do at once, for the owner to read: after turning
+            `allow_sandbox_use` off, that sandboxes already given the token keep a copy until it is swept.
         used_by (list[str] | Unset): Slugs of the SHARED pod connectors that run as this account.
     """
 
@@ -45,10 +48,12 @@ class PodAccountResponse:
     pod_id: UUID
     source: PodAccountSource
     visibility: PodAccountVisibility
+    allow_sandbox_use: bool | Unset = False
     connector_id: None | str | Unset = UNSET
     display_name: None | str | Unset = UNSET
     email: None | str | Unset = UNSET
     last_used_at: datetime.datetime | None | Unset = UNSET
+    notice: None | str | Unset = UNSET
     used_by: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -70,6 +75,8 @@ class PodAccountResponse:
         source = self.source.value
 
         visibility = self.visibility.value
+
+        allow_sandbox_use = self.allow_sandbox_use
 
         connector_id: None | str | Unset
         if isinstance(self.connector_id, Unset):
@@ -97,6 +104,12 @@ class PodAccountResponse:
         else:
             last_used_at = self.last_used_at
 
+        notice: None | str | Unset
+        if isinstance(self.notice, Unset):
+            notice = UNSET
+        else:
+            notice = self.notice
+
         used_by: list[str] | Unset = UNSET
         if not isinstance(self.used_by, Unset):
             used_by = self.used_by
@@ -116,6 +129,8 @@ class PodAccountResponse:
                 "visibility": visibility,
             }
         )
+        if allow_sandbox_use is not UNSET:
+            field_dict["allow_sandbox_use"] = allow_sandbox_use
         if connector_id is not UNSET:
             field_dict["connector_id"] = connector_id
         if display_name is not UNSET:
@@ -124,6 +139,8 @@ class PodAccountResponse:
             field_dict["email"] = email
         if last_used_at is not UNSET:
             field_dict["last_used_at"] = last_used_at
+        if notice is not UNSET:
+            field_dict["notice"] = notice
         if used_by is not UNSET:
             field_dict["used_by"] = used_by
 
@@ -149,6 +166,8 @@ class PodAccountResponse:
         source = PodAccountSource(d.pop("source"))
 
         visibility = PodAccountVisibility(d.pop("visibility"))
+
+        allow_sandbox_use = d.pop("allow_sandbox_use", UNSET)
 
         def _parse_connector_id(data: object) -> None | str | Unset:
             if data is None:
@@ -194,6 +213,15 @@ class PodAccountResponse:
 
         last_used_at = _parse_last_used_at(d.pop("last_used_at", UNSET))
 
+        def _parse_notice(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        notice = _parse_notice(d.pop("notice", UNSET))
+
         used_by = cast(list[str], d.pop("used_by", UNSET))
 
         pod_account_response = cls(
@@ -206,10 +234,12 @@ class PodAccountResponse:
             pod_id=pod_id,
             source=source,
             visibility=visibility,
+            allow_sandbox_use=allow_sandbox_use,
             connector_id=connector_id,
             display_name=display_name,
             email=email,
             last_used_at=last_used_at,
+            notice=notice,
             used_by=used_by,
         )
 

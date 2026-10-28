@@ -793,6 +793,15 @@ class Settings(BaseSettings):
             "app routing and is rejected at startup in development/production."
         ),
     )
+    app_pin_cross_pod_enforced: bool = Field(
+        default=False,
+        description=(
+            "Refuse an app page's calls to another pod's routes. On main an app "
+            "could pass any pod id to the SDK; while this is off such a call is "
+            "served as before and logged (`apps.pin.cross_pod_observed`), so "
+            "deployed apps that rely on it show up before it is refused."
+        ),
+    )
     app_api_via_app_origin: bool = Field(
         default=False,
         description=(

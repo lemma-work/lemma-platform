@@ -1,0 +1,6 @@
+{
+  "connector": "slack",
+  "mode": "SHARED",
+  "required": false,
+  "purpose": "The team's Slack bot answers here."
+}

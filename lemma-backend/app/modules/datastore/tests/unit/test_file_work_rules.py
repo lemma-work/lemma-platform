@@ -15,6 +15,7 @@ from app.core.embeddings.embeddings import EmbeddingProviderError
 from app.core.embeddings.local_embedder import EmbeddingModelUnavailableError
 from app.core.infrastructure.work import UnavailableEvidence
 from app.modules.datastore.domain.errors import ExtractorFailedOnDocument
+from app.modules.datastore.domain.events import DatastoreFileCreatedEvent
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     FileStatus,
@@ -213,3 +214,14 @@ def test_lemmas_own_database_being_unavailable_is_not_the_documents_fault() -> N
     assert was_database_unavailable(describe_error(unavailable))
     assert dead_message("unavailable_exhausted", "Unavailable: KreuzbergUnreachable")
     assert "extractor" in dead_message("unavailable_exhausted", None)
+
+
+def test_a_created_file_says_how_big_it_is() -> None:
+    """Its size is on the row, not in its metadata, which is where a reader of
+    the event used to look -- and find nothing."""
+    file = _file(size_bytes=123_456, metadata={"source": "upload"})
+    file.mark_created(uuid4())
+    (created,) = [
+        e for e in file.collect_events() if isinstance(e, DatastoreFileCreatedEvent)
+    ]
+    assert created.size_bytes == 123_456

@@ -7,6 +7,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.pod_bundle.domain.connector_plan import (
+    ConnectorChoice,
+    ConnectorPlan,
+)
 from app.modules.pod_bundle.domain.state import (
     BundleSourceKind,
     ExportState,
@@ -144,6 +148,16 @@ class ImportPlanResponse(BaseModel):
     variables: list[VariableSpecResponse] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     has_destructive_steps: bool = False
+    connectors: list[ConnectorPlan] = Field(
+        default_factory=list,
+        description=(
+            "The bundle's pod connectors, each with the importing org's "
+            "installations of its catalog connector, whether one can be "
+            "created, and (SHARED) your own accounts you could share. "
+            "NEEDS_INSTALLATION and CONFLICT block the apply until resolved; "
+            "NEEDS_ACCOUNT imports, waiting for an account."
+        ),
+    )
 
     @classmethod
     def from_domain(cls, plan: ImportPlan) -> "ImportPlanResponse":
@@ -175,6 +189,7 @@ class ImportPlanResponse(BaseModel):
             ],
             warnings=plan.warnings,
             has_destructive_steps=plan.has_destructive_steps,
+            connectors=plan.connectors,
         )
 
 
@@ -228,6 +243,15 @@ class ApplyImportRequest(BaseModel):
     confirm_destructive: bool = Field(
         default=False,
         description="Required to proceed when the plan has destructive steps.",
+    )
+    connectors: dict[str, ConnectorChoice] = Field(
+        default_factory=dict,
+        description=(
+            "Choices for the plan's `connectors`, by slug: which installation "
+            "(default: the plan's `auth_config_id`), or to create one, and for a "
+            "SHARED connector which of your own accounts to share. Account ids "
+            "are never in a bundle; they are chosen here, in your own org."
+        ),
     )
 
 
