@@ -13,10 +13,8 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.contact_conversations import (
-    move_contact_conversation,
-)
-from app.modules.agent.contracts.conversations_for_surfaces import SurfaceConversation
+from app.modules.agent.contracts.channels import move_contact_conversation
+from app.modules.agent.contracts.channels import SurfaceConversation
 from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
 from app.modules.agent_surfaces.domain.surface_config import ContactAnswer
 from app.modules.agent_surfaces.domain.web_widgets import WidgetAnswer

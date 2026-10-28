@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from app.modules.agent.contracts.progress_tools import (
+from app.modules.agent.contracts.channel_words import (
     TODO_TOOL_NAME,
     TodoStep,
     progress_comment_for_tool_call,

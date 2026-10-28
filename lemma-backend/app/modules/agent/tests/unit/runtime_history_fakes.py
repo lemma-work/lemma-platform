@@ -136,7 +136,7 @@ class StoredConversation:
         self._write(MessageDraft.of_text(text, role=MessageRole.USER), run_id=None)
 
     def folded(self, *lines: tuple[MessageRole, str]) -> UUID:
-        """What ``fold_history`` writes when a merge joins another of the
+        """What ``FoldConversations.fold`` writes when a merge joins another of the
         person's chats to this one: what they saw of it, in no run, each line
         marked with the conversation it came from. Returns that conversation."""
         other = uuid4()

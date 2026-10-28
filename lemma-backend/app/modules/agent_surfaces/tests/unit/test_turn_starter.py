@@ -15,9 +15,7 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent.infrastructure.tools.speech.provider import SpeechProviderError
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_context import (

@@ -26,7 +26,7 @@ from typing import Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts import channel_conversations
+from app.modules.agent.contracts import channels as agent_channels
 
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -148,7 +148,7 @@ class ChannelSeatsInDatabase:
     async def lock_person(
         self, *, channel_id: UUID, pod_id: UUID, agent_id: UUID | None, person_id: UUID
     ) -> None:
-        await channel_conversations.lock_person_in_channel(
+        await agent_channels.lock_person_in_channel(
             self.uow,
             channel_id=channel_id,
             pod_id=pod_id,
@@ -165,7 +165,7 @@ class ChannelSeatsInDatabase:
         user_id: UUID,
         contact_id: UUID | None,
     ) -> UUID | None:
-        return await channel_conversations.conversation_in_channel(
+        return await agent_channels.conversation_in_channel(
             self.uow,
             channel_id=channel_id,
             pod_id=pod_id,

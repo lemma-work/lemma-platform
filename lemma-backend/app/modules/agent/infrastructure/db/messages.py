@@ -104,6 +104,38 @@ class Messages(UnitOfWorkRepository):
             )
         return model.to_entity()
 
+    async def notification_keyed(
+        self, conversation_id: UUID, *, key: str, value: str
+    ) -> MessageEntity | None:
+        """The conversation's notification whose metadata has ``key`` = ``value``,
+        read under the conversation's row lock -- the lock every append takes --
+        so two sends of one notification cannot both find none and both append."""
+        await self.session.execute(
+            select(ConversationModel.id)
+            .where(ConversationModel.id == conversation_id)
+            .with_for_update()
+        )
+        model = await self.session.scalar(
+            select(MessageModel)
+            .where(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.kind == MessageKind.NOTIFICATION.value,
+                MessageModel.message_metadata[key].astext == value,
+            )
+            .order_by(MessageModel.sequence.desc())
+            .limit(1)
+        )
+        return model.to_entity() if model is not None else None
+
+    async def merge_message_metadata(
+        self, message_id: UUID, updates: dict[str, object]
+    ) -> None:
+        """Fold ``updates`` into one message's metadata, leaving its other keys."""
+        model = await self.session.get(MessageModel, message_id)
+        if model is not None:
+            model.message_metadata = {**(model.message_metadata or {}), **updates}
+            await self.session.flush()
+
     async def list_messages(
         self,
         *,

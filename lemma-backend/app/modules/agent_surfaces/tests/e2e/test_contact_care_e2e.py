@@ -35,7 +35,8 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.work import WorkClass
 from app.core.infrastructure.work.testing import run_until_idle
-from app.modules.agent.contracts import contact_conversations
+from app.modules.agent.contracts import channel_replies, channels as agent_channels
+from app.modules.agent.infrastructure.db import contact_history
 from app.modules.agent.infrastructure.models import ConversationModel
 from app.modules.agent.infrastructure.models.conversation import (
     AgentRunModel,
@@ -395,7 +396,7 @@ async def test_an_export_carries_their_rows_and_pages_through_everything(
         await _order(authenticated_client, pod_id, dana, item)
     await _order(authenticated_client, pod_id, str(uuid4()), "Somebody else's")
     # One of each to a page, so the export has to be followed to the end.
-    monkeypatch.setattr(contact_conversations, "MAX_EXPORTED_CONVERSATIONS", 1)
+    monkeypatch.setattr(contact_history, "MAX_EXPORTED_CONVERSATIONS", 1)
     monkeypatch.setattr(contact_rows, "MAX_CONTACT_ROWS", 1)
 
     conversations, rows, pages = [], [], 0
@@ -1120,7 +1121,7 @@ async def test_a_follow_up_the_platform_refused_is_never_shown_as_said(
             line=NewLine(sender=Sender.member(member), text=said),
         )
         assert line is not None
-        await contact_conversations.append_follow_up(
+        await agent_channels.append_follow_up(
             uow,
             conversation_id=context.conversation_id,
             line_id=line.id,
@@ -1129,7 +1130,7 @@ async def test_a_follow_up_the_platform_refused_is_never_shown_as_said(
         )
     await db_session.commit()
 
-    shown = await contact_conversations.visible_messages(
+    shown = await channel_replies.visible_messages(
         uow, context.conversation_id, after=-1, limit=100
     )
 

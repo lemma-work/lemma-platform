@@ -14,7 +14,7 @@ from app.modules.agent.contracts import (
     MessageKind,
     MessageRole,
 )
-from app.modules.agent.contracts.progress_tools import progress_comment_for_tool_call
+from app.modules.agent.contracts.channel_words import progress_comment_for_tool_call
 from app.modules.agent_surfaces.domain.display_redaction import redact_secrets_in_text
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,

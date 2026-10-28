@@ -30,9 +30,7 @@ from app.modules.agent.agent_host.controllers.schemas import (
     AgentHostHarnessResponse,
     AgentHostListResponse,
 )
-from app.modules.agent.contracts.conversations_for_surfaces import (
-    append_notification_message,
-)
+from app.modules.agent.contracts.channels import append_notification_message
 from app.modules.agent.agent_host.control.session_memory import load_binding
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.test_support.e2e.builders import E2EScenario

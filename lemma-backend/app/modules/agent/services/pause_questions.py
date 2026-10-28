@@ -31,7 +31,9 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.contracts import channel_conversations
+from app.modules.agent.infrastructure.db.channel_conversations import (
+    ChannelConversations,
+)
 from app.modules.agent.domain.asked_questions import line_client_id
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.pauses import (
@@ -286,9 +288,7 @@ async def _where_to_ask(
 ) -> tuple[UUID, UUID | None]:
     """The conversation's channel -- in the thread of the line ``run_id``
     answers, else the line it took up last -- or the member's own."""
-    channel_id = await channel_conversations.channel_of_conversation(
-        uow, conversation.id
-    )
+    channel_id = await ChannelConversations(uow).channel_of(conversation.id)
     if channel_id is None:
         direct = await direct_channel(
             uow, pod_id=conversation.pod_id, user_id=conversation.user_id

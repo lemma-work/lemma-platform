@@ -61,7 +61,7 @@ A_NEW_INSTRUCTION = "Create a table called approvals_probe with a column named n
 #: `agent`'s published conversation operations, doubled where they are defined
 #: rather than where this module imports them. They are a collaborator of the
 #: code under test, not a part of it, and the real ones reach a database.
-_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_OPERATIONS = "app.modules.agent.contracts.channels"
 
 
 def _pending_interaction(spec: dict):

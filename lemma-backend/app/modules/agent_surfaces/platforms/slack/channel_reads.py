@@ -21,9 +21,7 @@ from app.modules.agent_surfaces.domain.models import (
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     SlackSurfaceEventMetadata,
 )
-from app.modules.agent.contracts.surface_prompts import (
-    background_channel_context_note,
-)
+from app.modules.agent.contracts.channel_words import background_channel_context_note
 from app.modules.agent_surfaces.platforms.common import (
     platform_transport_errors,
     UnsafeApiBaseError,

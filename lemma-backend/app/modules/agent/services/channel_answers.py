@@ -39,8 +39,10 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import channel_conversations
-from app.modules.agent.contracts.run_replies import (
+from app.modules.agent.infrastructure.db.channel_conversations import (
+    ChannelConversations,
+)
+from app.modules.agent.contracts.channel_replies import (
     answer_line_client_id,
     run_reply_material,
 )
@@ -306,20 +308,18 @@ async def _members_conversation(
     agent_id: UUID,
     agent_name: str,
 ) -> UUID:
-    await channel_conversations.lock_person_in_channel(
-        uow,
+    seats = ChannelConversations(uow)
+    await seats.lock_person(
         channel_id=channel.id,
         pod_id=channel.pod_id,
         agent_id=agent_id,
         person_id=user_id,
     )
-    found = await channel_conversations.conversation_in_channel(
-        uow,
+    found = await seats.in_channel(
         channel_id=channel.id,
         pod_id=channel.pod_id,
         agent_id=agent_id,
-        user_id=user_id,
-        contact_id=None,
+        person_id=user_id,
     )
     if found is not None:
         return found

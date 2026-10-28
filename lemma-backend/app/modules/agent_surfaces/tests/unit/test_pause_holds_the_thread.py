@@ -55,7 +55,7 @@ def _paused(monkeypatch, conversation_id: UUID) -> None:
         )
 
     monkeypatch.setattr(
-        "app.modules.agent.contracts.conversations_for_surfaces.pending_interaction",
+        "app.modules.agent.contracts.channels.pending_interaction",
         pending,
     )
 

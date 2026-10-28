@@ -28,9 +28,7 @@ from app.modules.agent_surfaces.caches import (
     TELEGRAM_CALLBACK_TOKENS,
     surface_caches,
 )
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )

@@ -85,7 +85,7 @@ async def _reply_stream(*chunks: str):
 
 
 #: Where `agent` publishes what a surface reads about conversations and agents.
-_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_CONVERSATIONS = "app.modules.agent.contracts.channels"
 _AGENTS = "app.modules.agent.contracts.agents"
 
 _AGENT_NAME = "Slack Surface Assistant"

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.modules.agent.contracts.interaction_replies import (
+from app.modules.agent.contracts.channel_words import (
     ask_user_request_dict,
     interpret_reply_to_pending,
     reply_plainly_answers_pending,

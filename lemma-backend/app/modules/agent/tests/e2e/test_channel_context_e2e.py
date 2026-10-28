@@ -23,13 +23,9 @@ from app.core.infrastructure.db.uow_factory import (
 )
 from app.core.infrastructure.work import WorkClass, WorkRegistry, facts
 from app.core.infrastructure.work.testing import make_due, run_until_idle
-from app.modules.agent.contracts.channel_conversations import (
-    conversation_in_channel_query,
-)
-from app.modules.agent.contracts.contact_conversations import (
-    append_follow_up,
-    visible_messages,
-)
+from app.modules.agent.infrastructure.db.channel_conversations import in_channel_query
+from app.modules.agent.contracts.channels import append_follow_up
+from app.modules.agent.contracts.channel_replies import visible_messages
 from app.modules.agent.contracts.run_facts import AgentRunFinished
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
@@ -293,7 +289,7 @@ async def test_finding_a_persons_conversation_in_a_channel_uses_its_unique_index
     not which index an empty table happens to make cheapest."""
     await scenario.create_org_with_pod(name_prefix="Plan")
     pod_id, owner = UUID(scenario.pod_id), UUID(scenario.owner_user["id"])
-    query = conversation_in_channel_query(
+    query = in_channel_query(
         channel_id=uuid4(), pod_id=pod_id, agent_id=None, person_id=owner
     )
     sql = str(

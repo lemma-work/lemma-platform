@@ -353,7 +353,7 @@ class World:
             "append_notification_message",
         ):
             monkeypatch.setattr(
-                f"app.modules.agent.contracts.conversations_for_surfaces.{name}",
+                f"app.modules.agent.contracts.channels.{name}",
                 getattr(agent_side, name),
             )
         monkeypatch.setattr(

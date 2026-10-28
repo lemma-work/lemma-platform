@@ -253,7 +253,7 @@ class TestASoftWrappedAttribution:
         assert strip_quoted_reply(body, "Re: Hello") == "approve"
 
     def test_a_wrapped_reply_is_still_a_decision(self) -> None:
-        from app.modules.agent.contracts.interaction_replies import (
+        from app.modules.agent.contracts.channel_words import (
             classify_approval_reply as _classify_approval_reply,
         )
         from app.modules.agent_surfaces.platforms.email_text import inbound_email_text

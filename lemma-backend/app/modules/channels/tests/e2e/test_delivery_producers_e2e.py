@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.modules.agent.contracts import channel_conversations
+from app.modules.agent.contracts import channels as agent_channels
 from app.modules.agent.domain.value_objects import ConversationStatus
 from app.modules.agent.services.pause_questions import sync_pause_questions, tool_ref
 from app.modules.agent.tests.e2e.lifecycle_helpers import (
@@ -252,7 +252,7 @@ async def test_a_contacts_run_calling_a_person_in_plans_the_keepers_push(scenari
             display_name="Dana",
         )
         theirs = await contact_channel(uow, pod_id=seeded.pod_id, contact_id=contact.id)
-        await channel_conversations.place_in_channel(
+        await agent_channels.place_in_channel(
             uow, conversation_id=seeded.conversation_id, channel_id=theirs.id
         )
         await uow.commit()

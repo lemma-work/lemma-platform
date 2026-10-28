@@ -368,7 +368,7 @@ class SurfaceAgentRunProgressObserver(
         failure notice -- leaves no reply to close the stream, so it comes
         down now rather than spinning beside whatever follows.
         """
-        from app.modules.agent.contracts.run_replies import run_reply_material
+        from app.modules.agent.contracts.channel_replies import run_reply_material
 
         try:
             async with self.uow_factory() as uow:

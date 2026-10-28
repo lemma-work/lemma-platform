@@ -21,7 +21,7 @@ from app.core.authorization.dependencies import require_action
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent.contracts.contact_conversations import ExportedConversation
+from app.modules.agent.contracts.contacts import ExportedConversation
 from app.modules.contacts.domain.entities import (
     Contact,
     IdentityKind,

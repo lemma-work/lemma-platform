@@ -341,7 +341,7 @@ def test_channel_context_note_frames_history_as_background():
 
 
 def test_channel_context_note_is_published_through_the_agent_contract():
-    from app.modules.agent.contracts.surface_prompts import (
+    from app.modules.agent.contracts.channel_words import (
         background_channel_context_note as published,
     )
 

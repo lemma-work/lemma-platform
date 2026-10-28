@@ -11,9 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.entities import ResolvedSurfaceUser
 from app.modules.agent_surfaces.services.channel_lines import reply_ref_of
 from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder

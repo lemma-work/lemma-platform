@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.contracts.contact_conversations import ConversationCursor
+from app.modules.agent.contracts.contacts import ConversationCursor
 from app.modules.contacts.services.export import BadExportCursor, ExportCursor
 from app.modules.datastore.contracts.contact_rows import ContactRowsCursor
 

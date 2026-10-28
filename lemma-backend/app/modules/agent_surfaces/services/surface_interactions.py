@@ -22,10 +22,8 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.factory import create_authorization_data_service
 
 from app.modules.agent.contracts import AgentRunApprovalDecision
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent.contracts.conversations_for_surfaces import SurfaceConversation
+from app.modules.agent.contracts import channels as agent_conversations
+from app.modules.agent.contracts.channels import SurfaceConversation
 from app.modules.agent_surfaces.domain.entities import (
     platform_value_for_source,
     ParsedSurfaceInteraction,

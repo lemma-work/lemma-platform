@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api.dependencies import get_uow_factory
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import FastContext
-from app.modules.agent.contracts.contact_conversations import repoint_merged_contact
+from app.modules.agent.application.channels.fold import FoldConversations
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.channels.contracts import (
     AccountKey,
@@ -308,8 +308,8 @@ async def test_a_fold_keeps_the_merged_channels_people_conversations_and_state(
     # The agent's half of the merge then names the survivor: one person has
     # one live conversation per agent in a channel, so theirs keeps the seat
     # and the moved one leaves the channel, to be continued no more.
-    await repoint_merged_contact(
-        uow, pod_id=pod_id, merged_id=merged, survivor_id=survivor
+    await FoldConversations.build(uow).merge_contact(
+        pod_id=pod_id, merged_id=merged, survivor_id=survivor
     )
     await db_session.commit()
     db_session.expire_all()

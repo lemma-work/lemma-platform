@@ -68,9 +68,7 @@ async def owner_through_contracts(
     uow: "SqlAlchemyUnitOfWork", conversation_id: UUID
 ) -> UUID | None:
     """The conversation's owner, through `agent`'s own contract."""
-    from app.modules.agent.contracts.conversations_for_surfaces import (
-        surface_conversation,
-    )
+    from app.modules.agent.contracts.channels import surface_conversation
 
     found = await surface_conversation(uow, conversation_id)
     return None if found is None else found.user_id
@@ -80,9 +78,7 @@ async def pending_through_contracts(
     uow: "SqlAlchemyUnitOfWork", conversation_id: UUID
 ) -> object | None:
     """The conversation's unresolved sign-in, through `agent`'s own contract."""
-    from app.modules.agent.contracts.conversations_for_surfaces import (
-        pending_sign_in,
-    )
+    from app.modules.agent.contracts.channels import pending_sign_in
 
     return await pending_sign_in(uow, conversation_id)
 
@@ -106,7 +102,7 @@ async def resume_through_approvals(
     `response` carries `saved` and `saved_detail`, the way `ask_user` carries
     its answers. They used to live in a table of this feature's own.
     """
-    from app.modules.agent.contracts.conversations_for_surfaces import (
+    from app.modules.agent.contracts.channels import (
         AgentRunApprovalDecision,
         resolve_pending_interaction,
     )

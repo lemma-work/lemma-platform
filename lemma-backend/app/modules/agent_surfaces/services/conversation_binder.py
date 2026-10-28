@@ -19,9 +19,7 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.authorization.delegation import agent_display_name
 from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.conversation_surface import (
     ConversationSurface,

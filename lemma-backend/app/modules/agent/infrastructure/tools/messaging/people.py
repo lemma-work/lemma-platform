@@ -17,7 +17,9 @@ from uuid import UUID
 from app.core.authorization.delegation import effective_agent_id
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.agent.contracts import channel_conversations
+from app.modules.agent.infrastructure.db.channel_conversations import (
+    ChannelConversations,
+)
 from app.modules.agent.domain.asked_questions import line_client_id
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.context import ToolContext
@@ -112,9 +114,7 @@ async def call_a_person_in(
     their own channel, and the contact's own channel asks for one (a group's
     has no case to ask in). Whether the conversation is in a channel."""
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        channel_id = await channel_conversations.channel_of_conversation(
-            uow, conversation_id
-        )
+        channel_id = await ChannelConversations(uow).channel_of(conversation_id)
         if channel_id is None:
             return False
         in_contacts = await call_for_person(

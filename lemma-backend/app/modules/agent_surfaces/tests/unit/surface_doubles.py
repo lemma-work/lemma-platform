@@ -24,9 +24,7 @@ import pytest
 from app.modules.test_support.channel_lines_double import RecordingChannelLines
 from app.modules.test_support.channel_seats_double import InMemoryChannelSeats
 from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
@@ -58,7 +56,7 @@ from app.modules.test_support.surface_routing_double import routing_surfaces_dou
 #: doubles below are installed. On the contract rather than on the surface
 #: modules that call it: the operations belong to another module, and the real
 #: ones reach a database.
-_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_CONVERSATIONS = "app.modules.agent.contracts.channels"
 _AGENT_DIRECTORY = "app.modules.agent.contracts.agents"
 
 

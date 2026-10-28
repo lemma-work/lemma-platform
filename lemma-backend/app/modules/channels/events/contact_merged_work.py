@@ -23,7 +23,7 @@ from app.core.infrastructure.work import (
 from app.core.infrastructure.work import (
     registry as default_registry,
 )
-from app.modules.agent.contracts.contact_conversations import (
+from app.modules.agent.contracts.channels import (
     move_channel_conversations,
 )
 from app.modules.channels.infrastructure.contact_channels import ContactChannels

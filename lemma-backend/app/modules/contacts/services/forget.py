@@ -31,7 +31,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.contracts.contact_conversations import (
+from app.modules.agent.contracts.contacts import (
     forget_contact_conversations,
 )
 from app.modules.agent_surfaces.contracts.contacts import forget_contact_senders

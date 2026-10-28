@@ -10,9 +10,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ConversationType,
@@ -671,7 +669,7 @@ async def test_prepare_webhook_ignores_duplicate_external_message():
 
 
 async def test_ask_user_request_dict_accepts_both_shapes():
-    from app.modules.agent.contracts.interaction_replies import (
+    from app.modules.agent.contracts.channel_words import (
         ask_user_request_dict as _ask_user_request_dict,
     )
 

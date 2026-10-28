@@ -20,10 +20,8 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
-from app.modules.agent.contracts.sign_in import (
+from app.modules.agent.contracts import channels as agent_conversations
+from app.modules.agent.contracts.channel_words import (
     sign_in_link,
     sign_in_message,
     sign_in_request_from_tool_args,

@@ -37,7 +37,7 @@ from app.modules.agent.contracts.calls import (
     call_canvas,
     call_conversations,
 )
-from app.modules.agent.contracts.conversations_for_surfaces import (
+from app.modules.agent.contracts.channels import (
     append_delivery_notice,
     start_surface_turn,
 )

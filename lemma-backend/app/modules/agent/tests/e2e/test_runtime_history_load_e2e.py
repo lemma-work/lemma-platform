@@ -15,8 +15,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent.contracts.contact_conversations import hold_outside_turn
-from app.modules.agent.contracts.folded_history import fold_history
+from app.modules.agent.contracts.channels import hold_outside_turn
+from app.modules.agent.application.channels.fold import FoldConversations
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
     ConversationModel,
@@ -399,7 +399,9 @@ async def test_what_a_merge_folded_in_is_loaded_under_a_bound_of_its_own(
         )
     )
     await db_session.flush()
-    await fold_history(SqlAlchemyUnitOfWork(db_session), lost, into=kept)
+    await FoldConversations.build(SqlAlchemyUnitOfWork(db_session)).fold(
+        lost, into=kept
+    )
 
     async def carried(
         *,

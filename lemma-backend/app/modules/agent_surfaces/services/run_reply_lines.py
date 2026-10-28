@@ -26,11 +26,9 @@ from app.core.authorization.delegation import (
 )
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.agent.contracts import (
-    conversations_for_surfaces as agent_conversations,
-)
+from app.modules.agent.contracts import channels as agent_conversations
 from app.modules.agent.contracts.run_failures import user_safe_stored_reason
-from app.modules.agent.contracts.run_replies import (
+from app.modules.agent.contracts.channel_replies import (
     RunReplyMaterial,
     answer_line_client_id,
 )

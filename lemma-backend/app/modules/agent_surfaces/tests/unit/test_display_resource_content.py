@@ -65,7 +65,7 @@ def _target(adapter, platform: str = "TELEGRAM"):
 
 
 #: Where `agent` publishes the conversation lookup a card's authorization needs.
-_CONVERSATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+_CONVERSATIONS = "app.modules.agent.contracts.channels"
 
 
 def _file_entity(*, name: str, size_bytes: int, mime_type: str):
