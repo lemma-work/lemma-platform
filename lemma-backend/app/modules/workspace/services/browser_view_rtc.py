@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import json
+import secrets
 from typing import Literal
 
 from fastapi import WebSocket
@@ -75,7 +76,9 @@ async def ice_for(viewer: RtcViewer) -> tuple[list[IceServer], list[IceServer]]:
     """TURN credentials for the machine's end and the browser's, minted together.
 
     Different usernames for the two ends, so a relay's logs can tell a
-    machine's allocation from a viewer's.
+    machine's allocation from a viewer's. The rest of each username is random
+    per session: the relay is a third party, and its logs have no use for which
+    person or sandbox was on the other end.
     """
     provider = turn_provider()
     if provider is None:
@@ -84,9 +87,11 @@ async def ice_for(viewer: RtcViewer) -> tuple[list[IceServer], list[IceServer]]:
     try:
         machine, browser = await asyncio.gather(
             provider.ice_servers(
-                label=f"machine-{viewer.provider_id}", ttl_seconds=ttl
+                label=f"machine-{secrets.token_hex(8)}", ttl_seconds=ttl
             ),
-            provider.ice_servers(label=f"viewer-{viewer.sub}", ttl_seconds=ttl),
+            provider.ice_servers(
+                label=f"viewer-{secrets.token_hex(8)}", ttl_seconds=ttl
+            ),
         )
     except TurnUnavailable as exc:
         raise RtcUnavailable(str(exc)) from exc

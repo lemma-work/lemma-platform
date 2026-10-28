@@ -374,6 +374,9 @@ async def test_only_the_controller_sets_the_screen_size(
     )
 
 
+# Builds the streamer path end to end through a real coturn: past the PR
+# lane's 45 s budget, so it runs in the scheduled protected lane.
+@pytest.mark.slow
 async def test_webrtc_watch_drive_and_take_control_through_turn(
     authenticated_client,
     fixed_test_org,
