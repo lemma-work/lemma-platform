@@ -412,6 +412,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.ingest.after_routing_failed.degraded': EventSpec('warning', frozenset({'item_id'})),
     'agent_surfaces.ingest.message_not_processed.failed': EventSpec('error', frozenset({'inbound_message_id', 'platform', 'reason'})),
     'agent_surfaces.ingest.onboarding_replay_dead.failed': EventSpec('error', frozenset({'pending_id', 'reason'})),
+    'agent_surfaces.ingest.surface_connector_refused.degraded': EventSpec('warning', frozenset({'code', 'inbound_message_id', 'platform'})),
+    'agent_surfaces.ingest.usage_limit_reached.refused': EventSpec('info', frozenset({'item_id', 'platform'})),
     'agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic': EventSpec('debug', frozenset({'default_id', 'user_id'})),
     'agent_surfaces.ingress_service.agent_surface_dropped_event_after.observed': EventSpec('debug', frozenset({'surface_type'})),
     'agent_surfaces.ingress_service.agent_surface_ignored_webhook_because.observed': EventSpec('debug', frozenset({'source'})),
