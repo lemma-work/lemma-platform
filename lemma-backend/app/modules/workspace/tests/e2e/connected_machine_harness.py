@@ -2,8 +2,8 @@
 
 The machine is the real agent (``sandbox_runtime.machine_link.agent``) in host
 mode, run in this process against a real backend over TCP, serving the real
-workspace runtime as a subprocess of this interpreter under a temporary
-``--root``. Only the CLI's own work -- the uv environment and the bootstrap
+workspace runtime under a temporary ``--root`` with an interpreter of its own
+(``machine_python``) that sees this one's packages. Only the CLI's own work -- the uv environment and the bootstrap
 download -- is not exercised here; the parity suite's container lanes and the
 CLI's tests cover those.
 """
@@ -15,7 +15,9 @@ import hashlib
 import json
 import secrets
 import socket
+import subprocess
 import sys
+import sysconfig
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -133,6 +135,38 @@ class RunningMachine:
         self.task = asyncio.ensure_future(self.agent.run())
 
 
+def machine_python(state: Path) -> str:
+    """A venv for the machine that sees this interpreter's packages.
+
+    Installing a pushed runtime writes its overlay ``.pth`` into the
+    site-packages of the machine's Python. Handing the machine
+    ``sys.executable`` would put it in the backend's own venv, and every later
+    import of ``sandbox_runtime`` there would load the test's overlay.
+    """
+    env = state / "python"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(env)], check=True
+    )
+    python = env / "bin" / "python"
+    purelib = subprocess.run(
+        [
+            str(python),
+            "-c",
+            "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    ours = sysconfig.get_paths()["purelib"]
+    # addsitedir, not a bare path: it also runs this venv's own .pth files,
+    # which is how the backend's editable install reaches ``sandbox_runtime``.
+    (Path(purelib) / "lemma-e2e-backend.pth").write_text(
+        f"import site; site.addsitedir({ours!r})\n", encoding="utf-8"
+    )
+    return str(python)
+
+
 def machine_config(
     *,
     server: dict[str, str],
@@ -150,7 +184,7 @@ def machine_config(
         mode="host",
         home=str(root),
         overlay_root=str(state / "runtime"),
-        python=sys.executable,
+        python=machine_python(state),
         installation_id=installation_id,
         secret_file=str(secret_file),
         runtime_port=free_port(),
