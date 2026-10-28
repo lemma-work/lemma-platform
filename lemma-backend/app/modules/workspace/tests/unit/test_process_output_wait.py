@@ -10,32 +10,47 @@ The cause is a lost wakeup. `notify_all` only reaches waiters that are already
 waiting, and a fast command exits *before* its first poll arrives — so the exit
 notification went nowhere and the poll then waited out its whole window with
 nothing left to wake it. Latching "finished" instead of signalling it is what
-fixes that, and the timing assertions here are what stop it coming back.
+fixes that, and these tests are what stop it coming back.
+
+"At once" here is counted in event-loop turns, not seconds. A poll that already
+has its answer never waits, so it is done once the loop has run what was ready;
+a lost wakeup leaves it waiting on its window however many turns go by. A busy
+runner can take as long as it likes over each turn without changing which.
 """
 
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
 from sandbox_runtime.protocol import ProcessOutputChannel
-from sandbox_runtime.workspace.process_manager import OutputBuffer
+from sandbox_runtime.workspace.process_manager import OutputBuffer, OutputSnapshot
 
 pytestmark = pytest.mark.unit
-
-# Generous next to the real 29s window, tight enough that a lost wakeup fails.
-# 2s rather than 0.5s: the bug these guard against blocks for the whole 29s, so
-# anything well under that still fails loudly, while the correct path returns in
-# microseconds. The margin buys nothing except immunity to a runner that stalls
-# for half a second under coverage tracing -- and raising a `<` bound costs no
-# runtime at all, since nothing waits for it.
-_IMMEDIATE_SECONDS = 2.0
 
 
 def _buffer() -> OutputBuffer:
     return OutputBuffer(limit_bytes=1 << 20)
+
+
+def _poll(
+    buffer: OutputBuffer, after_sequence: int = 0
+) -> asyncio.Task[OutputSnapshot]:
+    """A poll with the real 29-second window, which nothing here waits out."""
+    return asyncio.create_task(buffer.snapshot(after_sequence, wait_seconds=29))
+
+
+async def _settle() -> None:
+    """Give everything that is ready its turn. A wakeup takes one or two."""
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+
+async def _abandon(poll: asyncio.Task[OutputSnapshot]) -> None:
+    poll.cancel()
+    # The CancelledError is the expected outcome, so it is collected.
+    await asyncio.gather(poll, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -46,64 +61,56 @@ async def test_a_silent_command_that_already_exited_returns_at_once() -> None:
     """
     buffer = _buffer()
     await buffer.mark_finished()
-    await asyncio.sleep(0.05)  # the poll arrives a moment later
 
-    started = time.monotonic()
-    snapshot = await buffer.snapshot(0, wait_seconds=29)
-    elapsed = time.monotonic() - started
+    poll = _poll(buffer)
+    await _settle()
 
-    assert elapsed < _IMMEDIATE_SECONDS, (
-        f"polling a finished process blocked for {elapsed:.1f}s -- every silent "
+    assert poll.done(), (
+        "polling a finished process waits out its window -- every silent "
         "command pays this"
     )
-    assert snapshot.chunks == ()
+    assert poll.result().chunks == ()
 
 
 @pytest.mark.asyncio
 async def test_a_poll_still_waits_for_a_process_that_is_running() -> None:
     """The wait is the feature: one long poll instead of a tick loop."""
     buffer = _buffer()
-    started = time.monotonic()
-    snapshot = await buffer.snapshot(0, wait_seconds=0.4)
-    elapsed = time.monotonic() - started
 
-    assert 0.3 < elapsed, "a running, quiet process must not return instantly"
-    assert snapshot.chunks == ()
+    poll = _poll(buffer)
+    await _settle()
+
+    assert not poll.done(), "a running, quiet process must not return instantly"
+    await _abandon(poll)
+    # And a window that runs out ends the wait with nothing to show.
+    assert (await buffer.snapshot(0, wait_seconds=0.01)).chunks == ()
 
 
 @pytest.mark.asyncio
 async def test_a_waiting_poll_wakes_the_moment_the_process_exits() -> None:
     buffer = _buffer()
+    poll = _poll(buffer)
+    await _settle()
+    assert not poll.done()
 
-    async def exit_soon() -> None:
-        await asyncio.sleep(0.2)
-        await buffer.mark_finished()
+    await buffer.mark_finished()
+    await _settle()
 
-    task = asyncio.create_task(exit_soon())
-    started = time.monotonic()
-    await buffer.snapshot(0, wait_seconds=29)
-    elapsed = time.monotonic() - started
-    await asyncio.wait_for(task, timeout=5)
-
-    assert elapsed < 3.0, f"woke {elapsed:.1f}s after exit, not promptly"
+    assert poll.done(), "the exit did not wake the poll waiting on it"
 
 
 @pytest.mark.asyncio
 async def test_a_waiting_poll_wakes_the_moment_output_appears() -> None:
     buffer = _buffer()
+    poll = _poll(buffer)
+    await _settle()
+    assert not poll.done()
 
-    async def speak() -> None:
-        await asyncio.sleep(0.2)
-        await buffer.append(ProcessOutputChannel.STDOUT, b"step 1\n")
+    await buffer.append(ProcessOutputChannel.STDOUT, b"step 1\n")
+    await _settle()
 
-    task = asyncio.create_task(speak())
-    started = time.monotonic()
-    snapshot = await buffer.snapshot(0, wait_seconds=29)
-    elapsed = time.monotonic() - started
-    await asyncio.wait_for(task, timeout=5)
-
-    assert elapsed < 3.0, f"woke {elapsed:.1f}s after output, not promptly"
-    assert len(snapshot.chunks) == 1
+    assert poll.done(), "the output did not wake the poll waiting on it"
+    assert len(poll.result().chunks) == 1
 
 
 @pytest.mark.asyncio
@@ -111,11 +118,11 @@ async def test_output_already_buffered_is_returned_without_waiting() -> None:
     buffer = _buffer()
     await buffer.append(ProcessOutputChannel.STDOUT, b"done\n")
 
-    started = time.monotonic()
-    snapshot = await buffer.snapshot(0, wait_seconds=29)
+    poll = _poll(buffer)
+    await _settle()
 
-    assert time.monotonic() - started < _IMMEDIATE_SECONDS
-    assert len(snapshot.chunks) == 1
+    assert poll.done()
+    assert len(poll.result().chunks) == 1
 
 
 @pytest.mark.asyncio
@@ -125,14 +132,16 @@ async def test_a_finished_process_does_not_re_block_on_later_polls() -> None:
     await buffer.append(ProcessOutputChannel.STDOUT, b"line\n")
     await buffer.mark_finished()
 
-    started = time.monotonic()
-    first = await buffer.snapshot(0, wait_seconds=29)
+    first = _poll(buffer)
+    await _settle()
+    assert first.done()
     # Second poll asks for everything after what it just read: nothing is left,
     # which is exactly the condition that used to block.
-    second = await buffer.snapshot(first.next_sequence, wait_seconds=29)
+    second = _poll(buffer, first.result().next_sequence)
+    await _settle()
 
-    assert time.monotonic() - started < _IMMEDIATE_SECONDS
-    assert second.chunks == ()
+    assert second.done()
+    assert second.result().chunks == ()
 
 
 class TestWritingToATerminal:

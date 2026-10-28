@@ -42,6 +42,8 @@ def _step(agent: _RecordingAgentPort) -> SimpleNamespace:
         pod_id=uuid4(),
         user_id=uuid4(),
         run_id=uuid4(),
+        flow_id=uuid4(),
+        flow_name="triage-flow",
     )
 
 
