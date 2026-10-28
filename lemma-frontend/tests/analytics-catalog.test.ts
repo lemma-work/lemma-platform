@@ -56,7 +56,7 @@ test("nothing raises an event the catalog does not declare", () => {
 /** `"name": AnalyticEvent(properties=frozenset({…})` in the backend catalog. */
 function backendProperties(name: string): string[] | null {
     const catalog = readFileSync(path.join(BACKEND, "analytics/event_catalog.py"), "utf8");
-    const escaped = name.replace(/\./g, "\\.");
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const match = catalog.match(new RegExp(`"${escaped}":\\s*AnalyticEvent\\(\\s*properties=frozenset\\(\\{([^}]*)\\}\\)`));
     return match ? [...match[1].matchAll(/"([^"]+)"/g)].map((key) => key[1]).sort() : null;
 }

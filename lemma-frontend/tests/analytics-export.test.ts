@@ -21,13 +21,15 @@ import type { CaptureResult, PostHog } from "posthog-js";
 
 const POD_IN_ADDRESS = "pod-in-the-address";
 const ENTRY =
-    "https://lemma.work/s/contact/ada-lovelace?n=Ada%20Lovelace&em=ada%40example.test&wa=%2B15551234567";
+    "https://lemma.work/s/contact/lovelace-card?n=Grace%20Lovelace&em=lovelace%40example.test&wa=%2B15551234567";
 const REFERRER = "https://mail.example.test/inbox/thread-42?q=quarterly+layoffs";
 
 /** Every string that must never leave. The referrer's host is not here: another
- *  site's origin is where somebody came from, and is kept on purpose. */
+ *  site's origin is where somebody came from, and is kept on purpose. Each one
+ *  is something no random id would spell: event ids are hex, and a marker
+ *  like "ada" turned up inside a uuid and failed a run that leaked nothing. */
 const PRIVATE = [
-    "ada", "Ada", "15551234567", "example.test/inbox", "thread-42", "quarterly",
+    "lovelace", "Lovelace", "15551234567", "example.test/inbox", "thread-42", "quarterly",
     POD_IN_ADDRESS, "q3-layoffs", "private", "Payroll export",
 ];
 
@@ -40,7 +42,7 @@ let client: typeof import("../src/site/analytics/client.ts");
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 before(async () => {
-    dom = new JSDOM("<!doctype html><title>Ada Lovelace | Lemma</title>", {
+    dom = new JSDOM("<!doctype html><title>Grace Lovelace | Lemma</title>", {
         url: ENTRY,
         referrer: REFERRER,
         pretendToBeVisual: true,
@@ -96,7 +98,7 @@ before(async () => {
     client.captureEvent("share_link.viewed", { kind: "contact", viewer_is_member: false });
     /* What a careless call site could do, past the types: the gate is the
        only thing between these and the network. */
-    posthog.capture("share_link.viewed", { kind: "contact", email: "ada@example.test" });
+    posthog.capture("share_link.viewed", { kind: "contact", email: "lovelace@example.test" });
     posthog.capture("not.in.the.catalog", { kind: "contact" });
     await settle();
 
