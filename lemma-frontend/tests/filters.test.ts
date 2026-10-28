@@ -60,13 +60,12 @@ test("two values on one column are an either-or, two columns are an and", () => 
 });
 
 test("when is asked in words, not in a pair of dates", () => {
-    const rows = pipeline();
+    // Every pipeline row is due within a week of today, so "later" needs one that is not.
+    const rows = [...pipeline(), { id: "y", company: "Next month", stage: "identified", owner: "Rohan", due: day(30), seats: 1, note: null }];
 
-    assert.ok(matching(rows, filters({ spans: { due: "overdue" } }), NOW.getTime())
-        .every((row) => row.due < day(0)));
+    assert.deepEqual(matching(rows, filters({ spans: { due: "overdue" } }), NOW.getTime()).map((r) => r.due), [day(-4), day(-3), day(-2), day(-1)]);
     assert.deepEqual(matching(rows, filters({ spans: { due: "today" } }), NOW.getTime()).map((r) => r.due), [day(0)]);
-    assert.ok(matching(rows, filters({ spans: { due: "later" } }), NOW.getTime())
-        .every((row) => row.due > day(7)));
+    assert.deepEqual(matching(rows, filters({ spans: { due: "later" } }), NOW.getTime()).map((r) => r.due), [day(30)]);
 });
 
 test("a row with no date is not overdue, it is unset", () => {
