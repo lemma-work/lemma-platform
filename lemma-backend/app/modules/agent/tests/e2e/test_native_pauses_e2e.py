@@ -138,3 +138,59 @@ async def test_two_pauses_and_a_sibling_in_one_step_then_one_resume(
     }
     assert answered["ask-rows"]["answers"] == {"q": "Yes"}
     assert answered["ask-email"]["answers"] == {"q": "No"}
+
+
+async def test_a_run_out_of_allowance_waits_and_carries_on_with_no_prompt(
+    pod: TurnPod, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The budget pause stops the run before its next request, with no
+    exception; approved, the next run re-sends that request -- no new prompt --
+    and the model answers it."""
+    from app.modules.agent.config import agent_settings
+
+    monkeypatch.setattr(agent_settings, "agent_run_budget_model_requests", 1)
+    conversation = await pod.conversation(
+        [
+            {
+                "text": None,
+                "tool_calls": [
+                    {"tool_name": "pod_tables", "args": {}, "tool_call_id": "read-1"}
+                ],
+            },
+            script_text("There are no tables yet."),
+        ]
+    )
+    paused = (await pod.append(conversation, "What tables are there?"))["agent_run_id"]
+    await drain(turn_registry())
+
+    approvals = await pod.client.get(
+        f"/pods/{pod.pod_id}/conversations/{conversation}/approvals"
+    )
+    (card,) = approvals.json()["items"]
+    monkeypatch.setattr(agent_settings, "agent_run_budget_model_requests", 10)
+    decided = await pod.client.post(
+        f"/pods/{pod.pod_id}/conversations/{conversation}"
+        f"/approvals/{card['tool_call_id']}/decision",
+        json={"decision": "APPROVE_ONCE"},
+    )
+    assert decided.status_code == 200, decided.text
+    await drain(turn_registry())
+
+    resumed = await rows(
+        "SELECT status FROM agent_runs WHERE conversation_id = :id AND id <> :paused",
+        id=UUID(conversation),
+        paused=UUID(paused),
+    )
+    assert [status for (status,) in resumed] == ["COMPLETED"]
+    texts = [
+        item["text"]
+        for item in await pod.messages(conversation)
+        if item["kind"] == "TEXT" and item["role"] == "assistant"
+    ]
+    assert texts[-1] == "There are no tables yet."
+    user_turns = [
+        item
+        for item in await pod.messages(conversation)
+        if item["kind"] == "TEXT" and item["role"] == "user"
+    ]
+    assert len(user_turns) == 1, "carrying on added no prompt"
