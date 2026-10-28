@@ -29,7 +29,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from uuid import UUID
 
-from pydantic_ai.messages import (
+from pydantic_ai.messages import (  # type: ignore[attr-defined]
+    _merge_consecutive_messages,  # the merge pydantic-ai stores a sent history in
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
@@ -204,6 +205,8 @@ class RunLogRecorder:
     labels: dict[int, RunStepKind] = field(default_factory=dict)
     covers: list[UUID] = field(default_factory=list)
     _logged_bytes: list[bytes] = field(default_factory=list)
+    #: The merged requests made here, kept so their ids are never reused.
+    _merges: list[ModelMessage] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self._logged_bytes = [_bytes(message) for message in self.logged]
@@ -212,9 +215,21 @@ class RunLogRecorder:
         """Rows steered into the run: carried by the step that holds them."""
         self.covers.extend(row_ids)
 
-    def take(self, messages: Sequence[ModelMessage]) -> list[RunStepDraft]:
-        """The steps that bring the log up to ``messages``; none when it is."""
+    def take(
+        self, messages: Sequence[ModelMessage], *, final: bool = False
+    ) -> list[RunStepDraft]:
+        """The steps that bring the log up to ``messages``; none when it is.
+
+        A trailing request is held back until the model answers it, or the
+        run ends (``final``): until it is sent, the run's capabilities still
+        add to it, and pydantic-ai merges it with the requests after it --
+        logged early, it would be logged as it was never sent.
+        """
         current = list(messages)
+        if not final:
+            while current and isinstance(current[-1], ModelRequest):
+                current.pop()
+        current = self._merged(current)
         current_bytes = [
             known if message is self._logged_at(index) else _bytes(message)
             for index, message in enumerate(current)
@@ -255,6 +270,38 @@ class RunLogRecorder:
         if drafts and self.covers:
             drafts[0] = replace(drafts[0], covers=tuple(self.covers))
         return drafts
+
+    def _merged(self, messages: list[ModelMessage]) -> list[ModelMessage]:
+        """``messages`` with consecutive requests merged, as pydantic-ai stores
+        them once it has sent them: logged apart, they would no longer match.
+
+        A merged request keeps the kind of the first request in it; an empty
+        one, which pydantic-ai leaves behind a run that ended on a tool and
+        merges into the next, is not history.
+        """
+        merged: list[ModelMessage] = []
+        group: list[ModelMessage] = []
+
+        def flush() -> None:
+            if len(group) > 1:
+                (joined,) = _merge_consecutive_messages(list(group))
+                if id(group[0]) in self.labels:
+                    self.labels[id(joined)] = self.labels[id(group[0])]
+                merged.append(joined)
+                self._merges.append(joined)
+            else:
+                merged.extend(group)
+            group.clear()
+
+        for message in messages:
+            if isinstance(message, ModelRequest):
+                if message.parts:
+                    group.append(message)
+                continue
+            flush()
+            merged.append(message)
+        flush()
+        return merged
 
     def _logged_at(self, index: int) -> ModelMessage | None:
         return self.logged[index] if index < len(self.logged) else None

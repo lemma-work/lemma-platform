@@ -116,24 +116,51 @@ def test_an_open_call_is_answered_by_its_row_or_told_what_happened() -> None:
 
 def test_what_extends_the_log_is_a_step_and_a_rewrite_is_a_checkpoint() -> None:
     first = ModelRequest(parts=[UserPromptPart("hi")])
+    before = ModelResponse(parts=[TextPart("hi there")])
     held = ModelRequest(parts=[UserPromptPart("held")])
     recorder = RunLogRecorder(
-        logged=[first],
+        logged=[first, before],
         labels={id(held): RunStepKind.HELD},
         covers=[uuid4()],
     )
     context = ModelRequest(parts=[UserPromptPart("<run_context>now</run_context>")])
     answer = ModelResponse(parts=[TextPart("hello")])
 
-    drafts = recorder.take([first, held, context, answer])
+    drafts = recorder.take([first, before, held, context, answer])
 
     assert [draft.kind for draft in drafts] == [RunStepKind.HELD, RunStepKind.STEP]
     assert drafts[0].covers and not drafts[1].covers
-    # The run's context is logged where it was sent: it is history.
-    assert "run_context" in drafts[1].messages
-    assert recorder.take([first, held, context, answer]) == []
+    # The run's context is logged where it was sent, in the request it was
+    # sent in (consecutive requests are one once sent): it is history.
+    assert "run_context" in drafts[0].messages
+    assert recorder.take([first, before, held, context, answer]) == []
 
     rewritten = ModelRequest(parts=[UserPromptPart("[summary]")])
     (checkpoint,) = recorder.take([rewritten, answer])
     assert checkpoint.kind is RunStepKind.COMPACTION
     assert "[summary]" in checkpoint.messages and "hello" in checkpoint.messages
+
+
+def test_requests_pydantic_ai_merges_once_sent_are_logged_merged() -> None:
+    """A run holds a steered message as a request of its own until it is sent;
+    pydantic-ai then stores it merged into the request before it. Logged apart,
+    the history would stop starting with the log: a checkpoint every run."""
+    first = ModelRequest(parts=[UserPromptPart("hi")])
+    answer = ModelResponse(parts=[TextPart("hello")])
+    returns = ModelRequest(parts=[UserPromptPart("result")])
+    steered = ModelRequest(parts=[UserPromptPart("also this")])
+    recorder = RunLogRecorder(logged=[])
+
+    held = recorder.take([first, answer, returns, steered])
+    sent = ModelResponse(parts=[TextPart("done")])
+    merged = ModelRequest(parts=[*returns.parts, *steered.parts])
+    later = recorder.take([first, answer, merged, sent])
+
+    assert [draft.kind for draft in [*held, *later]] == [
+        RunStepKind.STEP,
+        RunStepKind.STEP,
+    ]
+    assert "also this" in later[0].messages
+    # And the empty request a paused run leaves behind is not history.
+    ended = [first, answer, merged, sent, ModelRequest(parts=[])]
+    assert recorder.take(ended, final=True) == []

@@ -233,18 +233,22 @@ class NodeLoop[DepsT]:
                 # nothing came after it.
                 await self._release_undecided(final=True)
                 if clean:
-                    await self._log(run, then=self._paused_with)
+                    await self._log(run, then=self._paused_with, final=True)
                 # Billing is the metered model's, per request; this only says
                 # so when a provider reports a count that cannot be true.
                 warn_if_implausible_usage(getattr(run, "usage", None))
 
     async def _log(
-        self, run: AgentRun[DepsT, object], *, then: Sequence[ModelMessage] = ()
+        self,
+        run: AgentRun[DepsT, object],
+        *,
+        then: Sequence[ModelMessage] = (),
+        final: bool = False,
     ) -> None:
         """Queue the run-log steps that bring the log up to what ``run`` holds."""
         if self.recorder is None:
             return
-        for draft in self.recorder.take([*run.all_messages(), *then]):
+        for draft in self.recorder.take([*run.all_messages(), *then], final=final):
             await self.queue.put(
                 (
                     "event",

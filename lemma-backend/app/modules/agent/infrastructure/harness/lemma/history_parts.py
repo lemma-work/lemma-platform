@@ -19,8 +19,9 @@ carries it -- so a later run reads the context its turn was answered under, and
 its own context after its own turn. It holds the run's start time and is stable
 for the run, so nothing in it has to be fresh per request.
 
-A notice goes before the trailing user turn too, as its own message: editing
-the last request would rewrite a message the provider has already been sent.
+A notice goes before the person's words too. Both go into the trailing
+request, which nothing has sent yet, rather than beside it: pydantic-ai merges
+consecutive requests into one.
 """
 
 from __future__ import annotations
@@ -53,14 +54,9 @@ class RunContextCapability(ProcessHistory[object]):
             return history
         # Placed once; again only when a rewrite (a compaction) dropped it, and
         # then at the tail, where it moves nothing already sent.
-        before_user_turn = (
-            not self._placed and bool(history) and _is_user_request(history[-1])
-        )
+        before_turn = not self._placed
         self._placed = True
-        part = ModelRequest(parts=[UserPromptPart(content=self._text)])
-        if before_user_turn:
-            return [*history[:-1], part, history[-1]]
-        return [*history, part]
+        return _folded(history, [UserPromptPart(content=self._text)], before_turn)
 
     def _holds_part(self, messages: list[ModelMessage]) -> bool:
         """Matched by content, not identity: the graph merges consecutive
@@ -71,6 +67,34 @@ class RunContextCapability(ProcessHistory[object]):
             if isinstance(message, ModelRequest)
             for part in message.parts
         )
+
+
+def _folded(
+    history: list[ModelMessage], parts: list[UserPromptPart], before_turn: bool
+) -> list[ModelMessage]:
+    """``history`` with ``parts`` in its trailing request.
+
+    In it, never beside it: pydantic-ai merges consecutive requests into one,
+    so a request of its own would be logged as sent and then replaced by the
+    merged one -- a history that no longer starts with what was logged. Before
+    the person's words when ``before_turn``, else after everything in it.
+    """
+    if not history or not isinstance(history[-1], ModelRequest):
+        return [*history, ModelRequest(parts=list(parts))]
+    last = history[-1]
+    turn = next(
+        (
+            index
+            for index, part in enumerate(last.parts)
+            if isinstance(part, UserPromptPart)
+        ),
+        None,
+    )
+    at = turn if before_turn and turn is not None else len(last.parts)
+    # In place, as pydantic-ai records its own deltas: the request is the one
+    # about to be sent, and the run log labels what a run took in by identity.
+    last.parts = [*last.parts[:at], *parts, *last.parts[at:]]
+    return history
 
 
 def _is_user_request(message: object) -> bool:
@@ -96,7 +120,5 @@ class RunNoticeCapability(ProcessHistory[object]):
         waiting = self._notices.take()
         if not waiting:
             return messages
-        notice = ModelRequest(parts=[UserPromptPart(content=text) for text in waiting])
-        if messages and _is_user_request(messages[-1]):
-            return [*messages[:-1], notice, messages[-1]]
-        return [*messages, notice]
+        notices = [UserPromptPart(content=text) for text in waiting]
+        return _folded(messages, notices, before_turn=True)

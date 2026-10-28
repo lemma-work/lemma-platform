@@ -250,6 +250,9 @@ class Storage:
     conversation: Conversation
     rows: list[Message] = field(default_factory=list)
     log: list[ReplayStep] = field(default_factory=list)
+    #: The runs that wrote a checkpoint: a history that no longer started
+    #: with what was logged.
+    checkpoints: list[UUID] = field(default_factory=list)
 
     def _next(self) -> tuple[int, datetime]:
         sequence = len(self.rows) + 1
@@ -300,6 +303,7 @@ class Storage:
         seq = (self.log[-1].seq if self.log else 0) + 1
         if draft.kind is RunStepKind.COMPACTION:
             self.log = []
+            self.checkpoints.append(run_id)
         self.log.append(ReplayStep(seq, draft.kind, run_id, draft.messages))
         carried = set(covers)
         self.rows = [
@@ -333,6 +337,8 @@ class Storage:
 class Played:
     sent: list[Sent]
     summaries: list[int]
+    #: Which runs (1-based) wrote a checkpoint.
+    checkpoints: list[int] = field(default_factory=list)
 
 
 def _thought_call_response() -> ModelResponse:
@@ -521,7 +527,12 @@ async def _play() -> Played:
         script=[_text("Enjoy Oslo.")],
         trigger_tokens=trigger,
     )
-    return Played(sent=model.sent, summaries=model.summaries)
+    runs = [run1, run2, run3, run4]
+    return Played(
+        sent=model.sent,
+        summaries=model.summaries,
+        checkpoints=[runs.index(run) + 1 for run in storage.checkpoints],
+    )
 
 
 _NEW_TABLE = "## Tables\nbookings(city, day)"
@@ -757,6 +768,8 @@ async def test_a_conversation_past_the_threshold_compacts_once() -> None:
 
     # Once, in the run that crossed it: the next run starts from what it left.
     assert played.summaries == [3]
+    # And that is the one checkpoint: every other step extends the log.
+    assert played.checkpoints == [3]
     assert _carries_summary(played.sent[-1])
 
 
@@ -859,6 +872,7 @@ async def test_a_tool_found_mid_run_leaves_the_tools_as_they_were(
 
     played = Played(sent=model.sent, summaries=model.summaries)
     assert [sent.run for sent in played.sent] == [1, 1, 1, 2]
+    assert storage.checkpoints == [], "every step extends the log"
     assert "book_hotel" not in played.sent[0].tools
     breaks = await _breaks(played, protocol)
     assert not breaks, "\n\n".join(str(item) for item in breaks)
