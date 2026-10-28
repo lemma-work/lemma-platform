@@ -4,7 +4,6 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
-import time
 from uuid import UUID, uuid4
 
 import httpx
@@ -47,6 +46,17 @@ def execute_body(
         "output_limit_bytes": 65536,
         "deadline_at": deadline(seconds),
     }
+
+
+def meet(arrived: Path, partner: Path) -> str:
+    """Code that marks its arrival and returns once its partner has arrived."""
+    return (
+        "import pathlib, time\n"
+        f"pathlib.Path({str(arrived)!r}).touch()\n"
+        f"while not pathlib.Path({str(partner)!r}).exists():\n"
+        "    time.sleep(0.01)\n"
+        "'met'"
+    )
 
 
 async def test_python_sessions_are_stateful_isolated_concurrent_and_restartable(
@@ -92,20 +102,23 @@ async def test_python_sessions_are_stateful_isolated_concurrent_and_restartable(
             ),
         )
 
-        started = time.monotonic()
+        # Concurrent, told by a meeting rather than a stopwatch: each execution
+        # waits for the other to arrive. Run one after the other, the first
+        # waits for a partner that has not started until its deadline ends it.
+        first_here, second_here = tmp_path / "first.here", tmp_path / "second.here"
+        assert not first_here.exists() and not second_here.exists()
         first_overlap, second_overlap = await asyncio.gather(
             client.post(
                 f"/python-sessions/{first_id}:execute",
                 headers=HEADERS,
-                json=execute_body("import time; time.sleep(0.3); 'first'"),
+                json=execute_body(meet(first_here, second_here)),
             ),
             client.post(
                 f"/python-sessions/{second_id}:execute",
                 headers=HEADERS,
-                json=execute_body("import time; time.sleep(0.3); 'second'"),
+                json=execute_body(meet(second_here, first_here)),
             ),
         )
-        elapsed = time.monotonic() - started
         restarted = await client.post(
             f"/python-sessions/{first_id}:restart", headers=HEADERS
         )
@@ -125,9 +138,8 @@ async def test_python_sessions_are_stateful_isolated_concurrent_and_restartable(
     assert "42" in stateful.json()["result"]
     assert "alpha" in stateful.json()["result"]
     assert str(first_dir) in stateful.json()["result"]
-    assert elapsed < 0.55
-    assert first_overlap.json()["result"] == "'first'"
-    assert second_overlap.json()["result"] == "'second'"
+    assert first_overlap.json()["result"] == "'met'"
+    assert second_overlap.json()["result"] == "'met'"
     assert restarted.status_code == 200
     assert reset.json()["state"] == "failed"
     assert reset.json()["error_name"] == "NameError"

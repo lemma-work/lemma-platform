@@ -10,6 +10,7 @@ for the person the run acts for -- never an account the run's metadata names.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -65,7 +66,10 @@ class TestWhatTheDeliverySays:
 def _schedule(*, pod_connector_slug: str | None = None, name: str | None = None):
     """The fields `_conversation_metadata` reads off a schedule row."""
     return SimpleNamespace(
-        pod_connector_slug=pod_connector_slug, name=name, schedule_type="TIME"
+        id=uuid4(),
+        pod_connector_slug=pod_connector_slug,
+        name=name,
+        schedule_type="TIME",
     )
 
 
@@ -94,8 +98,10 @@ class TestWhatTheScheduleAdds:
             assert "repo" not in metadata
 
     def test_every_schedule_started_run_says_a_schedule_started_it(self):
-        metadata = _conversation_metadata(_schedule(name="daily-invoices"), None)
+        schedule = _schedule(name="daily-invoices")
+        metadata = _conversation_metadata(schedule, None)
         assert metadata["started_by"] == "SCHEDULE"
+        assert metadata["schedule_id"] == str(schedule.id)
         assert metadata["schedule_name"] == "daily-invoices"
         assert metadata["schedule_type"] == "TIME"
 

@@ -55,9 +55,11 @@ test("the warning threshold is the server's, not ours", () => {
     // the warning, and the two would tell people different things.
     const half = limits({ warning_percent: 50, windows: [window({ used_percent: 60 })] });
     const eighty = limits({ warning_percent: 80, windows: [window({ used_percent: 60 })] });
+    const atHalf = allowanceOf(half);
+    const atEighty = allowanceOf(eighty);
 
-    assert.equal(allowanceOf(half).kind === "within" && allowanceOf(half).warn, true);
-    assert.equal(allowanceOf(eighty).kind === "within" && allowanceOf(eighty).warn, false);
+    assert.equal(atHalf.kind === "within" && atHalf.warn, true);
+    assert.equal(atEighty.kind === "within" && atEighty.warn, false);
     assert.equal(worthShowing(half), true);
     assert.equal(worthShowing(eighty), false);
 });

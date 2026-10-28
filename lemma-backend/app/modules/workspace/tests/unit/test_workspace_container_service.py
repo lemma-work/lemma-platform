@@ -594,6 +594,24 @@ async def test_an_exhausted_ensure_stops_believing_what_it_knew(
     sandbox_health._capability.update({"status": "ready", "detail": "provisioned"})
 
 
+class _Stall:
+    """Thirty seconds of nothing, and whether they ever ran out.
+
+    The ceilings below are a fifth of a second. A call that comes back with its
+    stall still unfinished was cut short by its ceiling; a call the ceiling did
+    not cover comes back too, thirty seconds late, and leaves ``ran_out`` set.
+    That holds however slow the runner is: the ceiling's deadline is the earlier
+    timer, and it cancels the stall before the stall's own timer can end it.
+    """
+
+    def __init__(self) -> None:
+        self.ran_out = False
+
+    async def wait(self) -> None:
+        await asyncio.sleep(30)
+        self.ran_out = True
+
+
 @pytest.mark.asyncio
 async def test_the_interactive_ceiling_covers_acquiring_the_sandbox_too(
     monkeypatch: pytest.MonkeyPatch,
@@ -609,19 +627,18 @@ async def test_the_interactive_ceiling_covers_acquiring_the_sandbox_too(
 
     user_id = uuid4()
     service = _service(_FakeSandbox())
+    stall = _Stall()
 
     async def never_acquires(*_args: Any, **_kwargs: Any):
-        await asyncio.sleep(30)
+        await stall.wait()
 
     monkeypatch.setattr(service, "get_or_create_sandbox", never_acquires)
 
-    started = asyncio.get_running_loop().time()
     with pytest.raises(SandboxUnavailable):
         await service.get_session(
             user_id=user_id, pod_id=None, ready_timeout_seconds=0.2
         )
-    elapsed = asyncio.get_running_loop().time() - started
-    assert elapsed < 5, f"the ceiling did not cover acquisition; waited {elapsed:.1f}s"
+    assert not stall.ran_out, "the ceiling did not cover acquisition"
 
 
 @pytest.mark.asyncio
@@ -678,12 +695,16 @@ class _BundledService(WorkspaceSandboxService):
 class _HangingManagerClient(_FakeManagerClient):
     """Answers the directory ensure at once and hangs on file I/O."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.stall = _Stall()
+
     async def read_file(self, *_args: Any, **_kwargs: Any) -> bytes:
-        await asyncio.sleep(30)
+        await self.stall.wait()
         return b""
 
     async def write_file(self, *_args: Any, **_kwargs: Any) -> None:
-        await asyncio.sleep(30)
+        await self.stall.wait()
 
 
 @pytest.mark.asyncio
@@ -699,17 +720,14 @@ async def test_the_interactive_ceiling_covers_installing_the_runtime_bundle(
     """
     from sandbox_runtime.errors import SandboxUnavailable
 
-    service = _BundledService(
-        sandbox=_FakeSandbox(), manager_client=_HangingManagerClient()
-    )  # type: ignore[arg-type]
+    manager_client = _HangingManagerClient()
+    service = _BundledService(sandbox=_FakeSandbox(), manager_client=manager_client)  # type: ignore[arg-type]
 
-    started = asyncio.get_running_loop().time()
     with pytest.raises(SandboxUnavailable):
         await service.get_session(
             user_id=uuid4(), pod_id=None, ready_timeout_seconds=0.2
         )
-    elapsed = asyncio.get_running_loop().time() - started
-    assert elapsed < 5, f"the ceiling did not cover the bundle; waited {elapsed:.1f}s"
+    assert not manager_client.stall.ran_out, "the ceiling did not cover the bundle"
 
     installs = [
         task
@@ -728,16 +746,15 @@ async def test_a_slow_browser_proxy_write_degrades_within_the_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Written on every session, and allowed to fail without failing it."""
-    service = _service(_FakeSandbox(), manager_client=_HangingManagerClient())
+    manager_client = _HangingManagerClient()
+    service = _service(_FakeSandbox(), manager_client=manager_client)
 
-    started = asyncio.get_running_loop().time()
     session = await service.get_session(
         user_id=uuid4(), pod_id=None, env_vars={}, ready_timeout_seconds=0.2
     )
-    elapsed = asyncio.get_running_loop().time() - started
 
     assert session is not None
-    assert elapsed < 5, f"the proxy write held the session {elapsed:.1f}s"
+    assert not manager_client.stall.ran_out, "the proxy write held the session"
 
 
 @pytest.fixture
@@ -865,8 +882,10 @@ async def test_the_interactive_ceiling_covers_minting_the_session_environment(
     """Token minting and organization resolution are reads like any other."""
     from sandbox_runtime.errors import SandboxUnavailable
 
+    stall = _Stall()
+
     async def never_mints(**_: object) -> str:
-        await asyncio.sleep(30)
+        await stall.wait()
         return "unreachable"
 
     monkeypatch.setattr(
@@ -875,7 +894,6 @@ async def test_the_interactive_ceiling_covers_minting_the_session_environment(
     )
     service = _service(_FakeSandbox(), manager_client=_FakeManagerClient())
 
-    started = asyncio.get_running_loop().time()
     with pytest.raises(SandboxUnavailable):
         await service.get_session(
             user_id=uuid4(),
@@ -883,8 +901,7 @@ async def test_the_interactive_ceiling_covers_minting_the_session_environment(
             organization_id=uuid4(),
             ready_timeout_seconds=0.2,
         )
-    elapsed = asyncio.get_running_loop().time() - started
-    assert elapsed < 5, f"minting the environment held the session {elapsed:.1f}s"
+    assert not stall.ran_out, "minting the environment held the session"
 
 
 @pytest.mark.asyncio
@@ -893,9 +910,11 @@ async def test_a_stalled_storage_generation_read_costs_the_notice_not_the_sessio
 ) -> None:
     """Best effort, so a stall degrades to "not recreated" within the ceiling."""
 
+    stall = _Stall()
+
     class _StalledStore:
         async def observe_storage_generation(self, **_: object) -> bool:
-            await asyncio.sleep(30)
+            await stall.wait()
             return True
 
     service = _service(
@@ -904,7 +923,6 @@ async def test_a_stalled_storage_generation_read_costs_the_notice_not_the_sessio
         manager_client=_FakeManagerClient(),
     )
 
-    started = asyncio.get_running_loop().time()
     session = await service.get_session(
         user_id=uuid4(),
         pod_id=None,
@@ -912,7 +930,6 @@ async def test_a_stalled_storage_generation_read_costs_the_notice_not_the_sessio
         env_vars={},
         ready_timeout_seconds=0.2,
     )
-    elapsed = asyncio.get_running_loop().time() - started
 
-    assert elapsed < 5, f"the storage read held the session {elapsed:.1f}s"
+    assert not stall.ran_out, "the storage read held the session"
     assert session is not None

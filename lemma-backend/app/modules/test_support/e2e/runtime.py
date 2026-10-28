@@ -605,10 +605,18 @@ async def local_sandbox_server(
 
 @pytest_asyncio.fixture
 async def configure_workspace_api_url(
-    backend_server,
     local_sandbox_server,
+    backend_server,
 ) -> AsyncGenerator[dict[str, str], None]:
-    """Route workspace SDK calls to the backend and selected the sandbox runtime provider."""
+    """Route workspace SDK calls to the backend and selected the sandbox runtime provider.
+
+    The provider before the server: pytest sets fixtures up in argument order,
+    and the server's lifespan probes the sandbox provider. Started first, it
+    probed before the runtime credential key was set, logged
+    "WORKSPACE_RUNTIME_CREDENTIAL_KEY is required to provision sandboxes" on
+    every test, and kept "needs setup" as its capability answer -- noise that
+    read like the reason sandboxed code was not running.
+    """
 
     from app.modules.workspace.services.workspace_tool_runtime import (
         close_workspace_tool_runtimes,
