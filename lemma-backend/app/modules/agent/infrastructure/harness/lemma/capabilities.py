@@ -60,6 +60,7 @@ from app.modules.agent.infrastructure.harness.lemma.history_parts import (
     RunContextCapability,
 )
 from app.modules.agent.infrastructure.harness.lemma.pending_user_messages import (
+    ClaimSteered,
     PendingUserMessagesCapability,
 )
 from app.modules.agent.infrastructure.harness.lemma.reveal_referenced_tools import (
@@ -86,6 +87,7 @@ def harness_capabilities(
     runtime: ToolRuntime,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+    claim_steered: ClaimSteered | None = None,
 ) -> list[AgentCapability[ToolContext]]:
     """Every capability an in-process run gets, its tools included."""
     with run_phase("capabilities") as span:
@@ -95,6 +97,7 @@ def harness_capabilities(
             runtime=runtime,
             enable_prompt_caching=enable_prompt_caching,
             protocol=protocol,
+            claim_steered=claim_steered,
         )
         span.set_attribute("lemma.capabilities", len(capabilities))
         return capabilities
@@ -107,6 +110,7 @@ def _capabilities(
     runtime: ToolRuntime,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol,
+    claim_steered: ClaimSteered | None = None,
 ) -> list[AgentCapability[ToolContext]]:
     groups = _groups(spec for spec in specs if spec.toolset is not ToolGroup.QUESTIONS)
     # Deferral is for the pod's own assistant, which accumulates every optional
@@ -137,7 +141,7 @@ def _capabilities(
             and protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
         )
     )
-    capabilities.extend(_run_hooks(ctx))
+    capabilities.extend(_run_hooks(ctx, claim_steered))
     if deferred:
         # Provider-native search on Anthropic/OpenAI, a local `search_tools`
         # elsewhere; see `MeteredModel` for the monetary-limit case.
@@ -164,12 +168,18 @@ def _capabilities(
     return capabilities
 
 
-def _run_hooks(ctx: ToolContext) -> list[AgentCapability[ToolContext]]:
+def _run_hooks(
+    ctx: ToolContext, claim_steered: ClaimSteered | None = None
+) -> list[AgentCapability[ToolContext]]:
     """Steering, memory guidance and the platform's guidance, as the run has them."""
     hooks: list[AgentCapability[ToolContext]] = []
     # What the person says while the run works is steered into it.
     if ctx.agent_run_id is not None:
-        hooks.append(PendingUserMessagesCapability(agent_run_id=ctx.agent_run_id))
+        hooks.append(
+            PendingUserMessagesCapability(
+                agent_run_id=ctx.agent_run_id, claim=claim_steered
+            )
+        )
     if ctx.memory_enabled:
         hooks.append(Instructions(load_memory_prompt(after_turn=ctx.memory_after_turn)))
     # The platform is the run's: none for a run asked in Lemma.

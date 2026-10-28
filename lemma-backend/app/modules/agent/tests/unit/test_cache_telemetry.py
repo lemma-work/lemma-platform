@@ -8,6 +8,8 @@ same counts, tagged with the run and the step.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from uuid import uuid4
 
 import pytest
@@ -15,14 +17,16 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.models import ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage, RunUsage
 
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.infrastructure.harness.lemma import harness as harness_module
 from app.modules.agent.infrastructure.harness.lemma.cache_telemetry import (
     CACHE_EVENT,
     CacheTelemetry,
@@ -91,29 +95,39 @@ async def test_each_response_adds_an_event_on_the_current_span() -> None:
     assert event.attributes["lemma.cache.hit_ratio"] == 0.75
 
 
-@pytest.mark.anyio
-async def test_the_run_tells_pydantic_ai_its_place_in_the_conversation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
+@dataclass(init=False)
+class _RunMetadata(WrapperModel):
+    """The scripted model, keeping what each request's run carried."""
 
+    seen: list[dict[str, object] | None]
+
+    def __init__(self, wrapped: FunctionModel) -> None:
+        super().__init__(wrapped)
+        self.seen = []
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+        run_context: RunContext[object] | None = None,
+    ) -> AsyncIterator[StreamedResponse]:
+        self.seen.append(run_context.metadata if run_context else None)
+        async with self.wrapped.request_stream(
+            messages, model_settings, model_request_parameters, run_context
+        ) as stream:
+            yield stream
+
+
+@pytest.mark.anyio
+async def test_the_run_tells_pydantic_ai_its_place_in_the_conversation() -> None:
     async def answer(messages: object, info: AgentInfo) -> AsyncIterator[str]:
         yield "done"
 
-    monkeypatch.setattr(
-        harness_module,
-        "_runtime_profile_model",
-        lambda options: FunctionModel(stream_function=answer),
-    )
-    original_iter = harness_module.PydanticAIAgent.iter
-
-    def capturing_iter(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003, ANN202
-        captured.update(kwargs)
-        return original_iter(self, *args, **kwargs)
-
-    monkeypatch.setattr(harness_module.PydanticAIAgent, "iter", capturing_iter)
+    model = _RunMetadata(FunctionModel(stream_function=answer))
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
-    async for _ in PydanticAIHarness()._execute(
+    async for _ in PydanticAIHarness(model=model)._execute(
         agent=Agent(
             pod_id=conversation.pod_id,
             user_id=conversation.user_id,
@@ -137,4 +151,4 @@ async def test_the_run_tells_pydantic_ai_its_place_in_the_conversation(
     ):
         pass
 
-    assert captured["metadata"] == {RUN_INDEX_METADATA_KEY: 7}
+    assert model.seen == [{RUN_INDEX_METADATA_KEY: 7}]

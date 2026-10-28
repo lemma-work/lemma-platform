@@ -26,6 +26,7 @@ built, which is what makes a burst of bubbles arrive as one turn.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
@@ -38,12 +39,20 @@ from app.modules.agent.domain.entities import Message
 
 logger = get_logger(__name__)
 
+#: Claims what was sent to a run since it last looked: committed, and in the
+#: order it was sent. The database's claim, and its live frame, unless a caller
+#: hands in another -- which then tells the client itself.
+ClaimSteered = Callable[[UUID], Awaitable[list[Message]]]
+
 
 class PendingUserMessagesCapability(AbstractCapability[object]):
     """Steers messages that arrived mid-run into the run that is answering."""
 
-    def __init__(self, *, agent_run_id: UUID) -> None:
+    def __init__(
+        self, *, agent_run_id: UUID, claim: ClaimSteered | None = None
+    ) -> None:
         self._agent_run_id = agent_run_id
+        self._claim_from = claim
 
     def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
         return "pending_user_messages"
@@ -60,7 +69,11 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         else raised here is a bug and is left to surface.
         """
         try:
-            messages = await self._claim()
+            messages = await (
+                self._claim_from(self._agent_run_id)
+                if self._claim_from is not None
+                else self._claim()
+            )
         except SQLAlchemyError:
             logger.warning(
                 "agent.pending_user_messages.claim_failed.degraded",
@@ -85,7 +98,8 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
         # just took -- a reload reads the same claim. Publishing already
         # swallows transport errors; what is left is building the frame.
         try:
-            await self._announce(messages)
+            if self._claim_from is None:
+                await self._announce(messages)
         except TypeError, ValueError:
             logger.warning(
                 "agent.pending_user_messages.announce_failed.degraded",

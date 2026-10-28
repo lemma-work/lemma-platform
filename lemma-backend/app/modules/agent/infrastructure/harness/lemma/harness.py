@@ -63,6 +63,9 @@ from app.modules.agent.infrastructure.harness.lemma.capabilities import (
     LeaseGate,
     harness_capabilities,
 )
+from app.modules.agent.infrastructure.harness.lemma.pending_user_messages import (
+    ClaimSteered,
+)
 from app.modules.agent.infrastructure.harness.lemma.cache_telemetry import (
     CacheTelemetry,
 )
@@ -162,12 +165,17 @@ class PydanticAIHarness:
         *,
         emit_tokens: bool = True,
         model: Model | None = None,
+        claim_steered: ClaimSteered | None = None,
     ) -> None:
         self.emit_tokens = emit_tokens
         # Which model a run talks to. The runtime profile decides in production;
         # a test hands in a scripted model here rather than replacing a name
-        # inside this module.
+        # inside this module. A scripted model is not metered, and neither is
+        # its compaction call.
         self._model = model
+        # Where messages sent mid-run come from: the database unless a test
+        # says otherwise.
+        self._claim_steered = claim_steered
 
     async def run[DepsT: ToolContext](
         self,
@@ -328,7 +336,11 @@ class PydanticAIHarness:
             user_id=conversation.user_id,
             run_model=model,
             run_compaction_settings=options.compaction_model_settings,
-            meter=lambda resolved: _meter_compaction_model(resolved, options),
+            meter=lambda resolved: (
+                resolved
+                if self._model is not None
+                else _meter_compaction_model(resolved, options)
+            ),
         )
         capabilities = harness_capabilities(
             ctx=ctx,
@@ -340,6 +352,7 @@ class PydanticAIHarness:
                 if snapshot is not None
                 else RuntimeProfileProtocol.OPENAI_COMPATIBLE
             ),
+            claim_steered=self._claim_steered,
         )
         # Before the history processors, not after. Capabilities run in
         # registration order, and the processors include the hard-ceiling guard
