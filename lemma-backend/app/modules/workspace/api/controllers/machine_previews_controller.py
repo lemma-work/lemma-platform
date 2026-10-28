@@ -149,8 +149,10 @@ async def open_preview(
             str(preview.sandbox_id), caller, need=MachineAccess.STATUS
         )
     assert caller.user_id is not None
-    ticket = mint_ticket(label, caller.user_id)
+    # The stored label, not the one in the path: only a preview that exists
+    # is ever redirected to.
+    ticket = mint_ticket(preview.label, caller.user_id)
     return RedirectResponse(
-        preview_url(label, f"{AUTH_PATH}?ticket={ticket}"),
+        preview_url(preview.label, f"{AUTH_PATH}?ticket={ticket}"),
         status_code=status.HTTP_302_FOUND,
     )
