@@ -463,6 +463,8 @@ async def test_webrtc_watch_drive_and_take_control_through_turn(
     assert "running" in used.stdout
 
 
+# Shares the streamcheck build (~80 s) with the test above: slow lane too.
+@pytest.mark.slow
 async def test_unreachable_turn_fails_webrtc_and_vnc_still_serves(
     authenticated_client,
     fixed_test_org,

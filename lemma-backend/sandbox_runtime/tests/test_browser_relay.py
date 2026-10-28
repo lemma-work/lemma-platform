@@ -304,6 +304,9 @@ def _client(monkeypatch, tmp_path, token: str = "token-abc"):
     token_file = tmp_path / "token"
     token_file.write_text(token)
     monkeypatch.setattr(relay_app, "TOKEN_PATH", token_file)
+    # A fixed /tmp path that other tests on the same worker can touch: one that
+    # ran the agent-browser wrapper made `/health` report an active agent here.
+    monkeypatch.setattr(relay_app, "AGENT_ACTIVE_MARKER", tmp_path / "agent-active")
     return TestClient(relay_app.create_app())
 
 
