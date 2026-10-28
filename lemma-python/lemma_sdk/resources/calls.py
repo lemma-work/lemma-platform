@@ -26,12 +26,17 @@ class PodCalls(BoundResource):
     def open(
         self,
         *,
+        conversation_id: str | None = None,
         agent_name: str | None = None,
         display_name: str = "your teammate",
         title: str | None = None,
     ) -> CallResponse:
-        """Open a call with ``agent_name``, or the pod's default agent."""
+        """Open a call in ``conversation_id`` (your own chat, which the call
+        then continues), or in a new conversation with ``agent_name`` or the
+        pod's default agent."""
         body: dict[str, Any] = {"display_name": display_name}
+        if conversation_id is not None:
+            body["conversation_id"] = conversation_id
         if agent_name is not None:
             body["agent_name"] = agent_name
         if title is not None:

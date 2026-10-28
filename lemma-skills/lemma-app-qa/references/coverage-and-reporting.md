@@ -65,7 +65,7 @@ skill and current CLI help.
 | Displayed count is a real total | `lemma query run "select count(*) from <table> …"` as the tested principal; a UI figure that tracks the page size instead is the defect |
 | File uploaded/processed | `lemma files stat <path>`; inspect indexing status if search is claimed |
 | Workflow advanced | `lemma workflows runs get <run-id>`; inspect status, active wait, history, error/output |
-| Function completed | inspect the exact function run id, status, error/logs, and output data |
+| Function completed | `lemma functions runs get <function> <run-id>`; inspect status, error/logs, and output data |
 | Agent answered/acted | inspect the exact conversation messages and independently verify every claimed mutation |
 | Connector write occurred | inspect the exact controlled destination plus Lemma operation/run result |
 | Deploy is current | app detail/release id plus cache-busted live revision marker |

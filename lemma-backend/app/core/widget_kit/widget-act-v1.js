@@ -8,12 +8,15 @@
  *   lemma.when(value, { timeOnly?, dateOnly?, ago? }) / lemma.initials(name)
  *   lemma.avatar(name, size?) / lemma.icon(name)  -> HTML
  *
- * `act` runs one connector operation as the person viewing the widget. It finds
- * the organization's install of `connector` by itself -- that lookup is what a
- * widget used to spend its first ten minutes rediscovering -- and `kind`
- * ("http", "composio") names the backend the operation names belong to, so a
- * widget written for one says so plainly on the other instead of failing with a
- * missing operation.
+ * `act` runs one connector operation as the person viewing the widget, through
+ * the pod connector that serves `connector` -- the one the pod declared for it,
+ * else the person's own install, declared on first use. The pod connector
+ * decides whose account it runs as (the viewer's own, or the one the pod
+ * shares), so a widget never names an account. A connection the viewer still
+ * has to make, or remake, fails with `connectUrl` set, and a button shows a
+ * Connect link beside the error. `kind` ("http", "composio") names the backend
+ * the operation names belong to, so a widget written for the other one says so
+ * instead of only that the operation is missing.
  *
  * `button` is the one way a widget's button calls anything. A `confirm` sentence
  * opens a strip under the button's row that says what will happen and acts only
@@ -61,50 +64,62 @@
   });
   L.isSample = false;
 
-  var installs = {};
-  function install(connector) {
-    if (!installs[connector]) {
+  // The pod connector `connector` means here: the one by that slug, else one
+  // the pod declared for that catalog connector, else the name itself -- the
+  // server then finds the viewer's own install of it, or answers with where
+  // to connect one.
+  var slugs = {};
+  function slugFor(connector) {
+    if (!slugs[connector]) {
       var podId = (window.__LEMMA_CONFIG__ || {}).podId;
-      installs[connector] = L.client().then(function (c) {
-        return c.pods.get(podId).then(function (pod) {
-          return c.connectors.authConfigs.list(pod.organization_id, { limit: 200 }).then(function (listed) {
-            var found = ((listed && listed.items) || []).filter(function (i) {
-              return i.connector_id === connector && String(i.status || "ACTIVE").toUpperCase() === "ACTIVE";
-            }).sort(function (a, b) { return (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0); })[0];
-            if (!found) throw failure(named(connector) + " isn't connected in this organization yet.", "NOT_INSTALLED");
-            return { client: c, organizationId: pod.organization_id, name: found.name || found.id, kind: String(found.kind || "").toLowerCase(), podId: podId };
+      slugs[connector] = L.client().then(function (c) {
+        var pod = podId ? c.withPod(podId) : c;
+        return pod.connectors.pod.list().then(function (listed) {
+          var usable = ((listed && listed.items) || listed || []).filter(function (p) {
+            return p.can_use !== false && String(p.status || "ACTIVE").toUpperCase() === "ACTIVE";
           });
+          var found = usable.filter(function (p) { return p.slug === connector; })[0] ||
+            usable.filter(function (p) { return p.connector_id === connector; })[0];
+          return { pod: pod, slug: found ? found.slug : connector };
         });
       });
-      installs[connector].catch(function () { delete installs[connector]; });
+      slugs[connector].catch(function () { delete slugs[connector]; });
     }
-    return installs[connector];
+    return slugs[connector];
   }
 
-  function said(error, connector) {
+  function said(error, connector, kind) {
     var code = error && error.code;
-    if (code === "ACCOUNT_NOT_FOUND" || code === "POD_ACCOUNT_NOT_FOUND" || code === "ACCOUNT_RESOLUTION_ERROR" || code === "ACCOUNT_CREDENTIALS_NOT_FOUND") {
-      return failure("Connect your " + named(connector) + " account in Lemma, then try again.", code);
+    var url = (error && error.connectUrl) || null;
+    var e;
+    if (code === "REAUTH_REQUIRED") {
+      e = failure(url ? "Your " + named(connector) + " sign-in has expired. Reconnect it, then try again."
+        : "The shared " + named(connector) + " account needs its owner to reconnect it.", code);
+    } else if (code === "CONNECTION_REQUIRED" || code === "CONNECTOR_NEEDS_ACCOUNT" || code === "POD_CONNECTOR_NOT_FOUND") {
+      e = failure(url ? "Connect your " + named(connector) + " account, then try again."
+        : named(connector) + " isn't connected in this pod yet.", code);
+    } else if (code === "CONNECTOR_UNAVAILABLE") {
+      e = failure(named(connector) + " is turned off for this pod.", code);
+    } else if (code === "OPERATION_NOT_FOUND") {
+      e = failure("This " + named(connector) + " connection can't do that" +
+        (kind ? " (the widget was written for a " + kind + " connection)" : "") +
+        ". Ask in the conversation to adapt this widget.", code);
+    } else {
+      return error instanceof Error ? error : failure(String(error || "That didn't work."));
     }
-    if (code === "OPERATION_NOT_FOUND") {
-      return failure("This " + named(connector) + " connection can't do that. Ask in the conversation to adapt this widget.", code);
-    }
-    return error instanceof Error ? error : failure(String(error || "That didn't work."));
+    e.connectUrl = url;
+    e.connect = error && typeof error.connect === "function" ? function () { error.connect(); }
+      : url ? function () { window.open(url, "_blank", "noopener"); } : null;
+    return e;
   }
 
   L.act = function (connector, operation, payload, options) {
-    return install(connector).then(function (i) {
-      var kind = options && options.kind;
-      if (kind && i.kind && i.kind !== kind) {
-        throw failure("This widget was written for a different kind of " + named(connector) + " connection than this organization has. " +
-          "Ask in the conversation to adapt it.", "KIND_MISMATCH");
-      }
-      return i.client.connectors.operations.execute(
-        { organizationId: i.organizationId, authConfigName: i.name, podId: i.podId }, operation, payload || {}
-      );
+    var kind = options && options.kind;
+    return slugFor(connector).then(function (p) {
+      return p.pod.connectors.pod.execute(p.slug, operation, payload || {});
     }).then(function (response) {
       return response && "result" in response ? response.result : response;
-    }, function (error) { throw said(error, connector); });
+    }, function (error) { throw said(error, connector, kind); });
   };
 
   // A moment, the way a calendar or an inbox says one: "Tue 7 Oct, 14:30".
@@ -218,6 +233,14 @@
         el.disabled = false;
         delete el.dataset.busy;
         note(el, (error && error.message) || "That didn't work.", "bad");
+        if (error && error.connect) {
+          var fix = document.createElement("button");
+          fix.type = "button";
+          fix.className = "lw-btn";
+          fix.textContent = error.code === "REAUTH_REQUIRED" ? "Reconnect" : "Connect";
+          fix.addEventListener("click", error.connect);
+          line(el).appendChild(fix);
+        }
       });
     }
     el.addEventListener("click", function () {

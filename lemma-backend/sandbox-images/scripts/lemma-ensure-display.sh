@@ -546,7 +546,14 @@ for target in targets:
   return 0
 }
 
-open_log="/tmp/agent-browser-open.log"
+# This run's own, not a fixed path. The retry below decides on what this
+# file says, and this script runs from every `exec_command` that wants a
+# browser, so two can overlap. With one shared `/tmp/agent-browser-open.log`
+# the other run's `>` truncated it between a failed open and the grep: the
+# stale-session error was gone, nothing was retried, and the run exited 1
+# with nothing to say why. Caught by the unit lane on parallel workers.
+open_log="$(mktemp "${TMPDIR:-/tmp}/agent-browser-open.XXXXXX")"
+trap 'rm -f "$open_log"' EXIT
 opened_cold=0
 if [ "$#" -gt 0 ]; then
   set -- "$@"

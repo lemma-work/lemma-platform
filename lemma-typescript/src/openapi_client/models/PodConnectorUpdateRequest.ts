@@ -6,6 +6,8 @@ import type { PodConnectorMode } from './PodConnectorMode.js';
 import type { PodConnectorVisibility } from './PodConnectorVisibility.js';
 /**
  * Fields left out are unchanged; `shared_pod_account_id: null` clears it.
+ * Its slug and installation are fixed: a different one is a different
+ * connector, which apps, agents and bundles already address.
  */
 export type PodConnectorUpdateRequest = {
     mode?: (PodConnectorMode | null);

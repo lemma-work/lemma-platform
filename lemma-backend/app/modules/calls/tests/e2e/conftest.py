@@ -23,9 +23,13 @@ test_app = e2e_fixtures.test_app
 db_session = e2e_fixtures.db_session
 async_client = e2e_fixtures.async_client
 e2e_process_clients = e2e_fixtures.e2e_process_clients
-fixed_test_user = e2e_fixtures.fixed_test_user
+# One user and organization per module, reset to their snapshot before
+# each test (see `module_identity`); a module that needs its own per test
+# rebinds these to `fresh_test_user` / `fresh_test_org`.
+module_identity = e2e_fixtures.module_identity
+fixed_test_user = e2e_fixtures.module_test_user
 authenticated_client = e2e_fixtures.authenticated_client
-fixed_test_org = e2e_fixtures.fixed_test_org
+fixed_test_org = e2e_fixtures.module_test_org
 scenario = e2e_fixtures.scenario
 sandbox_reachable_backend = e2e_fixtures.sandbox_reachable_backend
 worker = e2e_fixtures.worker

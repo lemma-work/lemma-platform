@@ -950,6 +950,7 @@ export class ConnectorsService {
     }
     /**
      * Declare A Pod Connector
+     * Declare a connector by an organization installation (`auth_config_id`) or by a catalog connector (`connector_id`): its organization default, or Lemma's own app for it installed now when the organization has none and the caller may install connectors. `slug` defaults to the installation's name; `mode` to PER_MEMBER.
      * @param podId
      * @param requestBody
      * @returns PodConnectorResponse Successful Response

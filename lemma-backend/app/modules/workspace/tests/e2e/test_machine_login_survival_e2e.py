@@ -16,6 +16,7 @@ restored, never because some other copy of the file was left lying around.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from uuid import UUID, uuid4
 
 import pytest
@@ -225,8 +226,27 @@ async def test_a_disk_the_provider_lost_comes_back_with_its_logins(machine) -> N
     released = await client.post("/machines/me:release")  # the clean-close copy
     assert released.status_code < 300, released.text
 
+    # The provider loses it -- not Lemma deleting it, which marks the machine
+    # gone: this container and the volumes it mounts, by exact name, and the
+    # machine's row left as it was.
     service = get_sandbox_service()
-    await service.destroy(machine["id"], delete_storage=True)
+    handle = await service.ensure(machine["id"])
+    mounts = subprocess.run(
+        [
+            "docker",
+            "inspect",
+            "-f",
+            "{{range .Mounts}}{{if .Name}}{{.Name}} {{end}}{{end}}",
+            handle.provider_id,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    subprocess.run(["docker", "rm", "-f", "-v", handle.provider_id], check=True)
+    if mounts:
+        subprocess.run(["docker", "volume", "rm", "-f", *mounts], check=True)
+    service.forget(machine["id"])
     await _warm(client)
     assert (await _run(client, f'cat "{LOGIN}" 2>/dev/null || true'))[
         "text"

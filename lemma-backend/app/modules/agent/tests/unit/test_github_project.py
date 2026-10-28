@@ -53,6 +53,14 @@ def _context(repo: ProjectRepo | None) -> BaseAgentContext:
     )
 
 
+@pytest.fixture
+def fake_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeRedis:
+    """The marker store, in place of Redis for every test that needs one."""
+    redis = _FakeRedis()
+    monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
+    return redis
+
+
 _REPO = ProjectRepo(owner="acme", repo="web")
 _MARKER_KEY = f"{github_project._MARKER_KEY_PREFIX}:session-1:acme/web"
 
@@ -72,9 +80,8 @@ async def test_a_conversation_without_a_project_does_nothing(
 
 
 @pytest.mark.asyncio
-async def test_clone_runs_once_per_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
-    monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
+async def test_clone_runs_once_per_session(fake_redis: _FakeRedis) -> None:
+    redis = fake_redis
     ctx = _context(_REPO)
     session = _FakeSession()
 
@@ -88,13 +95,11 @@ async def test_clone_runs_once_per_session(monkeypatch: pytest.MonkeyPatch) -> N
 
 @pytest.mark.asyncio
 async def test_clone_never_runs_over_an_existing_checkout(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_redis: _FakeRedis,
 ) -> None:
     """The guard is in the command itself, so a fresh session cannot clobber a
     working tree another conversation is using."""
 
-    redis = _FakeRedis()
-    monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
     session = _FakeSession()
 
     await github_project.ensure_project_checkout(_context(_REPO), session)
@@ -114,10 +119,8 @@ async def test_clone_never_runs_over_an_existing_checkout(
 
 @pytest.mark.asyncio
 async def test_a_ref_is_checked_out_from_the_mirror(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_redis: _FakeRedis,
 ) -> None:
-    redis = _FakeRedis()
-    monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
     repo = ProjectRepo(owner="acme", repo="web", ref="release/2.0")
     session = _FakeSession()
 
@@ -133,12 +136,10 @@ async def test_a_ref_is_checked_out_from_the_mirror(
 
 @pytest.mark.asyncio
 async def test_a_pull_request_ref_comes_from_the_mirror(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_redis: _FakeRedis,
 ) -> None:
     """A mirror fetches `refs/pull/*` with everything else, so a review checks
     out the pull request itself rather than a branch that may be gone."""
-    redis = _FakeRedis()
-    monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
     repo = ProjectRepo(owner="acme", repo="web", ref="pull/12/head")
     session = _FakeSession()
 
@@ -153,10 +154,9 @@ async def test_a_pull_request_ref_comes_from_the_mirror(
 
 @pytest.mark.asyncio
 async def test_a_failed_clone_tells_the_agent_why_the_directory_is_empty(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_redis: _FakeRedis,
 ) -> None:
-    redis = _FakeRedis()
-    monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
+    redis = fake_redis
     session = _FakeSession(
         exit_code=128, stderr="remote: Repository not found.\nfatal: could not read"
     )
@@ -178,10 +178,8 @@ async def test_a_failed_clone_tells_the_agent_why_the_directory_is_empty(
 
 @pytest.mark.asyncio
 async def test_a_session_without_an_id_is_left_alone(
-    monkeypatch: pytest.MonkeyPatch,
+    fake_redis: _FakeRedis,
 ) -> None:
-    redis = _FakeRedis()
-    monkeypatch.setattr(github_project, "get_redis", lambda url=None: redis)
     session = _FakeSession()
     session.session_id = None
 

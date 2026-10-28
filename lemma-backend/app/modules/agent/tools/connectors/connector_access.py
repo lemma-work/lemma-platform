@@ -39,6 +39,8 @@ class ConnectorServices:
     uow: SqlAlchemyUnitOfWork
     #: Reads an attachment and lands a download, as this agent in its pod.
     files: object
+    #: The organization's installs and sign-ins: where a connect link comes from.
+    connectors: object
 
 
 def _connector_dependencies():
@@ -103,6 +105,7 @@ async def connector_services(
                 files=dependencies.build_operation_files(
                     uow, pod_id=deps.pod_id, ctx=auth_ctx
                 ),
+                connectors=dependencies.get_connector_service(uow),
             )
             await uow.commit()
         finally:

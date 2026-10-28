@@ -396,22 +396,20 @@ async def test_an_agent_with_no_permissions_key_still_gets_no_grants_step(tmp):
 
 
 async def test_the_app_step_says_how_the_app_will_be_served(tmp):
-    """An imported app whose manifest omits visibility is created PUBLIC.
-
-    That is deliberate -- an app is a shell whose data calls are authorized on
-    their own -- but the plan is where the importer sees what an approval will
-    do, and the APP step carried no visibility at all."""
+    """An imported app whose manifest omits visibility is created private to
+    the pod, like a hand-made one; one that asks to be PUBLIC says so in the
+    plan, which is where the importer sees what an approval will do."""
     root = _build_bundle(tmp)
     _write(root / "apps" / "dashboard" / "dashboard.json", {"name": "dashboard"})
     _write(
         root / "apps" / "internal" / "internal.json",
-        {"name": "internal", "visibility": "POD"},
+        {"name": "internal", "visibility": "PUBLIC"},
     )
     plan = await PlanBuilder(FakeExisting()).build_plan(bundle_root=root)
 
     by_name = {s.name: s for s in plan.steps if s.kind is StepKind.APP}
-    assert by_name["dashboard"].detail["visibility"] == "PUBLIC"
-    assert by_name["internal"].detail["visibility"] == "POD"
+    assert by_name["dashboard"].detail["visibility"] == "POD"
+    assert by_name["internal"].detail["visibility"] == "PUBLIC"
 
 
 async def test_an_app_the_pod_already_has_carries_no_visibility_claim(tmp):

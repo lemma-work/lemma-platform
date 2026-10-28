@@ -469,13 +469,18 @@ async def test_a_stop_request_wins_over_a_pending_retry(monkeypatch) -> None:
         yield "x"
         raise httpx2.ReadError("boom")
 
-    async def stop_now() -> bool:
-        return True
+    async def stop_once_an_attempt_began() -> bool:
+        # Pressed during the first attempt, not before it. A stop already
+        # pressed when the run starts is honoured by the consumer's own poll
+        # (STOP_POLL_SECONDS) -- correctly -- and on a slow runner that poll
+        # beat the driver to its first model call, so the run stopped with
+        # no attempt at all and this test read 0.
+        return bool(attempts)
 
     events = await _run_harness(
         FunctionModel(stream_function=always_drops),
         monkeypatch=monkeypatch,
-        should_stop=stop_now,
+        should_stop=stop_once_an_attempt_began,
     )
 
     assert len(attempts) == 1

@@ -25,6 +25,7 @@ def provider_create_spec(
     volume_name: str | None,
     size: SandboxSize | None,
     host_loopback: bool,
+    storage_generation: int | None = None,
 ) -> ProviderCreateSpec:
     return ProviderCreateSpec(
         sandbox_id=sandbox.id,
@@ -39,6 +40,7 @@ def provider_create_spec(
         profile_digest=profile.digest,
         deadline_at=deadline_at,
         volume_name=volume_name,
+        storage_generation=storage_generation,
         mounts=sandbox.mounts,
         size=size,
         template=sandbox.template,

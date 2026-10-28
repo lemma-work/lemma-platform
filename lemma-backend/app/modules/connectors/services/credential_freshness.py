@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from app.modules.connectors.config import connector_settings
+from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.domain.errors import AccountResolutionError
 
 
@@ -79,7 +80,13 @@ async def resolve_execution_credentials(
     stored = serialize(account.credentials)
     if not connector_service or not is_oauth(account):
         return stored
-    if not credential_refresh_due(stored):
+    # An account marked for reauth that resolution still let through is one
+    # whose grant only a refresh can vouch for (``reauth_recovery``): refresh it
+    # whatever its expiry says, and a success clears the mark.
+    verify = getattr(account, "status", None) == AccountStatus.REAUTH_REQUIRED and bool(
+        stored.get("refresh_token") or stored.get("connection_id")
+    )
+    if not verify and not credential_refresh_due(stored):
         return stored
 
     # Refreshed as the account's owner, never as the caller. Resolution has
@@ -89,7 +96,7 @@ async def resolve_execution_credentials(
     # anyone else fail with ``ACCOUNT_NOT_FOUND`` whenever the token happened to be
     # due, until the owner's own next call refreshed it.
     refreshed = await connector_service.get_account_credentials(
-        account.id, account.user_id, account.organization_id
+        account.id, account.user_id, account.organization_id, force_refresh=verify
     )
     refreshed_credentials = serialize(refreshed)
     if "user_data" not in refreshed_credentials and stored.get("user_data"):

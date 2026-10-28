@@ -123,7 +123,7 @@ Only six of them are a decision. Set those on the agent; the rest arrive on thei
 
 **Omitting `toolsets` is not the same as `[]`.** Leave the key out on create and the
 agent starts with `["WEB_SEARCH", "MEMORY"]`; write an explicit `[]` and it gets
-exactly none of the declared five. A scaffolded bundle states them, so what you see is
+exactly none of the declared six. A scaffolded bundle states them, so what you see is
 what you get — but a hand-written JSON that "doesn't use toolsets" quietly has two.
 
 A stale `POD` or `CONNECTORS` in an older agent's `toolsets` is harmless — the
@@ -141,9 +141,9 @@ colleague hearing from an implementation detail of somebody's turn cannot place 
 | `WEB_SEARCH` | **Declared.**  web search |
 | `BROWSER` | **Declared.** One tool, `browser_sign_in`: it gets past a login wall by loading a login the person saved earlier, or by pausing the run and asking them to sign in themselves in the agent's browser. The agent never sees or asks for a password. **Deferred**: not in the prompt prefix, so an agent that never meets a login wall never carries it. **Pair it with `WORKSPACE_CLI`** — the browsing itself is the `agent-browser` command line on the agent's machine, so `BROWSER` on its own can ask for a login and then do nothing with it. Add `view_image` to let the agent look at what it captures |
 | `USER_INTERACTION` | **Always on.**  ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
-| `SPEECH` | **Declared.**  speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |
+| `SPEECH` | **Declared.**  speak replies and transcribe voice notes (`say` / `listen`, plus `list_voices`). **Deferred** — found with `search_tools`. See `agent-tools.md` |
 | `SUBAGENTS` | **Declared.**  async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |
-| `CONNECTORS` | **Derived — any connector grant.**  call third-party APIs through the org's connector installs, without a machine. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `search_connector_operations` (leave `auth_config` unset to search **every** install — each hit names the one to run it against) and `run_connector_operation`; `describe_connector_operation` only if you want the full input schema up front, `list_connectors` only to see what is installed. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
+| `CONNECTORS` | **Derived — any connector grant.**  call third-party APIs through the org's connector installs, without a machine. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `run_connector_operation` by pod slug, the person's own app, or a catalog id (an app nobody connected answers with a `connect_url` for the person); `search_connector_operations` (leave `connector` unset to search **every** connector — each hit names the one to run it through) when the operation is unknown; `describe_connector_operation` only if you want the full input schema up front; `list_connectors` to see what is usable and whether the person has connected each; `connect_connector` for a link when the person asks to connect something. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
 | `TODO` | **Always on.**  a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
 | `MEMORY` | **Declared.**  durable facts kept between conversations, in ordinary pod files: `/memory` for what the whole pod should know, `/me` for what is true of one person only. `AGENTS.md` in each scope is read into every run automatically, so it must stay a short index of pointers — it is capped, and the overflow is truncated with a marker. It carries **no tools of its own**, but it does not need pairing: turning it on **derives a `folder.write` grant on `/memory`** (write implies read), which in turn derives `POD` — so the agent gets the file tools that make the instruction actionable. Turning it off takes the grant back, and it is re-derived on every write, so a `permissions` replace cannot strip it |
 | `WAIT` | **Always on.**  suspend the current turn and resume it when there is a reason to (`wait_for`): a time, a process on its machine exiting, or a sub-agent run finishing. Capped at 24h. Every wake replays the whole conversation, so one real wait beats a loop of short ones — and it is **not** for waiting on a person, nor on a `channel_post` answer |
@@ -156,9 +156,10 @@ broader than anything a grant describes. There is no separate file-system
 toolset: file access is part of `POD`, scoped by the folder grants that produced
 it.
 
-**Six toolsets are *deferred*, whether declared, derived or always-on.** `POD`,
-`CONNECTORS`, `SUBAGENTS`, `MESSAGING`, `WAIT` and `BROWSER` are not in the model's
-prompt prefix — it has to find them with `search_tools` first. That keeps a chat agent from
+**Six toolsets are *deferred*, whether declared, derived or always-on.**
+`CONNECTORS`, `SUBAGENTS`, `MESSAGING`, `WAIT`, `BROWSER` and `SPEECH` are not in the
+model's prompt prefix — it has to find them with `search_tools` first. (`POD` is
+deliberately *not* deferred: the tools on the pod's own data must not need finding.) That keeps a chat agent from
 reaching for "message a colleague" unprompted, and it is also why **an agent that
 should chase people has to be told so in its instruction**. "You have a tool for it" is
 not enough when the tool is behind a search.
@@ -201,7 +202,7 @@ This is the single behavior agents get wrong without being told, so spell it out
 the instruction. Pod files are **searchable by path** and **fully readable** — not
 snippet-only. The right loop, grounded in the file model (`files.md`):
 
-1. **Search first**, scoped to a folder: `search "refund policy" --scope /knowledge`
+1. **Search first**, scoped to a folder: `files search "refund policy" --scope /knowledge`
    returns ranked chunks **with page numbers**. Folder scope keeps retrieval tight.
 2. **Read the converted markdown** of the hit — `files cat <path>` (or
    `download_markdown`) returns the whole document as page-marked markdown. Agents
@@ -222,8 +223,9 @@ Grant each folder the agent reads (`folder.read`; add `folder.write` for uploads
 An agent calls a third-party app through one of the **pod's connectors** — it
 never holds raw credentials. Grant the pod connector by slug
 (`resource_type: "connector"`, `resource_name: "<slug>"`,
-`permission_ids: ["connector.use"]`), and either give the agent `POD`-level connector
-tools or `WORKSPACE_CLI` so it can run `lemma connectors …`. A PER_MEMBER connector
+`permission_ids: ["connector.use"]`) — the grant alone brings the `CONNECTORS` tools
+(`run_connector_operation` and friends); add `WORKSPACE_CLI` only if it also needs
+`lemma connectors run` in a shell. A PER_MEMBER connector
 runs as the invoking member's own account (`CONNECTION_REQUIRED`, with a connect
 link, when they have none); a SHARED one as the account its owner shared. Discover operation ids/payloads before relying on them —
 see `connectors.md`.
@@ -430,9 +432,8 @@ the agent standalone so its output conforms before wiring it in.
 
 By default agents run on the platform's system runtime (`system:lemma`).
 `agent_runtime: {"profile_id": "..."}` pins an org-level runtime profile instead.
-A profile's *protocol* is one of `OPENAI_COMPATIBLE`, `ANTHROPIC_COMPATIBLE`,
-`AZURE_OPENAI`, `GOOGLE_VERTEX` (all of which run the agent in-process) or
-`AGENT_HOST` (a coding harness, identified by the profile's `harness_id` — there is no
+A profile's *protocol* is one of `OPENAI_COMPATIBLE`, `ANTHROPIC_COMPATIBLE` (both
+run the agent in-process) or `AGENT_HOST` (a coding harness, identified by the profile's `harness_id` — there is no
 longer a protocol per coding tool). Manage them with `lemma runtime profiles
 list|get|create`. Leave `agent_runtime` unset unless the pod has a specific
 requirement — pinning one is also how you guarantee vision (`view_image`).

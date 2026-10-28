@@ -107,3 +107,21 @@ def test_an_answer_to_the_agents_question_is_the_persons_own_words():
     assert the_persons_words(
         [_said("Plan the sync."), asked, answer, _answered("Done.")]
     ) == [_said("Plan the sync."), answer]
+
+
+def test_an_acknowledgement_owes_no_pass():
+    """A pass reads the whole turn and the memory brief to conclude "nothing",
+    at a multiple of the turn's cost; "thanks" or a thumbs-up has nothing."""
+    for said in ("Thanks!", "ok thank you so much", "hi", "👍", "  "):
+        assert not said_by_the_person([_said(said), _answered("Any time.")]), said
+
+
+def test_anything_more_than_an_acknowledgement_is_read():
+    """Short is not empty: a name, or a sentence in any script, is a fact."""
+    for said in ("I'm Anukul", "thanks, I run a studio", "मैं स्टूडियो चलाता हूँ"):
+        assert said_by_the_person([_said(said)]), said
+
+
+def test_an_answer_to_the_agents_question_is_read_however_short():
+    """A bare "yes" to the agent's own question can be the fact itself."""
+    assert said_by_the_person([_returned("ask_user", "yes")])

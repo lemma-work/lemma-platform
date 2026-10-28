@@ -29,6 +29,15 @@ COPY lemma-skills ./lemma-skills
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project --extra local
 
+# The vocabulary behind the token counter (`cl100k_base`, named in
+# `history_tokens` and `core/embeddings/token_counter`), fetched once here.
+# Otherwise every new container downloads it the first time anything counts
+# tokens, which for a worker is in the middle of an agent turn. `tiktoken` reads
+# `TIKTOKEN_CACHE_DIR` and checks the file's hash before using it; the runtime
+# stage sets the same path.
+ENV TIKTOKEN_CACHE_DIR=/app/.tiktoken-cache
+RUN .venv/bin/python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+
 # Copy backend application code
 COPY lemma-backend/ ./
 
@@ -109,6 +118,8 @@ RUN mkdir -p /app/.composio && chown -R appuser:appuser /app/.composio
 
 # Copy virtual environment from builder
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+# The tokenizer vocabulary fetched in the builder; `TIKTOKEN_CACHE_DIR` below.
+COPY --from=builder --chown=appuser:appuser /app/.tiktoken-cache /app/.tiktoken-cache
 # uv installs monorepo path dependencies as editable links, so the linked
 # source has to survive into the runtime image or importing lemma_pod_bundle
 # fails once the builder stage is discarded. `sandbox_runtime` needs no such
@@ -176,6 +187,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     COMPOSIO_CACHE_DIR=/app/.composio \
+    TIKTOKEN_CACHE_DIR=/app/.tiktoken-cache \
     HOME=/home/appuser
 
 # jemalloc instead of glibc malloc. glibc gives each thread its own arena and

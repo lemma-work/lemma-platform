@@ -449,6 +449,36 @@ async fn a_model_whose_options_cannot_be_read_is_published_with_the_defaults() {
     assert_eq!(chosen, ["fake-1", "fake-2", "fake-broken", "fake-1"]);
 }
 
+/// An agent slow to switch models cannot run the probe out of time: the models
+/// asked within the budget keep their own options, the rest are published with
+/// the top level's, and the probe still answers well inside its 20s.
+#[tokio::test]
+async fn a_slow_agents_model_options_stop_at_the_budget_rather_than_failing_the_probe() {
+    let directory = TempDir::new().unwrap();
+    let (adapter, _log) = fake_adapter_in_mode(&directory, Some("slow-model-options"));
+    let started = std::time::Instant::now();
+    let probe = AcpDriver::default()
+        .probe(adapter, directory.path().join("probe"))
+        .await
+        .expect("a slow agent still probes");
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "the probe must finish inside refresh_harnesses' 20s: {:?}",
+        started.elapsed()
+    );
+    let models = &probe
+        .config_options
+        .iter()
+        .find(|option| option.category == "model")
+        .unwrap()
+        .options;
+    assert!(model_entry(models, "slow-1").contains_key(MODEL_OPTION_SET_KEY));
+    assert!(
+        !model_entry(models, "slow-6").contains_key(MODEL_OPTION_SET_KEY),
+        "a model past the budget keeps the top level's options: {models:?}"
+    );
+}
+
 /// A run of `adapter` with nothing special about it, working in `cwd`.
 fn plain_run(adapter: ResolvedAdapter, cwd: PathBuf) -> AcpRunRequest {
     AcpRunRequest {

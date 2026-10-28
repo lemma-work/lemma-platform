@@ -25,6 +25,7 @@ use uuid::Uuid;
 mod support;
 
 mod cancellation;
+mod config;
 mod streaming;
 mod tools;
 mod workspace;
@@ -51,8 +52,11 @@ impl AcpCallbacks for StreamCapture {
         _object_id: Option<String>,
         payload: JsonMap,
     ) -> anyhow::Result<()> {
+        // A config update is the one event allowed ahead of the session: a
+        // session the provider has forgotten, or a model it will not take, is
+        // said before the prompt -- as `JournalCallbacks` accepts in the host.
         anyhow::ensure!(
-            self.session_started.load(Ordering::SeqCst),
+            event_type == EventType::ConfigUpdate || self.session_started.load(Ordering::SeqCst),
             "streamed an event before the provider accepted the session"
         );
         self.events.lock().unwrap().push((event_type, payload));

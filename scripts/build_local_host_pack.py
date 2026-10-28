@@ -204,6 +204,10 @@ def install_python(
         # system Python. uv marks managed downloads as externally managed, so
         # explicitly authorize installing the application into this pack.
         "--break-system-packages",
+        # The export is already the whole locked graph. Resolving it again
+        # drops `[tool.uv] override-dependencies`, which `uv pip` never reads,
+        # and fastembed's `pillow<13` then refuses the pillow 13 the lock holds.
+        "--no-deps",
         "--find-links",
         wheels,
         "--requirements",
