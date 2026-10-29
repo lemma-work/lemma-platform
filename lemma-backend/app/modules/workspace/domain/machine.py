@@ -93,13 +93,13 @@ class MachineSize:
 
     @classmethod
     def parse(cls, label: str) -> MachineSize:
-        text = label.strip().lower()
-        # Every real label is a handful of characters ("16x64"); bounding it
-        # first keeps the match linear whatever a caller sends.
-        match = _SIZE_LABEL.fullmatch(text) if len(text) <= _MAX_LABEL else None
-        if match is None:
+        # Split, not a regex: every real label is a handful of characters
+        # ("16x64"), and nothing here should depend on how a pattern scales
+        # with whatever a caller sends.
+        cpus, _, memory = label.strip().lower().partition("x")
+        if not (_is_count(cpus, 3) and _is_count(memory, 4)):
             raise ValueError(f"'{label}' is not a machine size; use e.g. 2x4")
-        size = cls(int(match.group(1)), int(match.group(2)))
+        size = cls(int(cpus), int(memory))
         if size not in KNOWN_SIZES:
             known = ", ".join(s.label for s in KNOWN_SIZES)
             raise ValueError(f"'{label}' is not an offered size ({known})")
@@ -110,8 +110,10 @@ class MachineSize:
         return cls(size.cpu_count, max(1, size.memory_mb // 1024))
 
 
-_SIZE_LABEL = re.compile(r"(\d{1,3})x(\d{1,4})")
-_MAX_LABEL = 8
+def _is_count(text: str, digits: int) -> bool:
+    """One to `digits` ASCII digits; `str.isdigit` alone accepts "²" and "٣"."""
+    return 0 < len(text) <= digits and all("0" <= c <= "9" for c in text)
+
 
 #: Every size a template is built at. A plan narrows this; nothing widens it.
 KNOWN_SIZES = (
