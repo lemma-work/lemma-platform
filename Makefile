@@ -137,6 +137,10 @@ DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
 # or hosts-file setup in every current browser.
 DEV_BROWSER_BASE_DOMAIN := browser.lemma.localhost:$(DEV_BACKEND_PORT)
 DEV_APPS_DOMAIN_SUFFIX := apps.lemma.localhost
+# Machine previews, each on its own `p-<id>.` origin under this domain. Unset,
+# previews are off -- which is right for a deployment without a wildcard
+# certificate, and wrong for a laptop, where `*.localhost` needs nothing.
+DEV_MACHINE_PREVIEW_DOMAIN := machines.localhost:$(DEV_BACKEND_PORT)
 DEV_DATABASE_URL      := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma
 DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma_datastore
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
@@ -365,7 +369,9 @@ WORKSPACE_DEV_ENV := \
 	FUNCTION_IMAGE=$(DEV_FUNCTION_IMAGE) \
 	WORKSPACE_DOCKER_ALLOW_MUTABLE_IMAGES=true \
 	WORKSPACE_ADD_HOST_GATEWAY=true \
-	WORKSPACE_HOST_ALIAS=host.lemma.internal
+	WORKSPACE_HOST_ALIAS=host.lemma.internal \
+	MACHINE_PREVIEW_DOMAIN=$(DEV_MACHINE_PREVIEW_DOMAIN) \
+	MACHINE_PREVIEW_SCHEME=http
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

@@ -21776,7 +21776,7 @@
                 "type": "null"
               }
             ],
-            "description": "Absolute, inside the machine's home. Defaults to ~/lemma.",
+            "description": "Inside the machine's home: absolute, `~/...`, or relative to ~/lemma. Defaults to ~/lemma.",
             "title": "Cwd"
           },
           "env": {

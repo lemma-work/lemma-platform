@@ -91,3 +91,30 @@ def test_every_old_route_is_marked_deprecated_with_its_replacement() -> None:
     for (path, method), operation in old.items():
         assert operation.get("deprecated") is True, f"{method} {path}"
         assert operation["x-lemma-replacement"].split()[1].startswith("/machines/me")
+
+
+@pytest.mark.asyncio
+async def test_the_old_file_read_says_it_is_deprecated_too() -> None:
+    """It answers with a Response of its own, which drops every header its
+    dependencies set -- it was the one shim that answered without the notice."""
+    from app.modules.workspace.api.controllers import machine_files_controller
+
+    class Files:
+        async def stat_file(self, machine_id, path, *, deadline_at):
+            return SimpleNamespace(path=path, size_bytes=5, sha256=None)
+
+        async def read_file(self, machine_id, path, **_):
+            return b"hello"
+
+    app = _app(uuid4())
+    app.dependency_overrides[machine_files_controller.machine_files] = Files
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/workspace/files:content", params={"path": "a.txt"}
+        )
+
+    assert response.text == "hello"
+    assert "GET /machines/me/files:content" in response.headers[DEPRECATION_HEADER]
+    assert response.headers["Deprecation"] == "true"

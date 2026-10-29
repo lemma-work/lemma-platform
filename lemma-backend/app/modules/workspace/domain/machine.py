@@ -132,6 +132,22 @@ TEMPLATE_SIZES: dict[MachineTemplate, tuple[MachineSize, ...]] = {
 }
 
 
+#: Fabrics that can build a template other than the plain workspace. Docker
+#: inside a machine needs a VM of its own -- E2B's -- and a Docker fabric's
+#: container cannot run dockerd safely, so on Docker it is not offered at all:
+#: a `workspace-docker` machine there was created, said `docker: true`, and had
+#: no Docker in it.
+_TEMPLATE_FABRICS: dict[MachineTemplate, frozenset[MachineFabric]] = {
+    MachineTemplate.WORKSPACE_DOCKER: frozenset({MachineFabric.E2B}),
+}
+
+
+def template_builds_on(template: MachineTemplate, fabric: MachineFabric) -> bool:
+    """Whether this deployment's fabric can build machines from `template`."""
+    fabrics = _TEMPLATE_FABRICS.get(template)
+    return fabrics is None or fabric in fabrics
+
+
 @dataclass(frozen=True, slots=True)
 class Capabilities:
     """What a machine can do, declared per machine and checked before a call.
@@ -287,10 +303,17 @@ class Machine:
 
     @property
     def ref(self) -> str:
+        """How to name this machine, in a URL path as much as anywhere.
+
+        `pod:<pod>:<name>`, not `pod:<pod>/<name>`. Both parse, but this is
+        what the API hands out, and the slash form cannot sit in a path
+        segment: encoded or not, `/machines/pod:<pod>/qa` reaches no route,
+        so a client using the `ref` it was just given got a 404.
+        """
         if self.kind is MachineKind.DEFAULT:
             return "me"
         if self.kind is MachineKind.POD:
-            return f"pod:{self.pod_id}/{self.name}"
+            return f"pod:{self.pod_id}:{self.name}"
         return f"mine:{self.name}"
 
 
@@ -311,5 +334,6 @@ __all__ = [
     "MachineTemplate",
     "MachineVisibility",
     "TEMPLATE_SIZES",
+    "template_builds_on",
     "validate_machine_name",
 ]

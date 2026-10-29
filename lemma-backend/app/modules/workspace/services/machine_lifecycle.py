@@ -173,10 +173,18 @@ class MachineLifecycle:
     async def _reset_scope(
         self, machine: Machine, scope: str, acting_user: UUID
     ) -> ScopeOutcome:
-        before = await self._disk_used(machine.id, acting_user)
         if scope == "processes":
             killed = await self._processes.kill_all(machine.id, keep_services=True)
-            return ScopeOutcome(scope, detail=f"stopped {len(killed)} processes")
+            count = len(killed)
+            return ScopeOutcome(
+                scope,
+                detail=f"stopped {count} process{'' if count == 1 else 'es'}",
+            )
+        if scope == "docker" and not machine.capabilities.docker:
+            # Said, rather than run: the prune finds no daemon, frees nothing,
+            # and reported that as a clean success on a machine with no Docker.
+            return ScopeOutcome(scope, detail="this machine has no Docker")
+        before = await self._disk_used(machine.id, acting_user)
         command = scope_command(scope)
         if command is None:
             return ScopeOutcome(scope, detail="nothing to do")
