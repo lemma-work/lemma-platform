@@ -37,7 +37,7 @@ import { UsersNamespace } from "./namespaces/users.js";
 import { WorkflowsNamespace } from "./namespaces/workflows.js";
 import { WidgetsNamespace } from "./namespaces/widgets.js";
 import { MachinesNamespace } from "./namespaces/machines.js";
-import { WebLoginsNamespace, WorkspaceNamespace } from "./namespaces/workspace.js";
+import { WebLoginsNamespace } from "./namespaces/web-logins.js";
 import { DatastoreNamespace } from "./namespaces/datastore.js";
 
 export type { LemmaConfig };
@@ -89,8 +89,6 @@ export class LemmaClient {
   readonly widgets: WidgetsNamespace;
   /** The computers a person and their pods run commands, files and a browser on. */
   readonly machines: MachinesNamespace;
-  /** @deprecated Use {@link machines} with the ref `"me"`; removed next minor release. */
-  readonly workspace: WorkspaceNamespace;
   readonly webLogins: WebLoginsNamespace;
   readonly connectors: ConnectorsNamespace;
   readonly resourceAccess: ResourceAccessNamespace;
@@ -166,7 +164,6 @@ export class LemmaClient {
       hostOrigin: hostOriginOf(this._config.authUrl),
       bearerToken: () => this.auth.getBearerToken(),
     });
-    this.workspace = new WorkspaceNamespace(this._http, this.machines);
     this.webLogins = new WebLoginsNamespace(this._http);
     this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
     this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);

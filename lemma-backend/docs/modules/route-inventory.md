@@ -484,12 +484,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/machines/{ref}/startup` | `machine.startup` | Whether a machine is ready, without waking it |
 | GET | `/machines:policy` | `machine.policy` | Which machines you or a pod may create |
 | GET | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.get` | Who is granted a pod machine |
-| GET | `/workspace/browser/current-page-url` | `workspace.browser.current_page_url` | What page a sign-in's browser is actually showing |
-| GET | `/workspace/browser/status` | `workspace.browser.status` | Whether the workspace browser can be watched |
-| GET | `/workspace/files` | `workspace.files.list` | List workspace files |
-| GET | `/workspace/files:content` | `workspace.files.content` | Read workspace file content |
-| GET | `/workspace/files:stat` | `workspace.files.stat` | Stat one workspace file |
-| GET | `/workspace/status` | `workspace.status` | Whether your computer is ready |
 | PATCH | `/pods/{pod_id}/machines/{name}` | `machine.pod.update` | Rename, resize or change who sees a pod machine |
 | POST | `/machine-connections:pair` | `machine_connections.pair` | Approve a machine's pairing code |
 | POST | `/machine-consents` | `machine.consent.grant` | Let an app run code on your machine |
@@ -506,7 +500,5 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/machines/{ref}:reset` | `machine.reset` | Clean a machine by scope |
 | POST | `/machines/{ref}:restart` | `machine.restart` | Stop a machine and start it again |
 | POST | `/pods/{pod_id}/machines` | `machine.pod.create` | Create a machine the pod's agents share |
-| POST | `/workspace/apps/browser/access` | `workspace.browser.access` | Create workspace browser access URL |
-| POST | `/workspace/browser/display-size` | `workspace.browser.resize_display` | Fit the workspace display to the pane showing it |
 | PUT | `/machines/{ref}/files/content` | `machine.files.write` | Write a file on a machine |
 | PUT | `/pods/{pod_id}/machines/{name}/grants` | `machine.pod.grants.set` | Replace who is granted a pod machine |

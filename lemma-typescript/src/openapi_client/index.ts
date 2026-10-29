@@ -639,8 +639,6 @@ export { WorkflowRunWaitStatus } from './models/WorkflowRunWaitStatus.js';
 export { WorkflowRunWaitType } from './models/WorkflowRunWaitType.js';
 export type { WorkflowSummaryResponse } from './models/WorkflowSummaryResponse.js';
 export type { WorkflowUpdateRequest } from './models/WorkflowUpdateRequest.js';
-export type { WorkspaceAppAccessRequest } from './models/WorkspaceAppAccessRequest.js';
-export type { WorkspaceAppAccessResponse } from './models/WorkspaceAppAccessResponse.js';
 export { WriteIntent } from './models/WriteIntent.js';
 
 export { AgentAsksService } from './services/AgentAsksService.js';
@@ -691,5 +689,3 @@ export { UsersService } from './services/UsersService.js';
 export { WebLoginsService } from './services/WebLoginsService.js';
 export { WidgetsService } from './services/WidgetsService.js';
 export { WorkflowsService } from './services/WorkflowsService.js';
-export { WorkspaceService } from './services/WorkspaceService.js';
-export { WorkspaceAppsService } from './services/WorkspaceAppsService.js';

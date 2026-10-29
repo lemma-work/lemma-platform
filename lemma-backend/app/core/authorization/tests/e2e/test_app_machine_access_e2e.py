@@ -82,7 +82,6 @@ async def test_granted_or_not_the_browser_logins_and_reset_stay_the_persons(
         ("DELETE", "/machines/me/browser/logins/example.com", None),
         ("POST", "/machines/me:reset", {"scopes": ["home"], "confirm": True}),
         ("POST", "/machines/me:release", None),
-        ("GET", "/workspace/files", None),
     ):
         response = await browser.request(method, path, headers=as_app, json=body)
         assert response.status_code == status.HTTP_403_FORBIDDEN, (

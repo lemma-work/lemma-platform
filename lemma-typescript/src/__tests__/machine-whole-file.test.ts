@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ApiError } from "../http.js";
 import type { HttpClient } from "../http.js";
-import { MAX_READ_BYTES, WorkspaceNamespace } from "../namespaces/workspace.js";
+import { MAX_READ_BYTES, MachinesNamespace } from "../namespaces/machines.js";
 
 /**
  * A server that behaves like the files controller: it honours a `Range`, it
@@ -45,18 +45,18 @@ function serving(totalBytes: number, { ignoresRange = false } = {}) {
       return (await respond(...args)).blob;
     },
   } as unknown as HttpClient;
-  return { workspace: new WorkspaceNamespace(http), asked };
+  return { files: new MachinesNamespace(http).files, asked };
 }
 
-describe("readWholeFile", () => {
+describe("files.readWhole", () => {
   it("reads a file whose size the caller does not know", async () => {
     // The explorer's reload case: the open path comes back from the URL and
     // the size does not, so it passed 0 and every download after a reload
     // truncated at 8 MiB under the whole file's name.
     const total = MAX_READ_BYTES * 2 + 1234;
-    const { workspace } = serving(total);
+    const { files } = serving(total);
 
-    const blob = await workspace.readWholeFile("/home/user/big.bin");
+    const blob = await files.readWhole("me", "/home/user/big.bin");
 
     expect(blob.size).toBe(total);
   });
@@ -66,9 +66,9 @@ describe("readWholeFile", () => {
     // by the requested 64 MiB rather than the 8 that arrived dropped seven
     // eighths of the file and produced a plausible-looking short download.
     const total = MAX_READ_BYTES * 3;
-    const { workspace, asked } = serving(total);
+    const { files, asked } = serving(total);
 
-    const blob = await workspace.readWholeFile("/home/user/big.bin", total, 64 * 1024 * 1024);
+    const blob = await files.readWhole("me", "/home/user/big.bin", total, 64 * 1024 * 1024);
 
     expect(blob.size).toBe(total);
     expect(asked.every(({ start, end }) => end - start + 1 <= MAX_READ_BYTES)).toBe(true);
@@ -78,23 +78,23 @@ describe("readWholeFile", () => {
     // There is no short read to end on, so the loop runs one request past
     // the file and must read the 416 as "done" rather than as a failure.
     const total = MAX_READ_BYTES * 2;
-    const { workspace } = serving(total);
+    const { files } = serving(total);
 
-    const blob = await workspace.readWholeFile("/home/user/exact.bin");
+    const blob = await files.readWhole("me", "/home/user/exact.bin");
 
     expect(blob.size).toBe(total);
   });
 
   it("reads an empty file as empty rather than failing", async () => {
-    const { workspace } = serving(0);
+    const { files } = serving(0);
 
-    expect((await workspace.readWholeFile("/home/user/empty.txt")).size).toBe(0);
+    expect((await files.readWhole("me", "/home/user/empty.txt")).size).toBe(0);
   });
 
   it("still reads a known-small file in one unranged request", async () => {
-    const { workspace, asked } = serving(1024);
+    const { files, asked } = serving(1024);
 
-    const blob = await workspace.readWholeFile("/home/user/small.txt", 1024);
+    const blob = await files.readWhole("me", "/home/user/small.txt", 1024);
 
     expect(blob.size).toBe(1024);
     expect(asked).toEqual([]);
@@ -107,9 +107,9 @@ describe("readWholeFile", () => {
     // exact failure the ranged path exists to prevent, reached through the
     // shortcut past it.
     const total = MAX_READ_BYTES * 2 + 77;
-    const { workspace } = serving(total);
+    const { files } = serving(total);
 
-    const blob = await workspace.readWholeFile("/home/user/grew.bin", 4096);
+    const blob = await files.readWhole("me", "/home/user/grew.bin", 4096);
 
     expect(blob.size).toBe(total);
   });
@@ -117,18 +117,18 @@ describe("readWholeFile", () => {
   it("stops, rather than looping, when the server ignores the Range on a large file", async () => {
     // Every ranged read comes back 200 with the first 8 MiB. Taking those as
     // slices advanced the cursor forever and held a fresh copy each time.
-    const { workspace, asked } = serving(MAX_READ_BYTES * 3, { ignoresRange: true });
+    const { files, asked } = serving(MAX_READ_BYTES * 3, { ignoresRange: true });
 
-    await expect(workspace.readWholeFile("/home/user/big.bin")).rejects.toThrow(
+    await expect(files.readWhole("me", "/home/user/big.bin")).rejects.toThrow(
       /ignored the Range header/,
     );
     expect(asked.length).toBe(1);
   });
 
   it("takes a whole small file from a server that ignores the Range", async () => {
-    const { workspace, asked } = serving(1234, { ignoresRange: true });
+    const { files, asked } = serving(1234, { ignoresRange: true });
 
-    const blob = await workspace.readWholeFile("/home/user/small.txt");
+    const blob = await files.readWhole("me", "/home/user/small.txt");
 
     expect(blob.size).toBe(1234);
     expect(asked.length).toBe(1);
@@ -137,9 +137,9 @@ describe("readWholeFile", () => {
   it("stops when a stale size hint is followed by a server that ignores the Range", async () => {
     // The hint's unranged read comes back at the ceiling, so the loop goes on
     // from 8 MiB -- and must not accept the file-from-byte-0 it is sent.
-    const { workspace, asked } = serving(MAX_READ_BYTES * 2, { ignoresRange: true });
+    const { files, asked } = serving(MAX_READ_BYTES * 2, { ignoresRange: true });
 
-    await expect(workspace.readWholeFile("/home/user/grew.bin", 4096)).rejects.toThrow(
+    await expect(files.readWhole("me", "/home/user/grew.bin", 4096)).rejects.toThrow(
       /at byte 8388608/,
     );
     expect(asked.length).toBe(1);
@@ -155,10 +155,10 @@ describe("readWholeFile", () => {
         };
       },
     } as unknown as HttpClient;
-    const workspace = new WorkspaceNamespace(http);
+    const files = new MachinesNamespace(http).files;
 
     // The first slice starts at 0 and is fine; the second claims 0 again.
-    await expect(workspace.readWholeFile("/home/user/big.bin")).rejects.toThrow(
+    await expect(files.readWhole("me", "/home/user/big.bin")).rejects.toThrow(
       /ignored the Range header/,
     );
   });
@@ -170,7 +170,7 @@ describe("readWholeFile", () => {
       },
     } as unknown as HttpClient;
 
-    await expect(new WorkspaceNamespace(http).readWholeFile("/home/user/x")).rejects.toThrow(
+    await expect(new MachinesNamespace(http).files.readWhole("me", "/home/user/x")).rejects.toThrow(
       "not yours",
     );
   });

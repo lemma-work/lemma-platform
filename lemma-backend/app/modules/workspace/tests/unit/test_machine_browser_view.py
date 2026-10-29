@@ -787,7 +787,7 @@ def test_a_fabric_that_refuses_the_relays_port_is_a_terminal_close() -> None:
 
 
 async def test_a_refused_port_renders_a_state_rather_than_a_traceback() -> None:
-    """`/workspace/browser/status` exists to render a panel.
+    """`/machines/{ref}/browser` exists to render a panel.
 
     It answered every other "not right now" with a state and this one with a
     500, because the fabric's refusal had no type anything here caught — so the

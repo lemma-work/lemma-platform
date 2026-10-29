@@ -39,15 +39,6 @@ def _routers():
     from app.modules.workspace.api.controllers.port_proxy_controller import (
         router as port_proxy,
     )
-    from app.modules.workspace.api.controllers.browser_view_controller import (
-        router as old_browser_view,
-    )
-    from app.modules.workspace.api.controllers.workspace_shims_controller import (
-        apps_router as old_browser_access,
-    )
-    from app.modules.workspace.api.controllers.workspace_shims_controller import (
-        router as old_workspace,
-    )
 
     # `consents` and `previews` before `machines`: their literal paths must be
     # matched before `/machines/{ref}` reads them as a ref.
@@ -65,10 +56,6 @@ def _routers():
         browser_view,
         preview_proxy,
         port_proxy,
-        # `/workspace/*`, deprecated: `/machines/me` under the old paths.
-        old_workspace,
-        old_browser_access,
-        old_browser_view,
     ]
 
 

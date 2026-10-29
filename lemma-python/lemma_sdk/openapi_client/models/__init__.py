@@ -806,8 +806,6 @@ _NAME_TO_MODULE = {
     'WorkflowRunWaitingOn': 'workflow_run_waiting_on',
     'WorkflowSummaryResponse': 'workflow_summary_response',
     'WorkflowUpdateRequest': 'workflow_update_request',
-    'WorkspaceAppAccessRequest': 'workspace_app_access_request',
-    'WorkspaceAppAccessResponse': 'workspace_app_access_response',
     'WriteIntent': 'write_intent',
 }
 
@@ -1609,8 +1607,6 @@ if TYPE_CHECKING:
     from .workflow_run_waiting_on import WorkflowRunWaitingOn
     from .workflow_summary_response import WorkflowSummaryResponse
     from .workflow_update_request import WorkflowUpdateRequest
-    from .workspace_app_access_request import WorkspaceAppAccessRequest
-    from .workspace_app_access_response import WorkspaceAppAccessResponse
     from .write_intent import WriteIntent
 
 
@@ -2425,7 +2421,5 @@ __all__ = [
     'WorkflowRunWaitingOn',
     'WorkflowSummaryResponse',
     'WorkflowUpdateRequest',
-    'WorkspaceAppAccessRequest',
-    'WorkspaceAppAccessResponse',
     'WriteIntent',
 ]

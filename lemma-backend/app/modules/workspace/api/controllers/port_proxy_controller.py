@@ -80,11 +80,6 @@ router = APIRouter(tags=["Machine Browser"])
 #: to has no Lemma session and never will: the signed grant in the path is the
 #: whole credential, and the handlers verify it.
 PORT_PROXY_PREFIX = "/public/machine-ports"
-#: The paths grants were minted under before machines, served until the grants
-#: they name have expired: `/public/workspace-ports`, and the older
-#: `/workspace-ports` (a dated `LEGACY_ALIASES` entry in
-#: `app.core.auth_exemptions`).
-_OLD_PORT_PROXY_PREFIXES = ("/public/workspace-ports", "/workspace-ports")
 _PROXIED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
 
@@ -404,15 +399,16 @@ async def _relay(proxied: httpx.Response) -> AsyncIterator[bytes]:
         await proxied.aclose()
 
 
-# Registered on every prefix a grant may name. Two paths per prefix, one
-# handler: the grant's own URL ends at the token with a trailing slash and no
-# path at all, which `/{token}/{path:path}` does not match.
-for _prefix in (PORT_PROXY_PREFIX, *_OLD_PORT_PROXY_PREFIXES):
-    for _path in (_prefix + "/{token}", _prefix + "/{token}/{path:path}"):
-        router.add_api_websocket_route(_path, proxy_sandbox_websocket)
-        router.add_api_route(
-            _path,
-            proxy_sandbox_port,
-            methods=_PROXIED_METHODS,
-            include_in_schema=False,
-        )
+# Two paths, one handler: the grant's own URL ends at the token with a trailing
+# slash and no path at all, which `/{token}/{path:path}` does not match.
+for _path in (
+    PORT_PROXY_PREFIX + "/{token}",
+    PORT_PROXY_PREFIX + "/{token}/{path:path}",
+):
+    router.add_api_websocket_route(_path, proxy_sandbox_websocket)
+    router.add_api_route(
+        _path,
+        proxy_sandbox_port,
+        methods=_PROXIED_METHODS,
+        include_in_schema=False,
+    )
