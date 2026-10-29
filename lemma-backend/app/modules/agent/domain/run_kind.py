@@ -84,20 +84,29 @@ class RunPolicy:
     #: The memory pass after a completed turn (``application/background``):
     #: only for a member's own turns, where something worth keeping was said.
     memory_pass: bool
+    #: The tool profile: whether the pod assistant's tools follow the
+    #: deployment's ``AGENT_TOOL_PROFILE`` (``domain/tool_profile``). A
+    #: stranger's run has its own short list, and a voice call keeps the one
+    #: it was tuned on.
+    follows_tool_profile: bool = True
 
 
 POLICIES: dict[RunKind, RunPolicy] = {
     RunKind.CHAT: RunPolicy(Lane.ATTENDED, memory_pass=True),
     RunKind.SURFACE: RunPolicy(Lane.ATTENDED, memory_pass=True),
     RunKind.CHANNEL: RunPolicy(Lane.ATTENDED, memory_pass=True),
-    RunKind.CONTACT: RunPolicy(Lane.ATTENDED, memory_pass=False),
+    RunKind.CONTACT: RunPolicy(
+        Lane.ATTENDED, memory_pass=False, follows_tool_profile=False
+    ),
     RunKind.WORKFLOW: RunPolicy(Lane.BACKGROUND, memory_pass=False),
     RunKind.SCHEDULE: RunPolicy(Lane.BACKGROUND, memory_pass=False),
     # Its own pool from people's chats: a parent fanning out never queues them.
     RunKind.SUBAGENT: RunPolicy(Lane.BACKGROUND, memory_pass=False),
     RunKind.POD_ASK: RunPolicy(Lane.ATTENDED, memory_pass=False),
     # Every voice turn is a run; a memory pass after each is noise.
-    RunKind.CALL: RunPolicy(Lane.ATTENDED, memory_pass=False),
+    RunKind.CALL: RunPolicy(
+        Lane.ATTENDED, memory_pass=False, follows_tool_profile=False
+    ),
 }
 
 

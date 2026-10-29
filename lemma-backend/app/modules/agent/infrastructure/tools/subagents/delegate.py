@@ -153,7 +153,7 @@ SPECS = (
         # Visible: delegation is no search away. Its wait is a WAIT pause, and
         # its spawns are keyed per call and task, so a resumed turn re-running
         # it gets the same children.
-        ToolPolicy(pauses=PauseKind.WAIT, replay=ReplayClass.KEYED),
+        ToolPolicy(pauses=PauseKind.WAIT, replay=ReplayClass.KEYED, core=True),
     ),
 )
 

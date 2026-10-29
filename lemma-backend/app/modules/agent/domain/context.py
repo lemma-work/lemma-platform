@@ -104,6 +104,9 @@ class ToolContext(BaseModel):
     # invoking user for the assistant, where a named agent is limited to its own
     # resource grants.
     is_pod_default_agent: bool = False
+    #: The tool surface this run's pod assistant gets (``domain/tool_profile``),
+    #: a ``ToolProfile`` value; "today" for every other run.
+    tool_profile: str = "today"
     # Set only on the context of a call a person approved; see
     # `ApprovedExecution`. Tools must not read it directly: they get their
     # authorization context from `tool_authorization_context`.

@@ -7,6 +7,7 @@ import pytest
 from app.core.domain.generation import ReasoningEffort
 
 from app.core.config import reveal_secret
+from app.modules.agent.domain.tool_profile import ToolProfile
 from app.modules.agent.config import AgentSettings
 
 pytestmark = pytest.mark.unit
@@ -62,6 +63,7 @@ EXPECTED = [
         "AGENT_MEMORY_BRIEF_CACHE_TTL_SECONDS",
         60,
     ),
+    ("agent_tool_profile", "AGENT_TOOL_PROFILE", ToolProfile.TODAY),
     ("agent_memory_after_turn", "AGENT_MEMORY_AFTER_TURN", True),
     ("agent_memory_pass_model", "AGENT_MEMORY_PASS_MODEL", None),
     ("function_run_poll_interval_seconds", "FUNCTION_RUN_POLL_INTERVAL_SECONDS", 0.5),
@@ -207,6 +209,8 @@ def _override_for(default, field) -> tuple[str, object]:
         return "123", float(123) if isinstance(default, float) else 123
     if field == "speech_provider":
         return "deepgram", "deepgram"
+    if field == "agent_tool_profile":
+        return "core_cli", ToolProfile.CORE_CLI
     return "sentinel", "sentinel"
 
 

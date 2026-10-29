@@ -17,6 +17,7 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core.domain.generation import ReasoningEffort
 from app.core.settings_env import dotenv_path
+from app.modules.agent.domain.tool_profile import ToolProfile
 
 
 def _default_local_runtime_config_path() -> str:
@@ -172,6 +173,15 @@ class AgentSettings(BaseSettings):
             "TTL for the cached memory section of the runtime brief; zero "
             "disables caching. Writes invalidate it, so this is only the "
             "backstop for an invalidation that never arrived."
+        ),
+    )
+    agent_tool_profile: ToolProfile = Field(
+        default=ToolProfile.TODAY,
+        description=(
+            "Toolset experiment scaffolding: the tool surface the pod's own "
+            "assistant gets -- today, direct, core_cli or core_native "
+            "(domain/tool_profile). Recorded on each run that gets another one. "
+            "Deleted once the experiment picks the default."
         ),
     )
     agent_memory_after_turn: bool = Field(

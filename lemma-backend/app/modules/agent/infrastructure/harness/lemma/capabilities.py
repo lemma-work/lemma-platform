@@ -55,6 +55,7 @@ from app.modules.agent.domain.tool_call_ids import (
     unique_per_call_id,
     unparsed_signature,
 )
+from app.modules.agent.domain.tool_profile import ToolProfile
 from app.modules.agent.domain.tools import ToolGroup, ToolSpec
 from app.modules.agent.infrastructure.harness.lemma.history_parts import (
     RunContextCapability,
@@ -131,7 +132,12 @@ def _capabilities(
     # toolset; a named agent chose its own. Never on a stranger's run, whose
     # one way past what is Public is reaching the member, in view.
     defers = ctx.is_pod_default_agent and not run_audience(ctx).answers_outsiders
-    shown, deferred = _split(groups, defers=defers)
+    shown, deferred = _arm(
+        groups,
+        ToolProfile(ctx.tool_profile) if defers else ToolProfile.TODAY,
+        defers=defers,
+        natively=reveals_tools_natively,
+    )
     host_execution = ctx.host_workspace is not None
 
     def with_guidance(
@@ -243,6 +249,29 @@ def _run_hooks(
             )
         )
     return hooks
+
+
+def _arm(
+    groups: list[list[ToolSpec]],
+    profile: ToolProfile,
+    *,
+    defers: bool,
+    natively: bool,
+) -> tuple[list[list[ToolSpec]], list[list[ToolSpec]]]:
+    """The tools in view and behind search, for the run's tool profile."""
+    if profile is ToolProfile.DIRECT:
+        return _split(groups, defers=False)
+    if profile in (ToolProfile.CORE_CLI, ToolProfile.CORE_NATIVE):
+        core = [[spec for spec in group if spec.policy.core] for group in groups]
+        rest = [[spec for spec in group if not spec.policy.core] for group in groups]
+        # Behind the provider's own search, where the array never changes;
+        # elsewhere, and on core_cli, the rest is the CLI's.
+        keeps_rest = profile is ToolProfile.CORE_NATIVE and natively
+        return (
+            [group for group in core if group],
+            [group for group in rest if group] if keeps_rest else [],
+        )
+    return _split(groups, defers=defers)
 
 
 def _split(

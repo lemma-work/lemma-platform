@@ -584,12 +584,16 @@ SPECS = (
     tool(
         display_resource,
         ToolGroup.USER_INTERACTION,
-        ToolPolicy(replay=ReplayClass.SAFE),
+        ToolPolicy(replay=ReplayClass.SAFE, core=True),
     ),
     tool(
         request_approval,
         ToolGroup.USER_INTERACTION,
         ToolPolicy(pauses=PauseKind.APPROVAL),
     ),
-    tool(ask_user, ToolGroup.USER_INTERACTION, ToolPolicy(pauses=PauseKind.QUESTION)),
+    tool(
+        ask_user,
+        ToolGroup.USER_INTERACTION,
+        ToolPolicy(pauses=PauseKind.QUESTION, core=True),
+    ),
 )

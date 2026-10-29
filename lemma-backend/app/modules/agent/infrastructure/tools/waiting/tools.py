@@ -324,6 +324,6 @@ SPECS = (
     tool(
         wait_for,
         ToolGroup.WAIT,
-        ToolPolicy(pauses=PauseKind.WAIT, deferrable=True),
+        ToolPolicy(pauses=PauseKind.WAIT, deferrable=True, core=True),
     ),
 )

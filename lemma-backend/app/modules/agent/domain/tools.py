@@ -110,6 +110,9 @@ class ToolPolicy:
     outsider_allowed: bool = False
     #: Hidden behind tool search on the pod default assistant's runs.
     deferrable: bool = False
+    #: One of the few tools every tool profile keeps in view
+    #: (``domain/tool_profile``): the rest can be reached through the CLI.
+    core: bool = False
     #: Duplicates the coding agent's own shell, so withheld when an Agent Host
     #: run executes natively on the person's Mac.
     native_command: bool = False

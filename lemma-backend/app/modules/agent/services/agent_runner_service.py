@@ -6,6 +6,9 @@ from collections.abc import Callable
 from functools import partial
 import time
 from app.modules.agent.contracts.run_observer import RunObserver
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tool_profile import ToolProfile
+from app.modules.agent.infrastructure.db.runs import Runs
 from uuid import UUID
 
 import anyio
@@ -234,6 +237,8 @@ class AgentRunnerService:
                 configured_accounts=self._resolve_configured_accounts,
             )
             run = run.with_memory_after_turn(ctx.memory_after_turn)
+            if ctx.tool_profile != ToolProfile.TODAY.value:
+                await _record_tool_profile(self.uow_factory, run.agent_run_id, ctx)
             tools = await specs_for(
                 agent=agent,
                 conversation=conversation,
@@ -554,3 +559,14 @@ class AgentRunnerService:
             return await AgentCallableToolFactory(
                 self.uow_factory
             ).resolve_configured_accounts(agent=agent, user_id=user_id)
+
+
+async def _record_tool_profile(
+    uow_factory: UnitOfWorkFactory, run_id: UUID, ctx: ToolContext
+) -> None:
+    """The toolset experiment's arm, on the run and its span. Only for another
+    arm than today's, so the default path spends no statement on it."""
+    trace.get_current_span().set_attribute("lemma.tool_profile", ctx.tool_profile)
+    async with uow_factory() as uow:
+        await Runs(uow).record_tool_profile(run_id, ctx.tool_profile)
+        await uow.commit()

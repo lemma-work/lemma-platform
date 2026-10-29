@@ -35,6 +35,7 @@ from uuid import UUID
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.tool_profile import run_tool_profile
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.agent_memory_paths import (
     memory_is_active,
@@ -381,6 +382,11 @@ class RunSession:
                 answers_outsiders=for_outsider,
                 kind=agent_run.state.kind,
             ),
+            tool_profile=run_tool_profile(
+                agent_run.state.kind,
+                pod_default=agent.kind is AgentKind.POD_DEFAULT,
+                deployed=agent_settings.agent_tool_profile,
+            ).value,
             run_toolsets=run_toolsets,
             workspace_readable=AgentToolset.WORKSPACE_CLI in run_toolsets,
             grant_summary=self.grants,
