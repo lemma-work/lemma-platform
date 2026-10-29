@@ -44,6 +44,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import socket
 import tempfile
 import weakref
 
@@ -388,6 +389,7 @@ async def ensure_port(*, session: str | None = None) -> int:
     async with start_lock(session):
         with suppress(BrowserNotRunning):
             return await live_port(session)
+        clear_foreign_lock(Path(profile_for_session(session) or _DEFAULT_PROFILE))
         try:
             return await _start(session)
         except _DaemonWedged:
@@ -400,6 +402,36 @@ async def ensure_port(*, session: str | None = None) -> int:
             raise BrowserNotRunning(
                 "the browser daemon was not responding, and a restart did not help"
             ) from exc
+
+
+def clear_foreign_lock(profile: Path, *, host: str | None = None) -> bool:
+    """Remove a profile lock left by another container; whether one was.
+
+    `SingletonLock` links to `<hostname>-<pid>`, and Chrome checks the pid only
+    when the host is its own. The profile is on the home volume, which outlives
+    the container -- a reset, an image upgrade, one removed under a running
+    browser -- and Chrome takes a lock naming the old host as live: it shows a
+    "profile in use on another computer" dialog on the display and never
+    starts, so every start after it waited out the full timeout. No browser on
+    this host can hold a lock naming another, so the three files go.
+    `DevToolsActivePort` stays: see `lemma-ensure-display`, which does the same
+    for a start that comes from an agent's shell.
+    """
+    lock = profile / "SingletonLock"
+    try:
+        owner = os.readlink(lock)
+    except OSError:
+        return False
+    here = host or socket.gethostname()
+    if not here or owner.startswith(f"{here}-"):
+        return False
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        with suppress(OSError):
+            (profile / name).unlink()
+    logging.getLogger(__name__).warning(
+        "cleared a browser profile lock left by another host (%s)", owner
+    )
+    return True
 
 
 #: One lock per session, per event loop. The relay runs a single loop, so in

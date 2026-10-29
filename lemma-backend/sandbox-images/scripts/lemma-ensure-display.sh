@@ -87,6 +87,31 @@ mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
 # running browser's port, and this script is idempotent by `pgrep` -- a
 # second run leaves the existing Chrome alone -- so deleting it here left a
 # browser that nothing could find, for as long as the sandbox lived.
+#
+# One exception, and only by host. `SingletonLock` is a link to
+# `<hostname>-<pid>`, and Chrome checks the pid only when the host is its own.
+# The profile lives on the home volume, which outlives the container -- a
+# reset, an image upgrade, a container that was removed under a running
+# browser -- and a lock naming the old container's host is one Chrome will not
+# call stale: it puts "The profile appears to be in use by another Chromium
+# process on another computer" on the display in an `xmessage` and never
+# starts, for good. No browser on this host can hold a lock naming another, so
+# those three files go; `DevToolsActivePort` stays, as above.
+clear_foreign_profile_locks() {
+  local here lock owner profile
+  here="$(hostname 2>/dev/null)" || return 0
+  [ -n "$here" ] || return 0
+  for lock in "$(dirname "$PROFILE_DIR")"/*/SingletonLock "$PROFILE_DIR/SingletonLock"; do
+    [ -L "$lock" ] || continue
+    owner="$(readlink "$lock" 2>/dev/null)" || continue
+    case "$owner" in
+      "$here"-*) continue ;;
+    esac
+    profile="$(dirname "$lock")"
+    rm -f "$profile/SingletonLock" "$profile/SingletonSocket" "$profile/SingletonCookie"
+  done
+}
+clear_foreign_profile_locks
 # `--disable-blink-features=AutomationControlled` is the one that matters for
 # the journey this feature exists for. Chrome otherwise sets
 # `navigator.webdriver` and turns on the AutomationControlled blink feature,

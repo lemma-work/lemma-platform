@@ -1450,3 +1450,27 @@ async def test_a_keepalive_that_hangs_is_killed_not_left_behind(
         assert await chrome.keepalive(session="workspace") is False
     assert started[0].returncode is not None, "the stuck CLI was reaped"
     assert "timed out" in caplog.text
+
+
+def test_a_profile_lock_from_another_host_is_cleared(tmp_path) -> None:
+    """The home volume outlives its container, and Chrome will not call a lock
+    naming another host stale -- so the relay does, before it starts one."""
+    from sandbox_runtime.browser_relay.chrome import clear_foreign_lock
+
+    (tmp_path / "SingletonLock").symlink_to("old-container-3924")
+    (tmp_path / "SingletonSocket").symlink_to("/tmp/gone/SingletonSocket")
+    (tmp_path / "SingletonCookie").symlink_to("123")
+    (tmp_path / "DevToolsActivePort").write_text("41234\n")
+
+    assert clear_foreign_lock(tmp_path, host="this-container") is True
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["DevToolsActivePort"]
+
+
+def test_a_profile_lock_from_this_host_is_left_for_chrome(tmp_path) -> None:
+    from sandbox_runtime.browser_relay.chrome import clear_foreign_lock
+
+    (tmp_path / "SingletonLock").symlink_to("this-container-77")
+
+    assert clear_foreign_lock(tmp_path, host="this-container") is False
+    assert (tmp_path / "SingletonLock").is_symlink()
+    assert clear_foreign_lock(tmp_path / "missing", host="x") is False
