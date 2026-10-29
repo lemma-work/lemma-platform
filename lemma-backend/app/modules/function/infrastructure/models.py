@@ -33,6 +33,9 @@ class FunctionModel(UUIDAuditBase):
     """Database model for functions."""
 
     __tablename__ = "functions"
+    #: In an agent's runtime brief: a change replaces the pod's inventory
+    #: token (`core/infrastructure/db/pod_inventory`).
+    __pod_inventory__ = "pod_id"
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_function_pod_name"),
         Index("ix_function_name", "name"),

@@ -1080,6 +1080,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod_bundle.sweep.archive_delete_failed.degraded': EventSpec('warning', frozenset({'job_id', 'job_kind'})),
     'pod_bundle.sweep.archive_listing_unavailable.degraded': EventSpec('warning', frozenset({'job_kind'})),
     'pod_bundle.sweep.swept': EventSpec('debug', frozenset({'purged', 'reclaimed', 'recovered'})),
+    'pod_inventory.generation.bump_failed.degraded': EventSpec('warning', frozenset({'pod_id'})),
+    'pod_inventory.generation.read_failed.degraded': EventSpec('warning', frozenset({'pod_id'})),
     'release.identity.malformed': EventSpec('warning', frozenset({'deployment_environment'})),
     'release.identity.missing': EventSpec('warning', frozenset({'deployment_environment'})),
     'runtime.connection_scope.armed': EventSpec('info', frozenset({'service', 'threshold_ms'})),

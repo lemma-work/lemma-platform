@@ -32,6 +32,9 @@ class AgentModel(UUIDAuditBase):
     """Pod-owned agent definition."""
 
     __tablename__ = "agents"
+    #: In an agent's runtime brief: a change replaces the pod's inventory
+    #: token (`core/infrastructure/db/pod_inventory`).
+    __pod_inventory__ = "pod_id"
     __table_args__ = (
         # The pod's own assistant is one row per pod whose id *is* the pod's.
         # Stating it as an equivalence rather than a convention is what makes

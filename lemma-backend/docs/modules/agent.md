@@ -229,6 +229,13 @@ foreign keys, RLS, and visibility. Column descriptions are available through
 table inspection rather than repeated in every prompt. Omission counts mark
 truncated inventories and schemas.
 
+The rendered brief is cached in Redis, keyed by the pod's inventory token as
+well as the agent, user and brief shape. A model that appears in the brief
+declares `__pod_inventory__`, and any committed change to one of its rows
+replaces its pod's token (`app/core/infrastructure/db/pod_inventory.py`), so
+a table an agent has just created is in the next run's brief rather than one a
+TTL later.
+
 ## Key dependencies
 
 - Pod/identity: tenant, membership, authorization, delegation.

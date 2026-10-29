@@ -8,7 +8,7 @@ opening any UoW.
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.exc import OperationalError
@@ -155,7 +155,20 @@ class _FakeFileService:
 
 
 @pytest.fixture
-def stubbed(monkeypatch):
+def inventory_tokens(monkeypatch) -> dict[UUID, str]:
+    """Each pod's inventory token, as Redis holds it: a test writing to a pod
+    sets a new one, as a committed write would."""
+    tokens: dict[UUID, str] = {}
+
+    async def _token(pod_id: UUID) -> str:
+        return tokens.get(pod_id, "0")
+
+    monkeypatch.setattr(brief_mod, "pod_inventory_generation", _token)
+    return tokens
+
+
+@pytest.fixture
+def stubbed(monkeypatch, inventory_tokens):
     # The repository is a constructor argument, so tests build the subject with
     # a double rather than replacing a name inside it -- see `_builder` below.
     monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
@@ -302,6 +315,32 @@ async def test_brief_is_cached_second_call_opens_no_uow(stubbed, monkeypatch):
 
     assert first == second
     assert factory.opened == opened_after_first  # cache hit: no new UoWs
+
+
+async def test_a_write_to_the_pod_reaches_the_next_brief(
+    stubbed, monkeypatch, inventory_tokens
+):
+    """A table created a moment ago is in the next run's brief, not the one a
+    minute later: the write replaced the pod's token, so the entry built
+    before it is never read."""
+    monkeypatch.setattr(
+        brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
+    )
+    factory = RecordingUoWFactory()
+    builder = _builder(factory)
+    agent = _named_agent()
+    uid, pid = uuid4(), uuid4()
+
+    await builder.build(
+        agent=agent, conversation=_conversation(False), user_id=uid, pod_id=pid
+    )
+    opened_after_first = factory.opened
+    inventory_tokens[pid] = "after-the-write"
+    await builder.build(
+        agent=agent, conversation=_conversation(False), user_id=uid, pod_id=pid
+    )
+
+    assert factory.opened > opened_after_first
 
 
 async def test_a_new_conversation_reuses_the_cached_brief(stubbed, monkeypatch):
