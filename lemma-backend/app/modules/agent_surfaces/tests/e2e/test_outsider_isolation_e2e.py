@@ -411,7 +411,10 @@ async def test_a_stranger_reaches_no_member_and_can_only_call_a_person_in(
         == []
     )
     [notice] = await direct_lines(db_session, pod_id=scenario.pod_id, user_id=owner)
-    assert "needs a person" in notice.body
+    # The group, and that nothing was done -- never what the stranger asked,
+    # nor the run's reading of it.
+    assert "nothing was done for them" in notice.body
+    assert "40k" not in notice.body
 
 
 async def test_a_stranger_never_reads_answers_to_another_conversations_questions(
