@@ -146,6 +146,29 @@ async def test_a_spawned_sub_agent_is_followed_and_the_coordinators_run_state_is
     assert _signals(agents) == [Working(running=True), Working(running=False)]
 
 
+async def test_every_child_a_delegation_started_is_followed() -> None:
+    agents, watched = _agents()
+    first, second = uuid4(), uuid4()
+    agents._read(
+        agents.call_id,
+        _message(
+            "TOOL_RETURN",
+            "delegate",
+            "d1",
+            tool_result={
+                "children": [
+                    {"task": 0, "conversation_id": str(first)},
+                    {"task": 1, "error": "past the cap"},
+                    {"task": 2, "conversation_id": str(second)},
+                ]
+            },
+        ),
+    )
+    await asyncio.sleep(0)
+    await agents.close()
+    assert watched == [first, second]
+
+
 async def test_a_stream_that_fails_tells_the_voice_and_does_not_stop_the_call_closing() -> (
     None
 ):
