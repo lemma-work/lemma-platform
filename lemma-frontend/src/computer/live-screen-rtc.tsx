@@ -16,8 +16,9 @@ import {
  *  either. It differs underneath: the picture is H.264 or VP8 from the
  *  machine's streamer, through TURN, not VNC rectangles through the API — a
  *  push stream at a few megabits instead of a pulled one at tens, which is
- *  what makes a slow network usable at all. When WebRTC cannot connect within
- *  five seconds it says so through `onFallback`, and the pane uses VNC.
+ *  what makes a slow network usable at all. When ICE cannot connect within
+ *  five seconds of the machine's config arriving it says so through
+ *  `onFallback`, and the pane uses VNC.
  *
  *  Watching sends nothing. Driving sends the streamer's closed message set —
  *  pointer, button, wheel, key, text, paste — over a channel the streamer

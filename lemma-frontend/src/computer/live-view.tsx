@@ -14,8 +14,9 @@ import { chooseTransport, rtcSupported, type FallbackReason, type StreamSetting,
  *
  *  WebRTC where the server has rolled it out to them and this browser can
  *  hold a peer connection; VNC everywhere else, and VNC the moment WebRTC
- *  fails to connect within five seconds — a person sees "Connecting…" a
- *  little longer, never an error, and the beacon records why.
+ *  fails to connect within five seconds of the machine sending its ICE
+ *  config (a cold browser start before that is not counted) — a person sees
+ *  "Connecting…" a little longer, never an error, and the beacon records why.
  *
  *  Three things live here rather than in either transport, because they are
  *  the same for both:

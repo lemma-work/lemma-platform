@@ -85,9 +85,6 @@ export class RtcSession {
                 handlers.onClosed(event.code);
             }
         });
-        this.deadline = setTimeout(() => {
-            if (!this.connected) this.fallBack("ice-timeout");
-        }, ICE_DEADLINE_MS);
     }
 
     /** Ask to drive. The answer arrives as `onControl`. */
@@ -217,6 +214,17 @@ export class RtcSession {
     }
 
     private async start(config: RtcConfig): Promise<void> {
+        /* The ICE deadline starts here, with the machine's config, and not
+           when the socket opens. Everything before this message is the
+           machine starting its browser — a cold start takes longer than the
+           whole deadline — and timing that sent every cold start to VNC for
+           no network reason at all. What the deadline is for is ICE, and ICE
+           begins now. A machine that never gets this far is not left
+           hanging: the server closes the socket with a code the pane reads. */
+        clearTimeout(this.deadline);
+        this.deadline = setTimeout(() => {
+            if (!this.connected) this.fallBack("ice-timeout");
+        }, ICE_DEADLINE_MS);
         this.mayDrive = config.may_control;
         const peer = new RTCPeerConnection({
             iceServers: config.ice_servers,

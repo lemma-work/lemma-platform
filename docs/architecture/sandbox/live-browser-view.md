@@ -55,13 +55,43 @@ The pane picks a transport per mount (`stream.ts`, `chooseTransport`):
 | Server says (`BROWSER_STREAM`) | This browser has WebRTC | Pane uses |
 |---|---|---|
 | `vnc`, or the user is outside the rollout | — | VNC |
-| `auto` | yes | WebRTC, then VNC if ICE has not connected in 5 s |
+| `auto` | yes | WebRTC, then VNC if ICE has not connected 5 s after the machine's config |
 | `auto` | no (the probe fails, as on a WKWebView without it) | VNC |
 | `webrtc` | yes | WebRTC only, retried; for testing the streamer alone |
 
 An image built before the streamer existed answers `/rtc` with close code
 **4427**, and so does the API when no TURN relay is configured; the pane
 treats 4427 as "use VNC" and says nothing.
+
+## Opening the view
+
+Three things about the first seconds, each of which once left a pane stuck on
+"Connecting…":
+
+- **The API accepts the view socket as soon as it knows who is asking and
+  which machine** — before it starts the browser or sets up WebRTC. A browser
+  lets one WebSocket per host be in CONNECTING at a time (RFC 6455 §4.1), so a
+  handshake held open for a cold browser start queued the terminal's stream
+  and the pod's live socket behind it. Refusals after that point still arrive
+  as close codes (`browser_view_hangup.refuse` closes an accepted socket the
+  same way), 4427 included.
+- **The 5 s WebRTC deadline starts when the machine's `config` message
+  arrives** (`rtc-session.ts`), not when the socket opens. Everything before
+  `config` is the machine starting its browser, which can take longer than the
+  deadline on its own; ICE starts at `config`.
+- **The relay starts one browser per session at a time**
+  (`browser_relay/chrome.py`, `ensure_port`). The view socket, the toolbar's
+  tab poll and the keepalive arrive together, and two `agent-browser` starts
+  racing each spawn a daemon: the second daemon's Chrome finds the profile
+  locked and exits, and its daemon later deletes the live daemon's socket, so
+  Chrome runs on with nothing able to reach it. Starts, `open` and the
+  keepalive share a per-session lock, and a start re-checks for a live
+  browser once it holds it. If a start still reports a wedged or collided
+  daemon ("exited during startup"), the relay stops every `agent-browser`
+  daemon *and* the Chrome on that session's profile (matched by its
+  `--user-data-dir`; SIGTERM, then SIGKILL), and tries once more. Chrome runs
+  with `--hide-crash-restore-bubble` (`lemma-ensure-display`), so a browser
+  killed this way does not come back asking to restore pages.
 
 ## The input boundary
 

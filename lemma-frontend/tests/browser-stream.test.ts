@@ -230,19 +230,62 @@ function handlers(log: string[]): RtcHandlers {
     };
 }
 
-test("WebRTC that has not connected in five seconds becomes VNC", (t) => {
+/** Just enough of a peer connection for `start` to reach its offer. Node has
+ *  none; ICE never connects on this one, which is the case under test. */
+class FakePeer {
+    localDescription: { sdp: string } | null = null;
+    addTransceiver() { return {}; }
+    createDataChannel() { return { addEventListener() {}, close() {} }; }
+    addEventListener() {}
+    async createOffer() { return { type: "offer", sdp: "v=0" }; }
+    async setLocalDescription(offer: { sdp: string }) { this.localDescription = offer; }
+    close() {}
+}
+
+const CONFIG = JSON.stringify({ t: "config", ice_servers: [], policy: "relay", mode: "view", may_control: false });
+
+test("WebRTC that has not connected five seconds after its config becomes VNC", (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const original = globalThis.WebSocket;
+    const originalPeer = globalThis.RTCPeerConnection;
     globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+    globalThis.RTCPeerConnection = FakePeer as unknown as typeof RTCPeerConnection;
     try {
         const log: string[] = [];
         new RtcSession("wss://api.test/view", handlers(log));
+        FakeSocket.last!.emit("message", { data: CONFIG });
         t.mock.timers.tick(4_999);
         assert.deepEqual(log, []);
         t.mock.timers.tick(1);
         assert.deepEqual(log, ["fallback:ice-timeout"]);
     } finally {
         globalThis.WebSocket = original;
+        globalThis.RTCPeerConnection = originalPeer;
+    }
+});
+
+test("a browser still starting does not use up the ICE deadline", (t) => {
+    /* Everything before the config is the machine starting its browser, and a
+       cold start is longer than the deadline. Timed from the socket opening,
+       every cold start fell back to VNC with nothing wrong with the network. */
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const original = globalThis.WebSocket;
+    const originalPeer = globalThis.RTCPeerConnection;
+    globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
+    globalThis.RTCPeerConnection = FakePeer as unknown as typeof RTCPeerConnection;
+    try {
+        const log: string[] = [];
+        new RtcSession("wss://api.test/view", handlers(log));
+        t.mock.timers.tick(60_000);
+        assert.deepEqual(log, [], "no fallback while the machine has said nothing");
+        FakeSocket.last!.emit("message", { data: CONFIG });
+        t.mock.timers.tick(4_999);
+        assert.deepEqual(log, []);
+        t.mock.timers.tick(1);
+        assert.deepEqual(log, ["fallback:ice-timeout"]);
+    } finally {
+        globalThis.WebSocket = original;
+        globalThis.RTCPeerConnection = originalPeer;
     }
 });
 
