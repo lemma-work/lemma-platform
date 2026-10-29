@@ -37,6 +37,7 @@ APP_MANIFEST_ALIAS = "lemma.app.json"
 RESOURCE_DIRS = (
     "connectors",
     "tables",
+    "machines",
     "functions",
     "agents",
     "workflows",
@@ -53,6 +54,8 @@ RESOURCE_DIR_ALIASES = {
     "pod_connectors": "connectors",
     "table": "tables",
     "tables": "tables",
+    "machine": "machines",
+    "machines": "machines",
     "function": "functions",
     "functions": "functions",
     "agent": "agents",

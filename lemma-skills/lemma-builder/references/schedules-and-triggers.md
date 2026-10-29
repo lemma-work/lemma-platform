@@ -195,7 +195,7 @@ Bundle JSON (`schedules/<name>/<name>.json`) — `name` is the stable upsert key
   authorizes the *person*; a scheduled run is a delegated workload and is
   refused unless the **agent** also holds `connector.use` on the connector
   (`lemma agents permissions add <agent> connector:<slug>:use`). Without it the run still
-  starts and the repository is still bound — the sandbox simply has no
+  starts and the repository is still bound — the machine simply has no
   credentials, and `git clone` fails with `could not read Username`.
 
 Scaffold with `lemma schedules init <name>` (writes a commented TIME schedule, set
@@ -403,7 +403,7 @@ Both make something happen later, so be precise about which you want:
 | "I filed the invoice; finish once it's approved" | Ask the user and end the turn, or wait and re-check on wake |
 
 **Reacting to a row changing is always a trigger.** `wait_for` waits on a time, a
-sandbox process or a sub-agent run — it deliberately has no record-watching mode,
+process on the agent's machine or a sub-agent run — it deliberately has no record-watching mode,
 so there is exactly one way to react to data changing and it is a trigger.
 
 They differ in kind, not just scope. A trigger is a pod resource: it persists, it

@@ -498,7 +498,7 @@ async def run_connector_operation(
     `describe_connector_operation` first. Whose account the call runs as is the
     connector's decision, not yours. To send a file (an email attachment, a
     Drive upload), pass it as `{"pod_path": "/me/report.pdf"}` in the file
-    argument; a file in your sandbox has to be uploaded to the pod first. A
+    argument; a file on your machine has to be uploaded to the pod first. A
     file result larger than the inline limit is written to the pod datastore
     and returned as a reference; pass `output_path` to choose where it lands.
     A `CONNECTION_REQUIRED` or `REAUTH_REQUIRED` answer carries a `connect_url`

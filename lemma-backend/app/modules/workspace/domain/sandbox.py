@@ -122,6 +122,17 @@ class Sandbox:
     mounts: tuple[SandboxMount, ...] = ()
     last_used_at: datetime | None = None
     delete_after: datetime | None = None
+    # What makes a sandbox a machine; see `domain/machine.py`. Plain values here
+    # so this module stays the primitive and the machine vocabulary sits above.
+    template: str = "workspace"
+    size: str = "1x2"
+    fabric: str | None = None
+    machine_capabilities: dict[str, bool] = field(default_factory=dict)
+    visibility: str = "private"
+    billing_scope: str = "user"
+    connection_id: UUID | None = None
+    run_slots: int = 1
+    created_by: UUID | None = None
 
     @property
     def capabilities(self) -> frozenset[SandboxCapability]:

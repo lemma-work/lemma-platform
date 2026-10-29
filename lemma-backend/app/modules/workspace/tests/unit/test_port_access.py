@@ -125,9 +125,8 @@ def test_the_grants_own_url_shape_reaches_the_proxy() -> None:
     from app.modules.workspace.api.controllers.port_proxy_controller import router
 
     paths = {getattr(route, "path", "") for route in router.routes}
-    for prefix in ("/public/workspace-ports", "/workspace-ports"):
-        assert f"{prefix}/{{token}}" in paths
-        assert f"{prefix}/{{token}}/{{path:path}}" in paths
+    assert "/public/machine-ports/{token}" in paths
+    assert "/public/machine-ports/{token}/{path:path}" in paths
 
 
 def test_the_proxy_is_not_behind_the_session_gate() -> None:
@@ -135,19 +134,14 @@ def test_the_proxy_is_not_behind_the_session_gate() -> None:
     a browser that has no Lemma session and never will."""
     from app.core.auth_exemptions import exemption_of
 
-    assert exemption_of("/public/workspace-ports/t/", "GET") == "public"
-    assert exemption_of("/workspace-ports/t/", "GET") == "legacy alias"
+    assert exemption_of("/public/machine-ports/t/", "GET") == "public"
 
 
-@pytest.mark.parametrize("prefix", ["/public/workspace-ports", "/workspace-ports"])
-def test_both_paths_reach_the_handler_until_the_alias_goes(
-    monkeypatch: pytest.MonkeyPatch, prefix: str
+def test_a_forged_grant_is_refused_by_the_handler(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A grant minted before the move still names `/workspace-ports/`.
-
-    A forged token is a 403 from the handler on both paths -- not a 404 from a
-    path nothing serves.
-    """
+    """A forged token is a 403 from the handler -- not a 404 from a path
+    nothing serves."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -162,8 +156,8 @@ def test_both_paths_reach_the_handler_until_the_alias_goes(
     app.include_router(port_proxy_controller.router)
 
     with TestClient(app) as client:
-        assert client.get(f"{prefix}/forged/").status_code == 403
-        assert client.get(f"{prefix}/forged/deeper/page").status_code == 403
+        assert client.get("/public/machine-ports/forged/").status_code == 403
+        assert client.get("/public/machine-ports/forged/deeper/page").status_code == 403
 
 
 def test_the_proxy_carries_whatever_the_fabrics_own_door_needs() -> None:

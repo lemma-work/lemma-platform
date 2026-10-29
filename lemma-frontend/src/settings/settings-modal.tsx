@@ -16,6 +16,7 @@ import { PeopleSection } from "@/org/people";
 import { ConnectorsSection } from "@/org/connectors";
 import { ModelsSection } from "@/org/models";
 import { OrgUsageSection } from "@/org/org-usage";
+import { MachineConsentsSection } from "@/machines/consents-section";
 import { Modal } from "@/shell/modal";
 import { isLocalDeployment } from "@/site/config";
 import {
@@ -39,7 +40,7 @@ import { capitalised, useThisComputer } from "@/desktop/this-computer";
  *  the rest belong to the organization and are paid for once.
  */
 export type SettingsSection =
-    | "account" | "appearance" | "usage" | "plan"
+    | "account" | "appearance" | "usage" | "plan" | "machine-apps"
     | "people" | "connectors" | "models" | "org-usage" | "team-billing"
     | ThisMacSection;
 
@@ -57,6 +58,8 @@ const YOURS: Entry[] = [
     { key: "usage", label: "Usage", icon: UsageIcon, title: "Your usage", blurb: "What you have spent, and what you may spend." },
     { key: "plan", label: "Plan", icon: CardIcon, title: "Your plan",
         blurb: "What you pay for, and what it would take to be allowed to spend more." },
+    { key: "machine-apps", label: "Apps on your machine", icon: ComputerIcon, title: "Apps on your machine",
+        blurb: "Apps you let run commands on your machine, as you." },
 ];
 
 const THEIRS: Entry[] = [
@@ -311,6 +314,7 @@ export function SettingsModal({
                         {section === "appearance" && <AppearancePanel />}
                         {section === "usage" && <UsagePanel orgId={activeOrgId} />}
                         {section === "plan" && <PlanSection />}
+                        {section === "machine-apps" && <MachineConsentsSection />}
                         {org && section === "people" && <PeopleSection orgId={org.id} />}
                         {org && section === "connectors" && <ConnectorsSection orgId={org.id} />}
                         {org && section === "models" && <ModelsSection orgId={org.id} />}

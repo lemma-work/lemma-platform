@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { isForbidden } from "@/session/auth-state";
 import { live, useOrgStats, useOrgSummary } from "@/usage/queries";
-import { breakdown, formatCost } from "@/usage/allowance";
+import { breakdown, computeHint, computeOf, formatComputeUnits, formatCost } from "@/usage/allowance";
 import { useFeature } from "@/site/analytics/flags";
 import { ContactsCapBlock } from "./contacts-cap";
 
@@ -37,6 +37,7 @@ export function OrgUsageSection({ orgId }: { orgId: string }) {
 
     const byModel = breakdown(summary.data?.total_by_model);
     const byKind = breakdown(summary.data?.total_by_kind);
+    const compute = computeOf(summary.data?.total_by_kind);
     const buckets = stats.data?.items ?? [];
     const peak = buckets.reduce((high, b) => Math.max(high, b.system_cost_usd ?? 0), 0);
 
@@ -66,6 +67,13 @@ export function OrgUsageSection({ orgId }: { orgId: string }) {
                         <div><dt>Cost</dt><dd>{formatCost(summary.data.system_cost_usd)}</dd></div>
                         <div><dt>Tokens in</dt><dd>{(summary.data.total_input_tokens ?? 0).toLocaleString()}</dd></div>
                         <div><dt>Tokens out</dt><dd>{(summary.data.total_output_tokens ?? 0).toLocaleString()}</dd></div>
+                    {compute && (
+                        /* Machine time beside the spend, in its own unit.
+                           The cost is already inside "Cost" above. */
+                        <div title={computeHint(compute)}>
+                            <dt>Compute</dt><dd>{formatComputeUnits(compute.units)}</dd>
+                        </div>
+                    )}
                     </dl>
 
                     {buckets.length > 0 && peak > 0 && (
@@ -80,7 +88,7 @@ export function OrgUsageSection({ orgId }: { orgId: string }) {
                         </div>
                     )}
 
-                    {summary.data.total_tokens === 0 && <p className="usage-quiet">Nothing recorded in this window.</p>}
+                    {summary.data.total_tokens === 0 && !compute && <p className="usage-quiet">Nothing recorded in this window.</p>}
                 </>}
             </section>
 

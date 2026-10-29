@@ -3,7 +3,7 @@
 //! An agent that runs natively on someone's machine should be able to work in
 //! their project, not only in a directory Lemma invented under `~/lemma`. The
 //! obstacle is not the filesystem, it is who is allowed to name a path:
-//! `conversation_directory` accepts only a `/workspace/`-relative suffix
+//! `conversation_directory` accepts only a suffix beneath `/home/user/lemma/`
 //! precisely so that a remote command cannot point an agent at `~/.ssh`.
 //!
 //! So the choice does not travel through the backend at all. The desktop shell

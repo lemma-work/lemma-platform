@@ -107,7 +107,7 @@ async def execute_python(
     the very same one `start_process` gives a shell command. A fresh process
     per call means there is no shell to inherit it from, and without this it
     started in whatever directory the image defaults to: `execute_python`
-    reported `/workspace` while `exec_command` reported the conversation's
+    reported the image's default directory while `exec_command` reported the conversation's
     own directory, so a file one tool wrote by relative path was invisible
     to the other.
     """

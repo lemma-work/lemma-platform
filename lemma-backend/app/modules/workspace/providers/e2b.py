@@ -63,8 +63,11 @@ from app.modules.workspace.providers.e2b_common import (
     meta_profile_digest,
     meta_sandbox_id,
     meta_sandbox_kind,
+    generation_stamp,
     meta_template,
     sdk_errors,
+    superseded,
+    wait_unlisted,
     every_page as _every_page,
 )
 from app.modules.workspace.providers.profiles import profile_for
@@ -152,6 +155,7 @@ class E2BSandboxProvider(E2BOpsMixin):
             meta_epoch(namespace): str(spec.epoch),
             meta_profile_digest(namespace): spec.profile_digest,
             meta_template(namespace): self._template(spec),
+            **generation_stamp(namespace, spec.storage_generation),
         }
 
     def _template(self, spec: ProviderCreateSpec) -> str:
@@ -181,7 +185,9 @@ class E2BSandboxProvider(E2BOpsMixin):
         about it depends entirely on whether the sandbox owns a disk. See
         `_drift` and the branch below.
         """
-        existing = await self._find_any(spec.sandbox_id)
+        existing = await self._find_any(
+            spec.sandbox_id, generation=spec.storage_generation
+        )
         drift = () if existing is None else self._drift(existing, spec)
         if drift and spec.kind is SandboxKind.FUNCTION:
             # A function sandbox owns no durable disk -- it refetches an
@@ -430,6 +436,10 @@ class E2BSandboxProvider(E2BOpsMixin):
             # out a connection to it. In the failure case the next caller
             # re-connects and finds out honestly.
             self._forget(provider_id)
+        if naming.parse_container_name(name) is not None:
+            await wait_unlisted(
+                self.inspect, name, provider_id, deadline_at=deadline_at
+            )
 
     # ------------------------------------------------------------------
     # Storage
@@ -526,21 +536,18 @@ class E2BSandboxProvider(E2BOpsMixin):
     # Internals
     # ------------------------------------------------------------------
 
-    async def _find_any(self, sandbox_id: UUID) -> ProviderInstance | None:
-        """The sandbox holding this workspace's files.
-
-        Paused sandboxes count as found. Pausing is how storage persists here.
-        """
+    async def _find_any(
+        self, sandbox_id: UUID, *, generation: int | None = None
+    ) -> ProviderInstance | None:
+        """The sandbox holding this workspace's files, of ``generation`` when
+        asked (`superseded`). Paused counts: pausing is how storage persists."""
         namespace = self._config.metadata_namespace
-        queries: list[dict[str, str]] = [{meta_sandbox_id(namespace): str(sandbox_id)}]
-        for query in queries:
-            match = await self._first_matching(query)
-            if match is not None:
-                return match
-        return None
+        return await self._first_matching(
+            {meta_sandbox_id(namespace): str(sandbox_id)}, generation=generation
+        )
 
     async def _first_matching(
-        self, metadata: dict[str, str]
+        self, metadata: dict[str, str], *, generation: int | None = None
     ) -> ProviderInstance | None:
         with sdk_errors():
             matches = await _every_page(
@@ -554,17 +561,18 @@ class E2BSandboxProvider(E2BOpsMixin):
             key=lambda info: str(info.state).lower().endswith("running"),
             reverse=True,
         )
+        namespace = self._config.metadata_namespace
         for info in ordered:
             metadata = getattr(info, "metadata", None) or {}
+            if superseded(metadata, namespace, generation):
+                continue
             return ProviderInstance(
                 provider_id=info.sandbox_id,
                 name=info.sandbox_id,
                 volume_name=None,
                 running=str(info.state).lower().endswith("running"),
-                profile_digest=metadata.get(
-                    meta_profile_digest(self._config.metadata_namespace)
-                ),
-                template=metadata.get(meta_template(self._config.metadata_namespace)),
+                profile_digest=metadata.get(meta_profile_digest(namespace)),
+                template=metadata.get(meta_template(namespace)),
             )
         return None
 

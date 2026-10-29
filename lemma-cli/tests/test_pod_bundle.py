@@ -65,9 +65,19 @@ class _NoPodConnectors:
         return {"items": []}
 
 
+class _NoPodMachines:
+    """A pod with no machines of its own, for fakes that predate them."""
+
+    @staticmethod
+    def list(*_args, **_kwargs):
+        return {"machines": []}
+
+
 class FakeClient(SimpleNamespace):
     #: Export reads the pod's connectors; a fake that names none has none.
     connectors = _NoPodConnectors()
+    #: Export reads the pod's machines; likewise.
+    machines = _NoPodMachines()
 
     def pod(self, pod_id):
         files = getattr(self, "files", None)
@@ -760,6 +770,7 @@ def test_import_pod_bundle_agent_update_strips_name_and_clears_absent_schemas(
                 "toolsets": ["WORKSPACE_CLI"],
                 "output_schema": None,
                 "input_schema": None,
+                "machine": None,
             },
         )
     ]
@@ -4119,3 +4130,98 @@ def test_exported_no_build_app_re_imports(tmp_path: Path):
     assert result["errors"] == []
     assert result["ok"] is True
     assert result["summary"]["apps"] == ["created:support_app"]
+
+
+def test_import_creates_a_pod_machine_before_the_agent_that_runs_on_it(
+    tmp_path: Path,
+):
+    root = tmp_path / "bundle"
+    (root / "machines" / "builder").mkdir(parents=True)
+    (root / "agents" / "coder").mkdir(parents=True)
+    (root / "pod.json").write_text(json.dumps({"name": "dev"}), encoding="utf-8")
+    (root / "machines" / "builder" / "builder.json").write_text(
+        json.dumps(
+            {
+                "name": "builder",
+                "template": "workspace-docker",
+                "size": "4x8",
+                "visibility": "restricted",
+                "run_slots": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "agents" / "coder" / "coder.json").write_text(
+        json.dumps(
+            {"name": "coder", "instruction": "Write code.", "machine": "pod:builder"}
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, object]] = []
+
+    class Machines:
+        def list(self, pod_id=None):
+            return {"machines": []}
+
+        def create(self, name, **kwargs):
+            calls.append(("machine", {"name": name, **kwargs}))
+            return {"name": name}
+
+    client = FakeClient(
+        machines=Machines(),
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(
+            list=lambda pod_id, limit=1000: {"items": []},
+            create=lambda pod_id, payload: (
+                calls.append(("agent", _plain(payload))) or {"name": "coder"}
+            ),
+        ),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_123", source_dir=root)
+
+    assert result["ok"] is True, result
+    assert result["summary"]["machines"] == ["created:builder"]
+    assert [kind for kind, _ in calls] == ["machine", "agent"]
+    assert calls[0][1] == {
+        "name": "builder",
+        "pod_id": "pod_123",
+        "template": "workspace-docker",
+        "size": "4x8",
+        "visibility": "restricted",
+        "run_slots": 2,
+        "display_name": None,
+    }
+    assert calls[1][1]["machine"] == "pod:builder"
+
+
+def test_a_bundled_machine_without_a_template_fails_the_plan(tmp_path: Path):
+    root = tmp_path / "bundle"
+    (root / "machines" / "builder").mkdir(parents=True)
+    (root / "pod.json").write_text(json.dumps({"name": "dev"}), encoding="utf-8")
+    (root / "machines" / "builder" / "builder.json").write_text(
+        json.dumps({"name": "builder", "visibility": "pod"}), encoding="utf-8"
+    )
+    client = FakeClient(
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: {
+                "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+            }
+        ),
+    )
+
+    result = import_pod_bundle(client, pod_id="pod_123", source_dir=root, dry_run=True)
+
+    assert result["ok"] is False
+    assert any("template" in error["message"] for error in result["errors"])

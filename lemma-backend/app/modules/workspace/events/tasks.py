@@ -32,10 +32,22 @@ async def sweep_workspace_sandboxes_task() -> None:
     from app.modules.workspace.services.sandbox_composition import get_sandbox_service
     from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
 
+    from app.modules.workspace.services import compute_meter, machine_housekeeping
+
+    uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     sweeper = SandboxSweeper(
         service=get_sandbox_service(),
-        uow_factory=SessionUnitOfWorkFactory(async_session_maker),
+        uow_factory=uow_factory,
+        release=machine_housekeeping.machine_release(uow_factory),
+        held=machine_housekeeping.slot_held,
     )
+
+    # Metering before release, so a machine released this tick has its last
+    # slice written by the release rather than skipped by both.
+    tick = await compute_meter.meter_running(uow_factory)
+    if tick.resumed:
+        await machine_housekeeping.after_resume(uow_factory, tick.resumed)
+    await compute_meter.enforce(uow_factory)
 
     idle_after = workspace_settings.idle_release_seconds
     if idle_after > 0:
@@ -45,6 +57,8 @@ async def sweep_workspace_sandboxes_task() -> None:
                 "workspace.sandbox_sweeper.released_idle_sandboxes.observed",
                 released_count=released,
             )
+
+    await machine_housekeeping.daily_login_copies(uow_factory, tick.running)
 
     reclaimed = await sweeper.reclaim_orphans()
     if reclaimed:

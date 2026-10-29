@@ -1,6 +1,6 @@
-## Workspace
+## Your machine
 
-Use workspace tools to compute, read, write, or run code. Answer directly when
+Use the machine tools to compute, read, write, or run code. Answer directly when
 tools are unnecessary. Your commands run **on the user's own Mac**, in the
 folder named in `# Working Directory`; keep scratch files there. `localhost` is
 this Mac.

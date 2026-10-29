@@ -10,8 +10,11 @@ import {
     ImageIcon, RefreshIcon, TerminalIcon,
 } from "@/ui/icons";
 import { live } from "@/usage/queries";
-import { Logins } from "./logins-view";
+import "@/styles/environments.css";
 import { Screen } from "./screen";
+import { CleanUp, Dock, EnvironmentsRail, OtherScreen } from "./environments-view";
+import { useMachines } from "./environments-queries";
+import { STATUS_WORD } from "./environments";
 import { screenSay } from "./machine";
 import { useWorkspaceStatus } from "./queries";
 import { startupProgress } from "./startup";
@@ -113,20 +116,22 @@ function Save({ path, name, sizeBytes }: { path: string; name: string; sizeBytes
     );
 }
 
-/** The computer your teammates work on.
+/** The Environments screen: every machine this space can reach.
  *
- *  Not this pod's — yours. One sandbox per person, shared by every teammate in
- *  every organization you belong to, which is the fact the subtitle spends its
- *  one line on because nothing else on screen implies it.
+ *  A rail of machines — yours, the space's own, the ones somebody connected —
+ *  beside the selected one's screen, with a dock of tools under it: a
+ *  terminal, its processes, previews of its ports, its files and the sites its
+ *  browser is signed in to.
  *
- *  It opens on the directory the conversation you were reading works in,
- *  because that is the question that brings anybody here: the teammate said it
- *  wrote a file, and this is where it went. The whole machine is one crumb
- *  away for when the question is broader than that.
+ *  Your own machine is the one it opens on, and the one whose browser and
+ *  file explorer this pane has always shown. It opens on the directory the
+ *  conversation you were reading works in, because that is the question that
+ *  brings anybody here: the teammate said it wrote a file, and this is where
+ *  it went.
  *
  *  Nothing here starts a sandbox on its own. Listing is ambient — a paused
- *  machine answers "asleep" rather than being woken — and the two acts that do
- *  cost something, opening a file and opening the browser, are both a click
+ *  machine answers "asleep" rather than being woken — and the acts that do
+ *  cost something, opening a file, a shell or the browser, are all a click
  *  somebody made.
  */
 export function ComputerView({ podId, conversationId, visible }: {
@@ -147,9 +152,21 @@ export function ComputerView({ podId, conversationId, visible }: {
     const [openFile, setOpenFile] = useState<string | null>(null);
     const [wake, setWake] = useState(false);
     const [noise, setNoise] = useState(false);
-    /* The browser is the view; its files and the sites it is signed in to
-       open beside it when asked, rather than stacking under the screen. */
-    const [drawer, setDrawer] = useState<"files" | "logins" | null>(null);
+    const [picked, setPicked] = useState<string | null>(null);
+    const [railOpen, setRailOpen] = useState(false);
+    const [dockOpen, setDockOpen] = useState(true);
+
+    /* A narrow pane is the screen first: the dock starts as a closed sheet
+       rather than covering the browser somebody came to look at. */
+    useEffect(() => {
+        if (window.matchMedia("(max-width: 767px)").matches) setDockOpen(false);
+    }, []);
+
+    const machines = useMachines(podId, visible);
+    const list = machines.data ?? [];
+    const mine = list.find((machine) => machine.kind === "default") ?? null;
+    const selected = list.find((machine) => machine.ref === picked) ?? mine;
+    const onMine = selected === null || selected.kind === "default";
 
     /* The conversation's directory is where this opens, but only until
        somebody navigates: `at` staying null would send a reader back to the
@@ -160,9 +177,9 @@ export function ComputerView({ podId, conversationId, visible }: {
        it listed, so one request settles where this pane is and where it may
        go. */
     const asked = at ?? home.data ?? null;
-    const workspace = useWorkspaceStatus(visible);
+    const workspace = useWorkspaceStatus(visible && onMine);
     const preparing = startupProgress(workspace.data) !== null;
-    const listing = useFiles(asked, wake, visible && !preparing);
+    const listing = useFiles(asked, wake, visible && onMine && !preparing);
     const first = listing.data?.pages[0];
     const roots = rootsOf(first);
     /* The server's own word for where we are, because it resolved the path it
@@ -172,7 +189,7 @@ export function ComputerView({ podId, conversationId, visible }: {
        ambient and neither provisions anything, but asleep is the ordinary
        resting state and a second request to be told so again is one nobody
        needed. */
-    const browser = useBrowser(visible && first !== undefined && !first.sleeping);
+    const browser = useBrowser(visible && onMine && first !== undefined && !first.sleeping);
     const state = machineState(first, browser.data, listing.isPending);
     const say = screenSay(state, browser.data);
 
@@ -184,6 +201,7 @@ export function ComputerView({ podId, conversationId, visible }: {
     const tab = useOpenBrowserTab();
 
     const goTo = (next: string) => { setAt(next); setOpenFile(null); };
+    const select = (ref: string) => { setPicked(ref); setRailOpen(false); };
 
     /* Sample mode has no account behind it, so there is no sandbox to ask
        about — and the queries are disabled, which without this would leave the
@@ -200,42 +218,8 @@ export function ComputerView({ podId, conversationId, visible }: {
         );
     }
 
-    if (preparing) return (
-        <section className="library-view computer-view" aria-label="Computer">
-            <header className="library-heading"><h1>Your computer</h1></header>
-            <WorkspaceStartup status={workspace.data} />
-        </section>
-    );
-
-    return (
-        <section className="library-view computer-view" aria-label="Computer">
-            {/* The screen first, because that is what a computer is from the
-                outside, and the state is said once — on it — rather than
-                repeated in a badge beside it. */}
-            <header className="cbar">
-                <span className={"cbar__dot cbar__dot--" + state} aria-hidden="true" />
-                <span className="cbar__state">{say.headline}</span>
-                <span className="cbar__note">{say.note}</span>
-                <span className="cbar__spacer" />
-                <button className="cbar__button" aria-pressed={drawer === "logins"} onClick={() => setDrawer(was => was === "logins" ? null : "logins")}>Signed-in sites</button>
-                <button className="cbar__button" aria-pressed={drawer === "files"} onClick={() => setDrawer(was => was === "files" ? null : "files")}>Files</button>
-            </header>
-            <div className={"cbody" + (drawer ? " cbody--drawer" : "")}>
-            <div className="cstage">
-                <Screen
-                    state={state}
-                    browser={browser.data}
-                    conversationId={conversationId}
-                    visible={visible}
-                    busy={tab.busy}
-                    onWake={() => setWake(true)}
-                    onOpenTab={tab.open}
-                    fill
-                />
-            </div>
-            {drawer === "logins" && <aside className="cdrawer" aria-label="Signed-in sites"><Logins visible={visible} startOpen /></aside>}
-            {drawer === "files" && <aside className="cdrawer cdrawer--files" aria-label="Files">
-
+    const explorer = (
+        <div className="envfiles">
             <nav className="computer-path" aria-label="Where you are">
                 {/* Back means the last step taken, not one level of path. With
                     a file open that step was opening it, and an arrow that
@@ -275,15 +259,10 @@ export function ComputerView({ podId, conversationId, visible }: {
             </nav>
             {!openFile && describe(path, roots) && <p className="computer-where">{describe(path, roots)}</p>}
 
-            {tab.failed && (
-                <p className="computer-note" role="alert">
-                    Couldn’t open the browser. This computer may not support a browser view.
-                </p>
-            )}
-
             {openFile ? <FileBody path={openFile} /> : (
                 <>
-                    {listing.isPending && <LoadingRows label="Loading files" />}
+                    {preparing && <p className="computer-note" role="status">Your computer is still starting.</p>}
+                    {!preparing && listing.isPending && <LoadingRows label="Loading files" />}
                     {listing.isError && (
                         <p className="computer-note" role="alert">
                             This computer could not be read.{" "}
@@ -354,7 +333,83 @@ export function ComputerView({ podId, conversationId, visible }: {
                     )}
                 </>
             )}
-            </aside>}
+        </div>
+    );
+
+    return (
+        <section className={"library-view computer-view envs" + (railOpen ? " envs--rail" : "")} aria-label="Environments">
+            <div className="envs__rail">
+                <EnvironmentsRail
+                    podId={podId}
+                    machines={list}
+                    loading={machines.isPending}
+                    failed={machines.isError}
+                    onRetry={() => void machines.refetch()}
+                    selected={selected?.ref ?? "me"}
+                    onSelect={select}
+                    visible={visible}
+                />
+            </div>
+            <div className="envs__main">
+                {/* The screen first, because that is what a computer is from
+                    the outside, and the state is said once — on it — rather
+                    than repeated in a badge beside it. */}
+                <header className="cbar">
+                    <button className="cbar__button envs__machines" aria-expanded={railOpen} onClick={() => setRailOpen((was) => !was)}>
+                        Machines
+                    </button>
+                    {onMine ? (
+                        <>
+                            <span className={"cbar__dot cbar__dot--" + state} aria-hidden="true" />
+                            <span className="cbar__state">{say.headline}</span>
+                            <span className="cbar__note">{say.note}</span>
+                        </>
+                    ) : selected && (
+                        <>
+                            <span className={"envrow__dot envrow__dot--" + selected.status} aria-hidden="true" />
+                            <span className="cbar__state">{selected.display_name || selected.name}</span>
+                            <span className="cbar__note">{STATUS_WORD[selected.status] ?? selected.status}</span>
+                        </>
+                    )}
+                    <span className="cbar__spacer" />
+                    {selected?.access === "manage" && <CleanUp key={selected.ref} machine={selected} podId={podId} />}
+                </header>
+                {tab.failed && onMine && (
+                    <p className="computer-note envs__alert" role="alert">
+                        Couldn’t open the browser. This computer may not support a browser view.
+                    </p>
+                )}
+                <div className="cstage envs__stage">
+                    {onMine && preparing && <WorkspaceStartup status={workspace.data} />}
+                    {onMine && !preparing && (
+                        <Screen
+                            state={state}
+                            browser={browser.data}
+                            conversationId={conversationId}
+                            visible={visible}
+                            busy={tab.busy}
+                            onWake={() => setWake(true)}
+                            onOpenTab={tab.open}
+                            fill
+                        />
+                    )}
+                    {!onMine && selected && <OtherScreen machine={selected} />}
+                </div>
+                {selected && (
+                    <Dock
+                        key={selected.ref}
+                        machine={selected}
+                        visible={visible}
+                        myFiles={explorer}
+                        open={dockOpen}
+                        onOpen={setDockOpen}
+                    />
+                )}
+                {!selected && !machines.isPending && (
+                    <section className="envdock envdock--open" aria-label="Files">
+                        <div className="envdock__body">{explorer}</div>
+                    </section>
+                )}
             </div>
         </section>
     );

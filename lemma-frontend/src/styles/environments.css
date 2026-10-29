@@ -1,0 +1,609 @@
+/* ── Environments: the machines a space can reach ─────────────────────
+   A rail of machines, the selected one's screen, and a dock of tools under
+   it. Built on the Computer view's bar and stage (`space.css`) so the browser
+   keeps the look it had; what is new is the rail and the dock.
+
+   The view is a container, not the window: it also opens in the right-hand
+   side panel, where a wide window still leaves it phone-narrow. */
+
+.computer-view.library-view.envs {
+    flex-direction: row;
+    position: relative;
+    container-type: inline-size;
+    container-name: envs;
+}
+.envs__rail {
+    flex: none;
+    width: 264px;
+    min-height: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--line);
+    background: var(--paper);
+}
+.envs__main {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+.envs__stage {
+    flex: 1;
+    min-height: 160px;
+}
+.envs__machines {
+    display: none;
+}
+.envs__alert {
+    padding: 8px 18px;
+}
+/* The startup progress sits on the dark stage, so it takes the screen's ink. */
+.envs__stage .computer-startup {
+    position: absolute;
+    inset: 0;
+    align-content: center;
+    color: var(--screen-ink, rgb(255 255 255 / 0.9));
+}
+.envs__stage .computer-startup p {
+    color: rgb(255 255 255 / 0.7);
+}
+.envscreen {
+    position: absolute;
+    inset: 0;
+    justify-content: center;
+}
+.envscreen p {
+    color: rgb(255 255 255 / 0.7);
+}
+.envscreen strong {
+    font-weight: 500;
+    color: rgb(255 255 255 / 0.92);
+}
+.envscreen svg {
+    color: rgb(255 255 255 / 0.4);
+}
+
+/* ── the rail ── */
+.envrail {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 14px 10px 18px;
+}
+.envrail__group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.envrail__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 28px;
+    padding: 0 8px;
+}
+.envrail__head h2 {
+    margin: 0;
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--ink-3);
+}
+.computer-view .envrail__add {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--r-sm);
+    color: var(--ink-3);
+}
+.computer-view .envrail__add:hover {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.envrail__empty {
+    margin: 0;
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink-3);
+}
+.envrail__usage {
+    margin: 0;
+    padding: 10px 8px 0;
+    border-top: 1px solid var(--line);
+    font-size: 11.5px;
+    color: var(--ink-3);
+}
+
+.envrow {
+    position: relative;
+    display: flex;
+    align-items: center;
+    border-radius: var(--r-sm);
+}
+.envrow:hover {
+    background: var(--accent-soft);
+}
+.envrow--on,
+.envrow--on:hover {
+    background: var(--line-2);
+}
+.computer-view .envrow__main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 6px 8px;
+    text-align: left;
+}
+.envrow__dot {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--ink-3);
+}
+.envrow__dot--running {
+    background: var(--live);
+}
+.envrow__dot--starting {
+    background: var(--warn);
+}
+.envrow__dot--error {
+    background: var(--bad);
+}
+.envrow__dot--offline,
+.envrow__dot--stopped {
+    background: var(--line-2);
+    box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+.envrow__what {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+.envrow__what strong {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.envrow__what small {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.envrow__more {
+    position: relative;
+    flex: none;
+}
+.computer-view .envrow__more > button {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    margin-right: 4px;
+    border-radius: var(--r-sm);
+    color: var(--ink-3);
+}
+.computer-view .envrow__more > button:hover {
+    color: var(--ink);
+}
+
+/* A small menu under its button: one row each, the destructive one in red. */
+.envmenu {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 180px;
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-md);
+    background: var(--paper);
+    box-shadow: var(--shadow-lift);
+}
+.envrow__more .envmenu {
+    left: auto;
+    right: 0;
+}
+.envmenu--right {
+    left: auto;
+    right: 0;
+}
+.computer-view .envmenu button {
+    min-height: 36px;
+    padding: 6px 10px;
+    border-radius: var(--r-sm);
+    font-size: 13px;
+    text-align: left;
+    color: var(--ink);
+}
+.computer-view .envmenu button:hover {
+    background: var(--accent-soft);
+}
+.computer-view .envmenu .envmenu__danger {
+    color: var(--bad);
+}
+.envclean {
+    position: relative;
+}
+
+/* How a machine of your own joins: one command, set as code. */
+.envconnect {
+    margin: 6px 8px 0;
+    padding: 10px;
+    border: 1px dashed var(--line-2);
+    border-radius: var(--r-md);
+}
+.envconnect p {
+    margin: 0 0 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink-3);
+}
+.envconnect__cmd {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 6px 6px 10px;
+    border-radius: var(--r-sm);
+    background: var(--chrome);
+}
+.envconnect__cmd code {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink);
+    overflow-x: auto;
+    white-space: nowrap;
+}
+.computer-view .envcopy {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--r-sm);
+    color: var(--ink-3);
+}
+.computer-view .envcopy:hover {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+
+/* ── the dock ── */
+.envdock {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-top: 1px solid var(--line);
+    background: var(--paper);
+}
+.envdock--open {
+    height: 42%;
+    min-height: 240px;
+}
+.envdock__tabs {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-height: 44px;
+    padding: 0 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.envdock--open .envdock__tabs {
+    border-bottom: 1px solid var(--line);
+}
+.computer-view .envdock__tab,
+.computer-view .envdock__toggle {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 999px;
+    font-size: 13px;
+    white-space: nowrap;
+    color: var(--ink-2);
+}
+/* Pinned to the strip's end: five tabs overflow a phone's width, and the
+   toggle after them scrolled out of reach -- an open sheet nobody could shut. */
+.computer-view .envdock__toggle {
+    position: sticky;
+    right: 0;
+    margin-left: auto;
+    background: var(--paper);
+    box-shadow: -10px 0 8px -2px var(--paper);
+}
+.computer-view .envdock__tab:hover:not(:disabled),
+.computer-view .envdock__toggle:hover {
+    background: var(--accent-soft);
+    color: var(--ink);
+}
+.computer-view .envdock__tab[aria-selected="true"] {
+    background: var(--line-2);
+    color: var(--ink);
+}
+.envdock__body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 16px;
+}
+.envdock__body[hidden],
+.envdock__panel[hidden] {
+    display: none;
+}
+.envdock__panel {
+    height: 100%;
+}
+
+.envlist {
+    display: flex;
+    flex-direction: column;
+}
+.envlist > .computer-note {
+    padding: 12px 2px;
+}
+.envitem {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    padding: 6px 2px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-3);
+}
+.envitem:first-child {
+    border-top: 0;
+}
+.computer-view .envitem--button {
+    width: 100%;
+    text-align: left;
+}
+.computer-view .envitem--button:hover {
+    background: var(--accent-soft);
+}
+.envitem__what {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.envitem__what strong {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.envitem__what code {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.envitem__what small {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    font-size: 11.5px;
+    color: var(--ink-3);
+}
+.envbadge {
+    margin-left: 4px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--ink-2);
+    font-size: 11px;
+}
+
+.envpreview__form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px;
+    padding-bottom: 12px;
+}
+.envpreview__form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--ink-3);
+}
+.envpreview__form input,
+.envpreview__form select {
+    font: inherit;
+    font-size: 13px;
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-sm);
+    background: var(--paper);
+    color: var(--ink);
+}
+.envpreview__form input {
+    width: 90px;
+}
+.envpreview__form input[aria-invalid="true"] {
+    border-color: var(--bad);
+}
+
+.envfiles__path {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+}
+.envfiles__path code {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The terminal is a device, like the browser screen: dark in both
+   appearances, on the stage's own ground. */
+.envterm {
+    position: relative;
+    height: 100%;
+    min-height: 180px;
+    padding: 8px;
+    border-radius: var(--r-md);
+    background: var(--screen-ground);
+    overflow: hidden;
+}
+.envterm__screen {
+    height: 100%;
+}
+.envterm__state {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: rgb(255 255 255 / 0.82);
+    background: rgb(0 0 0 / 0.55);
+}
+.envterm__state .computer-inline {
+    color: rgb(255 255 255 / 0.92);
+    text-decoration: underline;
+}
+
+/* ── dialogs ── */
+.envform__lead {
+    margin: 0 0 14px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--ink-2);
+}
+.envform__lead code {
+    font-family: var(--mono);
+    font-size: 12px;
+}
+.envform__lead strong {
+    font-weight: 500;
+    color: var(--ink);
+}
+.envform__hint {
+    display: block;
+    margin-top: 4px;
+    font-size: 11.5px;
+    color: var(--ink-3);
+}
+.envform__error {
+    margin: 0 0 12px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--bad);
+}
+.envresult ul {
+    margin: 0 0 16px;
+    padding-left: 18px;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--ink-2);
+}
+
+/* ── narrow: the screen first, the rail as an overlay, the dock a sheet ── */
+@container envs (max-width: 760px) {
+    .envs__rail {
+        position: absolute;
+        z-index: 6;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: min(300px, 86%);
+        visibility: hidden;
+        transform: translateX(-100%);
+        transition: transform 0.18s var(--ease-out, ease), visibility 0.18s;
+        box-shadow: var(--shadow-lift);
+    }
+    .envs__machines {
+        display: inline-flex;
+        align-items: center;
+    }
+    .envs__main .cbar {
+        padding-left: 8px;
+    }
+    .envs__main .cbar__note {
+        display: none;
+    }
+    .envdock {
+        position: absolute;
+        z-index: 5;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        border: 1px solid var(--line);
+        border-bottom: 0;
+        border-radius: 14px 14px 0 0;
+        box-shadow: var(--shadow-lift);
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+    /* Open, the sheet takes its place in the column instead of lying over
+       the stage: a sheet over 72% of a stage whose picture is centred in it
+       left a phone with a black strip and the browser behind the sheet. */
+    .envdock--open {
+        position: relative;
+        height: 55%;
+        min-height: 0;
+        border-radius: 0;
+        box-shadow: none;
+    }
+    .envs__stage {
+        margin-bottom: 46px;
+    }
+    .envs__main:has(.envdock--open) .envs__stage {
+        margin-bottom: 0;
+    }
+    /* Clear of the floating Ask pill, which sits over the closed strip's
+       right end on a phone and took the click meant for Show. Open, the strip
+       is higher than the pill and the toggle goes back to the edge. */
+    .computer-view .envdock:not(.envdock--open) .envdock__toggle {
+        right: 96px;
+    }
+}
+/* The rail overlay, opened from the bar. A sibling selector rather than a
+   container query because it is a choice somebody made, not a width. */
+.envs--rail .envs__rail {
+    visibility: visible;
+    transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .envs__rail {
+        transition: none;
+    }
+}

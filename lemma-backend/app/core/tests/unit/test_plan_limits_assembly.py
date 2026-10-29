@@ -9,7 +9,7 @@ from uuid import UUID
 import pytest
 
 from app.core.plan_limits import build_plan_limits, reset_plan_limits
-from app.core.ports.plan_limits import PodAllowance, SandboxSize
+from app.core.ports.plan_limits import MachinePolicy, PodAllowance
 from app.core.registry.assembly import configure_plan_limits
 from app.core.registry.contract import LemmaModule
 
@@ -30,7 +30,9 @@ class SetPlan:
     async def member_limit(self, *, organization_id: UUID) -> int | None:
         return self.members
 
-    async def workspace_size(self, *, user_id: UUID) -> SandboxSize | None:
+    async def machine_policy(
+        self, *, user_id: UUID | None, organization_id: UUID | None
+    ) -> MachinePolicy | None:
         return None
 
 

@@ -53,6 +53,7 @@ from app.modules.pod_bundle.infrastructure.connector_planning import (
 )
 from app.modules.pod_bundle.infrastructure import account_checks
 from app.modules.pod_bundle.infrastructure.grants import has_grants
+from app.modules.pod_bundle.infrastructure import machine_bundle
 from app.modules.pod_bundle.infrastructure.plan_variables import (
     variables_from_manifest,
 )
@@ -72,7 +73,7 @@ from app.modules.pod_bundle.domain.state import (
 logger = get_logger(__name__)
 
 
-class ExistingResources(Protocol):
+class ExistingResources(machine_bundle.MachineNames, Protocol):
     """The pod's current resources, by name — everything the diff needs."""
 
     async def table_names(self) -> set[str]: ...
@@ -303,6 +304,8 @@ class PlanBuilder:
             if data_path.is_file():
                 seeded_rows += _check_seed_rows(data_path, name, seeded_rows)
                 data_steps.append((name, {}))
+
+        steps.extend(await machine_bundle.machine_steps(bundle_root, self._existing))
 
         # --- functions (+ deferred grants) -----------------------------------
         existing_functions = await self._existing.function_names()
@@ -591,3 +594,6 @@ class ServiceExistingResources:
                 exc_info=True,
             )
             return set()
+
+    async def machine_names(self) -> set[str]:
+        return await machine_bundle.pod_machine_names(self._uow, self._pod_id)

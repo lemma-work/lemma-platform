@@ -5,11 +5,11 @@ session and cwd, so the resolution lives here instead of being duplicated. The
 location is configurable per conversation via ``metadata``:
 
 - ``cwd`` — explicit working directory; a fresh root conversation gets a default
-  of ``/workspace/c/{date}/{slug}``. Stamped into metadata at creation
+  of ``~/lemma/c/{date}/{slug}``. Stamped into metadata at creation
   (``ConversationService._apply_inherited_cwd``) and read back thereafter.
 - ``repo`` — a GitHub repository this conversation works in, as
   ``{owner, repo, ref?}``. It *derives* the cwd
-  (``/workspace/repos/{owner}/{repo}``), so picking a project is the same act as
+  (``~/lemma/repos/{owner}/{repo}``), so picking a project is the same act as
   picking a directory and there is no second source of truth to keep in step.
 - ``workspace_name`` / ``workspace_id`` — selects the workspace; defaults to the
   single per-user workspace today. Kept metadata-driven so multi-workspace
@@ -22,8 +22,8 @@ rather than a scratchpad, and the working directories stay separate because each
 conversation already gets its own session and cwd inside that shared sandbox.
 
 The pod filesystem's working directory (``/me/{suffix}``) is derived from the
-workspace cwd by swapping the ``/workspace`` prefix for ``/me`` — so an agent's
-scratchpad (``/workspace/c/{date}/{slug}``) and its pod filesystem
+workspace cwd by swapping the ``~/lemma`` prefix for ``/me`` — so an agent's
+scratchpad (``~/lemma/c/{date}/{slug}``) and its pod filesystem
 (``/me/c/{date}/{slug}``) line up under the same short, human-readable path
 instead of a raw conversation UUID. No extra persisted field is needed: the cwd
 already lives in conversation metadata.
@@ -194,7 +194,7 @@ async def apply_location_metadata(
     A child (a sub-agent, or a conversation pinned under a PROJECT) inherits the
     parent's resolved cwd, project, and workspace selection, so it works
     alongside the parent instead of in a directory of its own. A root
-    conversation gets its own ``/workspace/c/{date}/{slug}``. An explicit ``cwd``
+    conversation gets its own ``~/lemma/c/{date}/{slug}``. An explicit ``cwd``
     always wins over both.
 
     A conversation created against a ``repo`` gets that repository's directory:

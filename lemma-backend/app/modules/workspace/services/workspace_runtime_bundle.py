@@ -65,7 +65,7 @@ from sandbox_runtime.protocol import (
 logger = get_logger(__name__)
 _tracer = trace.get_tracer(__name__)
 
-#: Where the overlay lives. Outside `/workspace` on purpose: this is platform
+#: Where the overlay lives. Outside `/home/user` on purpose: this is platform
 #: code, not the user's, and putting it in their project root would put it in
 #: their file tree, in their exports, and within reach of an agent's `rm`.
 RUNTIME_ROOT = RUNTIME_OVERLAY_ROOT

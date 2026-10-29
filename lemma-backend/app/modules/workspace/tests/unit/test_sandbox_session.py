@@ -366,7 +366,7 @@ async def test_every_execution_carries_the_directory_the_shell_uses() -> None:
     Creating the session with a cwd is not enough. A provider without a
     resident interpreter (E2B) starts a fresh process per execution, so it can
     only learn the directory from the execution itself -- and it was never
-    given one, which is how `execute_python` ran in `/workspace` while
+    given one, which is how `execute_python` ran in the image's default directory while
     `exec_command` ran in the conversation's own directory.
     """
     client = _CanonicalClient()

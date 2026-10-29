@@ -366,7 +366,7 @@ async def test_skill_resources_advertise_a_readable_path_not_a_container_path():
     Resources used to carry `workspace_path`, which reads as "a path in the
     workspace container" — so an agent ran `cat /skills/<skill>/references/<f>.md`
     (empty), then `ls` (no such directory), then `find /` across the container
-    before finding the real copies under /opt and /workspace. `/skills` is a pod
+    before finding the real copies under /opt and /home/user. `/skills` is a pod
     file path; the tool is what resolves it.
     """
     name = "lemma-artifact-author"
@@ -390,7 +390,7 @@ def test_skill_output_never_advertises_a_workspace_filesystem_path():
 
     for field_name in ("pod_path", "pod_dir"):
         description = fields[field_name].description or ""
-        assert "not a path on the workspace filesystem" in description
+        assert "not a path on your machine" in description
         assert "load_skill" in description
 
 

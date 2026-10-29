@@ -41,7 +41,7 @@ what the surrounding environment can actually do:
 
 | Skill | Use it for |
 |---|---|
-| [browser](browser/SKILL.md) | Driving a real browser in a Lemma workspace — navigation, screenshots, login flows, scraping |
+| [browser](browser/SKILL.md) | Driving the real browser on a Lemma machine — navigation, screenshots, login flows, scraping |
 | [liteparse-documents](liteparse-documents/SKILL.md) | Parsing documents the pod does not convert for you — anything outside its file system, and the formats its auto-indexing skips |
 
 ## Choosing between builder and user

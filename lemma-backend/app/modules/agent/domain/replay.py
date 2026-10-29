@@ -61,6 +61,11 @@ REPLAY_CLASS: Mapping[str, ReplayClass] = {
     "exec_command": _UNSAFE,
     "execute_python": _UNSAFE,
     "manage_process": _UNSAFE,
+    # Machines: listing reads; the rest change a machine or the pod.
+    "list_machines": _SAFE,
+    "expose_port": _UNSAFE,
+    "sync_files": _UNSAFE,
+    "reset_machine": _UNSAFE,
     "view_image": _SAFE,
     # Skills and the web: reads.
     "list_skills": _SAFE,

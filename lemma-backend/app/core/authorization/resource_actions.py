@@ -61,6 +61,10 @@ RESOURCE_ACTIONS: dict[ResourceType, tuple[str, ...]] = {
     # to the members an owner shares a RESTRICTED account with.
     ResourceType.CONNECTOR: (Permissions.CONNECTOR_USE,),
     ResourceType.CONNECTOR_ACCOUNT: (Permissions.CONNECTOR_ACCOUNT_USE,),
+    # Only `use` is grantable: managing a machine is a role's, never a
+    # workload's -- an agent that could resize or delete the machine it runs
+    # on could also take it away from the pod.
+    ResourceType.MACHINE: (Permissions.MACHINE_USE,),
 }
 
 # Owners get the full action set of resources they own. Schedules are owned by

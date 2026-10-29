@@ -167,6 +167,20 @@ async def test_docker_reaches_a_port_privately(docker_provider) -> None:
     assert endpoint.headers == {}
 
 
+async def test_docker_reaches_an_unpublished_port_through_the_runtime(
+    docker_provider,
+) -> None:
+    """A laptop's container publishes only the runtime's own ports; a dev
+    server on any other is reached through the runtime's `/ports` relay."""
+    instance = await docker_provider.create(_spec(uuid4()))
+    runtime = await check_reach_port_shape(docker_provider, instance, port=8080)
+    endpoint = await check_reach_port_shape(docker_provider, instance, port=5173)
+
+    assert endpoint.url == f"{runtime.url}/ports/5173"
+    assert set(endpoint.headers) == {"X-Lemma-Runtime-Token"}
+    assert endpoint.public is False
+
+
 async def test_e2b_reports_an_open_host_when_there_is_no_traffic_token(
     e2b_provider, e2b_world
 ) -> None:
@@ -473,9 +487,7 @@ async def test_a_secret_path_that_names_no_file_is_refused_everywhere(provider) 
         )
 
 
-@pytest.mark.parametrize(
-    "provider_name", ["docker_provider", "local_provider"], ids=["docker", "desktop"]
-)
+@pytest.mark.parametrize("provider_name", ["local_provider"], ids=["desktop"])
 async def test_an_undeclared_port_is_a_typed_refusal(
     provider_name: str, request: pytest.FixtureRequest
 ) -> None:
@@ -488,7 +500,10 @@ async def test_an_undeclared_port_is_a_typed_refusal(
     unhandled 500 with an unframed WebSocket close.
 
     E2B is excluded on purpose: its edge resolves any port, so it has no such
-    condition to have an answer for.
+    condition to have an answer for. Docker is excluded now for the same
+    reason: an unpublished port of a workspace is reached through the
+    runtime's `/ports` relay (`test_docker_reaches_an_unpublished_port_through_
+    the_runtime`), and what the relay will not serve it refuses itself.
     """
     provider = request.getfixturevalue(provider_name)
     instance = await provider.create(_spec(uuid4()))

@@ -22,6 +22,10 @@ from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
 
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
+
 UserIdResolver = Callable[[WebSocket], Awaitable[str]]
 
 
@@ -58,9 +62,37 @@ async def resolve_user_id(websocket: WebSocket) -> str:
     return session.get_user_id()
 
 
+async def session_user_id(
+    websocket: WebSocket, resolve: UserIdResolver, *, socket: str
+) -> str | None:
+    """Whose session this is, or None when it cannot be read.
+
+    Broad because the session library raises several unrelated types for the
+    same fact -- expired, malformed, revoked -- and every socket answers all
+    of them with the same close code. Logged with the traceback, and the
+    ``socket`` it was for, so a genuine failure in that library is not read
+    as somebody's token having expired. One place, so each socket that needs
+    a person does not grow its own copy of the catch.
+    """
+    try:
+        return await resolve(websocket)
+    except Exception:
+        logger.warning(
+            "workspace.socket.session_unreadable.degraded",
+            socket=socket,
+            exc_info=True,
+        )
+        return None
+
+
 def user_id_resolver() -> UserIdResolver:
     """The resolver the socket route uses, as something that can be supplied."""
     return resolve_user_id
 
 
-__all__ = ["UserIdResolver", "resolve_user_id", "user_id_resolver"]
+__all__ = [
+    "UserIdResolver",
+    "resolve_user_id",
+    "session_user_id",
+    "user_id_resolver",
+]

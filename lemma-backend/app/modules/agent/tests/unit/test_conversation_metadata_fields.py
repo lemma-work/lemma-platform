@@ -20,13 +20,13 @@ def test_the_keys_read_typed() -> None:
     run_id = uuid4()
     fields = ConversationMetadataFields.of(
         {
-            "cwd": "/workspace/c/2026-10-13/notes",
+            "cwd": "/home/user/lemma/c/2026-10-13/notes",
             "source": "schedule",
             "workflow_run_id": str(run_id),
             "anything_else": {"kept": "out of this view"},
         }
     )
-    assert fields.cwd == "/workspace/c/2026-10-13/notes"
+    assert fields.cwd == "/home/user/lemma/c/2026-10-13/notes"
     assert fields.source == "schedule"
     assert fields.workflow_run_id == run_id
 

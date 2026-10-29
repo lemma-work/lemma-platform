@@ -25,10 +25,9 @@ class SkillLookupRequest(BaseModel):
 
 
 _POD_PATH_NOTE = (
-    "This is a pod file path, not a path on the workspace filesystem: nothing "
-    "mounts `/skills` inside the workspace container, so `cat`/`ls` on it fail. "
-    "Read it with `load_skill`, or with `lemma files cat <path>` from a "
-    "workspace shell."
+    "This is a pod file path, not a path on your machine: nothing mounts "
+    "`/skills` on your machine, so `cat`/`ls` on it fail. Read it with "
+    "`load_skill`, or with `lemma files cat <path>` from your machine's shell."
 )
 
 

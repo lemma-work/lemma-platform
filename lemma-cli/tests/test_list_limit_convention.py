@@ -43,6 +43,26 @@ COMPLETE_SET_LISTINGS = {
         "single round trip, so there is no cursor to hand back and nothing a "
         "second page could contain"
     ),
+    "machine list": (
+        "every machine the caller can use -- the endpoint takes no limit or "
+        "page_token and answers with all of them"
+    ),
+    "machine preview list": (
+        "one machine's shared ports -- the endpoint takes no limit or cursor"
+    ),
+    "machine logins list": (
+        "the cookie domains one machine's browser holds, read in one round trip"
+    ),
+    "machines list": (
+        "every machine the caller can use -- the endpoint takes no limit or "
+        "page_token and answers with all of them"
+    ),
+    "machines preview list": (
+        "one machine's shared ports -- the endpoint takes no limit or cursor"
+    ),
+    "machines logins list": (
+        "the cookie domains one machine's browser holds, read in one round trip"
+    ),
 }
 
 

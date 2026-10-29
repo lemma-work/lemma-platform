@@ -1,9 +1,9 @@
 """What a deployment's plans allow: how many organizations, pods and members,
-and how big a workspace.
+and which machines.
 
 Three modules enforce these -- `pod` when a pod is made, `identity` when an
-organization is made or someone joins or is invited, `workspace` when a sandbox
-is built -- and none of them
+organization is made or someone joins or is invited, `workspace` when a machine
+is created, started or built -- and none of them
 knows what a plan is. The open-source build has no plans, so it declares no
 provider and nothing is limited. A deployment that sells plans (lemma.work)
 declares one through `LemmaModule.plan_limits`, and answers each question from
@@ -58,9 +58,30 @@ class SandboxSize:
         return f"{self.cpu_count}x{self.memory_mb}"
 
 
+@dataclass(frozen=True, slots=True)
+class MachinePolicy:
+    """Which machines a person or organization may have, and how big.
+
+    Sizes are ``<vcpu>x<memory GB>`` labels (``2x4``) and templates are names
+    (``workspace``, ``workspace-docker``), so core does not have to know the
+    workspace module's vocabulary to state a plan. ``None`` on a count is
+    unlimited. How much compute they may *use* is a usage limit, not this:
+    see ``UsageLimitValues``.
+    """
+
+    default_size: str = "2x4"
+    max_size: str = "8x16"
+    allowed_templates: frozenset[str] = frozenset({"workspace", "workspace-docker"})
+    max_pod_machines: int | None = None
+    max_connected_machines: int | None = None
+    #: Machines running at once for this person (default and connected) or,
+    #: for an organization, across its pods.
+    max_running: int | None = None
+
+
 class PlanLimits(Protocol):
     """Answers what a person or organization is allowed. ``None`` is unlimited,
-    or for a sandbox, the deployment's own default size."""
+    or for machines, the deployment's own default policy."""
 
     async def pod_allowance(
         self, *, user_id: UUID, organization_id: UUID
@@ -76,8 +97,11 @@ class PlanLimits(Protocol):
         """The most people ``organization_id`` may hold, invitations included."""
         ...
 
-    async def workspace_size(self, *, user_id: UUID) -> SandboxSize | None:
-        """The size of ``user_id``'s workspace sandbox."""
+    async def machine_policy(
+        self, *, user_id: UUID | None, organization_id: UUID | None
+    ) -> MachinePolicy | None:
+        """For ``user_id``'s own machines, or ``organization_id``'s pod
+        machines when ``user_id`` is None. ``None`` is the deployment default."""
         ...
 
 

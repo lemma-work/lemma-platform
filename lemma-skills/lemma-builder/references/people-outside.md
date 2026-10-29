@@ -20,7 +20,7 @@ never a member's personal allowance.
 | Visitor | What the pod made Public | Rows of tables opened to anyone |
 
 A contact's or visitor's run is anonymous to the pod: Public reads only, a short tool
-allowlist, no sandbox, no member's grants. In a **group**, people outside the pod are
+allowlist, no machine, no member's grants. In a **group**, people outside the pod are
 answered as outsiders the same way (`surfaces.md`).
 
 ## The pieces

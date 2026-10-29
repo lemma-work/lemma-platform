@@ -116,7 +116,7 @@ def test_a_context_without_a_conversation_falls_back_to_the_project_root():
 def test_pod_cwd_from_workspace_cwd_edge_cases():
     assert pod_cwd_from_workspace_cwd(WORKSPACE_ROOT) == "/me"
     assert pod_cwd_from_workspace_cwd(f"{WORKSPACE_ROOT}/a/b") == "/me/a/b"
-    # A cwd not under /workspace is placed under /me as-is (defensive).
+    # A cwd not under the workspace root is placed under /me as-is (defensive).
     assert pod_cwd_from_workspace_cwd("/other/x") == "/me/other/x"
 
 
@@ -240,7 +240,7 @@ def test_generate_cwd_slug_is_short_and_alphanumeric():
     "value",
     [
         # An owner/repo pair becomes a filesystem path, so anything that could
-        # climb out of /workspace/repos must not survive parsing.
+        # climb out of ~/lemma/repos must not survive parsing.
         {"owner": "../etc", "repo": "passwd"},
         {"owner": "acme", "repo": ".."},
         {"owner": "acme", "repo": "."},

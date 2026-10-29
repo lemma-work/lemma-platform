@@ -170,7 +170,7 @@ Show a user-facing resource or a rich interaction instead of prose. One tool, ma
 | --- | --- | --- | --- |
 | `type` | enum | all | `BROWSER`, `FILE`, `TABLE`, `AGENT`, `FUNCTION`, `WORKFLOW`, `APP`, `SCHEDULE`, `WIDGET` |
 | `name` | string? | resource types | unique pod resource name; omit to show all of that type |
-| `path` | string? | FILE | full pod-visible path (e.g. `/me/reports/q3.pdf`); never a private workspace path (`/tmp`, `/private`, `/Users`) |
+| `path` | string? | FILE | full pod-visible path (e.g. `/me/reports/q3.pdf`); never a path on the machine (`/tmp`, `/home/user`, `/Users`) |
 | `public_url` | string? | WIDGET | URL to embed/open — exactly one of `public_url`/`content` |
 | `content` | string? | WIDGET | inline HTML fragment: raw markup, body-level tags only; a standalone SVG is a pod file shown with `type=FILE` |
 | `loading_messages` | string[]? | WIDGET | ≤4, shown while the widget renders |
@@ -187,8 +187,8 @@ failure): BROWSER takes only `type`; `path` is FILE-only; `public_url`/`content`
 
 - `BROWSER` — returns the short-lived URL of the same browser the agent drives with
   browser CLI commands (`type` only).
-- `FILE` — show a pod file (`path`). Upload sandbox deliverables first
-  (`lemma files upload`).
+- `FILE` — show a pod file (`path`). Copy deliverables from the machine first
+  (`sync_files`, or `lemma files upload`).
 - `TABLE` — show a datastore table; `name` + optional `filters` (omit `name` to list all
   tables).
 - `AGENT`/`FUNCTION`/`WORKFLOW`/`APP`/`SCHEDULE` — show that pod resource (or all of the
@@ -200,7 +200,7 @@ failure): BROWSER takes only `type`; `path` is FILE-only; `public_url`/`content`
   a Vite app when the UI needs React, routing, or substantial application state.
 
 **Response** — `{ success, message?, error?, app?, url?, expires_at? }` (`url`/
-`expires_at` populate for displayed workspace apps).
+`expires_at` populate for displayed apps).
 
 ---
 
@@ -226,7 +226,7 @@ sending email, a privileged command).
 - `decision` — `APPROVE_ONCE`, `APPROVE_FOR_SESSION`, or `DENY`.
 - `executed` — `true` only when approved and the wrapped tool ran.
 - `result` — the wrapped tool's result (run as the user; for CLI/python in a fresh
-  workspace session minted with the user's token in the same working directory).
+  session on the machine, minted with the user's token in the same working directory).
 - On `DENY`, nothing runs (`executed:false`).
 
 Pausing tool (conversation → `WAITING`), same resume flow as `ask_user`.
@@ -252,9 +252,9 @@ Name exactly one target:
 }
 ```
 
-A process wait keeps its sandbox alive, because the running process is what holds it.
-Across a plain `seconds` wait nothing is holding it, so the sandbox may be reclaimed —
-write anything you need to the pod first.
+A process wait keeps its machine awake, because the running process is what holds it.
+Across a plain `seconds` wait nothing is holding it, so the machine may be paused —
+background processes stop, though files in `~` survive.
 
 **No record waits.** Waking on a row changing is deliberately not offered — see the
 trigger-or-wait rule in `schedules-and-triggers.md`.
@@ -272,10 +272,11 @@ Four constraints worth designing around:
   conversation, so a poll loop is the expensive way to wait. One sleep sized to the job
   beats several short ones. Below 30s the call is rejected rather than clamped — asking
   for a few seconds means the agent has mistaken this for `sleep()`.
-- **The sandbox may not survive a `seconds` wait.** Nothing holds it, so the workspace
-  container can be reclaimed during the sleep, and sandbox files, background processes,
-  and the shell's cwd are gone on wake. Anything needed afterwards must be written to
-  the pod first. (A `process_id` wait keeps it: the running process holds it.)
+- **The machine may not survive a `seconds` wait.** Nothing holds it, so it can be
+  paused during the sleep: files in the home directory persist, but background
+  processes, `/tmp` and the shell's cwd are gone on wake. Anything another run or a
+  person needs belongs in the pod. (A `process_id` wait keeps it: the running process
+  holds it.)
 - **24 hours, hard.** Partly because each wake replays the whole conversation, and partly
   because `reply_window_hours` is real — an agent that sleeps past a platform's reply
   window (WhatsApp's 24h rule) cannot deliver its own result on the surface it was asked
@@ -303,7 +304,7 @@ the pod datastore.
 
 **`listen`** — request `{ file_path, language? }` → `{ success, message?, error?,
 transcript, detected_language?, duration_seconds? }`. `file_path` is a pod path (e.g. an
-auto-ingested voice note at `/me/telegram/voice.ogg`) or a workspace path. Common formats
+auto-ingested voice note at `/me/telegram/voice.ogg`) or a path on the machine. Common formats
 (OGG/Opus, MP3, M4A/AAC, WAV, FLAC, WebM) work directly.
 
 **Behavior rules (the agent must follow these):**

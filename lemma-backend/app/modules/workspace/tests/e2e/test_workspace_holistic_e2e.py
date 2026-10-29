@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from uuid import UUID, uuid4
 
 import pytest
@@ -285,15 +287,19 @@ async def test_browser_process_and_signed_access_reach_the_sandbox(
     assert page.preview and "Example Domain" in page.preview
 
     browser = await authenticated_client.post(
-        "/workspace/apps/browser/access",
+        "/machines/me/browser:access",
         json={"ttl_seconds": 300},
     )
     assert browser.status_code == status.HTTP_200_OK, browser.text
     browser_payload = browser.json()
-    assert browser_payload["app"] == "browser"
     assert browser_payload["url"].startswith("http")
-    assert "/public/workspace-ports/" in browser_payload["url"]
+    assert "/public/machine-ports/" in browser_payload["url"]
     assert browser_payload["expires_at"]
+
+    granted = urlsplit(browser_payload["url"])
+    current = f"{granted.path}?{granted.query}" if granted.query else granted.path
+    answer = await authenticated_client.get(current, follow_redirects=False)
+    assert answer.status_code != status.HTTP_404_NOT_FOUND, answer.text
 
 
 async def test_the_browser_starts_again_after_its_x_server_dies_uncleanly(
@@ -772,7 +778,7 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
     base = backend_server["host_base_url"].replace("http://", "ws://", 1)
 
     def view_socket(mode: str) -> str:
-        return f"{base}/workspace/browser/view?mode={mode}&access_token={token}"
+        return f"{base}/machines/me/browser/view?mode={mode}&access_token={token}"
 
     async def find_page_point(socket, reader: _RfbReader) -> tuple[int, int, _RfbInfo]:
         """Anywhere on the real page, once Chrome has painted it.

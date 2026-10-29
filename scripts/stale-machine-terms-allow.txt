@@ -1,0 +1,18 @@
+# Legitimate uses of the old workspace-sandbox names, for
+# scripts/check_stale_machine_terms.py. One `path-or-glob[:rule]  # reason`
+# per line; a reason is required. Rules: old-route, workspace-path, old-sdk,
+# old-sdk-alias, agent-sandbox. Keep this short: a new entry needs a reason a
+# reviewer would accept, not "it was already there".
+
+# History describes the release it shipped with.
+docs/release-notes/*  # release notes are a record of what shipped then
+lemma-frontend/content/changelog/*  # the public changelog is a record of what shipped then
+lemma-backend/migrations/versions/*  # migrations are history and never edited after they ship
+
+# Recorded or contract data, not prose.
+desktop/agent-host/tests/fixtures/acp/*  # recorded ACP transcripts: what an adapter actually sent, its paths included
+lemma-skills/browser/references/agent-browser-core.md:agent-sandbox  # vendored verbatim from agent-browser; "the eve sandbox" is upstream prose about a different product
+
+# The legacy /workspace path, named because recognising it is the point.
+desktop/agent-host/src/conversation_directory.rs:workspace-path  # test that a cwd at the legacy /workspace root is refused before anything is created
+lemma-backend/app/modules/agent/tests/e2e/test_agent_host_session_binding_e2e.py:workspace-path  # a conversation stamped with a legacy /workspace cwd keeps it across a rebind

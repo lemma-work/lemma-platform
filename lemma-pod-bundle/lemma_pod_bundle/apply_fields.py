@@ -132,6 +132,12 @@ def read_bundle_connector(slug: str, payload: Mapping[str, Any]) -> BundleConnec
 #: ``permissions.grants``: what an agent and a function may do on their own.
 GRANT_HOLDER_DIRS = ("agents", "functions")
 
+#: Everything a bundled machine says about itself. The disk, the instance and
+#: who made it belong to the pod it came from; the grants that let an agent or
+#: a function use it travel on that agent or function, by machine name.
+MACHINE_APPLY_FIELDS = frozenset(
+    {"name", "display_name", "template", "size", "visibility", "run_slots"}
+)
 
 #: What a TIME schedule may not carry: there is no event for a filter to judge.
 TIME_SCHEDULE_FILTER_FIELDS = ("filter_instruction", "filter_output_schema")

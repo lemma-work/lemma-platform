@@ -56,6 +56,6 @@ async def test_workspace_cli_pydantic_wrapper_uses_docstring_description(
     assert result.success is True
     assert result.stdout == f"{run_ctx.deps.conversation_id}:pwd"
     assert tool.tool_def.description.startswith(
-        "Run a shell command in the private conversation workspace."
+        "Run a shell command on your machine, in this conversation's directory."
     )
     assert tool.tool_def.parameters_json_schema["properties"]["cmd"]["type"] == "string"

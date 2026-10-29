@@ -38,6 +38,8 @@ class UpdateAgentRequest:
         icon_url (None | str | Unset):
         input_schema (None | Unset | UpdateAgentRequestInputSchemaType0):
         instruction (None | str | Unset):
+        machine (None | str | Unset): Where this agent's commands run: a machine ref such as `pod:<name>` for one of the
+            pod's machines. Unset runs on the default machine of whoever the run acts for.
         metadata (None | Unset | UpdateAgentRequestMetadataType0):
         output_schema (None | Unset | UpdateAgentRequestOutputSchemaType0):
         permissions (AgentPermissionsReplaceRequest | None | Unset): Optional resource grants to REPLACE on this agent,
@@ -52,6 +54,7 @@ class UpdateAgentRequest:
     icon_url: None | str | Unset = UNSET
     input_schema: None | Unset | UpdateAgentRequestInputSchemaType0 = UNSET
     instruction: None | str | Unset = UNSET
+    machine: None | str | Unset = UNSET
     metadata: None | Unset | UpdateAgentRequestMetadataType0 = UNSET
     output_schema: None | Unset | UpdateAgentRequestOutputSchemaType0 = UNSET
     permissions: AgentPermissionsReplaceRequest | None | Unset = UNSET
@@ -107,6 +110,12 @@ class UpdateAgentRequest:
             instruction = UNSET
         else:
             instruction = self.instruction
+
+        machine: None | str | Unset
+        if isinstance(self.machine, Unset):
+            machine = UNSET
+        else:
+            machine = self.machine
 
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
@@ -165,6 +174,8 @@ class UpdateAgentRequest:
             field_dict["input_schema"] = input_schema
         if instruction is not UNSET:
             field_dict["instruction"] = instruction
+        if machine is not UNSET:
+            field_dict["machine"] = machine
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
         if output_schema is not UNSET:
@@ -258,6 +269,15 @@ class UpdateAgentRequest:
             return cast(None | str | Unset, data)
 
         instruction = _parse_instruction(d.pop("instruction", UNSET))
+
+        def _parse_machine(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        machine = _parse_machine(d.pop("machine", UNSET))
 
         def _parse_metadata(
             data: object,
@@ -363,6 +383,7 @@ class UpdateAgentRequest:
             icon_url=icon_url,
             input_schema=input_schema,
             instruction=instruction,
+            machine=machine,
             metadata=metadata,
             output_schema=output_schema,
             permissions=permissions,

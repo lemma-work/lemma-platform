@@ -181,7 +181,7 @@ releases this usually finds it already there. While it downloads,
 `core.sandbox_images_status` carries the MB done and in total across both
 images, and the workspace notice and the Settings row show them.
 
-A workspace sandbox's runtime overlay is bind-mounted from
+A machine's runtime overlay is bind-mounted from
 `runtime/<sandbox>` beside its home on the data disk, at `/opt/lemma-runtime`,
 so it survives the container being replaced; purging the sandbox's storage and a
 local-data reset remove it.
@@ -434,7 +434,7 @@ origins, and sandbox bridge. Frontend follows the backend dependency.
 The pack also carries two things the hosted backend image ships, named to the
 backend only when present so an older pack starts as it did: the sandbox
 runtime bundle (`backend/assets/runtime-bundle`, `WORKSPACE_RUNTIME_BUNDLE_DIR`),
-which the backend installs into each workspace sandbox exactly as the hosted
+which the backend installs into each machine exactly as the hosted
 image's `/app/runtime-bundle` is, so a Desktop sandbox runs this release's
 `lemma` CLI and SDK rather than its image's; and the `lemma` CLI for commands
 on the Mac itself (`backend/bin/lemma` and `backend/cli`,
@@ -547,7 +547,7 @@ The native host-pack renderer derives:
 - `FUNCTION_RUNTIME_GATEWAY_URL`;
 - `host.lemma.internal`.
 
-The workspace sandbox of the user this Mac's Agent Host is paired to also has
+The default machine of the user this Mac's Agent Host is paired to also has
 the loopback relay, which carries its
 browser to a port on this Mac's own `127.0.0.1` over vsock and locald's
 `run/host-loopback.sock`; see
@@ -722,7 +722,7 @@ are instead of controls the shell would refuse.
 | --- | --- | --- |
 | Overview | One health line, Start at login, Verify & repair, Open logs, a Server setup summary, disk space (data disk, the pre-update backup with Delete, runtimes, Free up space) | `local_settings_snapshot`, `check_for_app_update`, `set_start_at_login`, `repair_runtime`, `open_logs`, `delete_update_backup`, `free_up_disk_space` |
 | Server setup | One card per capability — AI model (required), Email, Connectors, Channels, Voice, Web search — each with its status, what it unlocks, a Test, and where to get its keys; then an Advanced part with state paths, addresses, log tails and anonymous install health | `local_settings_snapshot`, `apply_local_settings`, `test_server_setup`, `discover_provider_models`, `diagnostic_logs`, `telemetry_status`, `set_telemetry_enabled` |
-| Coding agents | This computer's Agent Host card, Run commands on this Mac, the workspace sandbox image | `agent_host_*`, `set_host_execution`, `local_settings_snapshot`, `prepare_sandbox_image` |
+| Coding agents | This computer's Agent Host card, Run commands on this Mac, the machine image | `agent_host_*`, `set_host_execution`, `local_settings_snapshot`, `prepare_sandbox_image` |
 | Sharing | This Mac / Local network / Public (ngrok or Cloudflare), who can join, a link to invite people | `local_sharing` |
 | Updates | Current version, check, install, what the channel means | `check_for_app_update`, `install_app_update` |
 

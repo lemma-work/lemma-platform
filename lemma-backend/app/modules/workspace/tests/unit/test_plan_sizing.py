@@ -1,18 +1,17 @@
-"""A workspace is built at its owner's plan's size; nothing else is."""
+"""A machine is built at the size on its row; a function keeps its own."""
 
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
-from app.core.plan_limits import declare_plan_limits, reset_plan_limits
+
 from app.core.ports.plan_limits import SandboxSize
-from app.modules.test_support.plan_limits import SetPlan
 from app.modules.workspace.domain.sandbox import (
     Sandbox,
     SandboxDesiredState,
@@ -25,7 +24,7 @@ from app.modules.workspace.providers.docker_sizing import memory_bytes, nano_cpu
 from app.modules.workspace.config import WorkspaceSettings
 from app.modules.workspace.providers import e2b_config
 from app.modules.workspace.providers.e2b_config import E2BProviderConfig, template_for
-from app.modules.workspace.services.sandbox_sizing import plan_size_for
+from app.modules.workspace.services.sandbox_sizing import machine_size_for
 
 PLUS = SandboxSize(cpu_count=4, memory_mb=8192)
 
@@ -162,22 +161,16 @@ def test_e2b_builds_a_function_from_the_function_template_whatever_the_size():
     )
 
 
-# --- which sandbox the plan sizes ----------------------------------------------
+# --- which size a row is built at -----------------------------------------------
 
 
-@pytest.fixture
-def plan() -> Iterator[SetPlan]:
-    answers = SetPlan(size=PLUS)
-    declare_plan_limits(lambda uow: answers)
-    yield answers
-    reset_plan_limits()
-
-
-def _sandbox(*, kind: SandboxKind, owner_kind: SandboxOwnerKind) -> Sandbox:
+def _sandbox(*, kind: SandboxKind, size: str) -> Sandbox:
     return Sandbox(
         id=uuid4(),
         kind=kind,
-        owner_kind=owner_kind,
+        owner_kind=SandboxOwnerKind.USER
+        if kind is SandboxKind.WORKSPACE
+        else SandboxOwnerKind.POD,
         owner_id=uuid4(),
         slug="default",
         display_name="workspace",
@@ -186,23 +179,30 @@ def _sandbox(*, kind: SandboxKind, owner_kind: SandboxOwnerKind) -> Sandbox:
         desired_state=SandboxDesiredState.PRESENT,
         epoch=1,
         storage_generation=1,
+        size=size,
     )
 
 
-async def test_a_persons_workspace_is_sized_by_their_plan(plan: SetPlan):
-    sandbox = _sandbox(kind=SandboxKind.WORKSPACE, owner_kind=SandboxOwnerKind.USER)
+def test_a_machine_is_built_at_the_size_on_its_row():
+    sandbox = _sandbox(kind=SandboxKind.WORKSPACE, size="4x8")
 
-    assert await plan_size_for(object(), sandbox) == PLUS  # type: ignore[arg-type]
-
-
-async def test_a_function_sandbox_keeps_the_configured_size(plan: SetPlan):
-    sandbox = _sandbox(kind=SandboxKind.FUNCTION, owner_kind=SandboxOwnerKind.POD)
-
-    assert await plan_size_for(object(), sandbox) is None  # type: ignore[arg-type]
+    assert machine_size_for(sandbox) == PLUS
 
 
-async def test_with_no_plan_declared_a_workspace_keeps_the_configured_size():
-    reset_plan_limits()
-    sandbox = _sandbox(kind=SandboxKind.WORKSPACE, owner_kind=SandboxOwnerKind.USER)
+def test_a_machine_still_at_the_legacy_size_keeps_the_configured_size():
+    sandbox = _sandbox(kind=SandboxKind.WORKSPACE, size="1x2")
 
-    assert await plan_size_for(object(), sandbox) is None  # type: ignore[arg-type]
+    assert machine_size_for(sandbox) is None
+
+
+def test_a_function_sandbox_keeps_the_configured_size():
+    sandbox = _sandbox(kind=SandboxKind.FUNCTION, size="4x8")
+
+    assert machine_size_for(sandbox) is None
+
+
+def test_e2b_builds_a_docker_machine_from_the_docker_template():
+    config = _e2b()
+    spec = replace(_spec(size=PLUS), template="workspace-docker")
+
+    assert template_for(config, spec) == "lemma-workspace-docker"

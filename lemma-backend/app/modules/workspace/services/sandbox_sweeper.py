@@ -58,9 +58,16 @@ _UNREACHABLE_GIVE_UP_MULTIPLE = 6
 
 
 class SandboxSweeper:
-    def __init__(self, *, service, uow_factory) -> None:
+    def __init__(self, *, service, uow_factory, release=None, held=None) -> None:
         self._service = service
         self._uow_factory = uow_factory
+        # How an idle sandbox is stopped. The machine lifecycle's release by
+        # default for a workspace: close the browser cleanly, copy the logins
+        # off, then stop -- never a pause with a browser open.
+        self._release = release
+        # Whether something still holds this machine though nothing runs on
+        # it: a run slot on a shared machine.
+        self._held = held
 
     @property
     def _provider(self):
@@ -105,7 +112,10 @@ class SandboxSweeper:
             try:
                 if await self._is_busy(sandbox):
                     continue
-                await self._service.release(sandbox.id)
+                if self._release is not None:
+                    await self._release(sandbox)
+                else:
+                    await self._service.release(sandbox.id)
                 # Named, because the count alone is not a diagnosis. When a
                 # run died mid-command and the only nearby log line said
                 # `released_count=1`, nothing connected the two: establishing
@@ -173,6 +183,8 @@ class SandboxSweeper:
         sweep would stop compute underneath live work.
         """
 
+        if self._held is not None and await self._held(sandbox.id):
+            return True
         async with self._uow_factory() as uow:
             current = await SandboxRepository(uow).current_instance(sandbox.id)
         if current is None or not current.provider_id:

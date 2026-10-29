@@ -80,7 +80,30 @@ my-pod/agents/triage-agent/
 ```
 
 Optional fields: `input_schema` (typed input when other systems invoke the agent),
-`icon_url`, `agent_runtime` (see Runtime Profiles).
+`icon_url`, `agent_runtime` (see Runtime Profiles), `machine` (below).
+
+### Where its commands run (`machine`)
+
+An agent with `WORKSPACE_CLI` runs commands on a **machine**. Leave `machine`
+unset and it uses the default machine of whoever the run acts for — the person
+who asked, in their own home directory. Set it to a pod machine when the work
+needs to be shared, heavier, or to have Docker:
+
+```jsonc
+{ "name": "builder", "toolsets": ["WORKSPACE_CLI"],
+  "machine": "pod:builder" }        // a pod machine: machines/<name>/<name>.json in cli-and-bundles.md
+```
+
+A `pod`-visibility machine is open to every agent in the pod. A `restricted` one
+is usable only by the agents, functions and members named in its `machine.use`
+grants (`PUT /pods/{pod}/machines/{name}/grants`), and by pod admins.
+
+On a pod machine each run gets its own working directory,
+`~/lemma/runs/<agent>/<run>`, and processes it starts stop when the run ends.
+The agent can still name another machine per call (the tools' `machine`
+argument), and `list_machines` shows which ones it may use. A run triggered from
+a channel never uses a person's own machine; give such an agent a pod machine.
+
 
 ## Toolsets
 
@@ -113,17 +136,17 @@ colleague hearing from an implementation detail of somebody's turn cannot place 
 | Toolset | Enables |
 | --- | --- |
 | `POD` | **Derived — any folder or table grant.**  list/read/query pod tables and records **and write records**, list/read/search pod files, write files, view a document's rendered pages, and mint file URLs (in-app member link or a public hit-capped share link) — each call grant-checked against the agent's own grants, so read-only is a matter of granting read, not of a narrower toolset |
-| `WORKSPACE_CLI` | **Declared.**  a sandbox shell with the `lemma` CLI — the most powerful and broadest toolset. Includes `view_image` (vision-gated: silently withheld if the active model has no vision capability) |
-| `SKILLS` | **Always on.**  loading skills available in the workspace; also added automatically at runtime when `USER_INTERACTION` is configured so widget-capable agents can load `lemma-widget` |
+| `WORKSPACE_CLI` | **Declared.**  a shell on the agent's machine with the `lemma` CLI — the most powerful and broadest toolset. Also `list_machines`, `expose_port` (a preview URL for a port), `sync_files` (machine ↔ pod files) and `reset_machine` (free disk: `processes`, `runs`, `caches`, `docker`; never logins). Includes `view_image` (vision-gated: silently withheld if the active model has no vision capability) |
+| `SKILLS` | **Always on.**  loading the skills available to the agent; also added automatically at runtime when `USER_INTERACTION` is configured so widget-capable agents can load `lemma-widget` |
 | `WEB_SEARCH` | **Declared.**  web search |
-| `BROWSER` | **Declared.** One tool, `browser_sign_in`: it gets past a login wall by loading a login the person saved earlier, or by pausing the run and asking them to sign in themselves in the agent's browser. The agent never sees or asks for a password. **Deferred**: not in the prompt prefix, so an agent that never meets a login wall never carries it. **Pair it with `WORKSPACE_CLI`** — the browsing itself is the `agent-browser` command line in the sandbox, so `BROWSER` on its own can ask for a login and then do nothing with it. Add `view_image` to let the agent look at what it captures |
+| `BROWSER` | **Declared.** One tool, `browser_sign_in`: it gets past a login wall by loading a login the person saved earlier, or by pausing the run and asking them to sign in themselves in the agent's browser. The agent never sees or asks for a password. **Deferred**: not in the prompt prefix, so an agent that never meets a login wall never carries it. **Pair it with `WORKSPACE_CLI`** — the browsing itself is the `agent-browser` command line on the agent's machine, so `BROWSER` on its own can ask for a login and then do nothing with it. Add `view_image` to let the agent look at what it captures |
 | `USER_INTERACTION` | **Always on.**  ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
 | `SPEECH` | **Declared.**  speak replies and transcribe voice notes (`say` / `listen`, plus `list_voices`). **Deferred** — found with `search_tools`. See `agent-tools.md` |
 | `SUBAGENTS` | **Declared.**  async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |
-| `CONNECTORS` | **Derived — any connector grant.**  call third-party APIs through the org's connector installs, without a sandbox. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `run_connector_operation` by pod slug, the person's own app, or a catalog id (an app nobody connected answers with a `connect_url` for the person); `search_connector_operations` (leave `connector` unset to search **every** connector — each hit names the one to run it through) when the operation is unknown; `describe_connector_operation` only if you want the full input schema up front; `list_connectors` to see what is usable and whether the person has connected each; `connect_connector` for a link when the person asks to connect something. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
+| `CONNECTORS` | **Derived — any connector grant.**  call third-party APIs through the org's connector installs, without a machine. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `run_connector_operation` by pod slug, the person's own app, or a catalog id (an app nobody connected answers with a `connect_url` for the person); `search_connector_operations` (leave `connector` unset to search **every** connector — each hit names the one to run it through) when the operation is unknown; `describe_connector_operation` only if you want the full input schema up front; `list_connectors` to see what is usable and whether the person has connected each; `connect_connector` for a link when the person asks to connect something. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
 | `TODO` | **Always on.**  a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
 | `MEMORY` | **Declared.**  durable facts kept between conversations, in ordinary pod files: `/memory` for what the whole pod should know, `/me` for what is true of one person only. `AGENTS.md` in each scope is read into every run automatically, so it must stay a short index of pointers — it is capped, and the overflow is truncated with a marker. It carries **no tools of its own**, but it does not need pairing: turning it on **derives a `folder.write` grant on `/memory`** (write implies read), which in turn derives `POD` — so the agent gets the file tools that make the instruction actionable. Turning it off takes the grant back, and it is re-derived on every write, so a `permissions` replace cannot strip it |
-| `WAIT` | **Always on.**  suspend the current turn and resume it when there is a reason to (`wait_for`): a time, a sandbox process exiting, or a sub-agent run finishing. Capped at 24h. Every wake replays the whole conversation, so one real wait beats a loop of short ones — and it is **not** for waiting on a person, nor on a `channel_post` answer |
+| `WAIT` | **Always on.**  suspend the current turn and resume it when there is a reason to (`wait_for`): a time, a process on its machine exiting, or a sub-agent run finishing. Capped at 24h. Every wake replays the whole conversation, so one real wait beats a loop of short ones — and it is **not** for waiting on a person, nor on a `channel_post` answer |
 | `MESSAGING` | **Always on.**  the pod's channels, and reaching a person *unprompted*: `channel_post` writes to a **pod member who is not in this conversation** — a line in their own channel in Lemma, carried on to the app they last used or their email — or into a channel; `list_pod_members` looks people up (and reports each member's `reachable_on`); `channel_read(asked_by_me=True)` reads the answers; `channel_list` / `channel_read` / `channel_search` read the channels the agent's person can see. A run answering a contact gets only `ask_a_person`, which calls a member in. See the pattern below — it is the one people get wrong |
 
 For pod files and data you grant the folder or table and `POD` follows — typed,
@@ -361,8 +384,8 @@ Or directly: `lemma agents permissions add coordinator agent:researcher:execute`
   child run to finish (bounded). A child run that exceeds the wait returns a handle
   (`conversation_id`/`run_id`) instead of blocking forever; the parent can keep going
   and poll it.
-- Child conversations **inherit the parent's workspace cwd** — a sub-agent works in
-  the same directory as its parent rather than a fresh one.
+- Child conversations **inherit the parent's machine and working directory** — a
+  sub-agent works in the same directory as its parent rather than a fresh one.
 - Use `JOB` functions for long deterministic work (awaited to completion when called
   as a tool) and `API` for quick request/response.
 

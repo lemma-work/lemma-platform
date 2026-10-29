@@ -1,6 +1,6 @@
 ---
 name: browser
-description: "Operate a real browser in a Lemma workspace for web pages or local/deployed apps: navigation, screenshots, login flows, forms, scraping, console/network inspection, and saved pages through Agent Browser. Use lemma-app-qa alongside it for systematic app journeys, defect evidence, or release judgment."
+description: "Operate the real browser on your Lemma machine for web pages or local/deployed apps: navigation, screenshots, login flows, forms, scraping, console/network inspection, and saved pages through Agent Browser. Use lemma-app-qa alongside it for systematic app journeys, defect evidence, or release judgment."
 ---
 
 # Browser
@@ -41,6 +41,9 @@ What is different about this browser:
   them; you never type a password. Never save session state to a file
   (`agent-browser state save`) — it writes cookies in plaintext that outlive
   your run, and the browser already remembers.
+- **Its profile is protected.** The logins live in `~/.lemma/browser/profile`.
+  Never delete, move, copy or overwrite it; Lemma backs it up and restores it,
+  and no reset an agent can run touches it.
 - **Somebody may be watching, and may take over.** If a step lands somewhere
   you did not expect — a page you did not navigate to, a field already
   filled — assume they did it, re-snapshot, and carry on from what is on
@@ -131,8 +134,8 @@ EOF
 ```
 
 **Open, then read. Never `read <url>` in one shot.** Passing a URL to `read`
-does not wait for the page to render, and it fails silently — measured in
-this sandbox:
+does not wait for the page to render, and it fails silently — measured on
+a Lemma machine:
 
 | page | `read <url>` | `open <url>` then `read` |
 | --- | --- | --- |
@@ -145,7 +148,7 @@ reference shipped with the CLI recommends the one-shot form; it is wrong for
 anything that renders client-side, which is most of what needs a browser at
 all. `web_fetch` uses the two-step form and checks the result has text in it.
 
-**A screenshot is a file until you look at it.** `screenshot` writes to the sandbox and tells you nothing about what it captured; `view_image` with `workspace_file_path` is what puts the picture in front of you. If this agent's model cannot see images, `view_image` asks one that can and hands you back the description — so set `instructions` to the question you actually have ("is the chart's y-axis labelled?"), not "describe this".
+**A screenshot is a file until you look at it.** `screenshot` writes to your machine and tells you nothing about what it captured; `view_image` with `workspace_file_path` is what puts the picture in front of you. If this agent's model cannot see images, `view_image` asks one that can and hands you back the description — so set `instructions` to the question you actually have ("is the chart's y-axis labelled?"), not "describe this".
 
 Use it for what a snapshot cannot describe: layout, charts, broken styles, error overlays. Everything textual is cheaper through `snapshot` and `get text`. `--annotate` writes numbered labels keyed to the `@eN` refs, which is how you tell two identical-looking buttons apart. Default to `.jpeg`, and to the viewport. A full-page `.png` is several times the bytes for a photograph of a web page, and a full-page capture of a long article measured 12.4s and 7.0 MB against 2.5s and 76 KB for the viewport. Ask for `--full` only when the part you need is below the fold.
 
@@ -176,11 +179,11 @@ A password is never yours to hold. `browser_sign_in` is the only sanctioned path
 
 **Parallel isolated sessions.** `agent-browser --session user-a --profile /tmp/lemma-browser/profile-user-a open ...` gives a separate browser with its own cookies, tabs and refs. Use it only when you genuinely need two at once — comparing two signed-in users, say.
 
-**Pass `--profile` with `--session`, always.** A session is a whole separate Chrome and needs a profile directory of its own; Chrome locks the one it opens. `--session` on its own therefore exits immediately with nothing but `Chrome exited early`. A named session's profile is also **scratch** — under `/tmp`, gone with the sandbox — so anything you sign in to there is lost. That is deliberate: the durable profile is the default one, and a second browser is for comparing two accounts, not for keeping one.
+**Pass `--profile` with `--session`, always.** A session is a whole separate Chrome and needs a profile directory of its own; Chrome locks the one it opens. `--session` on its own therefore exits immediately with nothing but `Chrome exited early`. A named session's profile is also **scratch** — under `/tmp`, gone when the machine next restarts — so anything you sign in to there is lost. That is deliberate: the durable profile is the default one, and a second browser is for comparing two accounts, not for keeping one.
 
 **Dialogs and iframes.** `agent-browser dialog accept|dismiss`; iframes are auto-inlined in snapshots (refs work through them), or `agent-browser frame @e3` / `frame main` to switch context explicitly.
 
-**Local app debugging.** `curl -fsS http://127.0.0.1:<port>` first → `agent-browser open http://127.0.0.1:<port>` → reproduce → screenshot + console/network logs — don't stop at the visual failure.
+**Local app debugging.** `curl -fsS http://127.0.0.1:<port>` first → `agent-browser open http://127.0.0.1:<port>` → reproduce → screenshot + console/network logs — don't stop at the visual failure. To let the person open the dev server themselves, `expose_port(port=<port>)` returns a preview URL.
 
 ## Test a pod app (authenticated)
 
@@ -202,7 +205,7 @@ the API origin, so cross-origin API calls authenticate too. Then it opens the ap
 
 Then `screenshot` + `view_image` as above, to see the rendered app rather than
 infer it. `view_image` reads from **either store** — pass exactly one of
-`workspace_file_path` (the sandbox) or `pod_file_path` (the datastore); it never
+`workspace_file_path` (your machine) or `pod_file_path` (the datastore); it never
 guesses from the path shape, and giving both or neither is an error. So an
 uploaded image or a rendered page from a pod document (`lemma files child
 …/pages/page_0001.jpg`) works too, and you can confirm a chart or document looks

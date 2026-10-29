@@ -549,6 +549,22 @@ fn a_stop_behind_an_operation_waits_for_it_and_says_so() {
         let _ = finished.send(stopping.stop_everything(Some(&json!("quit-2")), true));
     });
 
+    // Hold the operation from the moment the stop says it is waiting, not
+    // from the spawn: a runner that starts the thread late (seen on Windows
+    // CI, 14µs of a 200ms hold) otherwise measures nothing.
+    loop {
+        let line = events
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the stop says why it waits");
+        let event: Value = serde_json::from_str(&line).unwrap();
+        if event["detail"]
+            .as_str()
+            .unwrap_or("")
+            .contains("safe stopping point")
+        {
+            break;
+        }
+    }
     assert!(
         stopped
             .recv_timeout(std::time::Duration::from_millis(200))
@@ -561,12 +577,7 @@ fn a_stop_behind_an_operation_waits_for_it_and_says_so() {
         .unwrap();
     worker.join().unwrap();
 
-    // Most of the 200ms the operation held on for; the stop's thread started a
-    // moment after the clock above did.
+    // Most of the 200ms the operation held on for after the stop said so.
     assert_eq!(outcomes[0].step, "operations");
     assert!(outcomes[0].duration.as_millis() >= 100, "{outcomes:?}");
-    assert!(events_of(&events).iter().any(|event| event["detail"]
-        .as_str()
-        .unwrap_or("")
-        .contains("safe stopping point")));
 }

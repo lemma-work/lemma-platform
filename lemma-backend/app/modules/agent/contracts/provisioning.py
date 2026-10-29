@@ -25,6 +25,7 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.services.service_factories import build_agent_service
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.errors import AgentNotFoundError
+from app.modules.agent.domain.sentinels import UNSET, UnsetType
 from app.modules.agent.domain.value_objects import AgentToolset, JsonObject
 from app.modules.agent.services.agent_memory_grant import sync_memory_folder_grant
 
@@ -117,8 +118,13 @@ async def create_agent(
     visibility: str | None,
     metadata: JsonObject | None,
     ctx: Context,
+    machine: str | None = None,
 ) -> Agent:
-    """Create an agent, with the folder and grant its toolsets imply."""
+    """Create an agent, with the folder and grant its toolsets imply.
+
+    ``machine`` is a machine ref (``pod:<name>`` for one of the pod's
+    machines); ``None`` runs it on the default machine of whoever it acts for.
+    """
     return await build_agent_service(uow).create_agent(
         pod_id=pod_id,
         user_id=user_id,
@@ -132,6 +138,7 @@ async def create_agent(
         output_schema=output_schema,
         visibility=visibility,
         metadata=metadata,
+        machine=machine,
         ctx=ctx,
     )
 
@@ -151,8 +158,10 @@ async def update_agent(
     metadata: JsonObject | None,
     user_id: UUID,
     ctx: Context,
+    machine: str | None | UnsetType = UNSET,
 ) -> Agent:
-    """Overwrite an existing agent's definition."""
+    """Overwrite an existing agent's definition. ``machine`` left unset keeps
+    the agent's; ``None`` clears it."""
     return await build_agent_service(uow).update_agent(
         pod_id=pod_id,
         name=name,
@@ -164,6 +173,7 @@ async def update_agent(
         input_schema=input_schema,
         output_schema=output_schema,
         metadata=metadata,
+        machine=machine,
         requester_user_id=user_id,
         ctx=ctx,
     )

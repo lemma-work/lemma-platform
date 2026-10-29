@@ -107,7 +107,7 @@ class _Host:
 
     async def restart(self) -> None:
         await self.stop()
-        await self.start()
+        await self.start_process()
 
 
 @asynccontextmanager

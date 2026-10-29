@@ -74,7 +74,7 @@ and explain the evidence gap when the data cannot support the requested claim.
 
 ### 4. Calculate and diagnose
 
-Use SQL for source-side filtering and aggregation; use the workspace Python
+Use SQL for source-side filtering and aggregation; use the machine's Python
 stack for repeatable transformations and deeper analysis. Prefer `pandas` for
 tables, `numpy` for numerical work, `matplotlib` for charts, and `openpyxl` for
 XLSX authoring or preservation. Keep logic in code, not manual spreadsheet

@@ -8,7 +8,7 @@ The reason it exists at all: E2B's file SDK reports a type that is only ever
 "file" or "dir" and echoes back the path it was handed. A containment check
 written against those two fields is therefore structurally inert here, and the
 files API relies on exactly that check. It was correct on Docker and a comment
-on E2B, so a symlink out of `/workspace` was served. `realpath` is what this
+on E2B, so a symlink out of the home was served. `realpath` is what this
 fabric does give us, so the boundary is enforced with that.
 """
 

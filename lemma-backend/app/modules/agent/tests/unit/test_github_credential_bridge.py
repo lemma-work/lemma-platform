@@ -115,7 +115,7 @@ _MARKER_KEY = f"{bridge._MARKER_KEY_PREFIX}:session-1"
         ("echo hi && git push", True),
         ("gh pr list", True),
         ("  git status", True),
-        ("cd /workspace/repo; git log", True),
+        ("cd /home/user/lemma/repo; git log", True),
         ("echo git", False),
         ("npm install", False),
         ('echo "gitfoo"', False),

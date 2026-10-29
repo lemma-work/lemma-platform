@@ -9100,6 +9100,8 @@ var LemmaClient = (() => {
     LEMMA_COMPOSE_RESULT_MESSAGE_TYPE: () => LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
     LEMMA_THEME_EVENT: () => LEMMA_THEME_EVENT,
     LemmaClient: () => LemmaClient,
+    MACHINE_CONSENT_MESSAGE_TYPE: () => MACHINE_CONSENT_MESSAGE_TYPE,
+    MachineConsentRequiredError: () => MachineConsentRequiredError,
     POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
     applyLemmaHostTheme: () => applyLemmaHostTheme,
     buildAuthUrl: () => buildAuthUrl,
@@ -10566,6 +10568,9 @@ var LemmaClient = (() => {
       return error;
     }
     getRequestBody(options) {
+      if (options.rawBody !== void 0) {
+        return options.rawBody;
+      }
       if (options.body === void 0) {
         return void 0;
       }
@@ -21173,14 +21178,25 @@ var LemmaClient = (() => {
     }
   };
 
-  // src/namespaces/workspace.ts
-  var MAX_READ_BYTES = 8 * 1024 * 1024;
-  function contentPath(path, options = {}) {
-    const query = new URLSearchParams({ path });
-    if (options.offset) query.set("offset", String(options.offset));
-    if (options.length) query.set("length", String(options.length));
-    return `/workspace/files:content?${query.toString()}`;
+  // src/namespaces/machines.ts
+  var MACHINE_CONSENT_MESSAGE_TYPE = "lemma:machine-consent";
+  var MACHINE_CONSENT_REQUIRED = "MACHINE_CONSENT_REQUIRED";
+  var MachineConsentRequiredError = class extends ForbiddenError {
+    constructor(appId, consentUrl, source) {
+      super(403, source.message, source.code, source.details, source.rawResponse);
+      __publicField(this, "appId", appId);
+      __publicField(this, "consentUrl", consentUrl);
+      __publicField(this, "name", "MachineConsentRequiredError");
+      this.requestId = source.requestId;
+    }
+  };
+  function machinePathRef(ref) {
+    const trimmed = ref.trim();
+    if (!trimmed) throw new Error("A machine ref is required.");
+    const pathForm = trimmed.replace(/^pod:([^/:]+)\/(.+)$/, "pod:$1:$2");
+    return pathForm.split(":").map(encodeURIComponent).join(":");
   }
+  var MAX_READ_BYTES = 8 * 1024 * 1024;
   function rangeHeader(range) {
     return { Range: `bytes=${range.start}-${range.end}` };
   }
@@ -21191,6 +21207,559 @@ var LemmaClient = (() => {
     }
     return status === 206;
   }
+  var STOPPED_STATES = /* @__PURE__ */ new Set(["succeeded", "failed", "cancelled", "timed_out"]);
+  var MachineExecution = class {
+    constructor(machines, ref, process2) {
+      __publicField(this, "machines", machines);
+      __publicField(this, "ref", ref);
+      __publicField(this, "process", process2);
+      __publicField(this, "socket", null);
+    }
+    get id() {
+      return this.process.id;
+    }
+    [Symbol.asyncIterator]() {
+      return this.events()[Symbol.asyncIterator]();
+    }
+    /** Every event from after `after`, ending with the exit. */
+    async *events(after = 0) {
+      var _a;
+      let sequence = after;
+      const factory = this.machines.webSocketFactory();
+      if (factory) {
+        for await (const event of this.streamed(factory, sequence)) {
+          if (event.type === "output") sequence = event.sequence;
+          yield event;
+          if (event.type === "exit") return;
+        }
+      }
+      for (; ; ) {
+        const page = await this.machines.processes.output(this.ref, this.id, {
+          after: sequence,
+          waitSeconds: this.machines.pollWaitSeconds
+        });
+        for (const chunk of page.chunks) {
+          yield { type: "output", sequence: chunk.sequence, channel: chunk.channel, data: chunk.data };
+        }
+        sequence = Math.max(sequence, page.next_sequence);
+        if (page.exit_code != null || STOPPED_STATES.has(page.state)) {
+          yield { type: "exit", state: page.state, exit_code: (_a = page.exit_code) != null ? _a : null };
+          return;
+        }
+      }
+    }
+    /** The exit, having read (and dropped) all the output before it. */
+    async wait() {
+      for await (const event of this.events()) {
+        if (event.type === "exit") return { state: event.state, exit_code: event.exit_code };
+      }
+      throw new Error("The process ended without an exit event.");
+    }
+    /** Type into the process: over its socket when one is open, else by request. */
+    async input(data) {
+      var _a;
+      if (((_a = this.socket) == null ? void 0 : _a.readyState) === 1) {
+        this.socket.send(JSON.stringify({ type: "input", data }));
+        return;
+      }
+      await this.machines.processes.input(this.ref, this.id, { data });
+    }
+    async resize(cols, rows) {
+      var _a;
+      if (((_a = this.socket) == null ? void 0 : _a.readyState) === 1) {
+        this.socket.send(JSON.stringify({ type: "resize", cols, rows }));
+        return;
+      }
+      await this.machines.processes.resize(this.ref, this.id, { cols, rows });
+    }
+    kill() {
+      return this.machines.processes.kill(this.ref, this.id);
+    }
+    async *streamed(factory, after) {
+      const queue = [];
+      let closed = false;
+      let wake = null;
+      const notify = () => {
+        wake == null ? void 0 : wake();
+        wake = null;
+      };
+      let socket;
+      try {
+        socket = new factory(this.machines.processStreamUrl(this.ref, this.id, after));
+      } catch {
+        return;
+      }
+      this.socket = socket;
+      socket.onmessage = (message) => {
+        try {
+          const event = JSON.parse(String(message.data));
+          if (event.type === "output" || event.type === "exit") queue.push(event);
+        } catch {
+        }
+        notify();
+      };
+      socket.onclose = () => {
+        closed = true;
+        notify();
+      };
+      socket.onerror = () => {
+        closed = true;
+        notify();
+      };
+      try {
+        for (; ; ) {
+          const next = queue.shift();
+          if (next) {
+            yield next;
+            if (next.type === "exit") return;
+            continue;
+          }
+          if (closed) return;
+          await new Promise((resolve2) => {
+            wake = resolve2;
+          });
+        }
+      } finally {
+        this.socket = null;
+        if (socket.readyState === 0 || socket.readyState === 1) socket.close();
+      }
+    }
+  };
+  var MachinesNamespace = class {
+    constructor(http, options = {}) {
+      __publicField(this, "http", http);
+      __publicField(this, "options", options);
+      __publicField(this, "pollWaitSeconds");
+      __publicField(this, "processes");
+      __publicField(this, "files");
+      __publicField(this, "previews");
+      __publicField(this, "browser");
+      __publicField(this, "consents");
+      __publicField(this, "pod");
+      var _a;
+      this.pollWaitSeconds = (_a = options.pollWaitSeconds) != null ? _a : 20;
+      this.processes = new MachineProcessesApi(this);
+      this.files = new MachineFilesApi(this);
+      this.previews = new MachinePreviewsApi(this);
+      this.browser = new MachineBrowserApi(this);
+      this.consents = new MachineConsentsApi(this);
+      this.pod = new PodMachinesApi(this);
+    }
+    /** @internal A request, with a consent refusal turned into its own error. */
+    async call(method, path, options = {}) {
+      try {
+        return await this.http.request(method, path, options);
+      } catch (error) {
+        throw this.translate(error);
+      }
+    }
+    /** @internal `call`, for a response that is bytes. */
+    async bytes(path, headers) {
+      try {
+        return await this.http.requestBytesResponse("GET", path, { headers });
+      } catch (error) {
+        throw this.translate(error);
+      }
+    }
+    /** The page where a person says whether an app may use their machine. */
+    consentUrl(appId) {
+      var _a;
+      const origin = (_a = this.options.hostOrigin) != null ? _a : "";
+      return `${origin}/consent/machine?app=${encodeURIComponent(appId)}`;
+    }
+    translate(error) {
+      if (error instanceof ApiError && error.code === MACHINE_CONSENT_REQUIRED) {
+        const details = error.details;
+        const appId = typeof (details == null ? void 0 : details.app_id) === "string" ? details.app_id : "";
+        return new MachineConsentRequiredError(appId, this.consentUrl(appId), error);
+      }
+      return error;
+    }
+    /** @internal */
+    webSocketFactory() {
+      if (this.options.WebSocket !== void 0) return this.options.WebSocket;
+      const global2 = globalThis.WebSocket;
+      return global2 != null ? global2 : null;
+    }
+    /** @internal The URL of a process's output socket. */
+    processStreamUrl(ref, processId, after = 0) {
+      var _a, _b;
+      const query = new URLSearchParams();
+      if (after) query.set("after", String(after));
+      const token = (_b = (_a = this.options).bearerToken) == null ? void 0 : _b.call(_a);
+      if (token) query.set("access_token", token);
+      const base = this.http.getBaseUrl().replace(/^http/, "ws");
+      const encoded = query.toString();
+      const suffix = encoded ? `?${encoded}` : "";
+      return `${base}${machinePath(ref)}/processes/${encodeURIComponent(processId)}/stream${suffix}`;
+    }
+    /** The person's own default machine. */
+    me() {
+      return this.get("me");
+    }
+    get(ref) {
+      return this.call("GET", machinePath(ref));
+    }
+    /** Every machine the caller can see, or only a pod's. */
+    async list(options = {}) {
+      const response = await this.call("GET", "/machines", {
+        params: { pod_id: options.podId }
+      });
+      return response.machines;
+    }
+    /**
+     * Whether the machine is ready, without starting anything.
+     *
+     * `ready` it is running; `downloading` it is fetching its image, which the
+     * first start after an update does; `starting` it is coming up; `asleep` it
+     * is not running and starts on first use; `unavailable` it could not be asked.
+     */
+    startup(ref) {
+      return this.call("GET", `${machinePath(ref)}/startup`);
+    }
+    /** Let the machine go to sleep now rather than when it idles out. */
+    release(ref) {
+      return this.call("POST", `${machinePath(ref)}:release`);
+    }
+    restart(ref) {
+      return this.call("POST", `${machinePath(ref)}:restart`);
+    }
+    /**
+     * Put parts of a machine back as they started. `home` erases files and
+     * needs `confirm`; `forgetLogins` also signs the browser out.
+     */
+    reset(ref, options) {
+      return this.call("POST", `${machinePath(ref)}:reset`, {
+        body: {
+          scopes: options.scopes,
+          ...options.confirm !== void 0 ? { confirm: options.confirm } : {},
+          ...options.forgetLogins !== void 0 ? { forget_logins: options.forgetLogins } : {}
+        }
+      });
+    }
+    /** The sizes and limits the caller's plan allows. */
+    policy(options = {}) {
+      return this.call("GET", "/machines:policy", { params: { pod_id: options.podId } });
+    }
+    /** Start a command and follow it: see `MachineExecution`. */
+    async exec(ref, options) {
+      const process2 = await this.processes.start(ref, options);
+      return new MachineExecution(this, ref, process2);
+    }
+  };
+  function machinePath(ref) {
+    return `/machines/${machinePathRef(ref)}`;
+  }
+  var MachineProcessesApi = class {
+    constructor(machines) {
+      __publicField(this, "machines", machines);
+    }
+    start(ref, options) {
+      return this.machines.call("POST", `${machinePath(ref)}/processes`, {
+        body: {
+          command: options.command,
+          cwd: options.cwd,
+          env: options.env,
+          tty: options.tty,
+          timeout_seconds: options.timeoutSeconds,
+          service: options.service,
+          restart_on_resume: options.restartOnResume,
+          run_id: options.runId
+        }
+      });
+    }
+    async list(ref) {
+      const response = await this.machines.call(
+        "GET",
+        `${machinePath(ref)}/processes`
+      );
+      return response.processes;
+    }
+    get(ref, processId) {
+      return this.machines.call("GET", processPath(ref, processId));
+    }
+    /** A page of output after `after`, waiting up to `waitSeconds` for some. */
+    output(ref, processId, options = {}) {
+      return this.machines.call("GET", `${processPath(ref, processId)}/output`, {
+        params: { after: options.after || void 0, wait_seconds: options.waitSeconds || void 0 }
+      });
+    }
+    input(ref, processId, input) {
+      return this.machines.call("POST", `${processPath(ref, processId)}:input`, {
+        body: "data" in input ? { data: input.data } : { data_base64: input.dataBase64 }
+      });
+    }
+    resize(ref, processId, size) {
+      return this.machines.call("POST", `${processPath(ref, processId)}:resize`, { body: size });
+    }
+    kill(ref, processId) {
+      return this.machines.call("DELETE", processPath(ref, processId));
+    }
+  };
+  function processPath(ref, processId) {
+    return `${machinePath(ref)}/processes/${encodeURIComponent(processId)}`;
+  }
+  var MachineFilesApi = class {
+    constructor(machines) {
+      __publicField(this, "machines", machines);
+    }
+    /**
+     * One directory. Does not start a paused machine unless `wake` is set,
+     * which is the point of `sleeping`: a file pane that started a machine on
+     * every render would hold compute open for as long as it was on screen.
+     */
+    list(ref, options = {}) {
+      return this.machines.call("GET", `${machinePath(ref)}/files`, {
+        params: {
+          path: options.path || void 0,
+          wake: options.wake || void 0,
+          // From a previous response's `next_after`.
+          after: options.after || void 0
+        }
+      });
+    }
+    stat(ref, path) {
+      return this.machines.call("GET", `${machinePath(ref)}/files:stat`, { params: { path } });
+    }
+    /**
+     * A file, or a slice of one. `range` sends an HTTP `Range` and gets a 206
+     * back, which is how a file past the server's single-read ceiling is
+     * reachable at all; `readWhole` does that for you.
+     */
+    async read(ref, path, options = {}) {
+      const answer = await this.machines.bytes(
+        contentPath(ref, path, options),
+        options.range ? rangeHeader(options.range) : void 0
+      );
+      return answer.blob;
+    }
+    /**
+     * A whole file, however big, in as many requests as that takes.
+     *
+     * The server caps one read at 8 MiB. Ranges are requested in order and
+     * stitched until the server returns a short slice, so the size is
+     * discovered rather than trusted: `sizeBytes` is only a hint that lets a
+     * small file skip straight to one unranged read, and 0 is always correct.
+     * `chunk` is clamped to the ceiling, because asking for more got 8 MiB back
+     * and advanced the cursor past bytes never read.
+     */
+    async readWhole(ref, path, sizeBytes = 0, chunk = MAX_READ_BYTES) {
+      const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
+      const parts = [];
+      let start = 0;
+      if (sizeBytes > 0 && sizeBytes <= step) {
+        const only = await this.read(ref, path);
+        if (only.size < MAX_READ_BYTES) return only;
+        parts.push(only);
+        start = only.size;
+      }
+      for (; ; ) {
+        let part;
+        let honoured;
+        try {
+          const answer = await this.machines.bytes(
+            contentPath(ref, path),
+            rangeHeader({ start, end: start + step - 1 })
+          );
+          part = answer.blob;
+          honoured = rangeHonoured(answer.status, answer.contentRange, start);
+        } catch (error) {
+          if (error instanceof ApiError && error.statusCode === 416) break;
+          throw error;
+        }
+        if (!honoured) {
+          if (start === 0 && part.size < MAX_READ_BYTES) return part;
+          throw new Error(
+            `The server ignored the Range header reading "${path}" at byte ${start}; stopping rather than stitching repeated copies of the file.`
+          );
+        }
+        if (part.size === 0) break;
+        parts.push(part);
+        start += part.size;
+        if (part.size < step) break;
+      }
+      return new Blob(parts);
+    }
+    /** Write a file, replacing whatever was there. */
+    write(ref, path, content) {
+      return this.machines.call("PUT", `${machinePath(ref)}/files/content`, {
+        params: { path },
+        rawBody: content,
+        headers: { "Content-Type": "application/octet-stream" }
+      });
+    }
+    delete(ref, path, options = {}) {
+      return this.machines.call("DELETE", `${machinePath(ref)}/files`, {
+        params: { path, recursive: options.recursive || void 0 }
+      });
+    }
+    move(ref, source, destination) {
+      return this.machines.call("POST", `${machinePath(ref)}/files:move`, {
+        body: { source, destination }
+      });
+    }
+    /** Copy between the machine and a pod's files, in either direction. */
+    sync(ref, options) {
+      return this.machines.call("POST", `${machinePath(ref)}/files:sync`, {
+        body: {
+          direction: options.direction,
+          machine_path: options.machinePath,
+          pod_id: options.podId,
+          pod_path: options.podPath
+        }
+      });
+    }
+  };
+  function contentPath(ref, path, options = {}) {
+    const query = new URLSearchParams({ path });
+    if (options.offset) query.set("offset", String(options.offset));
+    if (options.length) query.set("length", String(options.length));
+    return `${machinePath(ref)}/files:content?${query.toString()}`;
+  }
+  var MachinePreviewsApi = class {
+    constructor(machines) {
+      __publicField(this, "machines", machines);
+    }
+    /**
+     * A URL for a port on the machine. `private` previews ask whoever opens
+     * them to be signed in as somebody who may use the machine; `link` ones
+     * work for anyone holding the URL until they expire or are revoked.
+     */
+    create(ref, options) {
+      var _a;
+      return this.machines.call("POST", `${machinePath(ref)}/previews`, {
+        body: {
+          port: options.port,
+          visibility: (_a = options.visibility) != null ? _a : "private",
+          ...options.ttlSeconds !== void 0 ? { ttl_seconds: options.ttlSeconds } : {}
+        }
+      });
+    }
+    async list(ref) {
+      const response = await this.machines.call(
+        "GET",
+        `${machinePath(ref)}/previews`
+      );
+      return response.previews;
+    }
+    revoke(ref, previewId) {
+      return this.machines.call(
+        "DELETE",
+        `${machinePath(ref)}/previews/${encodeURIComponent(previewId)}`
+      );
+    }
+  };
+  var MachineBrowserApi = class {
+    constructor(machines) {
+      __publicField(this, "machines", machines);
+    }
+    /** Whether the machine's browser can be watched, without starting anything. */
+    status(ref) {
+      return this.machines.call("GET", `${machinePath(ref)}/browser`);
+    }
+    /**
+     * A signed, short-lived URL for the live browser view. Minting one starts
+     * the machine if it is paused, so ask whether it is awake first.
+     */
+    access(ref, options = {}) {
+      var _a;
+      return this.machines.call("POST", `${machinePath(ref)}/browser:access`, {
+        body: { ttl_seconds: (_a = options.ttlSeconds) != null ? _a : 1800 }
+      });
+    }
+    /**
+     * Fit the browser's display to the pane showing it. `size` is what it
+     * became, which may be smaller than asked; `null` when nothing could be
+     * resized, which is not an error.
+     */
+    display(ref, size) {
+      return this.machines.call("POST", `${machinePath(ref)}/browser:display`, { body: size });
+    }
+    navigate(ref, url) {
+      return this.machines.call("POST", `${machinePath(ref)}/browser:navigate`, { body: { url } });
+    }
+    /** What page the browser signing in to `origin` is actually showing. */
+    currentPageUrl(ref, origin) {
+      return this.machines.call("GET", `${machinePath(ref)}/browser/current-page-url`, {
+        params: { origin }
+      });
+    }
+    /** The sites the browser is signed in to. `wake` starts a paused machine to ask. */
+    logins(ref, options = {}) {
+      return this.machines.call("GET", `${machinePath(ref)}/browser/logins`, {
+        params: { wake: options.wake || void 0 }
+      });
+    }
+    /** Sign the browser out of a site. */
+    forgetLogin(ref, site) {
+      return this.machines.call(
+        "DELETE",
+        `${machinePath(ref)}/browser/logins/${encodeURIComponent(site)}`
+      );
+    }
+  };
+  var MachineConsentsApi = class {
+    constructor(machines) {
+      __publicField(this, "machines", machines);
+    }
+    async list() {
+      const response = await this.machines.call("GET", "/machine-consents");
+      return response.consents;
+    }
+    grant(appId) {
+      return this.machines.call("POST", "/machine-consents", { body: { app_id: appId } });
+    }
+    revoke(appId) {
+      return this.machines.call("DELETE", `/machine-consents/${encodeURIComponent(appId)}`);
+    }
+  };
+  var PodMachinesApi = class {
+    constructor(machines) {
+      __publicField(this, "machines", machines);
+    }
+    create(podId, options) {
+      const body = {
+        name: options.name,
+        display_name: options.displayName,
+        template: options.template,
+        size: options.size,
+        visibility: options.visibility,
+        run_slots: options.runSlots
+      };
+      return this.machines.call("POST", podMachinesPath(podId), { body });
+    }
+    update(podId, name, changes) {
+      const body = {};
+      if (changes.displayName !== void 0) body.display_name = changes.displayName;
+      if (changes.size !== void 0) body.size = changes.size;
+      if (changes.visibility !== void 0) body.visibility = changes.visibility;
+      if (changes.runSlots !== void 0) body.run_slots = changes.runSlots;
+      return this.machines.call("PATCH", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`, {
+        body
+      });
+    }
+    delete(podId, name) {
+      return this.machines.call("DELETE", `${podMachinesPath(podId)}/${encodeURIComponent(name)}`);
+    }
+    grants(podId, name) {
+      return this.machines.call(
+        "GET",
+        `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`
+      );
+    }
+    setGrants(podId, name, grants) {
+      return this.machines.call(
+        "PUT",
+        `${podMachinesPath(podId)}/${encodeURIComponent(name)}/grants`,
+        { body: grants }
+      );
+    }
+  };
+  function podMachinesPath(podId) {
+    return `/pods/${encodeURIComponent(podId)}/machines`;
+  }
+
+  // src/namespaces/web-logins.ts
   var WebLoginsNamespace = class {
     constructor(http) {
       __publicField(this, "http", http);
@@ -21244,172 +21813,6 @@ var LemmaClient = (() => {
         `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
         { body: { signed_in: options.signedIn } }
       );
-    }
-  };
-  var WorkspaceNamespace = class {
-    constructor(http) {
-      __publicField(this, "http", http);
-    }
-    listFiles(options = {}) {
-      return this.http.request("GET", "/workspace/files", {
-        params: {
-          ...options.path ? { path: options.path } : {},
-          ...options.wake ? { wake: true } : {},
-          // From a previous response's `nextAfter`. A directory bigger than one
-          // page was otherwise a dead end.
-          ...options.after ? { after: options.after } : {}
-        }
-      });
-    }
-    statFile(path) {
-      return this.http.request("GET", "/workspace/files:stat", {
-        params: { path }
-      });
-    }
-    /**
-     * A signed, short-lived URL for the live browser view.
-     *
-     * Minting one starts the workspace if it is paused, so ask whether it is
-     * awake before calling this rather than after.
-     */
-    browserAccess(ttlSeconds = 1800) {
-      return this.http.request("POST", "/workspace/apps/browser/access", {
-        body: { ttl_seconds: ttlSeconds }
-      });
-    }
-    /**
-     * Whether this person's computer is ready, without starting anything.
-     *
-     * `ready` it is running; `downloading` it is fetching its image, which the
-     * first start after an update does; `starting` it is coming up; `asleep` it
-     * is not running and starts on first use; `unavailable` it could not be asked.
-     * While `downloading`, `done_mb` and `total_mb` say how far it has got, once
-     * that can be measured.
-     */
-    status() {
-      return this.http.request("GET", "/workspace/status");
-    }
-    /**
-     * Whether the browser can be watched, without starting anything.
-     *
-     * `asleep` the computer is paused; `stopped` it is up but the browser is not
-     * (its resting state after two idle minutes); `running` there is one now;
-     * `unavailable` the relay did not answer, which on an older image stays true
-     * until it is replaced; `unsupported` this kind of computer cannot do it.
-     */
-    browserStatus() {
-      return this.http.request("GET", "/workspace/browser/status");
-    }
-    /**
-     * What page the browser signing in to `origin` is actually showing.
-     *
-     * Polled by the sign-in page's anti-phishing host display while its VNC
-     * pane is open: VNC is pixels, not events, so there is nothing on the wire
-     * to react to the way the JSON stream this replaced had with its `url`
-     * message on every navigation. `null` when nothing can be read.
-     */
-    browserCurrentPageUrl(origin) {
-      return this.http.request("GET", "/workspace/browser/current-page-url", {
-        params: { origin }
-      });
-    }
-    /**
-     * Fit the workspace display to the pane showing it.
-     *
-     * The pane is a box of an arbitrary shape and the display is a real screen
-     * with a fixed size, so one of them has to move. Scaling the picture is
-     * what made the browser a small letterboxed rectangle; resizing the display
-     * means the pixels sent are the pixels shown, and a narrow pane gets a
-     * narrow *viewport* — so sites serve their mobile layout on a phone.
-     *
-     * `size` is what the display actually became, which may be smaller than
-     * asked for: the sandbox's framebuffer is a ceiling. `null` when nothing
-     * could be resized (a sleeping computer, an older image), which is not an
-     * error — the pane keeps the picture it had.
-     */
-    browserResizeDisplay(width, height) {
-      return this.http.request("POST", "/workspace/browser/display-size", {
-        body: { width, height }
-      });
-    }
-    /**
-     * Raw bytes of one file, from `offset`, at most `length` bytes.
-     *
-     * The query is built into the path because `requestBytes` takes no options —
-     * it is the byte-returning sibling of `request`, not a full request builder.
-     */
-    /**
-     * A file, or a slice of one.
-     *
-     * `range` sends an HTTP `Range` header and gets a 206 back. That is how a
-     * file larger than the server's single-read ceiling is reachable at all:
-     * ask for it a piece at a time. See `readWholeFile`, which does that for
-     * you.
-     */
-    readFile(path, options = {}) {
-      return this.http.requestBytes("GET", contentPath(path, options), {
-        headers: options.range ? rangeHeader(options.range) : void 0
-      });
-    }
-    /**
-     * A whole file, however big, in as many requests as that takes.
-     *
-     * The server caps one read at 8 MiB, which used to mean a larger file
-     * could be listed and never opened — the pane offered a download that
-     * silently returned the first 8 MiB under the full name. Ranges are
-     * requested in order and stitched, so what a person saves is the file.
-     *
-     * **The size is discovered, not trusted.** This took a `sizeBytes` and
-     * stopped there, which made the caller's bookkeeping load-bearing for
-     * whether a download was complete. The explorer's was wrong on the case
-     * that matters: the open file lives in the URL and its size lived in React
-     * state, so a reload restored the path with a size of 0 and every download
-     * after it truncated at 8 MiB, under the whole file's name. Reading until
-     * the server returns a short slice needs nobody to have remembered
-     * anything. `sizeBytes` survives only as a hint that lets a small file skip
-     * straight to a single unranged read; passing 0 or nothing is correct.
-     *
-     * `chunk` is clamped to the server's ceiling rather than trusted either.
-     * Asking for 64 MiB got 8 MiB back and advanced the cursor by 64, so seven
-     * eighths of the file was skipped and the result was a corrupt download of
-     * roughly the right length — the same failure, reintroduced by the
-     * parameter meant to tune it.
-     */
-    async readWholeFile(path, sizeBytes = 0, chunk = MAX_READ_BYTES) {
-      const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
-      const parts = [];
-      let start = 0;
-      if (sizeBytes > 0 && sizeBytes <= step) {
-        const only = await this.readFile(path);
-        if (only.size < MAX_READ_BYTES) return only;
-        parts.push(only);
-        start = only.size;
-      }
-      for (; ; ) {
-        let part;
-        let honoured;
-        try {
-          const answer = await this.http.requestBytesResponse("GET", contentPath(path), {
-            headers: rangeHeader({ start, end: start + step - 1 })
-          });
-          part = answer.blob;
-          honoured = rangeHonoured(answer.status, answer.contentRange, start);
-        } catch (error) {
-          if (error instanceof ApiError && error.statusCode === 416) break;
-          throw error;
-        }
-        if (!honoured) {
-          if (start === 0 && part.size < MAX_READ_BYTES) return part;
-          throw new Error(
-            `The server ignored the Range header reading "${path}" at byte ${start}; stopping rather than stitching repeated copies of the file.`
-          );
-        }
-        if (part.size === 0) break;
-        parts.push(part);
-        start += part.size;
-        if (part.size < step) break;
-      }
-      return new Blob(parts);
     }
   };
 
@@ -21934,6 +22337,13 @@ var LemmaClient = (() => {
   };
 
   // src/client.ts
+  function hostOriginOf(authUrl) {
+    try {
+      return new URL(authUrl).origin;
+    } catch {
+      return void 0;
+    }
+  }
   var LemmaClient = class _LemmaClient {
     constructor(overrides = {}, internalOptions = {}) {
       __publicField(this, "_config");
@@ -21955,7 +22365,8 @@ var LemmaClient = (() => {
       __publicField(this, "workflows");
       __publicField(this, "apps");
       __publicField(this, "widgets");
-      __publicField(this, "workspace");
+      /** The computers a person and their pods run commands, files and a browser on. */
+      __publicField(this, "machines");
       __publicField(this, "webLogins");
       __publicField(this, "connectors");
       __publicField(this, "resourceAccess");
@@ -22016,7 +22427,10 @@ var LemmaClient = (() => {
       this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
-      this.workspace = new WorkspaceNamespace(this._http);
+      this.machines = new MachinesNamespace(this._http, {
+        hostOrigin: hostOriginOf(this._config.authUrl),
+        bearerToken: () => this.auth.getBearerToken()
+      });
       this.webLogins = new WebLoginsNamespace(this._http);
       this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
       this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
@@ -22299,6 +22713,8 @@ var LemmaClient = (() => {
       ApiError,
       ConnectionRequiredError,
       isConnectionRequiredError,
+      MACHINE_CONSENT_MESSAGE_TYPE,
+      MachineConsentRequiredError,
       POD_DEFAULT_AGENT_SELECTOR,
       LEMMA_APP_THEME_MESSAGE_TYPE,
       LEMMA_THEME_EVENT,

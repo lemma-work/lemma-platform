@@ -29,7 +29,9 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "admin",
     "scheduler.job",  # internal scheduler ops
     "usage.",
-    "workspace.",  # workspace runtime is driven by the backend
+    # Deprecated shims of /machines, kept for old clients; the Machines facade
+    # (lemma_sdk/resources/machines.py) wraps the machine.* operations instead.
+    "workspace.",
     "app.public",
     "health_check",  # liveness probe
     # OAuth/consent browser callbacks — never called by a client

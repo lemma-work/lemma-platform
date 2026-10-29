@@ -42,6 +42,7 @@
     "app/modules/identity/infrastructure/organization_repositories.py::OrganizationRepository.count_members_with_role_for_update::unbounded-read": 1,
     "app/modules/identity/infrastructure/organization_repositories.py::OrganizationRepository.list_auto_join_organizations_by_email_domain::unbounded-read": 1,
     "app/modules/identity/services/organization_navigation.py::_memberships::unbounded-read": 1,
+    "app/modules/pod/contracts/provisioning.py::organization_pod_ids_query::unbounded-statement": 1,
     "app/modules/pod/infrastructure/pod_administration_queries.py::count_members_who_can::unbounded-read": 1,
     "app/modules/pod/infrastructure/pod_role_repository.py::PodRoleQueryRepository.get_member_role_names::unbounded-read": 1,
     "app/modules/pod_bundle/infrastructure/state_store.py::PodBundleStateStore._sync_steps::unbounded-read": 1,
@@ -52,6 +53,11 @@
     "app/modules/schedule/repositories/schedule_repository.py::ScheduleRepository.list_all_by_pod::unbounded-read": 1,
     "app/modules/schedule/repositories/schedule_repository.py::ScheduleRepository.lock_breaker_candidates::unbounded-read": 1,
     "app/modules/usage/infrastructure/models.py::_uncount_windows_of::unbounded-read": 1,
-    "app/modules/workspace/infrastructure/sandbox_repository.py::SandboxRepository.list_for_owner::unbounded-read": 1
+    "app/modules/workspace/infrastructure/machine_repository.py::MachineRepository._select::unbounded-read": 1,
+    "app/modules/workspace/infrastructure/sandbox_repository.py::SandboxRepository.list_for_owner::unbounded-read": 1,
+    "app/modules/workspace/services/compute_meter.py::close_sessions::unbounded-read": 1,
+    "app/modules/workspace/services/login_backup.py::LoginBackups._stale::unbounded-read": 1,
+    "app/modules/workspace/services/login_backup.py::LoginBackups.forget::unbounded-read": 1,
+    "app/modules/workspace/services/pod_machines.py::read_grants::unbounded-read": 1
   }
 }

@@ -31,7 +31,7 @@ async def web_fetch(
     ctx: RunContext[BaseAgentContext], request: WebFetchRequest
 ) -> WebFetchResponse:
     """
-    Capture web pages into your workspace so you can read them properly.
+    Capture web pages onto your machine so you can read them properly.
 
     Takes a *list* of URLs — fetch everything a question needs in one call.
     Each page is saved as readable markdown (optionally also PDF and a

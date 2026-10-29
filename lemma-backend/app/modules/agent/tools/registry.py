@@ -20,6 +20,7 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 )
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
+    machine_toolset,
     view_image_toolset,
     workspace_cli_toolset,
 )
@@ -125,8 +126,11 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     # that mentions voice is a prompt where finding it costs one call.
     AgentToolset.SPEECH,
 )
-EXTRA_TOOLSET_OBJECTS: tuple[AbstractToolset[ConversationContext], ...] = tuple(
-    _TOOLSET_BY_NAME[name] for name in EXTRA_TOOLSETS
+EXTRA_TOOLSET_OBJECTS: tuple[AbstractToolset[ConversationContext], ...] = (
+    *(_TOOLSET_BY_NAME[name] for name in EXTRA_TOOLSETS),
+    # Not a toolset of its own name: the machine tools come with WORKSPACE_CLI
+    # (see `resolve_agent_toolsets`) and are deferred for the pod's assistant.
+    machine_toolset,
 )
 
 
@@ -146,11 +150,14 @@ def resolve_agent_toolsets(
             continue
         seen.add(toolset_name)
         resolved.append(_TOOLSET_BY_NAME[toolset_name])
+        if toolset_name is AgentToolset.WORKSPACE_CLI:
+            resolved.append(machine_toolset)
     return resolved
 
 
 __all__ = [
     "POD_DEFAULT_AGENT_TOOLSETS",
+    "machine_toolset",
     "EXTRA_TOOLSETS",
     "EXTRA_TOOLSET_OBJECTS",
     "resolve_agent_toolsets",
