@@ -374,6 +374,8 @@ async def browser_view(
     Every refusal goes through `_refuse`, which accepts the socket before
     closing it. That is the opposite of what it should be, and is the only way
     a browser is ever told which refusal happened -- see `_refuse`.
+    Once the caller and the machine are known, the socket is accepted
+    outright, before the slow part -- see the comment there.
 
     `origin`, when given, means a sign-in: it steers the browser to that site
     before attaching, in a session named for it. `conversation`, when given
@@ -412,6 +414,18 @@ async def browser_view(
     if resolved is None:
         return
     machine_id = resolved.machine.id
+
+    # Accepted now, before anything slow, and that is for the *other* sockets
+    # on this page. A browser lets one WebSocket per host be CONNECTING at a
+    # time (RFC 6455 section 4.1), and everything below -- starting the
+    # browser, WebRTC's setup -- can take a cold start's worth of seconds. Held
+    # in the handshake that long, this socket queued the terminal's stream and
+    # the pod's live socket behind it: a Terminal tab stuck on "Starting a
+    # shell..." beside a screen saying "Connecting to the screen...". Every
+    # refusal from here on goes through `_refuse`, which closes an accepted
+    # socket with its code just as well, so nothing is lost by answering
+    # early -- the pane still hears which refusal it was.
+    await websocket.accept()
 
     try:
         target = await service.open_vnc_session(
@@ -518,8 +532,7 @@ async def _watch(
     rtc: PreparedRtc | None,
     machine_id: UUID,
 ) -> None:
-    """Accept the socket and carry it, keeping the machine awake meanwhile."""
-    await websocket.accept()
+    """Carry the accepted socket, keeping the machine awake meanwhile."""
     # Held awake for as long as somebody is looking. The idle sweep measures
     # from the last time a caller asked for the sandbox, and watching is not a
     # tool call -- so a person reading a page, or working through a sign-in,

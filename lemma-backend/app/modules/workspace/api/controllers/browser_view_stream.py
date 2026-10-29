@@ -2,9 +2,11 @@
 
 Its own module so the socket controller stays one route long. Setting up WebRTC
 has a part that can refuse -- TURN credentials, which a deployment may not
-have -- and a part that runs once the socket is accepted; the controller calls
-the first before `accept()` so a refusal arrives as a close code the pane
-reads, and the second after.
+have -- and a part that carries the signalling; the controller calls the first
+before it starts carrying, so a refusal arrives as a close code the pane reads
+rather than as a socket that opened onto nothing. The socket is already
+accepted by then (the controller says why), and `refuse` closes an accepted
+socket with its code just the same.
 """
 
 from __future__ import annotations
@@ -52,7 +54,7 @@ async def prepare_rtc(
     viewer: str | None,
     may_control: bool,
 ) -> PreparedRtc | None:
-    """Everything a WebRTC view needs before its socket is accepted.
+    """Everything a WebRTC view needs before its signalling is carried.
 
     `None`, logged, when there is no relay to be had: not a fault, and the
     caller turns it into `CLOSE_USE_VNC`, on which the pane switches to VNC.
@@ -99,7 +101,7 @@ async def setup_rtc(
     viewer: str | None,
     may_control: bool,
 ) -> tuple[bool, PreparedRtc | None]:
-    """WebRTC's setup, before the socket is accepted: whether it was refused.
+    """WebRTC's setup, before anything is carried: whether it was refused.
 
     A refusal is `CLOSE_USE_VNC`, not a fault: the pane switches to VNC on it.
     `may_control` is the viewer's own access to the machine -- a watcher of a
