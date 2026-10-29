@@ -331,3 +331,64 @@ def test_version_needs_no_browser(tmp_path: Path) -> None:
     result = _run(environment, "--version")
 
     assert result.returncode == 0, result
+
+
+class TestOneDaemonStartAtATime:
+    """A command that would start a daemon takes the session's start lock.
+
+    Two starts at once left two daemons and two Chromes on one profile, and the
+    browser that was running could no longer be found. `flock` is stood in for
+    by a script that records how it was called and then runs the command, as
+    the real one does -- macOS, where these also run, has none.
+    """
+
+    def _with_flock(self, tmp_path: Path) -> tuple[dict[str, str], Path]:
+        environment = _workspace(tmp_path, config=True, display=True)
+        calls = tmp_path / "flock-calls"
+        flock = tmp_path / "bin" / "flock"
+        flock.write_text(
+            f'#!/bin/sh\necho "$*" >> "{calls}"\n'
+            'while [ "${1#-}" != "$1" ]; do\n'
+            '  case "$1" in -w) shift 2 ;; *) shift ;; esac\n'
+            "done\n"
+            'shift\nexec "$@"\n'
+        )
+        flock.chmod(0o755)
+        environment["XDG_RUNTIME_DIR"] = str(tmp_path / "run")
+        return environment, calls
+
+    def test_with_no_daemon_the_command_waits_for_the_sessions_start_lock(
+        self, tmp_path: Path
+    ) -> None:
+        environment, calls = self._with_flock(tmp_path)
+
+        result = _run(
+            environment, "--session", "login-github.com", "open", "about:blank"
+        )
+
+        assert "open about:blank" in result.stdout
+        [call] = calls.read_text().splitlines()
+        assert call.startswith("-o -w ")
+        assert call.split()[3].endswith("/agent-browser/login-github.com.start.lock")
+
+    def test_the_session_comes_from_the_environment_without_the_flag(
+        self, tmp_path: Path
+    ) -> None:
+        environment, calls = self._with_flock(tmp_path)
+        environment["AGENT_BROWSER_SESSION"] = "workspace"
+
+        _run(environment, "get", "url")
+
+        assert calls.read_text().split()[3].endswith("/workspace.start.lock")
+
+    def test_with_the_daemon_up_nothing_waits(self, tmp_path: Path) -> None:
+        environment, calls = self._with_flock(tmp_path)
+        environment["AGENT_BROWSER_SESSION"] = "workspace"
+        daemons = tmp_path / "run" / "agent-browser"
+        daemons.mkdir(parents=True)
+        (daemons / "workspace.pid").write_text(str(os.getpid()))
+
+        result = _run(environment, "get", "url")
+
+        assert "get url" in result.stdout
+        assert not calls.exists()
