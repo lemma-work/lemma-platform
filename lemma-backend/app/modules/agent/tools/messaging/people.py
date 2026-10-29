@@ -31,11 +31,13 @@ from app.modules.agent.tools.messaging.models import (
     PodMemberSummary,
 )
 from app.modules.agent_surfaces.contracts import direct_messages
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.contracts import (
     NewLine,
     Principal,
     Sender,
     call_for_person,
+    channel_by_id,
     direct_channel,
     post,
 )
@@ -47,10 +49,6 @@ from app.modules.pod.contracts import directory as pod_directory
 CALLED_IN = (
     "A contact you look after needs a person -- their channel is in Contacts, "
     "waiting on one, with what the bot said."
-)
-CALLED_IN_GROUP = (
-    "Somebody in a group you look after needs a person -- open the group in "
-    "Channels to see what they asked and what the bot said."
 )
 
 
@@ -97,7 +95,11 @@ async def ask_a_person(
         )
     return AskAPersonResponse(
         success=True,
-        message="Done: a member has been asked to step in. Tell them someone will reply.",
+        message=(
+            "Passed on: a member has been asked, with what they wrote. Nothing "
+            "has been done yet -- tell them you have passed it on and someone "
+            "will reply, and do not say it is done, saved or added."
+        ),
     )
 
 
@@ -111,7 +113,10 @@ async def call_a_person_in(
 ) -> bool:
     """The member who looks after the contact hears they need a person, in
     their own channel, and the contact's own channel asks for one (a group's
-    has no case to ask in). Whether the conversation is in a channel."""
+    has no case to ask in). Whether the conversation is in a channel.
+
+    In a group there is no case to carry the why, so the member is told which
+    group, and that nothing was done for the guest."""
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
         channel_id = await channel_conversations.channel_of_conversation(
             uow, conversation_id
@@ -130,7 +135,9 @@ async def call_a_person_in(
                     effective_agent_id(None, pod_id=pod_id),
                     on_behalf_of=Principal.member(keeper_user_id),
                 ),
-                text=CALLED_IN if in_contacts else CALLED_IN_GROUP,
+                text=CALLED_IN
+                if in_contacts
+                else await _called_in_group(uow, channel_id=channel_id),
                 client_message_id=line_client_id(f"ask-a-person:{key}")
                 if key
                 else None,
@@ -138,6 +145,21 @@ async def call_a_person_in(
         )
         await uow.commit()
     return True
+
+
+async def _called_in_group(uow: SqlAlchemyUnitOfWork, *, channel_id: UUID) -> str:
+    """What a member who looks after a group is told when a guest needs them.
+
+    Where, and that nothing was done -- never what they wrote: like
+    ``CALLED_IN``, this line is the member's and would outlive the guest if
+    they were forgotten, while their own line in the group goes with them."""
+    group = await channel_by_id(uow, channel_id)
+    where = f"“{group.title}”" if group is not None and group.title else "a group"
+    return (
+        f"Somebody outside the pod in {where} asked for something the bot "
+        f"could not do, so nothing was done for them. Open {where} to see "
+        "what they asked and answer them there."
+    )
 
 
 async def list_pod_members(
@@ -238,7 +260,6 @@ async def _reachable_on(
 
 __all__ = [
     "CALLED_IN",
-    "CALLED_IN_GROUP",
     "ask_a_person",
     "call_a_person_in",
     "list_pod_members",
