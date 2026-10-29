@@ -341,7 +341,8 @@ async def test_a_clients_question_and_the_bots_answer_are_the_groups_lines(
     )
     note = notes.json()["items"][-1]["text"]
     assert "nothing was done for them" in note
-    assert "order 1182" not in note
+    # Named by the group ("Acme order 1182"), never by what Tiago asked.
+    assert "by Friday" not in note
 
 
 async def _file(
