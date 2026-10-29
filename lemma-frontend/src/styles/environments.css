@@ -326,6 +326,7 @@
     right: 0;
     margin-left: auto;
     background: var(--paper);
+    box-shadow: -10px 0 8px -2px var(--paper);
 }
 .computer-view .envdock__tab:hover:not(:disabled),
 .computer-view .envdock__toggle:hover {
@@ -587,6 +588,12 @@
     }
     .envs__main:has(.envdock--open) .envs__stage {
         margin-bottom: 0;
+    }
+    /* Clear of the floating Ask pill, which sits over the closed strip's
+       right end on a phone and took the click meant for Show. Open, the strip
+       is higher than the pill and the toggle goes back to the edge. */
+    .computer-view .envdock:not(.envdock--open) .envdock__toggle {
+        right: 96px;
     }
 }
 /* The rail overlay, opened from the bar. A sibling selector rather than a
