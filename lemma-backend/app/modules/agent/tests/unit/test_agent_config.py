@@ -93,6 +93,11 @@ EXPECTED = [
         60.0,
     ),
     (
+        "agent_model_stream_idle_timeout_seconds",
+        "AGENT_MODEL_STREAM_IDLE_TIMEOUT_SECONDS",
+        60.0,
+    ),
+    (
         "agent_history_compaction_timeout_seconds",
         "AGENT_HISTORY_COMPACTION_TIMEOUT_SECONDS",
         120.0,

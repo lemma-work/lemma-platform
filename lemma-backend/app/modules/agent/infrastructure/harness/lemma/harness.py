@@ -409,6 +409,7 @@ class PydanticAIHarness:
             agent_run_id=agent_run_id,
             should_stop=should_stop,
             pauses=_pauses(options.tools),
+            idle_seconds=agent_settings.agent_model_stream_idle_timeout_seconds,
         )
 
         node_loop = NodeLoop(

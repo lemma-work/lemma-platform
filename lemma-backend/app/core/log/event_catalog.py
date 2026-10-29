@@ -136,6 +136,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.message_replies.delivered': EventSpec('debug', frozenset({'conversation_id', 'started_new_run'})),
     'agent.mock_model.mock_llm_structured_output_required.diagnostic': EventSpec('debug', frozenset()),
     'agent.model_stream_budget.stream_abandoned.degraded': EventSpec('warning', frozenset({'elapsed_seconds', 'first_chunk', 'reason', 'url'})),
+    'agent.model_streaming.stream_stalled.degraded': EventSpec('warning', frozenset({'idle_seconds'})),
     'agent.module.system_lemma_models_will_be.observed': EventSpec('debug', frozenset()),
     'agent.module.system_models_cannot_back_a_spend_limit.degraded': EventSpec('warning', frozenset({'policy', 'unpriced_count', 'unpriced_models'})),
     'agent.outsider_runtime.fallback_skipped.degraded': EventSpec('warning', frozenset({'error_code', 'profile_id'})),

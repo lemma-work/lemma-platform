@@ -35,6 +35,7 @@ from app.core.domain.errors import DomainError
 __all__ = [
     "RETRYABLE_STATUS_CODES",
     "ModelResponseBudgetExceeded",
+    "ModelStreamStalled",
     "is_retryable_stream_error",
     "connection_failure_message",
     "local_model_server_down_message",
@@ -71,6 +72,17 @@ _TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
     httpx.TransportError,
     httpx2.TransportError,
 )
+
+
+class ModelStreamStalled(TimeoutError):
+    """A model response that had started went quiet past its idle bound.
+
+    Raised by the harness, not the transport: a provider sending empty
+    keep-alive chunks is making no progress while the bytes keep the per-chunk
+    read timeout from ever firing, and only the parsed stream says so. A
+    `TimeoutError`, so it is retried as a drop -- the same request, sent again,
+    usually streams.
+    """
 
 
 class ModelResponseBudgetExceeded(httpx2.ReadTimeout):

@@ -307,6 +307,17 @@ class AgentSettings(BaseSettings):
             "is told the model took too long. 0 disables it."
         ),
     )
+    agent_model_stream_idle_timeout_seconds: float = Field(
+        default=60.0,
+        description=(
+            "How long a model response, once it has started, may go without a "
+            "content, reasoning or tool-call delta before the attempt is "
+            "abandoned and retried. The per-chunk read timeout cannot see this: "
+            "a provider sending empty keep-alive chunks resets it forever. "
+            "Counted only after the first delta, so a model that thinks "
+            "silently before answering is not cut off. 0 disables it."
+        ),
+    )
     agent_model_http_max_connections: int = Field(
         default=100,
         description="Connection-pool ceiling per provider endpoint.",
