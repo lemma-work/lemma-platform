@@ -366,6 +366,7 @@ class AgentRunnerService:
                             ctx,
                             source_type=run.usage_source,
                             source_id=str(agent_run_id),
+                            parent_agent_run_id=run.parent_agent_run_id,
                         )
                         async with (
                             metering_execution(

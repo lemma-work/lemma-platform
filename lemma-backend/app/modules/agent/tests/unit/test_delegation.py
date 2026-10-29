@@ -141,3 +141,22 @@ async def test_without_waiting_it_starts_every_task_and_says_so(monkeypatch) -> 
         "call-1:1",
     ]
     assert service.spawned[1]["model"] == "fast-model"
+
+
+def test_a_sub_agents_spend_is_recorded_under_the_run_that_delegated_it() -> None:
+    from app.modules.agent.domain.entities import Conversation
+    from app.modules.agent.domain.value_objects import ConversationOrigin
+    from app.modules.agent.services.run_identity import delegated_by
+
+    parent_run = uuid4()
+    child = Conversation(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        parent_id=uuid4(),
+        parent_run_id=parent_run,
+        origin=ConversationOrigin.SUBAGENT,
+    )
+    assert delegated_by(child) == parent_run
+    # A conversation pinned under another is not a sub-agent's.
+    pinned = Conversation(user_id=uuid4(), pod_id=uuid4(), parent_run_id=parent_run)
+    assert delegated_by(pinned) is None

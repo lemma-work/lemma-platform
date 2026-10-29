@@ -18,6 +18,7 @@ from uuid import UUID
 
 from app.core.origin import Origin, current_origin
 from app.modules.agent.domain.run_waiters import run_work_origin
+from app.modules.agent.domain.value_objects import ConversationOrigin
 from app.modules.usage.contracts import UsageReservation
 
 if TYPE_CHECKING:
@@ -52,6 +53,9 @@ class RunIdentity:
     #: run starts, because the finalizer runs in a work item that has no origin
     #: of its own to inherit (``domain.run_waiters.run_work_origin``).
     origin: Origin | None = None
+    #: For a sub-agent's run, the parent run that delegated it: its usage is
+    #: recorded under that run too, so a delegation's cost rolls up to it.
+    parent_agent_run_id: UUID | None = None
 
     @classmethod
     def of_turn(
@@ -79,6 +83,7 @@ class RunIdentity:
             agent_id=conversation.agent_id,
             started_at=agent_run.started_at,
             usage_source=usage_source,
+            parent_agent_run_id=delegated_by(conversation),
             origin=current_origin()
             or run_work_origin(agent_run.state.kind, conversation, platform=platform),
         )
@@ -109,3 +114,10 @@ class RunIdentity:
     def with_memory_after_turn(self, memory_after_turn: bool) -> "RunIdentity":
         """The same run, once its context has said where its memory is kept."""
         return replace(self, memory_after_turn=memory_after_turn)
+
+
+def delegated_by(conversation: Conversation) -> UUID | None:
+    """The parent run a sub-agent's turns are spent for, if this is one."""
+    if conversation.origin is ConversationOrigin.SUBAGENT:
+        return conversation.parent_run_id
+    return None
