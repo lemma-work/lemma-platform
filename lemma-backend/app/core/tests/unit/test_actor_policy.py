@@ -51,7 +51,6 @@ def test_every_open_route_exists():
         ("PUT", "/usage/organizations/{organization_id}/contacts-cap"),
         ("POST", "/pods"),
         ("GET", "/web-logins"),
-        ("GET", "/workspace/files"),
     ],
 )
 def test_routes_that_act_as_the_person_stay_closed(method: str, template: str):

@@ -9,7 +9,6 @@ import {
   type MachineProcessEvent,
   type WebSocketFactory,
 } from "../namespaces/machines.js";
-import { WorkspaceNamespace } from "../namespaces/workspace.js";
 
 interface Asked {
   method: string;
@@ -54,51 +53,6 @@ describe("machine refs in paths", () => {
     const machines = await new MachinesNamespace(http).list({ podId: "p1" });
     expect(machines).toEqual([{ ref: "pod:p1/ci" }]);
     expect(asked[0].options.params).toEqual({ pod_id: "p1" });
-  });
-});
-
-describe("the deprecated workspace alias", () => {
-  it("asks /machines/me/startup for status", async () => {
-    const { http, asked } = fakeHttp({
-      "GET /machines/me/startup": { state: "downloading", done_mb: 10, total_mb: 40 },
-    });
-    const status = await new WorkspaceNamespace(http).status();
-    expect(asked[0].path).toBe("/machines/me/startup");
-    expect(status).toEqual({ state: "downloading", detail: null, done_mb: 10, total_mb: 40 });
-  });
-
-  it("keeps browserAccess's old answer, `app` included", async () => {
-    const { http, asked } = fakeHttp({
-      "POST /machines/me/browser:access": { url: "https://view.test/x", expires_at: "2026-10-22T00:00:00Z" },
-    });
-    const access = await new WorkspaceNamespace(http).browserAccess(60);
-    expect(asked[0].options.body).toEqual({ ttl_seconds: 60 });
-    expect(access).toEqual({ app: "browser", url: "https://view.test/x", expires_at: "2026-10-22T00:00:00Z" });
-  });
-
-  it("routes the browser and file calls to the default machine", async () => {
-    const { http, asked } = fakeHttp({
-      "GET /machines/me/browser": { state: "stopped" },
-      "POST /machines/me/browser:display": { size: "800x600" },
-      "GET /machines/me/browser/current-page-url": { url: null },
-      "GET /machines/me/files": { path: "/home/user", entries: [] },
-      "GET /machines/me/files:stat": { path: "/home/user/a" },
-    });
-    const workspace = new WorkspaceNamespace(http);
-    expect(await workspace.browserStatus()).toEqual({ state: "stopped", detail: null });
-    await workspace.browserResizeDisplay(800, 600);
-    await workspace.browserCurrentPageUrl("https://site.test");
-    await workspace.listFiles({ path: "/home/user", after: "b" });
-    await workspace.statFile("/home/user/a");
-    expect(asked.map((a) => `${a.method} ${a.path}`)).toEqual([
-      "GET /machines/me/browser",
-      "POST /machines/me/browser:display",
-      "GET /machines/me/browser/current-page-url",
-      "GET /machines/me/files",
-      "GET /machines/me/files:stat",
-    ]);
-    expect(asked[1].options.body).toEqual({ width: 800, height: 600 });
-    expect(asked[3].options.params).toEqual({ path: "/home/user", wake: undefined, after: "b" });
   });
 });
 

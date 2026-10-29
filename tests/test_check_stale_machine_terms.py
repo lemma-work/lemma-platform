@@ -68,6 +68,7 @@ def test_a_removed_route_or_operation_is_reported_once_as_a_route(line: str) -> 
         "/home/user/lemma/workspaces",
         'logger.warning("workspace.files.read_failed.degraded")',
         'logger.warning("workspace.status.unavailable.degraded")',
+        'assert workspace.status == "organization_access_required"',
         "the WORKSPACE_CLI toolset",
         "/machines/me/files",
     ],
@@ -76,29 +77,18 @@ def test_the_module_and_its_log_events_are_not_stale(line: str) -> None:
     assert rules(CODE, line) == []
 
 
-def test_a_deprecated_name_may_be_documented_as_deprecated() -> None:
-    assert (
-        rules(DOC, "`/workspace/files` is deprecated; use `/machines/me/files`.") == []
-    )
-    assert (
-        rules(
-            DOC, "`lemma.workspace.status()` (deprecated) is `lemma.machines.startup`"
-        )
-        == []
-    )
-    # ...but only the shims' names: a deprecated *path* is still a path.
-    assert rules(DOC, "the deprecated `cd /workspace/repos`") == ["workspace-path"]
-
-
-def test_tests_may_exercise_the_shims() -> None:
-    test = "lemma-backend/app/modules/workspace/tests/unit/test_workspace_shims.py"
-    assert rules(test, 'client.get("/workspace/files")') == []
-    assert rules(test, '@covers("workspace.browser.status")') == []
+def test_a_removed_name_is_flagged_even_where_it_says_so() -> None:
+    """The routes are gone, not deprecated: nothing may name them, in a doc
+    that calls them old or in a test that would call them."""
+    assert rules(
+        DOC, "`/workspace/files` is deprecated; use `/machines/me/files`."
+    ) == ["old-route"]
+    assert rules(DOC, "`lemma.workspace.browserAccess()` (deprecated)") == [
+        "old-sdk-alias"
+    ]
+    test = "lemma-backend/app/modules/workspace/tests/unit/test_machine_files.py"
+    assert rules(test, 'client.get("/workspace/files")') == ["old-route"]
     assert rules(test, 'cwd="/workspace"') == ["workspace-path"]
-    assert (
-        rules("lemma-frontend/tests/computer.test.ts", '"/workspace/browser/view"')
-        == []
-    )
 
 
 def test_old_generated_clients_are_flagged() -> None:
@@ -106,10 +96,10 @@ def test_old_generated_clients_are_flagged() -> None:
     assert rules(CODE, "WorkspaceService.status()") == ["old-sdk"]
 
 
-def test_the_deprecated_alias_is_only_flagged_in_docs_and_skills() -> None:
+def test_the_removed_alias_is_only_flagged_in_docs_and_skills() -> None:
     assert rules(DOC, "await lemma.workspace.exec(...)") == ["old-sdk-alias"]
     assert rules(SKILL, "await lemma.workspace.exec(...)") == ["old-sdk-alias"]
-    # The SDK itself defines the alias.
+    # Code says `lemma.workspace` for other things (span names, for one).
     assert rules("lemma-typescript/src/client.ts", "lemma.workspace.exec") == []
 
 

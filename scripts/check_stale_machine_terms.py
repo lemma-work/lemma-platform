@@ -2,37 +2,34 @@
 """Keep the words for the old workspace sandbox from coming back.
 
 The per-user "workspace sandbox" became a **machine**: `/machines` replaced the
-`/workspace/*` routes and `/workspace-ports` (which remain only as deprecated
-shims on top of it), the generated `workspace*` SDK clients went, and a
+`/workspace/*` routes and `/workspace-ports`, which are gone, as are the
+generated `workspace*` SDK clients and the `lemma.workspace` alias; and a
 machine's paths come from one module, `lemma-backend/sandbox_runtime/paths.py`
 (home `/home/user`, projects `~/lemma`). A rename like that is never finished
 by the change that makes it. The old names live on in prompts, skills and
 examples, and an agent that reads "cd /workspace/repos" acts on it: it writes
 to a directory that does not exist and reports the failure as the user's
-problem. A caller taught a shim breaks when the shim is retired.
+problem. A caller taught a removed route gets a 404.
 
 Four rules, each narrow enough to be close to false-positive-free:
 
 - **`/workspace` as a filesystem path.** A rooted `/workspace` -- `cd
   /workspace`, `cwd="/workspace"`, `/workspace/repos`. Not
   `app/modules/workspace`, which is a module, and not `~/workspace`.
-- **Deprecated route names**, which still answer as shims on top of
-  `/machines` but must not be taught or newly called: `/workspace/files`,
-  `/workspace/status`, `/workspace/browser`, `/workspace/apps`, `/workspace-ports`, and the
-  removed operation ids (`workspace.files.list`, `workspace.browser.status`,
+- **Removed route names**: `/workspace/files`, `/workspace/status`,
+  `/workspace/browser`, `/workspace/apps`, `/workspace-ports`, and their
+  operation ids (`workspace.files.list`, `workspace.browser.status`,
   `workspace.status` and the rest). Log event names such as
-  `workspace.files.read_failed.degraded` are the module's and pass, as do
-  tests (which exercise the shims) and a line that says the name is deprecated.
+  `workspace.files.read_failed.degraded` are the module's and pass.
 - **Old SDK names**: `WorkspaceService`, `WorkspaceAppsService`, and, in docs
-  and skills, `lemma.workspace.` -- the TypeScript SDK keeps that one as a
-  deprecated alias, so a line that says so passes.
+  and skills, `lemma.workspace.` -- the TypeScript SDK's removed alias.
 - **"Sandbox" where the agent means its machine**, in agent-facing text only
   (the agent prompts, `lemma-skills/`, `agent_tool_schemas.json`): "your
   sandbox", "the sandbox", "this sandbox", "workspace sandbox", "your
   workspace", "workspace container". The function sandbox is a different
   thing and keeps its name.
 
-A legitimate use -- a historical release note, a migration, the shims' code --
+A legitimate use -- a historical release note, a migration --
 goes in `stale-machine-terms-allow.txt` beside this file, one
 `path-or-glob[:rule]  # reason` per line.
 
@@ -106,23 +103,9 @@ class Rule:
     message: str
     #: Globs the rule applies to; empty means every scanned file.
     scope: Tuple[str, ...] = ()
-    #: For names that still exist as deprecated shims: a line that says
-    #: "deprecated" is documenting the shim, and a test exercises it.
-    shim: bool = False
 
     def applies_to(self, path: str) -> bool:
-        if self.shim and is_test(path):
-            return False
         return not self.scope or any(fnmatch.fnmatch(path, glob) for glob in self.scope)
-
-
-def is_test(path: str) -> bool:
-    name = path.rsplit("/", 1)[-1]
-    return (
-        "/tests/" in f"/{path}"
-        or name.startswith("test_")
-        or name.endswith(("_test.py", ".test.ts", ".test.tsx", ".spec.ts"))
-    )
 
 
 AGENT_FACING = (
@@ -145,13 +128,13 @@ OLD_ROUTE = Rule(
         r"|/workspace-ports\b"
         r"|\bworkspace\.files\.(?:list|stat|content)\b"
         r"|\bworkspace\.browser\.(?:access|status|current_page_url|resize_display)\b"
-        r"|\bworkspace\.status(?![\w.])"
+        # Quoted: unquoted, it is as often an attribute of a variable named
+        # `workspace` as the old operation id.
+        r"|[\"'`]workspace\.status[\"'`]"
     ),
-    "names a deprecated /workspace route or operation id; new code and docs use "
+    "names a removed /workspace route or operation id; use "
     "/machines/{ref}/... (files, previews, browser) and the port proxy "
-    "/public/machine-ports/<grant>/. A doc line that says the old name is "
-    "deprecated passes",
-    shim=True,
+    "/public/machine-ports/<grant>/",
 )
 FILESYSTEM_PATH = Rule(
     "workspace-path",
@@ -169,10 +152,9 @@ OLD_SDK = Rule(
 OLD_SDK_ALIAS = Rule(
     "old-sdk-alias",
     re.compile(r"\blemma\.workspace\."),
-    "teaches lemma.workspace.*, the deprecated alias; document lemma.machines.* "
-    "instead (a line that says the alias is deprecated passes)",
+    "teaches lemma.workspace.*, a removed alias; use lemma.machines.* with the "
+    'ref "me"',
     scope=DOCS_AND_SKILLS,
-    shim=True,
 )
 AGENT_SANDBOX = Rule(
     "agent-sandbox",
@@ -237,23 +219,15 @@ def find_offences(path: str, text: str) -> List[Tuple[int, Rule, str]]:
     the route, because that is the fix the reader needs.
     """
     rules = [rule for rule in RULES if rule.applies_to(path)]
-    # A shim's own route is also a rooted /workspace; in a test of the shim
-    # it must not come back as a path.
-    shim_names = OLD_ROUTE if is_test(path) else None
     found = []
     for number, line in enumerate(text.splitlines(), start=1):
         claimed: List[Tuple[int, int]] = []
-        if shim_names is not None:
-            claimed.extend(match.span() for match in shim_names.pattern.finditer(line))
-        documents_deprecation = "deprecated" in line.lower()
         for rule in rules:
             for match in rule.pattern.finditer(line):
                 span = match.span()
                 if any(start <= span[0] < end for start, end in claimed):
                     continue
                 claimed.append(span)
-                if rule.shim and documents_deprecation:
-                    continue
                 found.append((number, rule, match.group(0)))
     return found
 

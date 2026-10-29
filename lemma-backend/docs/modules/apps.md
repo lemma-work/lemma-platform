@@ -148,7 +148,7 @@ their account to the pod and letting it into sandboxes, asking members to
 connect, answering an agent's approval or question, approving a join request,
 opening a function to contacts) refuse an app with `APP_PERSON_ONLY`. The
 person's own browser socket, `/machines/{ref}/browser/view`, refuses any app
-host's origin, and so does its deprecated alias `/workspace/browser/view`. Bearer tokens are never read as an app. The
+host's origin. Bearer tokens are never read as an app. The
 authenticated asset route serves an app's files with
 `Content-Security-Policy: sandbox`, so they never run on the API's own origin.
 
