@@ -45,6 +45,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import weakref
 
 import httpx
 
@@ -367,7 +368,62 @@ async def ensure_port(*, session: str | None = None) -> int:
     megabytes in a sandbox where 220 MB free already triggers a kill. Somebody
     asking to take the wheel has asked for that. A card rendering in a
     transcript has not.
+
+    **One start per session at a time, and a browser that is already up is
+    not started again.** Several callers arrive at once whenever somebody opens
+    the view -- the view socket, the toolbar's targets poll, the keepalive --
+    and two CLIs that each find no daemon each spawn one. The second daemon's
+    Chrome finds the profile locked by the first, hands off and exits, and the
+    daemon dies with "exited during startup"; the orphan later deletes the
+    *live* daemon's socket and pid file on its way out, so the next command
+    spawns yet another, and the browser stays up and unreachable until the
+    idle timer kills it. Reproduced on demand, twice. Hence the lock, and the
+    `live_port` check *inside* it: whoever waited is usually waiting for the
+    browser the caller ahead of it has just started.
+
+    **A collided or wedged daemon is cleared and the start tried once more**,
+    rather than reported: the person opening the view would otherwise see a
+    refusal for a state nobody but this function can get them out of.
     """
+    async with start_lock(session):
+        with suppress(BrowserNotRunning):
+            return await live_port(session)
+        try:
+            return await _start(session)
+        except _DaemonWedged:
+            await restart_daemon(session=session)
+        try:
+            return await _start(session)
+        except _DaemonWedged as exc:
+            # Reported rather than recovered a second time: another round
+            # straight after the first would only kill what the retry started.
+            raise BrowserNotRunning(
+                "the browser daemon was not responding, and a restart did not help"
+            ) from exc
+
+
+#: One lock per session, per event loop. The relay runs a single loop, so in
+#: production this is just "per session"; the loop is in the key because an
+#: `asyncio.Lock` belongs to the loop it was first contended on, and a test
+#: suite runs a fresh loop per test.
+_START_LOCKS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, dict[str, asyncio.Lock]
+] = weakref.WeakKeyDictionary()
+
+
+def start_lock(session: str | None) -> asyncio.Lock:
+    """The lock held by anything in this relay that can start a session's browser.
+
+    Public because `ensure_port` is not the only such thing: `open` and the
+    keepalive's `get url` each spawn a daemon when none answers, and racing
+    either against a start is the same collision.
+    """
+    locks = _START_LOCKS.setdefault(asyncio.get_running_loop(), {})
+    return locks.setdefault(session or DEFAULT_SESSION, asyncio.Lock())
+
+
+async def _start(session: str | None) -> int:
+    """Run ``get cdp-url`` once and return the port it reports."""
     try:
         process = await asyncio.create_subprocess_exec(
             *agent_browser_argv("get", "cdp-url", session=session),
@@ -401,6 +457,10 @@ async def ensure_port(*, session: str | None = None) -> int:
         if process.returncode is None:
             with suppress(ProcessLookupError):
                 process.kill()
+
+
+class _DaemonWedged(BrowserNotRunning):
+    """The daemon cannot answer, or died starting: clearing it may help."""
 
 
 async def _read_port(process: asyncio.subprocess.Process) -> int:
@@ -439,39 +499,120 @@ async def _read_port(process: asyncio.subprocess.Process) -> int:
     if _daemon_is_wedged(complaint):
         # One hung command leaves the daemon unable to answer, and it serves
         # every session in the sandbox -- so a person watching and the agent
-        # working both get nothing until somebody clears it. Nothing did.
-        await restart_daemon()
-        raise BrowserNotRunning(
-            "the browser daemon was not responding and has been restarted"
-        )
+        # working both get nothing until somebody clears it. `ensure_port`
+        # does, and tries again.
+        raise _DaemonWedged("the browser daemon was not responding")
     raise BrowserNotRunning("the browser could not be started")
 
 
-#: What the CLI prints when its daemon has stopped answering. Matched on text
-#: because that is all it gives us -- there is no exit code that distinguishes
-#: a wedged daemon from a page that would not load.
-_WEDGED = ("daemon may be busy", "unresponsive", "Resource temporarily unavailable")
+#: What the CLI prints when its daemon has stopped answering, or died before
+#: it could. Matched on text because that is all it gives us -- there is no
+#: exit code that distinguishes a wedged daemon from a page that would not load.
+#:
+#: "exited during startup" is the collision `ensure_port` describes: a second
+#: daemon whose Chrome found the profile locked by one still running. It is in
+#: this list because the cure is the same -- nothing improves until the daemons
+#: *and* that Chrome are gone.
+_WEDGED = (
+    "daemon may be busy",
+    "unresponsive",
+    "Resource temporarily unavailable",
+    "exited during startup",
+)
 
 
 def _daemon_is_wedged(complaint: str) -> bool:
     return any(marker.lower() in complaint.lower() for marker in _WEDGED)
 
 
-async def restart_daemon() -> None:
-    """Kill the browser daemon so the next command starts a fresh one.
+#: How long a stopped process gets to go on its own before it is killed. Long
+#: enough for Chrome to release its profile lock cleanly; a person is waiting
+#: on the far side of this, so not much longer.
+_STOP_GRACE_SECONDS = 3.0
+
+
+async def restart_daemon(*, session: str | None = None) -> None:
+    """Stop the browser daemons, and the Chrome on this session's profile.
+
+    Both, because either alone leaves the collision in place. This used to
+    stop only the daemons, and Chrome outlives its daemon -- that orphan is
+    what holds the profile lock and makes every fresh daemon's Chrome hand off
+    and exit. A daemon left running is the other half: it deletes the next
+    one's socket when it does exit. So this waits for both to be *gone*, not
+    merely signalled; one still shutting down when the retry starts would
+    delete the new daemon's socket all the same.
+
+    Chrome is matched by its ``--user-data-dir``, anchored at the end so the
+    default profile can never match a named session's ``profile-<digest>``.
+    Killing it is not clean, which is why `lemma-ensure-display` passes
+    ``--hide-crash-restore-bubble``: the next start would otherwise greet the
+    person with "Restore pages?".
 
     Best effort: this runs when something has already failed, and the caller
     has an error to report that matters more than this succeeding.
     """
+    profile = profile_for_session(session) or _DEFAULT_PROFILE
+    # pkill's patterns are extended regexes, and a profile path is only ever
+    # `[A-Za-z0-9/._-]`, so the dot is the one character that needs taming.
+    chrome = f"--user-data-dir={profile.replace('.', '[.]')}([[:space:]]|$)"
+    for pattern in (_AGENT_BROWSER, chrome):
+        await _stop_matching(pattern)
+
+
+async def _stop_matching(pattern: str) -> None:
+    """SIGTERM what matches, wait for it to go, SIGKILL whatever has not."""
+    loop = asyncio.get_running_loop()
+    await _pkill("-TERM", pattern)
+    deadline = loop.time() + _STOP_GRACE_SECONDS
+    while await _any_matching(pattern):
+        if loop.time() >= deadline:
+            await _pkill("-KILL", pattern)
+            return
+        await asyncio.sleep(0.1)
+
+
+async def _pkill(signal: str, pattern: str) -> None:
     with suppress(OSError, asyncio.TimeoutError):
         process = await asyncio.create_subprocess_exec(
             "pkill",
+            signal,
             "-f",
-            "agent-browser",
+            # The Chrome pattern starts with `--`, which would otherwise be
+            # read as one of pkill's own options.
+            "--",
+            pattern,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
         await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_SECONDS)
+
+
+async def _any_matching(pattern: str) -> bool:
+    """Whether anything still matches.
+
+    A probe that cannot answer says no: it only decides whether to keep
+    waiting, and waiting on a missing or hung tool is waiting for ever.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "pgrep",
+            "-f",
+            "--",
+            pattern,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    try:
+        found = await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        with suppress(ProcessLookupError):
+            process.kill()
+        with suppress(ProcessLookupError):
+            await process.wait()
+        return False
+    return found == 0
 
 
 async def page_targets(*, port: int) -> list[dict[str, str]]:
@@ -516,7 +657,15 @@ async def open_url(url: str, *, session: str | None = None) -> None:
     the common case, where the browser was retired for idleness and started
     fresh for their arrival, that is a blank page under a heading naming a site
     they cannot see.
+
+    Under `start_lock`, because `open` starts a daemon when none answers and so
+    collides with a concurrent `ensure_port` exactly as two starts do.
     """
+    async with start_lock(session):
+        await _open_url(url, session=session)
+
+
+async def _open_url(url: str, *, session: str | None) -> None:
     try:
         process = await asyncio.create_subprocess_exec(
             *agent_browser_argv("open", url, session=session),
@@ -776,7 +925,16 @@ async def keepalive(*, session: str | None = None) -> bool:
     Returns whether the touch landed. A miss used to be silent, and a browser
     that then retired under a watcher looked like the page reloading itself
     every five minutes, with nothing anywhere saying why.
+
+    Under `start_lock` for the same reason as `open_url`: with no daemon
+    answering, `get url` spawns one, and it is one of the three callers that
+    arrive together when a view opens.
     """
+    async with start_lock(session):
+        return await _touch(session)
+
+
+async def _touch(session: str | None) -> bool:
     try:
         process = await asyncio.create_subprocess_exec(
             *agent_browser_argv("get", "url", session=session),

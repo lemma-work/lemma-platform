@@ -98,6 +98,153 @@ async def test_a_cli_that_never_exits_is_killed_rather_than_waited_on(
     assert process.killed, "a wedged CLI must not outlive the answer it gave"
 
 
+class _EndingStdout:
+    """A pipe that says its lines and then closes: a CLI that gave up."""
+
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = list(lines)
+
+    async def readline(self) -> bytes:
+        return self._lines.pop(0) if self._lines else b""
+
+
+class _Exited:
+    """A process that has already finished, with this exit status."""
+
+    def __init__(self, returncode: int, lines: list[bytes] | None = None) -> None:
+        self.returncode = returncode
+        self.stdout = _EndingStdout(lines or [])
+
+    async def wait(self) -> int:
+        return self.returncode
+
+    def kill(self) -> None:
+        pass
+
+
+#: Verbatim from the sandbox, the second time the collision was reproduced.
+_COLLIDED = (
+    "✗ Daemon process exited during startup with no error output. "
+    "Re-run with --debug for more details.\n"
+).encode()
+
+#: A named session, so the port file lives under a profile base the test can
+#: point at `tmp_path` -- the default session would also sweep `/tmp` for
+#: agent-browser's scratch profiles, which is this machine's business.
+_SESSION = "login-app.example.com"
+
+
+def _session_profile(monkeypatch, tmp_path: Path) -> Path:
+    monkeypatch.setattr(chrome, "_SCRATCH_PROFILE_BASE", str(tmp_path / "profile"))
+    profile = Path(chrome.profile_for_session(_SESSION) or "")
+    profile.mkdir(parents=True)
+    return profile
+
+
+async def test_concurrent_starts_run_the_cli_once(monkeypatch, tmp_path: Path) -> None:
+    """The view socket, the targets poll and the keepalive arrive together.
+
+    Each used to run its own `get cdp-url`; two CLIs that find no daemon each
+    spawn one, the second one's Chrome finds the profile locked, and the
+    browser ends up running and unreachable. The ones that wait must find the
+    browser the first one started -- a real listening socket and a real port
+    file, the way `live_port` would meet them in a sandbox.
+    """
+    profile = _session_profile(monkeypatch, tmp_path)
+    server = await asyncio.start_server(lambda _r, w: w.close(), "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    spawned: list[tuple[str, ...]] = []
+
+    async def fake_exec(*argv, **_kwargs):
+        spawned.append(argv)
+        # Slow enough that the others are queued behind the lock by now.
+        await asyncio.sleep(0.1)
+        (profile / "DevToolsActivePort").write_text(f"{port}\n/devtools/browser/x\n")
+        return _Exited(0, [f"ws://127.0.0.1:{port}/devtools/browser/x\n".encode()])
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    try:
+        ports = await asyncio.wait_for(
+            asyncio.gather(*(chrome.ensure_port(session=_SESSION) for _ in range(3))),
+            timeout=5,
+        )
+    finally:
+        server.close()
+        await server.wait_closed()
+
+    assert ports == [port, port, port]
+    assert len(spawned) == 1, spawned
+
+
+def _recording_exec(monkeypatch, starts: list[list[bytes]], *, alive: bool = False):
+    """Answer `get cdp-url` from `starts` in turn; pkill succeeds; pgrep says
+    whether anything is still `alive`. Returns every argv it was asked to run."""
+    ran: list[tuple[str, ...]] = []
+    answers = list(starts)
+
+    async def fake_exec(*argv, **_kwargs):
+        ran.append(argv)
+        if argv[0] == "pkill":
+            return _Exited(0)
+        if argv[0] == "pgrep":
+            return _Exited(0 if alive else 1)
+        return _Exited(0, answers.pop(0))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    return ran
+
+
+async def test_a_collided_start_stops_the_daemons_and_the_profiles_chrome_then_retries(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Stopping only the daemons left the orphaned Chrome holding the profile
+    lock, so every fresh daemon collided with it again."""
+    profile = _session_profile(monkeypatch, tmp_path)
+    ran = _recording_exec(
+        monkeypatch,
+        [[_COLLIDED], [b"ws://127.0.0.1:45125/devtools/browser/x\n"]],
+    )
+
+    assert await asyncio.wait_for(chrome.ensure_port(session=_SESSION), 5) == 45125
+
+    commands = [argv[0] if argv[0] in ("pkill", "pgrep") else "cli" for argv in ran]
+    assert commands == ["cli", "pkill", "pgrep", "pkill", "pgrep", "cli"]
+    stopped = [argv[-1] for argv in ran if argv[0] == "pkill"]
+    assert stopped[0] == "agent-browser"
+    assert stopped[1].startswith("--user-data-dir=")
+    assert str(profile).replace(".", "[.]") in stopped[1]
+    # Anchored, so the default profile cannot match a named session's
+    # `profile-<digest>` by prefix.
+    assert stopped[1].endswith("([[:space:]]|$)")
+    # And waited on: the pgrep after each pkill asks about the same thing.
+    assert [argv[-1] for argv in ran if argv[0] == "pgrep"] == stopped
+
+
+async def test_a_second_collision_is_reported_not_recovered_again(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _session_profile(monkeypatch, tmp_path)
+    ran = _recording_exec(monkeypatch, [[_COLLIDED], [_COLLIDED]])
+
+    with pytest.raises(chrome.BrowserNotRunning):
+        await asyncio.wait_for(chrome.ensure_port(session=_SESSION), 5)
+
+    assert sum(1 for argv in ran if argv[0] == "pkill") == 2, ran
+
+
+async def test_what_will_not_stop_is_killed(monkeypatch, tmp_path: Path) -> None:
+    """A Chrome that ignores SIGTERM still holds the lock; the retry would
+    collide with it exactly as before."""
+    _session_profile(monkeypatch, tmp_path)
+    monkeypatch.setattr(chrome, "_STOP_GRACE_SECONDS", 0.05)
+    ran = _recording_exec(monkeypatch, [], alive=True)
+
+    await asyncio.wait_for(chrome.restart_daemon(session=_SESSION), 5)
+
+    signals = [argv[1] for argv in ran if argv[0] == "pkill"]
+    assert signals == ["-TERM", "-KILL", "-TERM", "-KILL"]
+
+
 async def test_a_recorded_port_nothing_answers_on_is_not_believed(
     monkeypatch, tmp_path: Path
 ) -> None:

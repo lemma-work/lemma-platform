@@ -111,7 +111,16 @@ mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
 # bubble; it does not make this a "test build" of Chrome, which is a
 # different thing -- the binary is whatever `workspace-chrome` points at,
 # Debian Chromium on the Docker image and `google-chrome-stable` on E2B.
-CHROME_ARGS="--no-sandbox,--test-type,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled"
+#
+# `--hide-crash-restore-bubble` because this Chrome is killed rather than
+# closed more often than not: the memory guard SIGKILLs it, and the relay's
+# recovery from a collided daemon (`chrome.restart_daemon`) kills the Chrome
+# holding the profile lock. The next start then greets the person with a
+# "Restore pages?" bubble over the page they were sent to sign in to -- a
+# question about tabs nobody here chose to open. Here rather than in the
+# image because this script ships in the runtime overlay, so it reaches
+# sandboxes without a rebuild.
+CHROME_ARGS="--no-sandbox,--test-type,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled,--hide-crash-restore-bubble"
 if [ "$DENSITY" = "2" ]; then
   CHROME_ARGS="${CHROME_ARGS},--force-device-scale-factor=2"
 fi
