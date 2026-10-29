@@ -221,8 +221,9 @@ def classify_telegram(payload: Mapping[str, Any]) -> Verdict:
     message = _dict(payload.get("message"))
     if not message:
         return drop("telegram_not_a_message")
-    if message.get("left_chat_member"):
-        # A service message: somebody left the group, nothing was said.
+    if message.get("left_chat_member") or message.get("new_chat_members"):
+        # A service message: somebody left the group or joined it, nothing was
+        # said.
         return Verdict(platform_update=True)
     if _dict(message.get("from")).get("is_bot"):
         return drop("bot_echo")

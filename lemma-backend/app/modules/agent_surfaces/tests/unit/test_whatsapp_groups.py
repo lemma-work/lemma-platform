@@ -363,6 +363,52 @@ def test_a_deletion_and_nothing_else():
     ]
 
 
+def _participants(*groups: dict[str, Any]) -> dict[str, Any]:
+    payload = _lifecycle(*groups)
+    payload["entry"][0]["changes"][0]["field"] = "group_participants_update"
+    return payload
+
+
+def test_people_joining_and_leaving_a_group_are_named_by_their_number():
+    updates = whatsapp_group_updates(
+        _participants(
+            {
+                "timestamp": "1",
+                "group_id": GROUP,
+                "type": "group_participants_add",
+                "reason": "invite_link",
+                "added_participants": [
+                    {"wa_id": "447700900123"},
+                    {"input": "+447700900456", "wa_id": "447700900456"},
+                ],
+            },
+            {
+                "timestamp": "1",
+                "group_id": GROUP,
+                "type": "group_participants_remove",
+                "initiated_by": "participant",
+                "removed_participants": [{"wa_id": "447700900789"}],
+            },
+            {
+                "timestamp": "1",
+                "group_id": GROUP,
+                "type": "group_participants_remove",
+                "initiated_by": "business",
+                "removed_participants": [],
+                "failed_participants": [{"input": "447700900999", "errors": [{}]}],
+                "errors": [{}],
+            },
+        )
+    )
+
+    assert [(u.kind, u.external_user_id, u.phone) for u in updates] == [
+        (GroupUpdateKind.MEMBER_JOINED, "447700900123", "447700900123"),
+        (GroupUpdateKind.MEMBER_JOINED, "447700900456", "447700900456"),
+        (GroupUpdateKind.MEMBER_LEFT, "447700900789", "447700900789"),
+    ]
+    assert {u.external_channel_id for u in updates} == {GROUP}
+
+
 def test_a_message_webhook_carries_no_group_update():
     assert whatsapp_group_updates(_group_message("hello")) == []
 

@@ -193,7 +193,7 @@ class GroupLog:
                 self.uow,
                 channel_id=group.channel_id,
                 line=NewLine(
-                    sender=await self._speaker(group, parsed),
+                    sender=await self.speaker(group, parsed),
                     text=said.text,
                     parts=said.parts,
                     source_id=group.id,
@@ -209,10 +209,12 @@ class GroupLog:
             )
         return wrote or bool(known)
 
-    async def _speaker(
+    async def speaker(
         self, group: SurfaceGroup, parsed: ParsedInboundSurfaceEvent
     ) -> Sender:
-        """Who said it: the member the pod resolved them to, else a contact."""
+        """Who said it -- or joined, read as the same person
+        (``group_updates``): the member the pod resolved them to, else a
+        contact."""
         name = parsed.sender_display_name
         # Teams resolves a person by their AAD object id, not the bot id.
         external_id = parsed.sender_aad_object_id or parsed.sender_external_user_id

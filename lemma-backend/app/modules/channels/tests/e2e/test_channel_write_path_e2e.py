@@ -24,6 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.channels.contracts import speakers_in
+from app.modules.channels.domain.entities import Principal, SeatedBy
+from app.modules.channels.infrastructure.members import MemberRepository
+from app.modules.channels.infrastructure.repository import ChannelRepository
 from app.modules.channels.infrastructure.change_models import (
     ChannelChangeModel,
     ChannelThreadModel,
@@ -178,18 +181,31 @@ async def test_a_cursor_older_than_the_log_is_told_to_refetch(
 async def test_speakers_are_read_from_their_seats(
     pod: Pod, db_session: AsyncSession
 ) -> None:
-    """Who spoke, newest first, under the name they last spoke under -- one
-    read of the seats, none of the lines."""
+    """Who spoke, newest first, under the name they last spoke under -- then
+    whoever the platform seated who has said nothing yet, under the name it
+    showed them by. One read of the seats, none of the lines."""
     channel = await group(pod, title="Speakers")
     await say(pod, channel["id"], "first", as_user=pod.user)
     await say(pod, channel["id"], "second", as_user=pod.editor)
+    async with async_session_maker() as session:
+        made = await ChannelRepository(session).get(UUID(channel["id"]))
+        assert made is not None
+        await MemberRepository(session).add_person(
+            made,
+            Principal.member(UUID(pod.viewer["id"])),
+            seated_by=SeatedBy.PLATFORM,
+            shown_as="Joined Quietly",
+        )
+        await session.commit()
     with counted_queries() as statements:
         async with async_session_maker() as session:
             found = await speakers_in(
                 SqlAlchemyUnitOfWork(session), [UUID(channel["id"])]
             )
-    assert [each.principal.user_id for each in found][:2] == [
+    assert [each.principal.user_id for each in found] == [
         UUID(pod.editor["id"]),
         UUID(pod.user["id"]),
+        UUID(pod.viewer["id"]),
     ]
+    assert (found[-1].name, found[-1].last_said_at) == ("Joined Quietly", None)
     assert not [each for each in statements if "channel_messages" in each]

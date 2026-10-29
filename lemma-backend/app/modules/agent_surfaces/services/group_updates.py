@@ -6,8 +6,9 @@ and invite link, a refusal removes it, and a deletion removes the group and its
 log -- nobody can speak there again.
 
 A mirrored place's people are the ones the platform shows are there, so the
-platform saying somebody left (Slack, Teams, Telegram) takes them out of its
-channel -- unless somebody in Lemma put them there. The bot being taken out
+platform saying somebody left takes them out of its channel -- unless somebody
+in Lemma put them there -- and saying somebody joined seats them in it before
+they speak (``group_joiners``). The bot being taken out
 archives the channel; being put back brings it back. And a Slack channel turned
 private makes its mirror private (one way only; see ``domain/place_privacy``).
 Each is asked only of the places the request could be for: the receiving
@@ -56,6 +57,7 @@ from app.modules.agent_surfaces.platforms.common import platform_transport_error
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
+from app.modules.agent_surfaces.services.group_joiners import who_joined
 from app.modules.channels.contracts import Principal
 from app.modules.channels.contracts.places import places_hearing
 from app.modules.contacts.contracts import (
@@ -73,6 +75,7 @@ _PLACE_CHANGES = frozenset(
         GroupUpdateKind.SHARED,
         GroupUpdateKind.UNSHARED,
         GroupUpdateKind.MEMBER_LEFT,
+        GroupUpdateKind.MEMBER_JOINED,
         GroupUpdateKind.BOT_LEFT,
         GroupUpdateKind.BOT_RETURNED,
     }
@@ -246,6 +249,11 @@ class GroupUpdates:
             return await self.groups.bot_removed(group.id)
         if kind is GroupUpdateKind.BOT_RETURNED:
             return await self.groups.bot_returned(group.id)
+        if kind is GroupUpdateKind.MEMBER_JOINED:
+            joined = await who_joined(self.uow, group, update)
+            return joined is not None and await self.groups.member_joined(
+                group.id, joined, name=update.display_name
+            )
         who = await self._who_left(group, update)
         return who is not None and await self.groups.member_left(group.id, who)
 
@@ -280,6 +288,13 @@ class GroupUpdates:
                 pod_id=group.pod_id,
                 kind=IdentityKind.SLACK,
                 user_id=external_id,
+            )
+        elif group.platform == SurfacePlatform.WHATSAPP.value and update.phone:
+            contact = await find_contact(
+                self.uow,
+                pod_id=group.pod_id,
+                kind=IdentityKind.PHONE,
+                value=f"+{update.phone}",
             )
         return Principal.contact(contact.id) if contact is not None else None
 
