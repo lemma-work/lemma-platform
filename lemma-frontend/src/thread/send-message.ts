@@ -60,3 +60,25 @@ export async function steerConversation<A>(text: string, id: string, deps: {
         throw problem;
     }
 }
+
+/** What the composer waits on when it sends: a steer or an answer, whose
+ *  failure it puts the words back for -- but a new turn only until it has
+ *  been handed over.
+ *
+ *  A new turn's send lasts as long as the stream it opens, which is the whole
+ *  run, and the composer refuses a second send while it waits on the first.
+ *  Waiting on it meant nothing typed during a run started from this pane
+ *  went anywhere: Enter and Send did nothing, and the steer the run was ready
+ *  to take was never reached. The turn reports its own failure (it marks the
+ *  message as not sent, with Retry), so nothing is lost by not waiting. */
+export function composerSend(
+    send: (text: string) => Promise<void>,
+    startsTurn: () => boolean,
+): (text: string) => Promise<void> {
+    return async (text) => {
+        const turn = startsTurn();
+        const going = send(text);
+        if (!turn) return going;
+        going.catch(() => undefined);
+    };
+}
