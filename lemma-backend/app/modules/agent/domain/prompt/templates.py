@@ -395,12 +395,7 @@ def build_agent_instruction_parts(
     # A surface run narrows this further -- ``surface_platform_guidance`` appends
     # its own ``soft_char_limit`` below -- but a run with no surface platform
     # would otherwise be told nothing at all about length or narration.
-    # A sub-agent's reply goes to the agent that briefed it, not to a person.
-    sections.append(
-        _read_required_prompt(_SUBAGENT_CHILD_PROMPT_PATH)
-        if is_sub_agent_run(conversation)
-        else load_replies_prompt()
-    )
+    sections.append(load_replies_prompt())
 
     enabled = _fragment_toolsets(agent=agent, conversation=conversation, ctx=ctx)
 
@@ -416,7 +411,13 @@ def build_agent_instruction_parts(
     # here whenever they can run workspace tools. A native agent also has a host
     # cwd, resolved by Agent Host at dispatch; the sandbox path stays scoped to
     # its tools so neither masquerades as a mount that does not exist.
-    sections = list(
+    sections = []
+    if is_sub_agent_run(conversation):
+        # A sub-agent's reply goes to the agent that briefed it, not to a
+        # person. Here, after everything a parent's request also carries, so a
+        # child of the same agent reuses its parent's cached prefix up to this.
+        sections.append(_read_required_prompt(_SUBAGENT_CHILD_PROMPT_PATH))
+    sections.extend(
         _directory_sections(
             ctx=ctx,
             conversation=conversation,

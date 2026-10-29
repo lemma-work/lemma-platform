@@ -68,7 +68,11 @@ from app.modules.agent.domain.tools import ToolGroup
 from app.modules.agent.infrastructure.tools.user_interaction import (
     tools as user_interaction_tools,
 )
-from app.modules.agent.services.tool_catalog import ToolSurface, specs_for
+from app.modules.agent.services.tool_catalog import (
+    REFUSED_TO_SUBAGENT,
+    ToolSurface,
+    specs_for,
+)
 from app.modules.function.domain.entities import FunctionEntity, FunctionType
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.todos import Todo
@@ -1629,10 +1633,11 @@ async def test_agent_tool_timeout_returns_handle_dict_even_no_output_schema(
 
 
 @pytest.mark.asyncio
-async def test_sub_agent_conversation_excludes_subagents_toolset():
-    # Depth=1: a run that IS a spawned sub-agent (origin SUBAGENT) must not get
-    # the sub-agent control toolset. The source of truth is the origin, not
-    # parent_id.
+async def test_sub_agent_conversation_is_refused_the_subagents_toolset():
+    # Depth=1: a run that IS a spawned sub-agent (origin SUBAGENT) cannot use
+    # the sub-agent control toolset. It is still shown it, so its tools match
+    # its parent's, and every call is refused. The source of truth is the
+    # origin, not parent_id.
     agent = Agent(
         pod_id=uuid4(),
         user_id=uuid4(),
@@ -1640,7 +1645,6 @@ async def test_sub_agent_conversation_excludes_subagents_toolset():
         instruction="",
         toolsets=[AgentToolset.SUBAGENTS, AgentToolset.WEB_SEARCH],
     )
-    top = Conversation(pod_id=agent.pod_id, user_id=agent.user_id, agent_id=agent.id)
     sub_agent = Conversation(
         pod_id=agent.pod_id,
         user_id=agent.user_id,
@@ -1648,13 +1652,28 @@ async def test_sub_agent_conversation_excludes_subagents_toolset():
         parent_id=uuid4(),
         origin=ConversationOrigin.SUBAGENT,
     )
+    ctx = ToolContext(
+        user_id=sub_agent.user_id,
+        pod_id=sub_agent.pod_id,
+        conversation_id=sub_agent.id,
+    )
+    specs = await specs_for(
+        agent=agent,
+        conversation=sub_agent,
+        ctx=ctx,
+        surface=ToolSurface.IN_PROCESS,
+        uow_factory=None,
+        grants=AgentGrantSummary(),
+    )
 
-    top_ts = await _groups(agent, top)
-    sub_ts = await _groups(agent, sub_agent)
-
-    assert ToolGroup.SUBAGENTS in top_ts
-    assert ToolGroup.SUBAGENTS not in sub_ts
-    assert ToolGroup.WEB_SEARCH in sub_ts  # non-spawn tools survive
+    spawn_tools = [spec for spec in specs if spec.toolset is ToolGroup.SUBAGENTS]
+    assert spawn_tools
+    for spec in spawn_tools:
+        assert await spec.run(ctx, None) == {
+            "success": False,
+            "error": REFUSED_TO_SUBAGENT,
+        }
+    assert ToolGroup.WEB_SEARCH in {spec.toolset for spec in specs}
 
 
 @pytest.mark.asyncio

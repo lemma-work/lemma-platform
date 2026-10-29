@@ -21,8 +21,9 @@ MAX_TASKS_PER_CALL = 8
 #: Children one run may have spawned in all. A backstop for a run spawning in
 #: a loop, not a schedule for one fanning out on purpose.
 MAX_CHILDREN_PER_RUN = 16
-#: A sub-agent delegates no further: its toolsets lose the delegation tools
-#: (``domain/toolsets``), so a fan-out is one level and its cost is visible.
+#: A sub-agent delegates no further: it is shown the delegation tools, as its
+#: parent is, and every call of them is refused (``domain/toolsets``), so a
+#: fan-out is one level and its cost is visible.
 MAX_DEPTH = 1
 
 #: Characters of reports one wake carries in all. Split evenly between the

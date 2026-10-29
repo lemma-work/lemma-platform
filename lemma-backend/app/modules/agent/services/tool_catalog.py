@@ -12,6 +12,7 @@ keep -- by each spec's policy.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from enum import StrEnum
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
@@ -19,8 +20,12 @@ from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.outsiders import Audience
 from app.modules.agent.domain.tools import ToolGroup, ToolSpec
-from app.modules.agent.domain.toolsets import AgentGrantSummary, resolve_toolset_names
-from app.modules.agent.domain.value_objects import AgentToolset, HarnessKind
+from app.modules.agent.domain.toolsets import AgentGrantSummary, resolve_toolsets
+from app.modules.agent.domain.value_objects import (
+    AgentToolset,
+    HarnessKind,
+    JsonObject,
+)
 from app.modules.agent.infrastructure.tools.browser import tools as browser
 from app.modules.agent.infrastructure.tools.browser import vm_browser
 from app.modules.agent.infrastructure.tools.callables import (
@@ -119,8 +124,18 @@ async def _assemble(
 ) -> list[ToolSpec]:
     if grants is None and agent is not None and uow_factory is not None:
         grants = await load_agent_grant_summary(uow_factory, agent=agent)
-    names, allow_subagents = resolve_toolset_names(agent, conversation, grants=grants)
-    specs = [spec for name in names for spec in STATIC_SPECS.get(name, ())]
+    resolved = resolve_toolsets(agent, conversation, grants=grants)
+    names, allow_subagents = resolved.names, resolved.allow_subagents
+    # In process, a refused toolset stays in view so a child's request starts
+    # with its parent's bytes. A coding agent on Agent Host builds its own
+    # prompt, so there is no prefix to keep and the tools are simply left out.
+    keep_refused = surface is not ToolSurface.AGENT_HOST
+    specs = [
+        refused(spec) if name in resolved.refused else spec
+        for name in names
+        if keep_refused or name not in resolved.refused
+        for spec in STATIC_SPECS.get(name, ())
+    ]
     if AgentToolset.TODO in names and uow_factory is not None:
         from app.modules.agent.infrastructure.tools.todo import todo_specs
 
@@ -234,6 +249,25 @@ def _seen_and_placed(
     if not audience.answers_outsiders:
         specs.extend(answer.SPECS)
     return specs
+
+
+#: What a sub-agent calling a tool it is shown but may not use is told.
+REFUSED_TO_SUBAGENT = (
+    "Not available to a sub-agent: you cannot delegate further or message "
+    "anyone. Do the work yourself, and say in your report what the agent that "
+    "briefed you should hand out or send."
+)
+
+
+def refused(spec: ToolSpec) -> ToolSpec:
+    """``spec`` as a sub-agent sees it: the same schema, so the same bytes in
+    the request, and a call that does nothing but say why."""
+
+    async def refuse(_ctx: ToolContext, _args: object) -> JsonObject:
+        return {"success": False, "error": REFUSED_TO_SUBAGENT}
+
+    # Not a pause any more: it ends nothing, so nothing waits on it.
+    return replace(spec, run=refuse, policy=replace(spec.policy, pauses=None))
 
 
 def _offered(spec: ToolSpec, audience: Audience) -> bool:
