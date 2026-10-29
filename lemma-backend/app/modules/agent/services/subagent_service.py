@@ -1,6 +1,6 @@
 """Spawn and interact with sub-agent conversations.
 
-When an agent calls another agent (or a JOB-type function) as a tool we create a
+When an agent calls another agent as a tool we create a
 real, persisted child conversation linked by ``parent_id`` (and the child run by
 ``parent_run_id``) and run it through the normal background job queue — instead
 of a blocking, ephemeral inline run. The parent can then spawn, await, read
@@ -17,14 +17,14 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.infrastructure.tools.authority import tool_authorization_context
-from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
+from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     AgentRunStatus,
@@ -37,7 +37,11 @@ from app.modules.agent.domain.pauses import PERSON_KINDS
 from app.modules.agent.domain.subagent_results import (
     DELIVERED_STATUSES,
 )
+from app.modules.agent.domain.delegation import MAX_CHILDREN_PER_RUN
 from app.modules.agent.domain.subagent_spawn import spawn_key
+from app.modules.agent.services.runtime_resolution import (
+    default_agent_runtime_for_pod,
+)
 from app.modules.agent.infrastructure.db.calls import Calls
 from app.modules.agent.infrastructure.db.conversations import Conversations
 from app.modules.agent.infrastructure.db.messages import Messages
@@ -52,6 +56,10 @@ from app.modules.agent.application.turns.send_message import SendMessage
 from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.application.turns.stop import StopConversation
 from app.modules.agent.services.poll_backoff import poll_delay
+from app.modules.agent.services.subagent_runtime import (
+    ParentRuntimeLookup,
+    parent_runtime_from,
+)
 from app.modules.agent.services.subagent_result_delivery import mark_collected
 
 if TYPE_CHECKING:
@@ -76,79 +84,6 @@ class SubAgentHandle:
 _AWAIT_POLL_SECONDS = 1.0
 
 
-class _RunReader(Protocol):
-    async def get_agent_run(self, agent_run_id: UUID) -> AgentRun | None: ...
-
-
-class _ConversationReader(Protocol):
-    async def get_conversation(self, conversation_id: UUID) -> Conversation | None: ...
-
-
-class _AgentReader(Protocol):
-    async def get_by_pod_and_name(self, *, pod_id: UUID, name: str) -> Agent | None: ...
-
-
-class ParentRuntimeLookup(Protocol):
-    """Which runtime a sub-agent's conversation is pinned to, if any."""
-
-    async def __call__(
-        self,
-        uow: SqlAlchemyUnitOfWork,
-        deps: ToolContext,
-        *,
-        is_self: bool,
-        target_name: str | None,
-    ) -> AgentRuntimeConfig | None: ...
-
-
-async def inherited_runtime(
-    *,
-    runs: _RunReader,
-    conversations: _ConversationReader,
-    agents: _AgentReader,
-    deps: ToolContext,
-    is_self: bool,
-    target_name: str | None,
-) -> AgentRuntimeConfig | None:
-    """The runtime a sub-agent's conversation is pinned to, if any.
-
-    A sub-agent runs on what its parent is running on: the model the person
-    picked for the conversation, or the one its agent defaults to. Without
-    this the child had no runtime of its own and fell to the pod default, so a
-    conversation switched to another model -- or to a coding agent on this Mac
-    -- spawned helpers that quietly ran somewhere else. A named agent
-    configured with a runtime of its own keeps it: that choice was made for
-    that agent on purpose.
-    """
-    if not is_self and target_name is not None:
-        target = await agents.get_by_pod_and_name(pod_id=deps.pod_id, name=target_name)
-        if target is not None and target.agent_runtime is not None:
-            return None
-    if deps.agent_run_id is not None:
-        run = await runs.get_agent_run(deps.agent_run_id)
-        if run is not None and run.agent_runtime is not None:
-            return run.agent_runtime
-    parent = await conversations.get_conversation(deps.conversation_id)
-    return parent.agent_runtime if parent is not None else None
-
-
-async def _parent_runtime_from(
-    uow: SqlAlchemyUnitOfWork,
-    deps: ToolContext,
-    *,
-    is_self: bool,
-    target_name: str | None,
-) -> AgentRuntimeConfig | None:
-    return await inherited_runtime(
-        runs=Runs(uow),
-        conversations=Conversations(uow),
-        agents=AgentRepository(uow),
-        deps=deps,
-        is_self=is_self,
-        target_name=target_name,
-    )
-
-
 class SubAgentService:
     def __init__(
         self,
@@ -157,7 +92,7 @@ class SubAgentService:
         parent_runtime: ParentRuntimeLookup | None = None,
     ):
         self.uow_factory = uow_factory
-        self._parent_runtime = parent_runtime or _parent_runtime_from
+        self._parent_runtime = parent_runtime or parent_runtime_from
 
     # -- context helpers ----------------------------------------------------
 
@@ -182,7 +117,13 @@ class SubAgentService:
         agent_name: str | None = None,
         input_data: JsonObject | str,
         tool_call_id: str | None = None,
+        model: str | None = None,
     ) -> SubAgentHandle:
+        """Start a child; the same child again for the same call or task.
+
+        ``model`` runs the child on another model of the runtime it would
+        have had. A run may have ``MAX_CHILDREN_PER_RUN`` children in all.
+        """
         # Self-spawn: omit agent_name (or pass the parent's own name) to launch
         # another instance of the agent already running in this conversation. The
         # parent has no agent.execute grant on itself, so self-spawn skips the
@@ -213,6 +154,7 @@ class SubAgentService:
                 )
                 if earlier is not None:
                     return earlier
+                await self._within_fan_out(uow, deps)
                 # A sub-agent spawned from a live call draws on that call's
                 # canvas; one spawned after the call ended is ordinary.
                 in_call = await Calls(uow).inherited_by_child(deps.conversation_id)
@@ -221,8 +163,8 @@ class SubAgentService:
                     agent_name=target_name,
                     user_id=deps.user_id,
                     parent_id=deps.conversation_id,
-                    agent_runtime=await self._parent_runtime(
-                        uow, deps, is_self=is_self, target_name=target_name
+                    agent_runtime=await self._child_runtime(
+                        uow, deps, is_self=is_self, target_name=target_name, model=model
                     ),
                     require_execute_grant=not is_self,
                     # The source of truth for depth=1 gating (`tool_catalog.specs_for`):
@@ -255,6 +197,39 @@ class SubAgentService:
                 )
             finally:
                 reset_current_context(token)
+
+    async def _within_fan_out(self, uow: SqlAlchemyUnitOfWork, deps) -> None:
+        """Refuse a child past the run's cap. Under the parent's lock, which
+        ``_already_spawned`` took, so parallel spawns count each other."""
+        if deps.agent_run_id is None:
+            return
+        spawned = await Conversations(uow).count_children_of_run(
+            parent_id=deps.conversation_id, parent_run_id=deps.agent_run_id
+        )
+        if spawned >= MAX_CHILDREN_PER_RUN:
+            raise SubAgentError(
+                f"This run has already delegated to {spawned} sub-agents, the "
+                f"most one run may ({MAX_CHILDREN_PER_RUN}). Work with their "
+                "reports, or do the rest yourself."
+            )
+
+    async def _child_runtime(
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        deps,
+        *,
+        is_self: bool,
+        target_name: str | None,
+        model: str | None,
+    ) -> AgentRuntimeConfig | None:
+        """The parent's runtime, on ``model`` when the delegation names one."""
+        inherited = await self._parent_runtime(
+            uow, deps, is_self=is_self, target_name=target_name
+        )
+        if model is None:
+            return inherited
+        base = inherited or await default_agent_runtime_for_pod(uow, pod_id=deps.pod_id)
+        return base.with_overrides(model_name=model)
 
     async def _already_spawned(
         self,
@@ -388,7 +363,7 @@ class SubAgentService:
                 "error": latest.error,
             }
             if report["status"] == _NEEDS_INPUT:
-                report.update(await _open_question(uow, conversation_id))
+                report.update(await open_question(uow, conversation_id))
             elif latest.status in DELIVERED_STATUSES:
                 await mark_collected(uow, latest.id)
                 await uow.commit()
@@ -538,7 +513,7 @@ def _child_status(conversation: Conversation, latest: AgentRun | None) -> str:
     return conversation.status.value if conversation.status else "UNKNOWN"
 
 
-async def _open_question(
+async def open_question(
     uow: SqlAlchemyUnitOfWork, conversation_id: UUID
 ) -> dict[str, object]:
     """What a waiting child asked, for the parent to answer or pass on."""
@@ -574,5 +549,5 @@ async def _finished_or_asking(
     status = await Conversations(uow).get_conversation_status(run.conversation_id)
     if status == ConversationStatus.WAITING:
         report["status"] = _NEEDS_INPUT
-        report.update(await _open_question(uow, run.conversation_id))
+        report.update(await open_question(uow, run.conversation_id))
     return report

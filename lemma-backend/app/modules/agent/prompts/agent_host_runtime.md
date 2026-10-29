@@ -49,7 +49,7 @@ nothing -- the browser exists only in the sandbox.
 Use them for the person in this conversation.
 
 `wait_for` ends the turn and resumes later in the same conversation. Name one
-of `seconds`, `process_id` or `subagent_run_id`. Waiting on a process keeps the
+of `seconds`, `process_id` or the sub-agent runs. Waiting on a process keeps the
 sandbox alive; across a plain `seconds` wait it may be reclaimed, so save state
 to pod files first. On waking, check the result — waking proves only that the
 wait ended.

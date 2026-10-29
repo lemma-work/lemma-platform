@@ -26,6 +26,8 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import AgentRun, Conversation
 from app.modules.agent.domain.subagent_results import (
     DELIVERED_STATUSES,
+    combined_metadata,
+    combined_results,
     result_message,
     result_metadata,
 )
@@ -44,9 +46,11 @@ from app.modules.agent.application.turns.admit import AdmitMessage
 
 logger = get_logger(__name__)
 
-#: How many of a parent's children are looked at for owed results. A parent
-#: spawns a handful; anything past this is collected on a later finish.
-CHILDREN_WINDOW = 50
+#: Owed children read per page. Paged until none are left: a result is never
+#: dropped for being older than the newest few.
+CHILDREN_PAGE = 50
+#: Pages read per delivery, a backstop: a run may have ``MAX_CHILDREN_PER_RUN``.
+MAX_PAGES = 20
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,18 +104,20 @@ class SubagentResultDelivery:
                 )
             )
             try:
-                admit = AdmitMessage.build(uow)
-                for result in owed:
-                    await admit.admit(
-                        parent,
-                        user_id=parent.user_id,
-                        content=result.content,
-                        agent_name=None,
-                        message_metadata=result.metadata,
-                        # Continues the run it answers.
-                        kind=None,
-                        supersede_pauses=False,
-                    )
+                # One message, however many finished: one turn reads them all
+                # together, instead of a turn -- and a full replay -- each.
+                await AdmitMessage.build(uow).admit(
+                    parent,
+                    user_id=parent.user_id,
+                    content=combined_results([result.content for result in owed]),
+                    agent_name=None,
+                    message_metadata=combined_metadata(
+                        [result.metadata for result in owed]
+                    ),
+                    # Continues the run it answers.
+                    kind=None,
+                    supersede_pauses=False,
+                )
             finally:
                 reset_current_context(token)
             await uow.commit()
@@ -133,9 +139,18 @@ class SubagentResultDelivery:
             and parent_latest.status in ACTIVE_AGENT_RUN_STATUSES
             else None
         )
-        children = await Conversations(uow).list_child_conversations(
-            parent_id=parent.id, user_id=parent.user_id, limit=CHILDREN_WINDOW
-        )
+        children: list[Conversation] = []
+        for page in range(MAX_PAGES):
+            found = await Conversations(uow).list_child_conversations(
+                parent_id=parent.id,
+                user_id=parent.user_id,
+                limit=CHILDREN_PAGE,
+                owing=True,
+                offset=page * CHILDREN_PAGE,
+            )
+            children.extend(found)
+            if len(found) < CHILDREN_PAGE:
+                break
         agents = await AgentRepository(uow).get_many(
             [child.agent_id for child in children]
         )

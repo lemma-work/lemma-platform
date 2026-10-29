@@ -20,10 +20,10 @@ from app.modules.agent.domain.value_objects import (
     ConversationOrigin,
 )
 from app.modules.agent.services import subagent_service as subagent_module
+from app.modules.agent.services.subagent_runtime import inherited_runtime
 from app.modules.agent.services.subagent_service import (
     SubAgentError,
     SubAgentService,
-    inherited_runtime,
 )
 
 pytestmark = pytest.mark.asyncio

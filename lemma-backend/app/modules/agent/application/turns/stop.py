@@ -12,6 +12,7 @@ from uuid import UUID
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
+from app.modules.agent.domain.delegation import MAX_CHILDREN_PER_RUN
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.pauses import PERSON_KINDS
 from app.modules.agent.domain.ports import AgentRepository
@@ -30,6 +31,10 @@ from app.modules.agent.infrastructure.live import publish_conversation_event
 from app.modules.agent.domain.live_events import message_payload
 from app.modules.agent.services.run_stop import stop_run
 from app.modules.agent.domain.live_events import message_to_payload
+
+
+#: Children read per stop: every one a run may have, several runs over.
+_CHILDREN_STOPPED_AT_ONCE = 4 * MAX_CHILDREN_PER_RUN
 
 
 class StopConversation:
@@ -84,6 +89,9 @@ class StopConversation:
             agent_id=conversation.agent_id,
             action=Permissions.AGENT_EXECUTE,
         )
+        # Stopping a delegation stops what it delegated: a person who stops a
+        # runaway fan-out does not go on paying for every child.
+        await self._stop_children(conversation)
         active_run = await self.runs.get_active_agent_run_for_update(conversation.id)
         if active_run is not None:
             # What is said from here on is owed an answer once the run has
@@ -112,7 +120,34 @@ class StopConversation:
         # approval card stayed up.
         await self._close_open_pauses(conversation=conversation, user_id=user_id)
         await self._keep_a_decided_pause_from_resuming(conversation=conversation)
+        await self.uow.commit()
         return conversation
+
+    async def _stop_children(self, conversation: Conversation) -> None:
+        """Stop each sub-agent still running or waiting, in this transaction.
+
+        One level: a sub-agent delegates no further (``MAX_DEPTH``). Owned by
+        the same person through the parent, so no grant is asked again.
+        """
+        children = await self.conversations.unfinished_children(
+            conversation.id, limit=_CHILDREN_STOPPED_AT_ONCE
+        )
+        for child in children:
+            run = await self.runs.get_active_agent_run_for_update(child.id)
+            if run is not None:
+                await stop_run(
+                    self.uow,
+                    self.runs,
+                    pod_id=child.pod_id,
+                    conversation_id=child.id,
+                    run_id=run.id,
+                    stop_requested_after_sequence=None,
+                )
+                continue
+            await self.supersede.supersede(conversation=child, user_id=child.user_id)
+            await self.conversations.set_conversation_status(
+                conversation_id=child.id, status=ConversationStatus.STOPPED
+            )
 
     async def _close_open_pauses(
         self, *, conversation: Conversation, user_id: UUID

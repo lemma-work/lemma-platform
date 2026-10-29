@@ -81,6 +81,7 @@ from app.modules.agent.domain.tools import (
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
+    ConversationOrigin,
     MessageDraft,
     MessageKind,
     MessageRole,
@@ -942,3 +943,55 @@ async def test_a_tool_found_mid_run_leaves_the_tools_as_they_were(
     ]
     assert [draft.tool_name for draft in returned] == ["book_hotel"]
     assert returned[0].tool_result == {"booked": "Grand", "nights": 2}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+async def test_two_siblings_share_every_byte_up_to_their_brief(
+    protocol: Protocol,
+) -> None:
+    """Children one delegation started read the same prefix: the same tools,
+    the same instructions, the same history up to the brief that tells them
+    apart -- so the second reads from cache what the first wrote."""
+    parent = uuid4()
+    pod, user = uuid4(), uuid4()
+    agent = Agent(pod_id=pod, user_id=user, name="planner", instruction="Plan trips.")
+
+    async def first_request(brief: str) -> Sent:
+        child = Conversation(
+            pod_id=pod,
+            user_id=user,
+            agent_id=uuid4(),
+            parent_id=parent,
+            origin=ConversationOrigin.SUBAGENT,
+            reports_to_parent=True,
+        )
+        storage = Storage(child)
+        model = Model()
+        run_id = uuid4()
+        storage.user(brief, run_id=run_id)
+        # Both start in one minute: the same run, as far as the clock goes.
+        model.run = 0
+        await _run(
+            model,
+            storage,
+            agent=agent,
+            run_id=run_id,
+            script=[_text("Report.")],
+            trigger_tokens=10**6,
+        )
+        return model.sent[0]
+
+    one = await first_request("Find hotels in Oslo.")
+    two = await first_request("Find trains to Bergen.")
+    assert one.instructions == two.instructions
+    assert one.tools == two.tools
+    first, second = (
+        await _wire(one.messages, protocol),
+        await _wire(two.messages, protocol),
+    )
+    differs = next(
+        at for at, (a, b) in enumerate(zip(first, second, strict=True)) if a != b
+    )
+    assert "Oslo" in first[differs] and "Bergen" in second[differs]
+    assert first[:differs] == second[:differs]

@@ -3,9 +3,12 @@
 Lets an agent launch other pod agents as real, linked child conversations and
 then poll, message, or stop them — instead of only blocking inline calls.
 
-The surface is three tools: ``spawn_subagent`` launches a child,
-``interact_subagent`` drives a running child (send/await/stop), and
-``query_subagents`` inspects children (list/messages).
+``delegate`` (``subagents/delegate``) is the one an agent sees: it hands out
+several tasks and waits once. The three here sit behind tool search:
+``interact_subagent`` drives a running child (send/await/stop),
+``query_subagents`` inspects children (list/messages), and ``spawn_subagent``
+-- deprecated, kept because a harness over MCP may still call it -- starts one
+child the way ``delegate(wait="none")`` does.
 """
 
 from __future__ import annotations
@@ -25,6 +28,9 @@ from collections.abc import Mapping
 
 from app.modules.agent.domain.replay import request_body
 from app.modules.agent.domain.tools import ReplayClass, ToolGroup, ToolPolicy, tool
+from app.modules.agent.infrastructure.tools.subagents.delegate import (
+    SPECS as delegate_specs,
+)
 from app.modules.agent.infrastructure.tools.subagents.models import (
     InteractSubagentRequest,
     QuerySubagentsRequest,
@@ -49,13 +55,11 @@ async def spawn_subagent(
     ctx: ToolContext,
     request: SpawnSubagentRequest,
 ) -> JsonObject:
-    """Start a pod agent as a linked child conversation; returns a handle.
+    """Deprecated: use `delegate`. Start one child; returns a handle.
 
-    Omit agent_name to spawn another instance of yourself for a targeted subtask.
     Non-blocking: returns {conversation_id, run_id, status}. To collect the
     result, call `wait_for` with `subagent_run_id` and end your turn; you wake
-    with it. If you end your turn without waiting, it arrives later as a new
-    message.
+    with its report. If you end your turn without waiting, it arrives later.
     """
     try:
         handle = await _service().spawn(
@@ -173,6 +177,7 @@ def _interaction_replay(args: Mapping[str, object]) -> ReplayClass:
 
 
 SPECS = (
+    *delegate_specs,
     # A spawn is unique on (parent run, call).
     tool(
         spawn_subagent,

@@ -1542,10 +1542,10 @@ def test_agent_tool_structured_input_when_input_schema_set():
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_returns_string_when_no_output_schema(monkeypatch):
+async def test_agent_tool_returns_the_answer_when_no_output_schema(monkeypatch):
     captured: dict = {}
-    # A no-schema run stores its final text as {"answer": <text>} — the tool must
-    # unwrap it to a plain string for the parent model.
+    # A no-schema run stores its final text as {"answer": <text>}: the tool
+    # hands it back as the typed answer.
     _patch_subagent(
         monkeypatch,
         await_result={"output": {"answer": "the answer"}, "status": "COMPLETED"},
@@ -1556,12 +1556,12 @@ async def test_agent_tool_returns_string_when_no_output_schema(monkeypatch):
     ctx = SimpleNamespace(agent_name="parent_agent")
     validated = tool.parse({"input": "do it"})
     result = await tool.run(ctx, validated)
-    assert result == "the answer"
+    assert result == {"status": "COMPLETED", "answer": "the answer"}
     assert captured["input_data"] == {"input": "do it"}
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_no_output_schema_failed_returns_error_string(monkeypatch):
+async def test_agent_tool_failed_returns_its_error_not_an_answer(monkeypatch):
     _patch_subagent(
         monkeypatch,
         await_result={"output": None, "status": "FAILED", "error": "boom"},
@@ -1571,7 +1571,28 @@ async def test_agent_tool_no_output_schema_failed_returns_error_string(monkeypat
     ctx = SimpleNamespace(agent_name="parent_agent")
     validated = tool.parse({"input": "x"})
     result = await tool.run(ctx, validated)
-    assert result == "boom"
+    assert result["status"] == "FAILED" and result["error"] == "boom"
+    assert "answer" not in result
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_that_asked_returns_its_question(monkeypatch):
+    """Not the bare "WAITING" it used to be, with the question lost."""
+    _patch_subagent(
+        monkeypatch,
+        await_result={
+            "output": None,
+            "status": "WAITING",
+            "waiting_on": {"kind": "ask_user", "asked": {"question": "Which?"}},
+        },
+    )
+    child, parent = _agent_pair()
+    tool = _agent_tool(child, parent)
+    result = await tool.run(
+        SimpleNamespace(agent_name="parent_agent"), tool.parse({"input": "x"})
+    )
+    assert result["status"] == "NEEDS_INPUT"
+    assert result["question"]["asked"] == {"question": "Which?"}
 
 
 @pytest.mark.asyncio
@@ -1587,7 +1608,7 @@ async def test_agent_tool_returns_dict_when_output_schema_set(monkeypatch):
     ctx = SimpleNamespace(agent_name="parent_agent")
     validated = tool.parse({})
     result = await tool.run(ctx, validated)
-    assert result == {"k": "v"}
+    assert result == {"status": "COMPLETED", "output": {"k": "v"}}
 
 
 @pytest.mark.asyncio

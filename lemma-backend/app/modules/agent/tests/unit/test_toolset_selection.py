@@ -141,14 +141,14 @@ def test_no_grants_derives_nothing():
 def test_a_sub_agent_loses_the_withheld_ones_even_though_they_are_always_on():
     """The subtraction has to run last.
 
-    MESSAGING and SNOOZE are universal now, so an ordering that added them after
-    the sub-agent filter would hand a child run the two toolsets it is
-    specifically withheld from.
+    MESSAGING is universal now, so an ordering that added it after the
+    sub-agent filter would hand a child run the toolset it is withheld from.
+    WAIT stays: a child waits on its own long builds durably.
     """
     resolved = resolve_toolsets(_agent(), _conversation(is_sub_agent=True))
 
     assert AgentToolset.MESSAGING not in resolved.names
-    assert AgentToolset.WAIT not in resolved.names
+    assert AgentToolset.WAIT in resolved.names
     assert AgentToolset.SUBAGENTS not in resolved.names
     # The rest of the always-on set survives.
     assert AgentToolset.USER_INTERACTION in resolved.names

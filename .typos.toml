@@ -28,6 +28,8 @@ extend-ignore-re = [
     # A line can opt out, for text that is misspelt on purpose: a fuzzy-match
     # fixture, a typo a parser must tolerate.
     "(?Rm)^.*(#|//)\\s*typos:\\s*ignore.*$",
+    # A content digest in a golden (`tool:name@0335f8d34166`): hex, not words.
+    "@[0-9a-f]{12}\\b",
 ]
 
 [default.extend-words]

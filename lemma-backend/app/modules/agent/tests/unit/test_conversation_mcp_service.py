@@ -314,11 +314,12 @@ class _ConversationAlreadyLoaded(ConversationMCPService):
         return None, self._conversation, self._ctx, AgentGrantSummary()
 
 
+# A sub-agent keeps `wait_for` for its own long builds; it may not delegate.
 _SUBAGENT_TOOLS = {
+    "lemma_delegate",
     "lemma_spawn_subagent",
     "lemma_interact_subagent",
     "lemma_query_subagents",
-    "lemma_wait_for",
 }
 
 

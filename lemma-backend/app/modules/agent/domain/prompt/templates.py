@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from app.modules.agent.domain.outsiders import run_audience
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
 from app.modules.agent.domain.prompt.directories import _directory_sections
+from app.modules.agent.domain.toolsets import is_sub_agent_run
 from app.modules.agent.domain.value_objects import AgentToolset
 
 if TYPE_CHECKING:
@@ -50,6 +51,7 @@ _MEMORY_TIMING_SECTION = "When to write"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 _MESSAGING_PROMPT_PATH = _PROMPT_DIR / "messaging.md"
 _SUBAGENTS_PROMPT_PATH = _PROMPT_DIR / "subagents.md"
+_SUBAGENT_CHILD_PROMPT_PATH = _PROMPT_DIR / "subagent_child.md"
 _USER_INTERACTION_PROMPT_PATH = _PROMPT_DIR / "user_interaction.md"
 _AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
 _AGENT_HOST_HOST_EXECUTION_PROMPT_PATH = _PROMPT_DIR / "agent_host_host_execution.md"
@@ -393,7 +395,12 @@ def build_agent_instruction_parts(
     # A surface run narrows this further -- ``surface_platform_guidance`` appends
     # its own ``soft_char_limit`` below -- but a run with no surface platform
     # would otherwise be told nothing at all about length or narration.
-    sections.append(load_replies_prompt())
+    # A sub-agent's reply goes to the agent that briefed it, not to a person.
+    sections.append(
+        _read_required_prompt(_SUBAGENT_CHILD_PROMPT_PATH)
+        if is_sub_agent_run(conversation)
+        else load_replies_prompt()
+    )
 
     enabled = _fragment_toolsets(agent=agent, conversation=conversation, ctx=ctx)
 

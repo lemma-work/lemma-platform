@@ -146,15 +146,14 @@ _CONNECTOR_RESOURCES = frozenset(
 
 # Withheld from a sub-agent, each for its own reason:
 #
-# SUBAGENTS   -- the depth rule itself.
-# WAIT        -- a waiting child blocks its parent's tool call while the parent
-#                is still mid-run and subject to its own limits.
+# SUBAGENTS   -- the depth rule itself (``domain/delegation.MAX_DEPTH``).
 # MESSAGING   -- a sub-agent is an implementation detail of its parent's turn,
 #                and a colleague receiving a message from one has no way to
 #                place it. Whatever needs saying, the parent should say.
-_SUB_AGENT_WITHHELD = frozenset(
-    {AgentToolset.SUBAGENTS, AgentToolset.WAIT, AgentToolset.MESSAGING}
-)
+#
+# WAIT stays: a child running a long build or test suite waits on it durably
+# (the parent's own wait is a row, not a held tool call).
+_SUB_AGENT_WITHHELD = frozenset({AgentToolset.SUBAGENTS, AgentToolset.MESSAGING})
 
 # All a run answering somebody outside the pod keeps, when its agent has them:
 # ``OUTSIDER_TOOLSETS`` (``domain/outsiders``). That is only the first cut --

@@ -13,8 +13,11 @@ target is doing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from uuid import UUID
+
+from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -23,6 +26,12 @@ from app.core.log.log import get_logger
 from app.modules.agent.domain.value_objects import (
     TERMINAL_AGENT_RUN_STATUSES,
     ConversationStatus,
+)
+from app.modules.agent.domain.delegation import (
+    GONE,
+    NEEDS_INPUT,
+    RUNNING,
+    ChildReport,
 )
 from app.modules.agent.domain.wait import AgentWaitType, AgentWaitWakeReason
 from app.modules.agent.infrastructure.tools.waiting.models import wake_message
@@ -42,6 +51,8 @@ class TargetOutcome:
     exit_code: int | None = None
     message: str = ""
     unreadable: bool = False
+    #: Each child's report, for a wait on sub-agents.
+    reports: tuple[ChildReport, ...] = ()
 
 
 _STILL_GOING = TargetOutcome(reason=None)
@@ -115,11 +126,20 @@ async def _read_process(process_id: str, *, user_id: UUID) -> TargetOutcome:
 async def _read_subagent_run(
     run_id: str, *, user_id: UUID, parent_conversation_id: UUID
 ) -> TargetOutcome:
-    """``read_subagent_in`` on a unit of work of its own (``wait_for``'s check)."""
+    return await read_children(
+        [run_id], user_id=user_id, parent_conversation_id=parent_conversation_id
+    )
+
+
+async def read_children(
+    run_ids: Sequence[str], *, user_id: UUID, parent_conversation_id: UUID
+) -> TargetOutcome:
+    """``read_children_in`` on a unit of work of its own (the check a wait
+    makes before it suspends)."""
     async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-        outcome = await read_subagent_in(
+        outcome = await read_children_in(
             uow,
-            run_id,
+            run_ids,
             user_id=user_id,
             parent_conversation_id=parent_conversation_id,
         )
@@ -134,29 +154,84 @@ async def read_subagent_in(
     user_id: UUID,
     parent_conversation_id: UUID,
 ) -> TargetOutcome:
-    """A child's run, in terms of its conversation as well as the run.
+    """One child's run, as ``read_children_in`` reads a set of them."""
+    return await read_children_in(
+        uow,
+        [run_id],
+        user_id=user_id,
+        parent_conversation_id=parent_conversation_id,
+    )
+
+
+async def read_children_in(
+    uow: SqlAlchemyUnitOfWork,
+    run_ids: Sequence[str],
+    *,
+    user_id: UUID,
+    parent_conversation_id: UUID,
+) -> TargetOutcome:
+    """The children's runs, in terms of their conversations as well as the runs.
+
+    Still going while any is; needing input as soon as one stopped to ask --
+    the child has no surface, so nobody but its parent sees the question --
+    and finished once every one has ended. Every outcome carries each child's
+    report, so the parent wakes once, with all of them.
 
     On the caller's unit of work, so a timer or a finished child resolves the
-    parent's wait in one transaction: database reads only. A run that ended on
-    a question has ended, but its conversation is WAITING on an answer only
-    the parent can arrange -- the child has no surface, so nobody else sees the
-    question. Reported as finished, the parent built on a result that did not
-    exist yet and the question was never answered.
+    parent's wait in one transaction: database reads only.
+    """
+    reports = [
+        await _child_report(
+            uow, run_id, user_id=user_id, parent_conversation_id=parent_conversation_id
+        )
+        for run_id in run_ids
+    ]
+    statuses = {report.status for report in reports}
+    reason: AgentWaitWakeReason | None
+    if NEEDS_INPUT in statuses:
+        reason = AgentWaitWakeReason.TARGET_NEEDS_INPUT
+    elif RUNNING in statuses:
+        return TargetOutcome(reason=None, reports=tuple(reports))
+    elif statuses == {GONE}:
+        reason = AgentWaitWakeReason.TARGET_GONE
+    else:
+        reason = AgentWaitWakeReason.TARGET_FINISHED
+    return TargetOutcome(
+        reason=reason,
+        message=wake_message(AgentWaitType.SUBAGENT, reason),
+        reports=tuple(reports),
+    )
+
+
+async def _child_report(
+    uow: SqlAlchemyUnitOfWork,
+    run_id: str,
+    *,
+    user_id: UUID,
+    parent_conversation_id: UUID,
+) -> ChildReport:
+    """One child, as its parent hears of it; claimed as collected once ended.
+
+    A run that ended on a question has ended, but its conversation is WAITING
+    on an answer only the parent can arrange. Reported as finished, the parent
+    built on a result that did not exist yet.
     """
     from app.modules.agent.infrastructure.db.conversations import Conversations
     from app.modules.agent.infrastructure.db.runs import Runs
+    from app.modules.agent.infrastructure.repositories import AgentRepository
     from app.modules.agent.services.subagent_result_delivery import mark_collected
+    from app.modules.agent.services.subagent_service import open_question
 
+    gone = ChildReport(conversation_id="", run_id=run_id, agent="", status=GONE)
     try:
         parsed = UUID(run_id)
     except ValueError:
-        return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE)
-
-    conversations = Conversations(uow)
-    runs = Runs(uow)
-    run = await runs.get_agent_run(parsed)
+        return gone
+    run = await Runs(uow).get_agent_run(parsed)
     child = (
-        await conversations.get_conversation(run.conversation_id, include_runs=False)
+        await Conversations(uow).get_conversation(
+            run.conversation_id, include_runs=False
+        )
         if run is not None
         else None
     )
@@ -167,12 +242,22 @@ async def read_subagent_in(
         or child.user_id != user_id
     ):
         # Somebody else's run reads exactly like one that does not exist.
-        return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_GONE)
+        return gone
+    agent = await AgentRepository(uow).get(child.agent_id) if child.agent_id else None
+    report = ChildReport(
+        conversation_id=str(child.id),
+        run_id=run_id,
+        agent=agent.name if agent is not None else DEFAULT_POD_AGENT_NAME,
+        status=RUNNING,
+    )
     if run.status not in TERMINAL_AGENT_RUN_STATUSES:
-        return _STILL_GOING
+        return report
     if child.status == ConversationStatus.WAITING:
-        return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_NEEDS_INPUT)
-    # Both callers hand "finished" to the parent that is waiting on exactly
-    # this run, so the parent has collected it and nothing delivers it again.
+        asked = await open_question(uow, child.id)
+        return replace(report, status=NEEDS_INPUT, question=asked.get("waiting_on"))
+    # Handed to the parent waiting on exactly this run: collected, so nothing
+    # delivers it again.
     await mark_collected(uow, run.id)
-    return _outcome(AgentWaitType.SUBAGENT, AgentWaitWakeReason.TARGET_FINISHED)
+    return replace(
+        report, status=run.status.value, output=run.output_data, error=run.error
+    )

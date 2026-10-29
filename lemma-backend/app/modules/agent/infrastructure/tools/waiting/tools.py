@@ -45,6 +45,7 @@ from app.modules.agent.domain.tools import (
     ToolPolicy,
     tool,
 )
+from app.modules.agent.domain.delegation import report_payload
 from app.modules.agent.domain.pauses import CALL_NAMES, Pause
 from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.infrastructure.tools.waiting.models import (
@@ -59,14 +60,18 @@ from app.modules.agent.infrastructure.tools.waiting.models import (
 logger = get_logger(__name__)
 
 
-def _target_of(request: WaitForRequest) -> tuple[AgentWaitType, str | None] | None:
-    """The one target this call names, or None when it does not name exactly one."""
+def _target_of(request: WaitForRequest) -> tuple[AgentWaitType, list[str]] | None:
+    """The one target this call names, or None when it does not name exactly one.
+
+    A set of sub-agent runs is one target: the parent wakes once, for all."""
+    children = [
+        *([request.subagent_run_id] if request.subagent_run_id else []),
+        *(request.subagent_run_ids or []),
+    ]
     named = [
-        (AgentWaitType.TIME, None) if request.seconds is not None else None,
-        (AgentWaitType.PROCESS, request.process_id) if request.process_id else None,
-        (AgentWaitType.SUBAGENT, request.subagent_run_id)
-        if request.subagent_run_id
-        else None,
+        (AgentWaitType.TIME, []) if request.seconds is not None else None,
+        (AgentWaitType.PROCESS, [request.process_id]) if request.process_id else None,
+        (AgentWaitType.SUBAGENT, list(dict.fromkeys(children))) if children else None,
     ]
     chosen = [target for target in named if target is not None]
     return chosen[0] if len(chosen) == 1 else None
@@ -79,7 +84,8 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
     - `seconds` — a plain gap, when there is nothing to watch.
     - `process_id` — a command from `exec_command` that is still running. You
       wake when it exits, with its exit code.
-    - `subagent_run_id` — a child from `spawn_subagent`. You wake with its result.
+    - `subagent_run_id` / `subagent_run_ids` — children from `delegate`. You
+      wake once, with every report.
 
     You come back in the same conversation with the same history. Three things
     that bite:
@@ -96,6 +102,17 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
     talking to, and `channel_post` ends your turn and gets you a new one when
     the answers arrive.
     """
+    return await wait_on(ctx, request)
+
+
+async def wait_on(
+    ctx: ToolContext,
+    request: WaitForRequest,
+    *,
+    tool_name: str = CALL_NAMES[PauseKind.WAIT],
+) -> WaitForResponse:
+    """``wait_for``'s whole work, for the call named ``tool_name``: ``delegate``
+    suspends on its children through it too."""
     deps = ctx
 
     if deps.agent_run_id is None:
@@ -116,12 +133,12 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
         return WaitForResponse(
             success=False,
             error=(
-                "Name exactly one of `seconds`, `process_id` or "
-                "`subagent_run_id` — waiting on several things at once is not "
+                "Name exactly one of `seconds`, `process_id` or the sub-agent "
+                "runs — waiting on different kinds of thing at once is not "
                 "supported, so wait for the one that gates your next step."
             ),
         )
-    wait_type, external_ref = target
+    wait_type, targets = target
 
     if wait_type is AgentWaitType.TIME and request.seconds < MIN_WAIT_SECONDS:
         # Rejected rather than clamped: asking for a few seconds means the model
@@ -173,7 +190,7 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
         # Checked before suspending: a target that has already finished should
         # answer now rather than cost a suspend, a wake and a full history
         # replay to learn something that was true before the call was made.
-        settled = await _already_settled(deps, wait_type, external_ref)
+        settled = await _already_settled(deps, wait_type, targets)
         if settled is not None:
             return settled
         ceiling = min(
@@ -200,7 +217,7 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
         run_id=deps.agent_run_id,
         pod_id=deps.pod_id,
         tool_call_id=ctx.tool_call_id,
-        tool_name=CALL_NAMES[PauseKind.WAIT],
+        tool_name=tool_name,
         kind=PauseKind.WAIT,
         wait_type=wait_type,
         external_ref=str(wait_ref),
@@ -210,7 +227,8 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
             note_to_self=request.note_to_self,
             started_at=now,
             deadline_at=deadline_at,
-            target_ref=external_ref,
+            target_ref=targets[0] if len(targets) == 1 else None,
+            target_refs=targets if len(targets) > 1 else None,
             user_id=deps.user_id,
             requested_seconds=request.seconds,
             requested_max_seconds=request.max_seconds,
@@ -244,7 +262,7 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
     if suspends_itself:
         # Ends the run cleanly (conversation -> WAITING). The resolution path
         # synthesizes this call's return and starts a fresh run that replays it.
-        raise AgentInputRequired(ctx.tool_call_id, PauseKind.WAIT)
+        raise AgentInputRequired(ctx.tool_call_id, tool_name)
 
     # A remote harness reads this and then stops, mid-sentence if that is where
     # the cancel catches it. Written for a model that may get no further turn to
@@ -262,18 +280,25 @@ async def wait_for(ctx: ToolContext, request: WaitForRequest) -> WaitForResponse
 
 
 async def _already_settled(
-    deps: ToolContext, wait_type: AgentWaitType, external_ref: str | None
+    deps: ToolContext, wait_type: AgentWaitType, targets: list[str]
 ) -> WaitForResponse | None:
     """An immediate answer when the target has already reached a terminal state."""
-    from app.modules.agent.services.wait_targets import read_target
+    from app.modules.agent.services.wait_targets import read_children, read_target
 
-    outcome = await read_target(
-        wait_type=wait_type,
-        target_ref=external_ref,
-        user_id=deps.user_id,
-        pod_id=deps.pod_id,
-        conversation_id=deps.conversation_id,
-    )
+    if wait_type is AgentWaitType.SUBAGENT:
+        outcome = await read_children(
+            targets,
+            user_id=deps.user_id,
+            parent_conversation_id=deps.conversation_id,
+        )
+    else:
+        outcome = await read_target(
+            wait_type=wait_type,
+            target_ref=targets[0] if targets else None,
+            user_id=deps.user_id,
+            pod_id=deps.pod_id,
+            conversation_id=deps.conversation_id,
+        )
     if outcome.unreadable:
         # The wait still goes ahead -- the resolver gives an unreadable target a
         # grace period -- but it starts blind, and the probe failing is the only
@@ -290,6 +315,7 @@ async def _already_settled(
         woke_because=outcome.reason.value,
         waited_seconds=0,
         exit_code=outcome.exit_code,
+        results=report_payload(list(outcome.reports)) if outcome.reports else None,
         message=outcome.message,
     )
 

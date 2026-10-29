@@ -78,7 +78,10 @@ CALL_NAMES: dict[PauseKind, str] = {
     PauseKind.BUDGET: "request_approval",
     PauseKind.HOST_PERMISSION: "request_approval",
 }
-PAUSING_CALL_NAMES = frozenset(CALL_NAMES.values())
+#: The call that hands tasks to sub-agents and waits on them: a WAIT pause
+#: under a name of its own, since it is not ``wait_for``.
+DELEGATE_CALL_NAME = "delegate"
+PAUSING_CALL_NAMES = frozenset({*CALL_NAMES.values(), DELEGATE_CALL_NAME})
 #: Somebody decided it (or the system did, for them); its return may still be
 #: on its way -- an approved tool runs in a worker first.
 DECIDED = frozenset({PauseStatus.RESOLVED, PauseStatus.EXPIRED, PauseStatus.SUPERSEDED})

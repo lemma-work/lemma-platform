@@ -131,7 +131,7 @@ def _capabilities(
     # toolset; a named agent chose its own. Never on a stranger's run, whose
     # one way past what is Public is reaching the member, in view.
     defers = ctx.is_pod_default_agent and not run_audience(ctx).answers_outsiders
-    deferred = [g for g in groups if defers and all(s.policy.deferrable for s in g)]
+    shown, deferred = _split(groups, defers=defers)
     host_execution = ctx.host_workspace is not None
 
     def with_guidance(
@@ -143,9 +143,7 @@ def _capabilities(
         return InstructedToolset(toolset, guidance)
 
     capabilities: list[AgentCapability[ToolContext]] = [
-        with_guidance(group, function_toolset(group, runtime))
-        for group in groups
-        if group not in deferred
+        with_guidance(group, function_toolset(group, runtime)) for group in shown
     ]
     capabilities.append(UniqueToolCallIds())
     capabilities.append(RunContextCapability(run_context_for(ctx)))
@@ -157,6 +155,7 @@ def _capabilities(
                 runtime,
                 natively=reveals_tools_natively,
                 host_execution=host_execution,
+                guided={group[0].toolset for group in shown},
             )
         )
     questions = [spec for spec in specs if spec.toolset is ToolGroup.QUESTIONS]
@@ -179,6 +178,7 @@ def _deferred(
     *,
     natively: bool,
     host_execution: bool,
+    guided: frozenset[ToolGroup] | set[ToolGroup] = frozenset(),
 ) -> list[AgentCapability[ToolContext]]:
     """The deferred toolsets, their guidance, and the hint naming them.
 
@@ -187,8 +187,11 @@ def _deferred(
     the monetary-limit case). Otherwise behind `search_tools` and `call_tool`.
     """
     capabilities: list[AgentCapability[ToolContext]] = []
+    # A group whose other tools are in view already carries its guidance.
     guidance = [
-        toolset_instructions(group[0].toolset, host_execution=host_execution)
+        None
+        if group[0].toolset in guided
+        else toolset_instructions(group[0].toolset, host_execution=host_execution)
         for group in deferred
     ]
     if natively:
@@ -240,6 +243,27 @@ def _run_hooks(
             )
         )
     return hooks
+
+
+def _split(
+    groups: list[list[ToolSpec]], *, defers: bool
+) -> tuple[list[list[ToolSpec]], list[list[ToolSpec]]]:
+    """Each group's tools in view, and its deferrable ones behind search.
+
+    By tool, not by group: one group can hold a tool every run should see
+    beside advanced ones it rarely needs (``delegate`` beside the sub-agent
+    controls). A group of only deferrable tools is deferred whole, as before.
+    """
+    shown: list[list[ToolSpec]] = []
+    deferred: list[list[ToolSpec]] = []
+    for group in groups:
+        hidden = [spec for spec in group if defers and spec.policy.deferrable]
+        visible = [spec for spec in group if spec not in hidden]
+        if visible:
+            shown.append(visible)
+        if hidden:
+            deferred.append(hidden)
+    return shown, deferred
 
 
 def _groups(specs: Iterable[ToolSpec]) -> list[list[ToolSpec]]:

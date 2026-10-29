@@ -794,6 +794,9 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     # Always there, open question or not: see `tool_catalog._seen_and_placed`.
     "answer_question",
     "write_todos",
+    # Delegation is one visible tool: behind search it went unused, and a
+    # reveal rewrote the cached tool array (subagents.md).
+    "delegate",
     # The pod's own data and files. Visible on purpose, and it is the one entry
     # here that costs real prefix budget: ten schemas in every pod-default
     # prompt. Deferred, they went almost unused — most conversations that
@@ -828,7 +831,7 @@ async def test_pod_default_visible_toolset_is_slim():
 
     assert visible == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS
     assert any(isinstance(c, ToolSearch) for c in capabilities)
-    # Sub-agents stay deferred: delegating is a deliberate step.
+    # `delegate` is in view; the rest of the sub-agent controls stay deferred.
     assert {"spawn_subagent", "interact_subagent", "query_subagents"} <= deferred
     assert not any(name.startswith("pod_") for name in deferred)
     # Asking for a login is the deliberate step past `web_fetch`.
@@ -836,7 +839,7 @@ async def test_pod_default_visible_toolset_is_slim():
     # The hint names what is deferred -- with a line each -- and nothing else.
     [hint] = _hint(capabilities)
     assert "spawn_subagent" in hint
-    assert "Start a pod agent as a linked child conversation" in hint
+    assert "Deprecated: use `delegate`" in hint
     assert {"say", "listen", "list_voices"} <= deferred
     assert "Speaking and transcribing" in hint
     assert "pod_tables" not in hint
