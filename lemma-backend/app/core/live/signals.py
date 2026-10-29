@@ -112,12 +112,14 @@ def signal_after_commit(session: AsyncSession, pod_id: UUID, signal: Signal) -> 
     """Publish ``signal`` once ``session``'s transaction commits; never if it
     rolls back. The same signal twice in one transaction is published once."""
     sync = session.sync_session
-    pending: dict[UUID, list[Signal]] | None = sync.info.get(_SESSION_KEY)
-    if pending is None:
-        pending = {}
-        sync.info[_SESSION_KEY] = pending
-        event.listen(sync, "after_commit", _flush, once=True)
-        event.listen(sync, "after_rollback", _forget, once=True)
+    pending: dict[UUID, list[Signal]] = sync.info.setdefault(_SESSION_KEY, {})
+    # Kept for the session's life rather than ``once``: a unit of work commits
+    # more than once, and a ``once`` listener stays registered without firing
+    # again, so listening again was a silent no-op and every signal after the
+    # session's first commit was dropped.
+    if not event.contains(sync, "after_commit", _flush):
+        event.listen(sync, "after_commit", _flush)
+        event.listen(sync, "after_rollback", _forget)
     queued = pending.setdefault(pod_id, [])
     if signal not in queued:
         queued.append(signal)
@@ -125,16 +127,12 @@ def signal_after_commit(session: AsyncSession, pod_id: UUID, signal: Signal) -> 
 
 def _flush(sync: Session) -> None:
     pending: dict[UUID, list[Signal]] = sync.info.pop(_SESSION_KEY, None) or {}
-    if event.contains(sync, "after_rollback", _forget):
-        event.remove(sync, "after_rollback", _forget)
     for pod_id, signals in pending.items():
         publish_signals(pod_id, signals)
 
 
 def _forget(sync: Session) -> None:
     sync.info.pop(_SESSION_KEY, None)
-    if event.contains(sync, "after_commit", _flush):
-        event.remove(sync, "after_commit", _flush)
 
 
 # -- listening -----------------------------------------------------------------
