@@ -379,7 +379,7 @@ class TestOneDaemonStartAtATime:
 
         _run(environment, "get", "url")
 
-        assert calls.read_text().split()[3].endswith("/workspace.start.lock")
+        assert Path(calls.read_text().split()[3]).name == "workspace.start.lock"
 
     def test_with_the_daemon_up_nothing_waits(self, tmp_path: Path) -> None:
         environment, calls = self._with_flock(tmp_path)
