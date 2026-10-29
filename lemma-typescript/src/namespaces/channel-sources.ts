@@ -108,6 +108,34 @@ export class ChannelSourcesNamespace {
     );
   }
 
+  /** The tables a group's people outside the pod may read or add to. */
+  tableGrants(podId: string, channelId: string) {
+    return this.client.request(() => ChannelsService.channelTableGrantList(podId, channelId));
+  }
+
+  /** Give a group a table: the columns everybody there may read, and those
+   *  they may fill in a new row. Everybody in the group reads what is granted. */
+  setTableGrant(
+    podId: string,
+    channelId: string,
+    table: string,
+    grant: { readColumns: string[]; addColumns: string[] },
+  ) {
+    return this.client.request(() =>
+      ChannelsService.channelTableGrantSet(podId, channelId, table, {
+        read_columns: grant.readColumns,
+        add_columns: grant.addColumns,
+      }),
+    );
+  }
+
+  /** The group no longer reads or adds to the table. */
+  removeTableGrant(podId: string, channelId: string, table: string) {
+    return this.client.request(() =>
+      ChannelsService.channelTableGrantRemove(podId, channelId, table),
+    );
+  }
+
   /** The account that opened the code is not the caller's: spend it. */
   declineIdentityLink(podId: string, code: string) {
     return this.client.request(() =>

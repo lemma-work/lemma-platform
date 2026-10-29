@@ -144,6 +144,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/me` | `channel.member.leave` | Leave Channel |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/members/{kind}:{member_id}` | `channel.member.remove` | Remove Member |
 | DELETE | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}` | `channel.message.delete` | Delete Message |
+| DELETE | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | `channel.table_grant.remove` | Remove Table Grant |
 | GET | `/pods/{pod_id}/channels` | `channel.list` | List Channels |
 | GET | `/pods/{pod_id}/channels/me` | `channel.me.get` | Get My Channel |
 | GET | `/pods/{pod_id}/channels/{channel_id}` | `channel.get` | Get Channel |
@@ -153,6 +154,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries` | `channel.delivery.list` | List Deliveries |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/files/{file_id}` | `channel.message.file` | Line File |
 | GET | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/thread` | `channel.message.thread` | List Thread |
+| GET | `/pods/{pod_id}/channels/{channel_id}/table-grants` | `channel.table_grant.list` | List Table Grants |
 | GET | `/pods/{pod_id}/inbox` | `channel.inbox.get` | Get Inbox |
 | GET | `/pods/{pod_id}/search` | `channel.search` | Search |
 | PATCH | `/pods/{pod_id}/channels/{channel_id}` | `channel.update` | Update Channel |
@@ -168,6 +170,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/deliveries/{delivery_id}/retry` | `channel.delivery.retry` | Retry Delivery |
 | POST | `/pods/{pod_id}/channels/{channel_id}/messages/{message_id}/share` | `channel.message.share` | Share Message |
 | POST | `/pods/{pod_id}/channels/{channel_id}/read` | `channel.read` | Mark Read |
+| PUT | `/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}` | `channel.table_grant.set` | Set Table Grant |
 
 ## connectors
 

@@ -840,6 +840,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.changes.retention.observed': EventSpec('info', frozenset({'deleted'})),
     'datastore.changes.retention.subscriber_lapsed': EventSpec('warning', frozenset({'pod_id', 'skipped', 'subscriber'})),
     'datastore.changes.retention.unknown_subscriber_dropped': EventSpec('warning', frozenset({'pod_id', 'subscriber'})),
+    'datastore.channel_grants.granted': EventSpec('info', frozenset({'add_count', 'channel_id', 'pod_id', 'read_count', 'table_id'})),
     'datastore.config.setting_renamed': EventSpec('warning', frozenset({'new_name', 'old_name'})),
     'datastore.docling_processor.docling_pdf_page_count_probe.observed': EventSpec('debug', frozenset()),
     'datastore.docling_processor.docling_poll_hiccup_s_retrying.observed': EventSpec('debug', frozenset()),

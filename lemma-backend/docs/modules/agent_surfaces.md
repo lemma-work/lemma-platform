@@ -486,11 +486,16 @@ is answered *for the pod*, in a group the pod has opened to them.
     dispatcher drop anything not on the list, however it arrived. A workspace
     -- sandbox, host session, the owner's files -- is never opened for such a
     run (`refuse_owner_workspace`), and a test fails until any new tool in a
-    kept toolset is classified.
+    kept toolset is classified. In a group it also has `group_history` (the
+    group it sits in, from its seat, never another), and `group_records` and
+    `group_add_record` for the tables the group was given (channels' "Tables
+    a group was given"), read and added as the member who gave them.
   - **What it is told.** A brief naming the owner by display name only -- no
     email, no ids -- as who looks after the conversation; no task list; no
-    sandbox described. The agent's and conversation's own instructions are
-    pod configuration and stay.
+    sandbox described; only the tools it has, and in a group the group's brief
+    with the tables it was given. It never says a thing was saved unless a
+    tool said so. The agent's and conversation's own instructions are pod
+    configuration and stay.
   - **What it remembers.** Nothing a private note started: the owner's note in
     a contact's conversation, and its run's answer, are left out of every later
     turn of theirs. From the group's log, nothing the bot answered with a

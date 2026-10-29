@@ -12,6 +12,7 @@ import { CopyButton } from "@/thread/copy-button";
 import { channelApi } from "./api";
 import { sourceKey, useSourceSettings } from "./queries";
 import { SourcePublic } from "./source-public";
+import { TableGrants } from "./table-grants";
 import {
     answering,
     howToAsk,
@@ -131,6 +132,7 @@ function Settings({ pod, source }: { pod: Pod; source: SourceSettings }) {
                     )}
                     {(told ?? who) && <p className="gside__fine">{told ?? who}</p>}
                     {source.publicReach && <SourcePublic reach={source.publicReach} space={pod.name} />}
+                    <TableGrants pod={pod} channelId={source.channelId} may={may} />
                     {change.isError && (
                         <p className="gside__problem" role="alert">{isForbidden(change.error) ? refusedChange(pod.name) : "Couldn’t change that. Try again."}</p>
                     )}

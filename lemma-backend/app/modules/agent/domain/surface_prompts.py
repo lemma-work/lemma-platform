@@ -256,9 +256,11 @@ def group_participants_notice(participants: object) -> str | None:
             f"{', '.join(outside)} "
             f"{'is' if _one(outside, unnamed[False]) else 'are'} not in this pod: "
             "they read only what this pod has made public, so say nothing here "
-            "that they should not hear. When they ask the bot themselves it can "
-            "only read what is Public for them and cannot save or change "
-            "anything: what they want written down, you write."
+            "that they should not hear. When they ask the bot themselves it "
+            "reads only what is Public and any table this group was given, and "
+            "adds rows only to a table given with adding: anything else they "
+            "want written down, you write -- or give the group the table "
+            "(`lemma channels grants set`)."
         )
     lines.append(
         "This is for you to judge the answer by, not to repeat: do not tell the "

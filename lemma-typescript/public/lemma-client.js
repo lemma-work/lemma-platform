@@ -18160,6 +18160,91 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List Table Grants
+     * The tables the group's people outside the pod may read or add to.
+     * @param podId
+     * @param channelId
+     * @returns TableGrantsResponse Successful Response
+     * @throws ApiError
+     */
+    static channelTableGrantList(podId, channelId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/channels/{channel_id}/table-grants",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Remove Table Grant
+     * The group no longer reads or adds to the table.
+     * @param podId
+     * @param channelId
+     * @param tableName
+     * @returns void
+     * @throws ApiError
+     */
+    static channelTableGrantRemove(podId, channelId, tableName) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "table_name": tableName
+        },
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
+     * Set Table Grant
+     * Give the group these columns of the table to read, and those to fill.
+     *
+     * Everybody in the group reads what is granted -- the people outside the
+     * pod included -- through the granting member's own access.
+     * @param podId
+     * @param channelId
+     * @param tableName
+     * @param requestBody
+     * @returns TableGrantResponse Successful Response
+     * @throws ApiError
+     */
+    static channelTableGrantSet(podId, channelId, tableName, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}",
+        path: {
+          "pod_id": podId,
+          "channel_id": channelId,
+          "table_name": tableName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          400: `A cursor this API did not give.`,
+          403: `Not allowed: \`INSUFFICIENT_PERMISSION\`.`,
+          404: `Not there, or not the reader's to see: \`CHANNEL_NOT_FOUND\`, \`LINE_NOT_FOUND\`, \`MEMBER_NOT_FOUND\` ...`,
+          409: `Not in this channel's state: \`CHANNEL_ARCHIVED\`, \`WRONG_CHANNEL_KIND\`, \`LAST_OWNER\`, \`LAST_MEMBER\`, \`NOT_JOINED\`, \`CHANNEL_CONFLICT\`.`,
+          422: `The request cannot be done as asked: \`VALIDATION_ERROR\`.`
+        }
+      });
+    }
+    /**
      * Get Inbox
      * What is new for the reader across the pod: the badges, the questions
      * waiting on them, the unread lines naming them -- newest first -- and the
@@ -18435,6 +18520,26 @@ var LemmaClient = (() => {
     confirmIdentityLink(podId, code) {
       return this.client.request(
         () => AgentSurfacesService.telegramIdentityLinkConfirm(podId, code)
+      );
+    }
+    /** The tables a group's people outside the pod may read or add to. */
+    tableGrants(podId, channelId) {
+      return this.client.request(() => ChannelsService.channelTableGrantList(podId, channelId));
+    }
+    /** Give a group a table: the columns everybody there may read, and those
+     *  they may fill in a new row. Everybody in the group reads what is granted. */
+    setTableGrant(podId, channelId, table, grant) {
+      return this.client.request(
+        () => ChannelsService.channelTableGrantSet(podId, channelId, table, {
+          read_columns: grant.readColumns,
+          add_columns: grant.addColumns
+        })
+      );
+    }
+    /** The group no longer reads or adds to the table. */
+    removeTableGrant(podId, channelId, table) {
+      return this.client.request(
+        () => ChannelsService.channelTableGrantRemove(podId, channelId, table)
       );
     }
     /** The account that opened the code is not the caller's: spend it. */

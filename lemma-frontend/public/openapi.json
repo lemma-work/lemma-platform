@@ -21765,6 +21765,79 @@
         "title": "TableDetailResponse",
         "type": "object"
       },
+      "TableGrantRequest": {
+        "properties": {
+          "add_columns": {
+            "description": "Columns they may fill in a new row; empty to only read.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Add Columns",
+            "type": "array"
+          },
+          "read_columns": {
+            "description": "Columns everybody in the group may read.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Read Columns",
+            "type": "array"
+          }
+        },
+        "title": "TableGrantRequest",
+        "type": "object"
+      },
+      "TableGrantResponse": {
+        "properties": {
+          "add_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Add Columns",
+            "type": "array"
+          },
+          "granted_by": {
+            "format": "uuid",
+            "title": "Granted By",
+            "type": "string"
+          },
+          "read_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Read Columns",
+            "type": "array"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "read_columns",
+          "add_columns",
+          "granted_by"
+        ],
+        "title": "TableGrantResponse",
+        "type": "object"
+      },
+      "TableGrantsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TableGrantResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "TableGrantsResponse",
+        "type": "object"
+      },
       "TableListResponse": {
         "description": "Schema for table list response.",
         "properties": {
@@ -37214,6 +37287,334 @@
           "resource": "channel.source",
           "result": "entity",
           "verb": "update"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/table-grants": {
+      "get": {
+        "description": "The tables the group's people outside the pod may read or add to.",
+        "operationId": "channel.table_grant.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableGrantsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "List Table Grants",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "channel.table_grant",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/channels/{channel_id}/table-grants/{table_name}": {
+      "delete": {
+        "description": "The group no longer reads or adds to the table.",
+        "operationId": "channel.table_grant.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Remove Table Grant",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.table_grant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.table_grant",
+          "result": "void",
+          "verb": "remove"
+        }
+      },
+      "put": {
+        "description": "Give the group these columns of the table to read, and those to fill.\n\nEverybody in the group reads what is granted -- the people outside the\npod included -- through the granting member's own access.",
+        "operationId": "channel.table_grant.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table_name",
+            "required": true,
+            "schema": {
+              "title": "Table Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TableGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A cursor this API did not give."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not allowed: `INSUFFICIENT_PERMISSION`."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not there, or not the reader's to see: `CHANNEL_NOT_FOUND`, `LINE_NOT_FOUND`, `MEMBER_NOT_FOUND` ..."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not in this channel's state: `CHANNEL_ARCHIVED`, `WRONG_CHANNEL_KIND`, `LAST_OWNER`, `LAST_MEMBER`, `NOT_JOINED`, `CHANNEL_CONFLICT`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The request cannot be done as asked: `VALIDATION_ERROR`."
+          }
+        },
+        "summary": "Set Table Grant",
+        "tags": [
+          "Channels"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "channel.table_grant"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "channel.table_grant",
+          "result": "entity",
+          "verb": "set"
         }
       }
     },

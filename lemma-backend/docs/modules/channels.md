@@ -194,6 +194,19 @@ them, shared or not (`may_read`). Migration `0061_answers_shared` added the
 column true, so every group already there shows the answers posted from then
 on.
 
+### Tables a group was given
+
+People outside the pod in a group act as nobody: they read what is Public and
+nothing else. Whoever may manage a group (its owners, or an admin) can give it
+one table at a time (`api/grant_controller.py`, stored by `datastore`'s
+`channel_grants`): the columns everybody in the group may read, and the
+columns they may fill in a new row. A guest's run reads and adds through
+`group_records` and `group_add_record`, as the member who gave it -- their
+access rebuilt on every call -- and an added row is marked as from outside,
+naming the contact. Everybody in the group reads what is given, so whoever
+gives a column gives it to the whole group; a table where each member sees only
+their own rows is never given.
+
 ## Posting a line
 
 `services/posting.Timeline.post` is the only way a line is written. Under the
@@ -375,6 +388,9 @@ Under `/pods/{pod_id}` -- everybody named one way, a `PersonRef`
   `/files/{file_id}` `GET` (below). Every line a reader may read carries
   `delivered`: each place outside Lemma the line went to, with its status and
   why -- sent again on the socket when a send moves.
+- `/channels/{c}/table-grants` `GET`; `/table-grants/{table}` `PUT
+  {read_columns, add_columns}` · `DELETE` -- a group only (409 otherwise),
+  set by whoever may manage it (below).
 - `/inbox` (counts, waiting, mentions, and -- for a reader who sees contacts
   -- `contacts` waiting on a reply: asking for a person, or assigned to them
   with the contact's word last) and `/search` (Postgres full text in

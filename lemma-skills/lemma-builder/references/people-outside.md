@@ -24,9 +24,12 @@ allowlist, no sandbox, no member's grants. In a **group**, people outside the po
 answered as outsiders the same way (`surfaces.md`): they can read what is Public, and
 nothing they say in the group is written anywhere by the bot -- a request to save or
 change something is passed to the member who looks after the group, who acts on it.
-So a workflow where people outside the pod "post in the group and the bot records it"
-does not work as such: only members' messages can be written down. Design it so a
-member records them, or so the people taking part are members.
+So for a workflow where people outside the pod "post in the group and the bot records
+it", give the group the table: `lemma channels grants set <channel> <table> --read
+<cols> --add <cols>` (or the group's settings in the app). Then guests' runs read
+those columns (`group_records`) and add rows (`group_add_record`) through the
+granting member's access, each row marked as from outside. Without a grant, only
+members' messages can be written down. Everybody in the group reads what is granted.
 
 ## The pieces
 
