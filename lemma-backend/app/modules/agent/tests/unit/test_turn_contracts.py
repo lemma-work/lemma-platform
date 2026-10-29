@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from app.core.infrastructure.work import WorkClass
 from app.modules.agent.contracts.run_facts import AgentRunFinished
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.services.turn_staging import (
     AgentTurnStart,
     stage_agent_turn,
@@ -65,7 +66,7 @@ async def test_an_untitled_conversation_gets_its_title_item() -> None:
 async def test_an_automation_turn_lands_in_the_automation_class() -> None:
     uow = _Uow()
 
-    await stage_agent_turn(uow, _start(origin="schedule"))  # type: ignore[arg-type]
+    await stage_agent_turn(uow, _start(kind=RunKind.SCHEDULE))  # type: ignore[arg-type]
 
     turn = uow.session.item(work_kinds.AGENT_TURN_AUTOMATION)
     assert turn["cls"] == "automation"
@@ -78,12 +79,11 @@ async def test_stage_agent_turn_honours_an_inline_caller() -> None:
     assert uow.session.items == []
 
 
-def test_automation_origins_run_in_the_automation_class() -> None:
-    assert turn_class_for("schedule") is WorkClass.AUTOMATION
-    assert turn_class_for("workflow") is WorkClass.AUTOMATION
-    assert turn_class_for("trigger") is WorkClass.AUTOMATION
-    assert turn_class_for("chat") is WorkClass.INTERACTIVE
-    assert turn_class_for("surface") is WorkClass.INTERACTIVE
+def test_automation_kinds_run_in_the_automation_class() -> None:
+    assert turn_class_for(RunKind.SCHEDULE) is WorkClass.AUTOMATION
+    assert turn_class_for(RunKind.WORKFLOW) is WorkClass.AUTOMATION
+    assert turn_class_for(RunKind.CHAT) is WorkClass.INTERACTIVE
+    assert turn_class_for(RunKind.SURFACE) is WorkClass.INTERACTIVE
 
 
 def test_the_run_fact_runs_its_subscribers_in_the_pod() -> None:

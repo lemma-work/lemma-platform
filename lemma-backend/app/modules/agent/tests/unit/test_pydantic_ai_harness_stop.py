@@ -20,7 +20,13 @@ from pydantic_ai.toolsets import FunctionToolset
 from app.modules.agent.domain.context import ToolContext
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.harness_options import HarnessOptions
-from app.modules.agent.domain.value_objects import AgentEventType
+from app.modules.agent.domain.value_objects import (
+    AgentEvent,
+    AgentEventType,
+    MessageDraft,
+    MessageKind,
+)
+from app.modules.agent.infrastructure.harness.lemma.tool_returns import waiting_event
 from app.modules.agent.infrastructure.harness.lemma.model_streaming import (
     ModelRequestStreamer,
 )
@@ -102,16 +108,25 @@ async def test_stream_stop_unwinds_anyio_cancel_scope_in_generator_task() -> Non
 
 
 @pytest.mark.asyncio
-async def test_run_emits_waiting_event_when_tool_requests_input(monkeypatch) -> None:
-    """A tool raising AgentInputRequired ends the run with a single WAITING event."""
+async def test_a_paused_run_ends_on_its_waiting_event_last(monkeypatch) -> None:
+    """The node loop's WAITING is the terminal: held back until what is still
+    open is closed -- every call but the paused ones -- then emitted last."""
     harness = PydanticAIHarness()
     conversation_id = UUID("00000000-0000-0000-0000-0000000000aa")
     agent_run_id = UUID("00000000-0000-0000-0000-0000000000bb")
 
     async def fake_execute(**_kwargs):
-        if False:  # pragma: no cover - makes this an async generator
-            yield
-        raise AgentInputRequired("tool-call-1", "ask_user")
+        for call_id, name in (("ask-1", "ask_user"), ("slow-1", "exec_command")):
+            yield AgentEvent(
+                type=AgentEventType.MESSAGE,
+                data=MessageDraft.of_tool_call(tool_name=name, tool_call_id=call_id),
+                agent_run_id=agent_run_id,
+            )
+        yield waiting_event(
+            [("ask-1", "ask_user")],
+            conversation_id=str(conversation_id),
+            agent_run_id=agent_run_id,
+        )
 
     monkeypatch.setattr(harness, "_execute", fake_execute)
 
@@ -122,16 +137,21 @@ async def test_run_emits_waiting_event_when_tool_requests_input(monkeypatch) -> 
             conversation=SimpleNamespace(id=conversation_id),
             messages=[],
             ctx=SimpleNamespace(),
-            options=SimpleNamespace(should_stop=None),
+            options=SimpleNamespace(should_stop=None, tools=[]),
             agent_run_id=agent_run_id,
         )
     ]
 
-    assert len(events) == 1
-    assert events[0].type == AgentEventType.WAITING
-    assert events[0].data["tool_call_id"] == "tool-call-1"
-    assert events[0].data["kind"] == "ask_user"
-    assert events[0].data["conversation_id"] == str(conversation_id)
+    closed = [
+        event.data.tool_call_id
+        for event in events
+        if isinstance(event.data, MessageDraft)
+        and event.data.kind is MessageKind.TOOL_RETURN
+    ]
+    assert closed == ["slow-1"]
+    assert events[-1].type == AgentEventType.WAITING
+    assert events[-1].data["tool_call_ids"] == ["ask-1"]
+    assert events[-1].data["kind"] == "ask_user"
 
 
 class _EmptyAgentRun:

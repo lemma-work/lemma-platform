@@ -12,6 +12,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
+from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.services.run_session import RunSession
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
@@ -165,6 +167,7 @@ def _runner(
     )
     agent_run = SimpleNamespace(
         started_at=None,
+        state=RunState(kind=RunKind.SCHEDULE),
         status=AgentRunStatus.RUNNING,
         agent_runtime=None,
         error=None,

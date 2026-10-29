@@ -132,6 +132,8 @@ class BackgroundModel:
         short is still recorded.
         """
         source = USAGE_SOURCES.get(purpose, usage.source_type)
+        if usage.pod_id is not None and call.affinity_key is None:
+            call = replace(call, affinity_key=f"{usage.pod_id}:{purpose.value}")
         async with (
             metering_execution(replace(usage, source_type=source)),
             asyncio.timeout(timeout_seconds),

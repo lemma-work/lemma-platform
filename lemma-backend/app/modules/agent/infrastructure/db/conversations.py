@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import func, select, union_all, update
+from sqlalchemy import ColumnElement, func, select, union_all, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -28,8 +28,10 @@ from app.modules.agent.domain.events import ConversationStartedEvent
 from app.modules.agent.domain.run_projections import ConversationOpeningTexts
 from app.modules.agent.domain.todos import Todo, todos_from_json, todos_to_json
 from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
     ConversationAgentSelection,
     ConversationListCursor,
+    ConversationOrigin,
     ConversationStatus,
     ConversationType,
     JsonObject,
@@ -104,6 +106,21 @@ def _first_text_of_role(conversation_id: UUID, role: str):
         )
         .order_by(MessageModel.sequence)
         .limit(1)
+    )
+
+
+def _owes_a_result() -> ColumnElement[bool]:
+    """A child holding a finished run whose result has not reached its parent."""
+    return (
+        select(AgentRunModel.id)
+        .where(
+            AgentRunModel.conversation_id == ConversationModel.id,
+            AgentRunModel.status.in_(
+                [AgentRunStatus.COMPLETED.value, AgentRunStatus.FAILED.value]
+            ),
+            AgentRunModel.delivered_to_parent_at.is_(None),
+        )
+        .exists()
     )
 
 
@@ -360,6 +377,45 @@ class Conversations(UnitOfWorkRepository):
         )
         return model.to_entity() if model is not None else None
 
+    async def count_children_of_run(
+        self, *, parent_id: UUID, parent_run_id: UUID
+    ) -> int:
+        """How many children one parent run has given work to."""
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(ConversationModel)
+                .where(
+                    ConversationModel.parent_id == parent_id,
+                    ConversationModel.parent_run_id == parent_run_id,
+                    ConversationModel.origin == ConversationOrigin.SUBAGENT,
+                )
+            )
+            or 0
+        )
+
+    async def unfinished_children(
+        self, parent_id: UUID, *, limit: int
+    ) -> list[ConversationEntity]:
+        """A parent's sub-agents still running or waiting, oldest first."""
+        result = await self.session.execute(
+            select(ConversationModel)
+            .where(
+                ConversationModel.parent_id == parent_id,
+                ConversationModel.origin == ConversationOrigin.SUBAGENT,
+                ConversationModel.status.in_(
+                    [
+                        ConversationStatus.RUNNING.value,
+                        ConversationStatus.WAITING.value,
+                        ConversationStatus.STOP_REQUESTED.value,
+                    ]
+                ),
+            )
+            .order_by(ConversationModel.created_at, ConversationModel.id)
+            .limit(limit)
+        )
+        return [model.to_entity() for model in result.scalars()]
+
     async def set_parent_run(
         self, conversation_id: UUID, parent_run_id: UUID | None
     ) -> None:
@@ -386,8 +442,14 @@ class Conversations(UnitOfWorkRepository):
         user_id: UUID,
         limit: int = 50,
         include_runs: bool = True,
+        owing: bool = False,
+        offset: int = 0,
     ) -> list[ConversationEntity]:
         """List child (sub-agent) conversations of a parent, newest first.
+
+        ``owing``: only children holding a finished run whose result has not
+        reached the parent, so a caller delivering results pages through
+        exactly those rather than the newest few.
 
         Inverse of list_conversations (which hides children via parent_id IS NULL);
         reuses the ix_agent_conv_parent index. Scoped to the owning user.
@@ -407,8 +469,13 @@ class Conversations(UnitOfWorkRepository):
                 ConversationModel.created_at.desc(),
                 ConversationModel.id.desc(),
             )
+            .offset(offset)
             .limit(limit)
         )
+        if owing:
+            stmt = stmt.where(
+                ConversationModel.reports_to_parent.is_(True), _owes_a_result()
+            )
         result = await self.session.execute(stmt)
         models = list(result.scalars())
         if include_runs and models:

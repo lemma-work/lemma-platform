@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import replace
 from decimal import Decimal
 from datetime import datetime
@@ -22,7 +22,12 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 from pydantic_ai.tools import RunContext
 
-from app.modules.usage.domain.accounting import RequestReceipt, TokenCounts
+from app.modules.usage.domain.accounting import (
+    RUN_INDEX_METADATA_KEY,
+    RequestPosition,
+    RequestReceipt,
+    TokenCounts,
+)
 from app.modules.usage.domain.errors import (
     UsageContextMissingError,
     ProviderAttemptsExhaustedError,
@@ -38,6 +43,17 @@ from app.modules.usage.infrastructure.request_features import (
     priceable_request,
 )
 from app.modules.usage.services.metering_scope import current_metering_scope
+
+
+def _position(run_context: RunContext[object] | None) -> RequestPosition | None:
+    """The request's run and step, from what the harness put on its run."""
+    if run_context is None:
+        return None
+    run_index = (run_context.metadata or {}).get(RUN_INDEX_METADATA_KEY)
+    return RequestPosition(
+        run_index=run_index if isinstance(run_index, int) and run_index > 0 else None,
+        step_index=run_context.run_step,
+    )
 
 
 def _counts(usage: RequestUsage) -> TokenCounts | None:
@@ -80,6 +96,10 @@ class MeteredModel(WrapperModel):
         self.runtime_profile = dict(profile)
         self.source = source
         self.retry_stream_connections = retry_stream_connections
+        #: Once a request of this run went out with the local tool search, the
+        #: rest do too: switching back would rewrite the tool array, the front
+        #: of every later request's cached prefix. One model per run.
+        self._local_tool_search = False
 
     async def request(
         self,
@@ -119,7 +139,10 @@ class MeteredModel(WrapperModel):
             dispatch: Dispatch | None = None
             try:
                 async with self._dispatch(
-                    messages, model_settings, model_request_parameters
+                    messages,
+                    model_settings,
+                    model_request_parameters,
+                    position=_position(run_context),
                 ) as dispatch:
                     async with self.wrapped.request_stream(
                         messages,
@@ -163,6 +186,8 @@ class MeteredModel(WrapperModel):
         messages: list[ModelMessage],
         settings: ModelSettings | None,
         parameters: ModelRequestParameters,
+        *,
+        position: RequestPosition | None = None,
     ) -> AsyncIterator["Dispatch"]:
         scope = current_metering_scope()
         if scope is None:
@@ -183,9 +208,9 @@ class MeteredModel(WrapperModel):
             ) and not _compound_billing(effective)
 
         priceable = priceable_as(parameters)
-        local_search = None if priceable else _with_local_tool_search(parameters)
-        if local_search is not None and not priceable_as(local_search):
-            local_search = None
+        local_search = (
+            None if priceable else _local_alternative_for(parameters, priceable_as)
+        )
         # Admitted as the request it would be under a limit: the gateway only
         # asks about priceability when one applies, and then it is the local
         # shape that is sent.
@@ -194,9 +219,10 @@ class MeteredModel(WrapperModel):
         )
         if limited:
             effective["max_tokens"] = output_ceiling
-            if local_search is not None:
-                parameters, priceable = local_search, True
-        dispatch = Dispatch(effective, request_id, occurred_at, parameters)
+        if local_search is not None and (limited or self._local_tool_search):
+            parameters, priceable = local_search, True
+            self._local_tool_search = True
+        dispatch = Dispatch(effective, request_id, occurred_at, parameters, position)
         try:
             yield dispatch
         except provider_errors() as exc:
@@ -211,6 +237,17 @@ class MeteredModel(WrapperModel):
                     meter.require_reconciliation = True
 
 
+def _local_alternative_for(
+    parameters: ModelRequestParameters,
+    priceable_as: Callable[[ModelRequestParameters], bool],
+) -> ModelRequestParameters | None:
+    """``parameters`` with the local tool search, if that makes them priceable."""
+    local_search = _with_local_tool_search(parameters)
+    if local_search is None or not priceable_as(local_search):
+        return None
+    return local_search
+
+
 class Dispatch:
     def __init__(
         self,
@@ -218,8 +255,10 @@ class Dispatch:
         request_id: UUID,
         occurred_at: datetime,
         parameters: ModelRequestParameters,
+        position: RequestPosition | None = None,
     ) -> None:
         self.settings = settings
+        self.position = position
         self.request_id = request_id
         self.occurred_at = occurred_at
         #: What is sent, which a monetary limit can change -- see
@@ -250,6 +289,7 @@ class Dispatch:
             occurred_at=self.occurred_at,
             counts=counts,
             cost=cost,
+            position=self.position,
         )
 
 

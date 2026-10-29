@@ -6,6 +6,9 @@ from collections.abc import Callable
 from functools import partial
 import time
 from app.modules.agent.contracts.run_observer import RunObserver
+from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.domain.tool_profile import ToolProfile
+from app.modules.agent.infrastructure.db.runs import Runs
 from uuid import UUID
 
 import anyio
@@ -25,7 +28,6 @@ from app.modules.agent.services.context_budget import (
 )
 from app.modules.agent.domain.entities import Agent, Message
 from app.modules.agent.domain.outsiders import Audience
-from app.modules.agent.domain.run_origin import run_origin
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -39,10 +41,14 @@ from app.modules.agent.services.runtime_profile_service import (
     runtime_profile_service_for,
 )
 from app.modules.agent.domain.resolved_runtime import ResolvedAgentRuntime
+from app.modules.agent.config import agent_settings
+from app.modules.agent.services.run_signals import RunSignals
 from app.modules.agent.services.run_limits import (
     budget_for_run,
     make_stop_checker,
 )
+from app.modules.agent.domain.run_log import RunLogReplay
+from app.modules.agent.services.run_log_loader import load_run_log
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_session import RunSession, SessionLoader
 from app.modules.agent.services.run_metrics import (
@@ -202,7 +208,7 @@ class AgentRunnerService:
             return
         usage_reservation: UsageReservation | None = None
         runtime_profile_snapshot: dict[str, object | None] | None = None
-        run_kind = run_origin(conversation).origin
+        run_kind = agent_run.state.kind.value
         # Known once the runtime resolves; a run that fails before that is
         # counted against no model rather than not counted.
         run_model: str | None = None
@@ -231,6 +237,8 @@ class AgentRunnerService:
                 configured_accounts=self._resolve_configured_accounts,
             )
             run = run.with_memory_after_turn(ctx.memory_after_turn)
+            if ctx.tool_profile != ToolProfile.TODAY.value:
+                await _record_tool_profile(self.uow_factory, run.agent_run_id, ctx)
             tools = await specs_for(
                 agent=agent,
                 conversation=conversation,
@@ -267,6 +275,9 @@ class AgentRunnerService:
                     agent_name=agent_name,
                 ),
             )
+            run_log = await self._run_log(
+                resolved_runtime.harness_kind, session, messages
+            )
             usage_reservation = await self.usage_recorder.reserve(
                 organization_id=conversation.organization_id,
                 user_id=user_id,
@@ -281,6 +292,12 @@ class AgentRunnerService:
             # that had 900k to spare, and a 110k "ceiling" on a 128k model is
             # not a ceiling at all.
             context_budget = context_budget_for(resolved_runtime.model)
+            # Steer and stop are pushed to the run; the database is read when
+            # signalled, and on a slow backstop.
+            signals = RunSignals(
+                agent_run_id,
+                backstop_seconds=agent_settings.agent_run_control_backstop_seconds,
+            )
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 tools=tools,
@@ -290,8 +307,9 @@ class AgentRunnerService:
                 compaction_model_settings=compaction_model_settings,
                 lighter_reasoning_settings=lighter_reasoning_settings,
                 should_stop=make_stop_checker(
-                    agent_run_id, uow_factory=self.uow_factory
+                    agent_run_id, uow_factory=self.uow_factory, signals=signals
                 ),
+                steer_due=signals.steer_due,
                 spend=budget_for_run(run_with_usage),
                 history_summarization_token_limit=(
                     context_budget.summarization_token_limit
@@ -300,6 +318,8 @@ class AgentRunnerService:
                 context_window=context_budget.window,
                 runtime_profile=snapshot,
                 lease_alive=self.lease_alive,
+                run_index=session.run_index,
+                run_log=run_log,
                 extra={
                     "runtime_credentials": runtime_credentials,
                 },
@@ -346,9 +366,13 @@ class AgentRunnerService:
                             ctx,
                             source_type=run.usage_source,
                             source_id=str(agent_run_id),
+                            parent_agent_run_id=run.parent_agent_run_id,
                         )
-                        async with metering_execution(
-                            run_usage_context, factory=self.uow_factory
+                        async with (
+                            metering_execution(
+                                run_usage_context, factory=self.uow_factory
+                            ),
+                            signals.listening(conversation.pod_id),
                         ):
                             await drive_harness(
                                 self.event_pump,
@@ -466,6 +490,19 @@ class AgentRunnerService:
                 seconds=time.monotonic() - run_started,
             )
 
+    async def _run_log(
+        self, harness_kind: HarnessKind, session: RunSession, history: list[Message]
+    ) -> RunLogReplay | None:
+        """The run log an in-process run replays; the Agent Host keeps its own."""
+        if harness_kind != HarnessKind.LEMMA or session.run is None:
+            return None
+        return await load_run_log(
+            self.uow_factory,
+            conversation=session.conversation,
+            run=session.run,
+            history=history,
+        )
+
     async def _resolve_agent_runtime(
         self,
         agent_runtime: AgentRuntimeConfig,
@@ -523,3 +560,14 @@ class AgentRunnerService:
             return await AgentCallableToolFactory(
                 self.uow_factory
             ).resolve_configured_accounts(agent=agent, user_id=user_id)
+
+
+async def _record_tool_profile(
+    uow_factory: UnitOfWorkFactory, run_id: UUID, ctx: ToolContext
+) -> None:
+    """The toolset experiment's arm, on the run and its span. Only for another
+    arm than today's, so the default path spends no statement on it."""
+    trace.get_current_span().set_attribute("lemma.tool_profile", ctx.tool_profile)
+    async with uow_factory() as uow:
+        await Runs(uow).record_tool_profile(run_id, ctx.tool_profile)
+        await uow.commit()

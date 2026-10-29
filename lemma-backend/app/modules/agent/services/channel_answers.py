@@ -72,6 +72,7 @@ from app.modules.agent.application.conversations.start import (
     authorize_opening,
 )
 from app.modules.agent.application.turns.send_message import SendMessage
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.infrastructure import repositories
 from app.modules.channels.contracts import (
     ChannelKind,
@@ -222,6 +223,7 @@ async def _answer_as(
             message_metadata=turn_metadata(channel, line, background),
             require_execute_grant=False,
             client_message_id=turn_client_id(line.id),
+            kind=RunKind.CHANNEL,
         )
         # The run that answers it: the one this turn started, or the one
         # already going that it joined.

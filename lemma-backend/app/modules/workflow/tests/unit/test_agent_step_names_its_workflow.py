@@ -33,6 +33,7 @@ async def test_the_conversation_names_its_workflow_and_keeps_its_origin():
     starts = StartAutomatedRun(
         Mock(session=RecordingWorkSession()),
         default_runtime=AsyncMock(return_value=None),
+        runtime_check=AsyncMock(),
     )
     starts.conversations = Mock(
         create_conversation=AsyncMock(return_value=SimpleNamespace(id=uuid4()))

@@ -125,7 +125,9 @@ class PydanticAIModelProvider:
                 deps=call.deps,
                 usage_limits=limits,
                 model_settings=runtime_model_factory.provider_model_settings(
-                    call.model_settings
+                    runtime_model_factory.with_affinity(
+                        call.model_settings, call.affinity_key
+                    )
                 ),
             )
         except ModelHTTPError as error:
@@ -144,7 +146,9 @@ class PydanticAIModelProvider:
                 deps=call.deps,
                 usage_limits=limits,
                 model_settings=runtime_model_factory.provider_model_settings(
-                    call.plain_model_settings
+                    runtime_model_factory.with_affinity(
+                        call.plain_model_settings, call.affinity_key
+                    )
                 ),
             )
 

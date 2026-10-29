@@ -150,7 +150,11 @@ async def view_image(
 _SHELL = ToolPolicy(native_command=True, kind="sandbox")
 
 SPECS = (
-    tool(exec_command, ToolGroup.WORKSPACE_CLI, _SHELL),
+    tool(
+        exec_command,
+        ToolGroup.WORKSPACE_CLI,
+        ToolPolicy(native_command=True, kind="sandbox", core=True),
+    ),
     tool(manage_process, ToolGroup.WORKSPACE_CLI, _SHELL),
     tool(execute_python, ToolGroup.WORKSPACE_CLI, _SHELL),
 )

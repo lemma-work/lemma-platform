@@ -1,5 +1,12 @@
 """Rebuild a pydantic-ai conversation from Lemma's persisted messages.
 
+**Fallback, kept one release.** A run replays its conversation's run log
+(``run_log``); this rebuilds only what the log does not carry -- rows written
+outside any run's log, taken in once -- and, on a conversation that predates
+the log, its whole past, once. The rules below (pairing calls with returns,
+the pausing-call and interrupted-call notes, thought replay) apply to those
+rows only, and go with this module when the fallback does.
+
 Kept apart from the harness because it is a pure transform with no runtime
 state: given the message rows, it produces the ``ModelMessage`` history and the
 user prompt for the next turn. Its one subtle rule is tool pairing — a tool call
@@ -13,7 +20,6 @@ beside the credential check it depends on.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
 from uuid import UUID
 
 import pydantic_core
@@ -29,6 +35,10 @@ from pydantic_ai.messages import (
 )
 
 from app.core.log.log import get_logger
+from app.modules.agent.infrastructure.harness.lemma.run_log import (
+    INTERRUPTED,
+    NOT_ANSWERED,
+)
 from app.modules.agent.infrastructure.harness.lemma.thinking import (
     PendingThoughts,
 )
@@ -92,6 +102,30 @@ def history_and_prompt(
         ),
         user_prompt,
     )
+
+
+def prompt_and_rows(rows: Sequence[Message]) -> tuple[list[Message], str | None]:
+    """``rows`` in order, less the trailing user turn -- and that turn as the
+    prompt, rendered as the run sends it."""
+    ordered = _without_unanswered_thoughts(
+        sorted(rows, key=lambda message: message.sequence)
+    )
+    if (
+        ordered
+        and ordered[-1].role is MessageRole.USER
+        and ordered[-1].kind in TEXTUAL_MESSAGE_KINDS
+    ):
+        return ordered[:-1], timed_user_prompt_text(ordered[-1])
+    return ordered, None
+
+
+def rows_to_messages(rows: Sequence[object]) -> list[ModelMessage]:
+    """Rows written outside the run log, as the model reads them.
+
+    No stored thought is replayed from a row: the log carries a logged run's
+    reasoning as it was sent, and a row's is the safe thing to drop.
+    """
+    return _to_pydantic_ai_messages(rows, PendingThoughts(None))
 
 
 def _without_unanswered_thoughts(ordered: list[Message]) -> list[Message]:
@@ -279,36 +313,6 @@ def _sent_while_running(message: object) -> bool:
     return isinstance(state, MessageState) and state.queue_state is not QueueState.NONE
 
 
-#: Where a tool call's provider identity is stored on its message row. Some
-#: endpoints attach data to a call that they require back on it, and a run that
-#: resumes -- after an approval, say -- rebuilds the call from this row.
-TOOL_CALL_PROVIDER_NAME_KEY = "tool_call_provider_name"
-TOOL_CALL_PROVIDER_DETAILS_KEY = "tool_call_provider_details"
-
-
-def tool_call_identity(part: object) -> dict[str, object]:
-    """The metadata that lets a stored tool call be sent back as it arrived."""
-    name = getattr(part, "provider_name", None)
-    details = getattr(part, "provider_details", None)
-    if not isinstance(name, str) or not name or not isinstance(details, dict):
-        return {}
-    return {
-        TOOL_CALL_PROVIDER_NAME_KEY: name,
-        TOOL_CALL_PROVIDER_DETAILS_KEY: details,
-    }
-
-
-def _stored_tool_call_identity(msg: object) -> dict[str, Any]:
-    metadata = getattr(msg, "metadata", None)
-    if not isinstance(metadata, dict):
-        return {}
-    name = metadata.get(TOOL_CALL_PROVIDER_NAME_KEY)
-    details = metadata.get(TOOL_CALL_PROVIDER_DETAILS_KEY)
-    if not isinstance(name, str) or not name or not isinstance(details, dict):
-        return {}
-    return {"provider_name": name, "provider_details": details}
-
-
 def _user_moved_on(messages: list[object], after_index: int) -> bool:
     """Whether the person sent something new instead of answering.
 
@@ -367,23 +371,9 @@ def _build_tool_batch(
                 # here leaves no record of having asked, so the model asks the
                 # same question again instead of reading what they actually
                 # sent.
-                synthetic_error = (
-                    "The user did not answer this. They sent a new message "
-                    "instead, which is the turn you are responding to now. "
-                    "Read it and carry on; ask again only if you still cannot "
-                    "proceed without an answer."
-                )
+                synthetic_error = NOT_ANSWERED
             else:
-                # Deliberately not "run it again". The tool may well have
-                # succeeded -- what is known is only that no result was
-                # recorded, and a run interrupted mid-send that is told to
-                # retry sends twice.
-                synthetic_error = (
-                    "This tool call was interrupted before a result was "
-                    "recorded, so its outcome is unknown: it may have completed. "
-                    "Check the current state before repeating it, and only "
-                    "repeat it if it clearly did not take effect."
-                )
+                synthetic_error = INTERRUPTED
         elif parsed_args is None:
             synthetic_error = (
                 "The arguments recorded for this call could not be parsed, so "
@@ -403,7 +393,6 @@ def _build_tool_batch(
                 # Keep the raw arguments when they did not parse: the model can
                 # see what it sent and correct it.
                 args=parsed_args if parsed_args is not None else {},
-                **_stored_tool_call_identity(msg),
             )
         )
         request_parts.append(

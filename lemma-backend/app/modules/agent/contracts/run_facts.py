@@ -30,10 +30,18 @@ AgentConversationStatus = Literal[
 #: Who is waiting on this run, if anybody: a workflow's AGENT step, a parent
 #: agent's SUBAGENT wait, or a pod that asked this one a question.
 AgentRunParentKind = Literal["workflow", "agent", "pod_ask"]
-#: What started the run. Runs started by automation run in the automation
-#: class, so a burst of them never queues a person's chat.
+#: Who the run was for: its ``RunKind``, set by whatever started it. A
+#: person's message into a schedule's conversation is ``chat``, not ``schedule``.
 AgentRunOrigin = Literal[
-    "chat", "surface", "schedule", "workflow", "trigger", "subagent", "pod_ask"
+    "chat",
+    "surface",
+    "channel",
+    "contact",
+    "workflow",
+    "schedule",
+    "subagent",
+    "pod_ask",
+    "call",
 ]
 
 

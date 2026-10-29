@@ -51,6 +51,7 @@ _CONVERSATION_COLUMNS = (
 )
 _RUN_COLUMNS = (
     "trigger",
+    "kind",
     "private_note",
     "asked_in_lemma",
     "written_in",
@@ -77,6 +78,7 @@ _MESSAGE_COLUMNS = (
     "folded_from",
     "synthetic_tool_return",
     "parked_in_run_id",
+    "run_step_seq",
 )
 
 
@@ -375,13 +377,33 @@ def _seed(plain_url: str) -> _Ids:
                 "COMPLETED",
             ),
         ]
+        # Where each run is, when not the plain chat: its kind is read off it.
+        placed = {
+            "fired_run": "schedule",
+            "person_in_schedule_run": "schedule",
+            "voice_run": "coordinator",
+            "widget_run": "widget",
+            "worker_run": "child",
+        }
+        runs += [
+            ("fired_run", {"source": "SCHEDULE"}, "COMPLETED"),
+            ("person_in_schedule_run", {"source": "user_message"}, "COMPLETED"),
+            ("voice_run", {"source": "user_message"}, "COMPLETED"),
+            ("widget_run", {"source": "user_message"}, "COMPLETED"),
+            ("worker_run", {"source": "user_message"}, "COMPLETED"),
+        ]
         for name, metadata, status in runs:
             run(
                 "INSERT INTO agent_runs (id, conversation_id, status, agent_runtime, "
                 "started_at, finished_at, run_metadata, created_at, updated_at) "
                 "VALUES (%s, %s, %s, '{}', now(), "
                 "'2026-10-01T12:00:00+00:00', %s, now(), now())",
-                (ids[name], ids["chat"], status, json.dumps(metadata)),
+                (
+                    ids[name],
+                    ids[placed.get(name, "chat")],
+                    status,
+                    json.dumps(metadata),
+                ),
             )
 
         messages: list[tuple[str, str, str, dict[str, object], str | None]] = [
@@ -659,6 +681,26 @@ def _assert_runs(rows: dict[UUID, dict], ids: _Ids) -> None:
     delivered = rows[ids["child_run"]]["delivered_to_parent_at"]
     assert delivered is not None and delivered.isoformat().startswith("2026-10-01T12")
     assert rows[ids["wake_run"]]["delivered_to_parent_at"] is None
+    kinds = {
+        name: rows[ids[name]]["kind"]
+        for name in (
+            "asked_run",
+            "fired_run",
+            "person_in_schedule_run",
+            "voice_run",
+            "widget_run",
+            "worker_run",
+        )
+    }
+    assert kinds == {
+        "asked_run": "CHAT",
+        "fired_run": "SCHEDULE",
+        # A person writing into a schedule's conversation: their turn.
+        "person_in_schedule_run": "CHAT",
+        "voice_run": "CALL",
+        "widget_run": "CONTACT",
+        "worker_run": "SUBAGENT",
+    }
 
 
 def _assert_messages(rows: dict[UUID, dict], ids: _Ids) -> None:
@@ -705,6 +747,39 @@ def _assert_messages(rows: dict[UUID, dict], ids: _Ids) -> None:
     assert rows[ids["parked"]]["parked_in_run_id"] == ids["asked_run"]
 
 
+def _assert_run_log_keeps_bytes(plain_url: str) -> None:
+    """The run log is new and empty, and hands back the bytes it was given:
+    TEXT, so neither key order nor spacing moves."""
+    assert _columns(plain_url, "agent_run_steps") == {
+        "id",
+        "created_at",
+        "conversation_id",
+        "run_id",
+        "seq",
+        "kind",
+        "messages",
+    }
+    written = '[{"parts": [{"tool_name":"x","args":"{\\"b\\": 1,  \\"a\\": 2}"}]}]'
+    with psycopg.connect(plain_url) as connection:
+        conversation_id = connection.execute(
+            "SELECT id FROM agent_conversations LIMIT 1"
+        ).fetchone()[0]
+        connection.execute(
+            "INSERT INTO agent_run_steps "
+            "(id, created_at, conversation_id, seq, kind, messages) "
+            "VALUES (%s, now(), %s, 1, 'STEP', %s)",
+            (uuid4(), conversation_id, written),
+        )
+        (read,) = connection.execute(
+            "SELECT messages FROM agent_run_steps WHERE conversation_id = %s",
+            (conversation_id,),
+        ).fetchone()
+        assert read == written
+        assert connection.execute(
+            "SELECT count(*) FROM agent_messages WHERE run_step_seq IS NOT NULL"
+        ).fetchone() == (0,)
+
+
 def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
     with get_postgres_container() as postgres:
         database_url = get_postgres_url(postgres)
@@ -732,6 +807,7 @@ def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
         assert "1 later client_message_id copies dropped" in log
         # Expand only: the JSON is untouched.
         assert _metadata(plain_url) == metadata_before
+        _assert_run_log_keeps_bytes(plain_url)
 
         # Learned after the upgrade: only agent_surfaces' table hears of it.
         with psycopg.connect(plain_url) as connection:
@@ -747,6 +823,7 @@ def test_the_metadata_keys_land_in_typed_columns_and_come_back_out() -> None:
         assert not set(_RUN_COLUMNS) & _columns(plain_url, "agent_runs")
         assert not set(_MESSAGE_COLUMNS) & _columns(plain_url, "agent_messages")
         assert not _columns(plain_url, "surface_conversation_state")
+        assert not _columns(plain_url, "agent_run_steps")
         restored = _metadata(plain_url)
         surfaced = restored["agent_conversations"][ids["surface"]]
         assert surfaced["external_thread_id"] == "777"

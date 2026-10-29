@@ -431,13 +431,21 @@ async def test_racing_children_and_their_parent_deliver_each_result_once(
                 await asyncio.gather(*(dispatcher.execute(i) for i in claimed))
 
         await asyncio.wait_for(asyncio.gather(*(pump(d) for d in dispatchers)), 60)
-        results = await scalar(
-            "SELECT count(*) FROM agent_messages WHERE conversation_id = :c "
-            "AND message_metadata->>'source' = 'subagent_result'",
-            c=UUID(parent),
-        )
-        assert results == len(children)
-        delivered += results
+        # Results owed at once arrive together, so count the children each
+        # delivery names rather than the messages.
+        named = [
+            child
+            for (metadata,) in await rows(
+                "SELECT message_metadata FROM agent_messages "
+                "WHERE conversation_id = :c "
+                "AND message_metadata->>'source' = 'subagent_result'",
+                c=UUID(parent),
+            )
+            for child in metadata.get("subagent_conversation_ids")
+            or [metadata["subagent_conversation_id"]]
+        ]
+        assert sorted(named) == sorted(str(child) for child in children)
+        delivered += len(named)
         assert (
             await scalar(
                 "SELECT count(*) FROM work_items WHERE state = 'dead' "

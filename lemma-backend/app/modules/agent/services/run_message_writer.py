@@ -41,6 +41,8 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.db.messages import Messages
 from app.modules.agent.infrastructure.db.pauses import Pauses
+from app.modules.agent.infrastructure.db.run_steps import RunSteps
+from app.modules.agent.domain.run_log import RunStepDraft
 from app.modules.agent.infrastructure.repositories.run_last_words import (
     last_text,
     tool_result_after,
@@ -205,6 +207,22 @@ class RunMessageWriter:
                     conversation_id=conversation_id, tool_call_id=draft.tool_call_id
                 )
             return saved
+
+    async def append_step(
+        self, *, conversation_id: UUID, agent_run_id: UUID, draft: RunStepDraft
+    ) -> int:
+        """A step of the run log, where the run's messages commit."""
+        async with self.uow_factory() as uow:
+            return await RunSteps(uow).append(
+                conversation_id=conversation_id, run_id=agent_run_id, draft=draft
+            )
+
+    async def carry(
+        self, *, conversation_id: UUID, row_ids: list[UUID], step: int
+    ) -> None:
+        """Mark rows a run wrote after its last log step as carried by it."""
+        async with self.uow_factory() as uow:
+            await RunSteps(uow).carry(conversation_id, row_ids, step=step)
 
     async def notice(
         self, *, conversation_id: UUID, text: str, metadata: JsonObject

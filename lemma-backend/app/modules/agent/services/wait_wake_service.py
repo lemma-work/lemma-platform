@@ -33,6 +33,7 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.work import WorkWriter
 from app.core.log.log import get_logger
+from app.modules.agent.domain.delegation import ChildReport
 from app.modules.agent.domain.pauses import Pause
 from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import RunTrigger
@@ -47,7 +48,7 @@ from app.modules.agent.infrastructure.db.pauses import Pauses
 from app.modules.agent.services.wait_timers import WaitTimer, arm_wait, disarm_wait
 from app.modules.agent.services.wait_targets import (
     TargetOutcome,
-    read_subagent_in,
+    read_children_in,
     read_target,
 )
 from app.modules.agent.infrastructure.tools.waiting.models import (
@@ -158,7 +159,7 @@ class AgentWaitService:
         wait = waits[0] if waits else None
         if wait is None or wait.wait_type is not AgentWaitType.SUBAGENT:
             return False
-        if str(_spec(wait).target_ref) != str(child_run_id):
+        if str(child_run_id) not in _spec(wait).targets:
             return False
         claimed = await self._claim(wait.id)
         if claimed is None:
@@ -206,12 +207,12 @@ class AgentWaitService:
 
     async def _read_child(self, wait: Pause) -> TargetOutcome:
         user_id = await self._user_of(wait)
-        target_ref = _spec(wait).target_ref
-        if user_id is None or not target_ref:
+        targets = _spec(wait).targets
+        if user_id is None or not targets:
             return TargetOutcome(reason=None)
-        return await read_subagent_in(
+        return await read_children_in(
             self.uow,
-            target_ref,
+            targets,
             user_id=user_id,
             parent_conversation_id=wait.conversation_id,
         )
@@ -239,7 +240,10 @@ class AgentWaitService:
         )
         if isinstance(decision, WakeNow):
             return await self._wake_claimed(
-                claimed, decision.reason, exit_code=outcome.exit_code
+                claimed,
+                decision.reason,
+                exit_code=outcome.exit_code,
+                reports=outcome.reports,
             )
         if claimed.wait_type is AgentWaitType.SUBAGENT:
             # Pushed, not polled: nothing to look at before the deadline, which
@@ -260,6 +264,7 @@ class AgentWaitService:
         reason: AgentWaitWakeReason,
         *,
         exit_code: int | None = None,
+        reports: tuple[ChildReport, ...] = (),
     ) -> bool:
         conversation = await self.conversations.get_conversation(
             claimed.conversation_id, include_runs=False
@@ -289,7 +294,7 @@ class AgentWaitService:
                 trigger=RunTrigger.WAKE,
                 tool_return=(
                     claimed.tool_name,
-                    self._tool_result(claimed, reason, exit_code),
+                    self._tool_result(claimed, reason, exit_code, reports),
                 ),
             )
         finally:
@@ -308,6 +313,7 @@ class AgentWaitService:
         wait: Pause,
         reason: AgentWaitWakeReason,
         exit_code: int | None,
+        reports: tuple[ChildReport, ...] = (),
     ) -> dict[str, object]:
         spec = _spec(wait)
         return build_wait_result(
@@ -316,6 +322,7 @@ class AgentWaitService:
             waited_seconds=elapsed_seconds(spec.started_at),
             note_to_self=spec.note_to_self,
             exit_code=exit_code,
+            reports=list(reports),
         )
 
     async def _context_for(self, user_id: UUID, pod_id: UUID) -> Context:

@@ -97,18 +97,20 @@ class TestTheTracker:
 
         assert tracker.closing_events(_terminal()) == []
 
-    def test_the_pausing_call_is_left_for_the_user_to_answer(self) -> None:
-        """`ask_user` gets its real return when the user replies; closing it here
+    def test_the_pausing_calls_are_left_for_their_answers(self) -> None:
+        """Each pause gets its real return when it is resolved; closing one here
         would duplicate that."""
         tracker = OutstandingToolCalls()
         tracker.observe(_call("pause1", "ask_user"))
-        tracker.observe(_call("c2", "exec_command"))
+        tracker.observe(_call("pause2", "request_approval"))
+        tracker.observe(_call("c3", "exec_command"))
 
         closing = tracker.closing_events(
-            _terminal(AgentEventType.WAITING), skip_tool_call_id="pause1"
+            _terminal(AgentEventType.WAITING),
+            skip_tool_call_ids=frozenset({"pause1", "pause2"}),
         )
 
-        assert [event.data.tool_call_id for event in closing] == ["c2"]
+        assert [event.data.tool_call_id for event in closing] == ["c3"]
 
     def test_only_message_events_are_tracked(self) -> None:
         tracker = OutstandingToolCalls()
@@ -130,7 +132,9 @@ class TestTheHarnessClosesWhatItOpened:
                 conversation=SimpleNamespace(id=RUN_ID),
                 messages=[],
                 ctx=SimpleNamespace(),
-                options=SimpleNamespace(should_stop=None, runtime_profile=None),
+                options=SimpleNamespace(
+                    should_stop=None, runtime_profile=None, tools=[]
+                ),
                 agent_run_id=RUN_ID,
             )
         ]
@@ -241,7 +245,9 @@ class TestAStoppedRunClosesWhatItOpened:
                 conversation=SimpleNamespace(id=RUN_ID),
                 messages=[],
                 ctx=SimpleNamespace(),
-                options=SimpleNamespace(should_stop=None, runtime_profile=None),
+                options=SimpleNamespace(
+                    should_stop=None, runtime_profile=None, tools=[]
+                ),
                 agent_run_id=RUN_ID,
             )
         ]

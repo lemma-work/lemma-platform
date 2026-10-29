@@ -72,3 +72,25 @@ async def test_a_spec_runs_through_the_runtime_with_its_own_description(
         "Run a shell command in the private conversation workspace."
     )
     assert tool.tool_def.parameters_json_schema["properties"]["cmd"]["type"] == "string"
+
+
+def test_a_tools_schema_is_derived_once_per_process() -> None:
+    """Deriving a tool's validator is the costliest part of assembling a run's
+    tools, and depends only on its request model: every run after the first
+    reuses it."""
+    from app.modules.agent.infrastructure.harness.lemma.toolset_adapter import (
+        function_toolset,
+    )
+    from app.modules.agent.infrastructure.tools.deferred.tools import (
+        deferred_entry_specs,
+    )
+    from app.modules.agent.services.tool_runtime import ToolRuntime
+
+    specs = deferred_entry_specs([])
+    runtime = ToolRuntime(specs)
+    first = function_toolset(specs, runtime).tools["call_tool"]
+    second = function_toolset(specs, runtime).tools["call_tool"]
+
+    assert first is not second
+    assert first.function_schema.validator is second.function_schema.validator
+    assert first.function_schema.function is not second.function_schema.function

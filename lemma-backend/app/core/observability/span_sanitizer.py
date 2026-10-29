@@ -216,7 +216,7 @@ METRIC_ATTRIBUTE_KEYS = frozenset(
         # enum.
         "lane",
         # Agent run metrics (``app.modules.agent.services.run_metrics``):
-        # what started the run (bounded by ``RunOriginName``), which model it
+        # who the run was for (bounded by ``RunKind``), which model it
         # used (bounded by the configured catalog), and which family of tool a
         # call went to (bounded by ``ToolKind``).
         "kind",

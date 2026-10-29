@@ -18,11 +18,17 @@ stop has to be a yielded event rather than a raised exception.
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+import time
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import aclosing
 from uuid import UUID
 
 from app.core.log.log import get_logger
+from app.modules.agent.infrastructure.providers.transport_errors import (
+    ModelStreamStalled,
+)
 from app.modules.agent.domain.state_kinds import PauseKind
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -72,6 +78,61 @@ def _tool_call_args_text(args: object) -> str:
     return json.dumps(to_json_value(args), default=str)
 
 
+def _is_progress(event: object) -> bool:
+    """Whether an event adds anything: a delta with nothing in it does not."""
+    if not isinstance(event, PartDeltaEvent):
+        return True
+    delta = event.delta
+    return any(
+        getattr(delta, name, None)
+        for name in (
+            "content_delta",
+            "args_delta",
+            "tool_name_delta",
+            "signature_delta",
+            "citations_delta",
+        )
+    )
+
+
+async def _while_progressing[T](
+    events: AsyncIterable[T], idle_seconds: float | None
+) -> AsyncIterator[T]:
+    """``events``, failing with `ModelStreamStalled` once a response that has
+    started goes ``idle_seconds`` without adding anything.
+
+    The gap that counts is between two events that carry something, whatever
+    bytes the provider sent meanwhile -- an empty keep-alive delta is not
+    progress. Bounded only after the first such event: a model may think
+    silently before it answers. Each wait is bounded in this task, never
+    across a ``yield``.
+    """
+    iterator = aiter(events)
+    last_progress: float | None = None
+    while True:
+        left = (
+            None
+            if last_progress is None or idle_seconds is None
+            else idle_seconds - (time.monotonic() - last_progress)
+        )
+        try:
+            async with asyncio.timeout(left):
+                event = await anext(iterator)
+        except StopAsyncIteration:
+            return
+        except TimeoutError as exc:
+            logger.warning(
+                "agent.model_streaming.stream_stalled.degraded",
+                idle_seconds=idle_seconds,
+            )
+            raise ModelStreamStalled(
+                f"The model added nothing for {idle_seconds}s mid-response."
+            ) from exc
+        if _is_progress(event):
+            last_progress = time.monotonic()
+        yield event
+
+
 class ModelRequestStreamer:
     """Streams one model request's parts as agent events."""
 
@@ -82,9 +143,12 @@ class ModelRequestStreamer:
         agent_run_id: UUID,
         should_stop: StopChecker | None,
         pauses: Mapping[str, PauseKind] | None = None,
+        idle_seconds: float | None = None,
     ) -> None:
         self.emit_tokens = emit_tokens
         self.pauses = pauses
+        #: How long a started response may go without a delta; None: unbounded.
+        self.idle_seconds = idle_seconds if idle_seconds and idle_seconds > 0 else None
         self.agent_run_id = agent_run_id
         self.should_stop = should_stop
 
@@ -106,8 +170,11 @@ class ModelRequestStreamer:
         # the tail below before the run ends.
         stopped: AgentEvent | None = None
 
-        async with node.stream(run.ctx) as request_stream:
-            async for event in request_stream:
+        async with (
+            node.stream(run.ctx) as request_stream,
+            aclosing(_while_progressing(request_stream, self.idle_seconds)) as events,
+        ):
+            async for event in events:
                 if isinstance(event, PartStartEvent):
                     handler = self._stream_part_start(
                         event,

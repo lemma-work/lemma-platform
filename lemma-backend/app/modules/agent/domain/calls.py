@@ -127,8 +127,9 @@ at the next pause. `now` only for a failure or a question the person must answer
 
 How you work:
 - Anything that takes more than a few seconds goes to a sub-agent with \
-`spawn_subagent`, one per distinct ask, with a complete self-contained brief. Tell \
-the voice in `context` that it is underway, then return: the call must not wait on you.
+`delegate(wait="none")`, one task per distinct ask, each with a complete \
+self-contained brief. Tell the voice in `context` that it is underway, then \
+return: the call must not wait on you.
 - When the person adds or changes something about running work, send it to that \
 sub-agent with `interact_subagent(action="send")`. When they drop it, stop it, and \
 only say it stopped after the tool says so.

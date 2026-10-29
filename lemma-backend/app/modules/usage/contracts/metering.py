@@ -9,6 +9,9 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.usage.contracts import MeteredRequest
+from app.modules.usage.domain.accounting import (
+    RUN_INDEX_METADATA_KEY as RUN_INDEX_METADATA_KEY,
+)
 from app.modules.usage.services.usage_context import UsageExecutionContext
 
 from pydantic_ai.models import Model

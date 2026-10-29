@@ -32,9 +32,9 @@ from app.modules.agent.domain.entities import (
     Message as MessageEntity,
 )
 from app.modules.agent.domain.conversation_lifecycle import conversation_status_for
-from app.modules.agent.domain.run_state import RunFailure
 from app.modules.agent.domain.message_state import MessageState
-from app.modules.agent.domain.run_state import RunState
+from app.modules.agent.domain.run_kind import RunKind
+from app.modules.agent.domain.run_state import RunFailure, RunState
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -51,7 +51,6 @@ from app.modules.agent.infrastructure.model_converters import (
     agent_runtime_from_json,
     default_agent_runtime,
 )
-
 from app.modules.agent.infrastructure.models.agent import AgentModel
 from app.modules.agent.infrastructure.models.typed_state import (
     conversation_state_fields,
@@ -413,6 +412,7 @@ class AgentRunModel(UUIDAuditBase):
     trigger: Mapped[RunTrigger] = enum_column(
         RunTrigger, length=32, default=RunTrigger.MESSAGE
     )
+    kind: Mapped[RunKind] = enum_column(RunKind, length=16, default=RunKind.CHAT)
     private_note: Mapped[bool] = flag_column()
     asked_in_lemma: Mapped[bool] = flag_column()
     written_in: Mapped[WrittenIn | None] = enum_column(WrittenIn, length=16)
@@ -545,6 +545,7 @@ class MessageModel(UUIDCreatedBase):
     folded_from: Mapped[UUID | None] = mapped_column(nullable=True)
     synthetic_tool_return: Mapped[bool] = flag_column()
     parked_in_run_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    run_step_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     conversation: Mapped["ConversationModel"] = relationship(
         ConversationModel,
@@ -579,6 +580,7 @@ class MessageModel(UUIDCreatedBase):
             tool_result=self.tool_result,
             metadata=self.message_metadata,
             state=message_state_of(self),
+            run_step_seq=self.run_step_seq,
         )
 
 

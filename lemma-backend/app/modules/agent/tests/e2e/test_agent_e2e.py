@@ -1442,7 +1442,7 @@ class TestPodAgentLifecycle:
         )
         assert approvals_done.json()["items"] == []
 
-    async def test_new_message_while_ask_user_pending_denies_it_and_starts_fresh_run(
+    async def test_new_message_while_ask_user_pending_supersedes_it_with_the_reply(
         self,
         authenticated_client,
         fixed_test_org,
@@ -1494,14 +1494,18 @@ class TestPodAgentLifecycle:
         assert messages.status_code == 200, messages.text
         items = messages.json()["items"]
 
-        # The stale ask_user call is auto-denied as superseded, not dropped.
+        # The question is passed over, but what they wrote back reaches the
+        # model as its answer, not as the question "dismissed".
         tool_return = next(
             item
             for item in items
             if item["kind"] == "TOOL_RETURN" and item["tool_call_id"] == approval_id
         )
         assert tool_return["agent_run_id"] == str(paused_run.id)
-        assert tool_return["tool_result"]["success"] is False
+        assert tool_return["tool_result"]["success"] is True
+        assert tool_return["tool_result"]["answers"] == {
+            "reply": "Actually, never mind — let's talk about something else."
+        }
 
         # The approvals list clears instead of showing "needs approval" forever.
         approvals_after = await authenticated_client.get(
@@ -1835,7 +1839,8 @@ class TestPodAgentLifecycle:
             for item in items
             if item["kind"] == "TOOL_RETURN" and item["tool_call_id"] == approval_id
         )
-        assert tool_return["tool_result"]["success"] is False
+        # Written back rather than on the card: the reply is the answer.
+        assert tool_return["tool_result"]["success"] is True
 
         # The original stale call is resolved (no longer "needs approval").
         # Don't assert the approvals list is globally empty: the fix's job is

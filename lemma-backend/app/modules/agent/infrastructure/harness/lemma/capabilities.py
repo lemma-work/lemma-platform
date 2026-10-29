@@ -55,18 +55,21 @@ from app.modules.agent.domain.tool_call_ids import (
     unique_per_call_id,
     unparsed_signature,
 )
+from app.modules.agent.domain.tool_profile import ToolProfile
 from app.modules.agent.domain.tools import ToolGroup, ToolSpec
 from app.modules.agent.infrastructure.harness.lemma.history_parts import (
     RunContextCapability,
 )
 from app.modules.agent.infrastructure.harness.lemma.pending_user_messages import (
+    ClaimSteered,
+    OnSteered,
     PendingUserMessagesCapability,
-)
-from app.modules.agent.infrastructure.harness.lemma.reveal_referenced_tools import (
-    RevealReferencedToolsCapability,
 )
 from app.modules.agent.infrastructure.harness.lemma.toolset_adapter import (
     function_toolset,
+)
+from app.modules.agent.infrastructure.tools.deferred.tools import (
+    deferred_entry_specs,
 )
 from app.modules.agent.services.run_phase_spans import run_phase
 from app.modules.agent.services.tool_runtime import ToolRuntime
@@ -86,8 +89,18 @@ def harness_capabilities(
     runtime: ToolRuntime,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+    claim_steered: ClaimSteered | None = None,
+    on_steered: OnSteered | None = None,
+    reveals_tools_natively: bool = True,
+    steer_due: Callable[[], bool] | None = None,
 ) -> list[AgentCapability[ToolContext]]:
-    """Every capability an in-process run gets, its tools included."""
+    """Every capability an in-process run gets, its tools included.
+
+    ``reveals_tools_natively`` says the model has a channel for tools added
+    mid-run that leaves the request's ``tools`` as they were; without one, the
+    deferred tools are reached through two fixed entries instead
+    (``infrastructure/tools/deferred``).
+    """
     with run_phase("capabilities") as span:
         capabilities = _capabilities(
             ctx=ctx,
@@ -95,6 +108,8 @@ def harness_capabilities(
             runtime=runtime,
             enable_prompt_caching=enable_prompt_caching,
             protocol=protocol,
+            steering=(claim_steered, on_steered, steer_due),
+            reveals_tools_natively=reveals_tools_natively,
         )
         span.set_attribute("lemma.capabilities", len(capabilities))
         return capabilities
@@ -107,13 +122,22 @@ def _capabilities(
     runtime: ToolRuntime,
     enable_prompt_caching: bool,
     protocol: RuntimeProfileProtocol,
+    steering: tuple[
+        ClaimSteered | None, OnSteered | None, Callable[[], bool] | None
+    ] = (None, None, None),
+    reveals_tools_natively: bool = True,
 ) -> list[AgentCapability[ToolContext]]:
     groups = _groups(spec for spec in specs if spec.toolset is not ToolGroup.QUESTIONS)
     # Deferral is for the pod's own assistant, which accumulates every optional
     # toolset; a named agent chose its own. Never on a stranger's run, whose
     # one way past what is Public is reaching the member, in view.
     defers = ctx.is_pod_default_agent and not run_audience(ctx).answers_outsiders
-    deferred = [g for g in groups if defers and all(s.policy.deferrable for s in g)]
+    shown, deferred = _arm(
+        groups,
+        ToolProfile(ctx.tool_profile) if defers else ToolProfile.TODAY,
+        defers=defers,
+        natively=reveals_tools_natively,
+    )
     host_execution = ctx.host_workspace is not None
 
     def with_guidance(
@@ -125,31 +149,21 @@ def _capabilities(
         return InstructedToolset(toolset, guidance)
 
     capabilities: list[AgentCapability[ToolContext]] = [
-        with_guidance(group, function_toolset(group, runtime))
-        for group in groups
-        if group not in deferred
+        with_guidance(group, function_toolset(group, runtime)) for group in shown
     ]
     capabilities.append(UniqueToolCallIds())
-    capabilities.append(
-        RunContextCapability(
-            run_context_for(ctx),
-            mark_cache_boundary=enable_prompt_caching
-            and protocol is RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
-        )
-    )
-    capabilities.extend(_run_hooks(ctx))
+    capabilities.append(RunContextCapability(run_context_for(ctx)))
+    capabilities.extend(_run_hooks(ctx, *steering))
     if deferred:
-        # Provider-native search on Anthropic/OpenAI, a local `search_tools`
-        # elsewhere; see `MeteredModel` for the monetary-limit case.
-        capabilities.append(ToolSearch())
-        capabilities.append(RevealReferencedToolsCapability())
         capabilities.extend(
-            with_guidance(group, function_toolset(group, runtime).defer_loading())
-            for group in deferred
+            _deferred(
+                deferred,
+                runtime,
+                natively=reveals_tools_natively,
+                host_execution=host_execution,
+                guided={group[0].toolset for group in shown},
+            )
         )
-        hint = deferred_tools_hint(deferred)
-        if hint:
-            capabilities.append(Instructions(hint))
     questions = [spec for spec in specs if spec.toolset is ToolGroup.QUESTIONS]
     if questions:
         capabilities.append(ToolsetCapability(function_toolset(questions, runtime)))
@@ -164,14 +178,66 @@ def _capabilities(
     return capabilities
 
 
-def _run_hooks(ctx: ToolContext) -> list[AgentCapability[ToolContext]]:
+def _deferred(
+    deferred: Sequence[Sequence[ToolSpec]],
+    runtime: ToolRuntime,
+    *,
+    natively: bool,
+    host_execution: bool,
+    guided: frozenset[ToolGroup] | set[ToolGroup] = frozenset(),
+) -> list[AgentCapability[ToolContext]]:
+    """The deferred toolsets, their guidance, and the hint naming them.
+
+    ``natively``: behind pydantic-ai's tool search (provider-native on
+    Anthropic/OpenAI, a local `search_tools` elsewhere; see `MeteredModel` for
+    the monetary-limit case). Otherwise behind `search_tools` and `call_tool`.
+    """
+    capabilities: list[AgentCapability[ToolContext]] = []
+    # A group whose other tools are in view already carries its guidance.
+    guidance = [
+        None
+        if group[0].toolset in guided
+        else toolset_instructions(group[0].toolset, host_execution=host_execution)
+        for group in deferred
+    ]
+    if natively:
+        capabilities.append(ToolSearch())
+        for group, text in zip(deferred, guidance, strict=True):
+            toolset = function_toolset(group, runtime).defer_loading()
+            capabilities.append(
+                InstructedToolset(toolset, text) if text else ToolsetCapability(toolset)
+            )
+    else:
+        entries = deferred_entry_specs([spec for group in deferred for spec in group])
+        capabilities.append(ToolsetCapability(function_toolset(entries, runtime)))
+        capabilities.extend(Instructions(text) for text in guidance if text)
+    hint = deferred_tools_hint(deferred, by_entry=not natively)
+    if hint:
+        capabilities.append(Instructions(hint))
+    return capabilities
+
+
+def _run_hooks(
+    ctx: ToolContext,
+    claim_steered: ClaimSteered | None = None,
+    on_steered: OnSteered | None = None,
+    steer_due: Callable[[], bool] | None = None,
+) -> list[AgentCapability[ToolContext]]:
     """Steering, memory guidance and the platform's guidance, as the run has them."""
     hooks: list[AgentCapability[ToolContext]] = []
     # What the person says while the run works is steered into it.
     if ctx.agent_run_id is not None:
-        hooks.append(PendingUserMessagesCapability(agent_run_id=ctx.agent_run_id))
+        hooks.append(
+            PendingUserMessagesCapability(
+                agent_run_id=ctx.agent_run_id,
+                claim=claim_steered,
+                on_steered=on_steered,
+                due=steer_due,
+            )
+        )
     if ctx.memory_enabled:
-        hooks.append(Instructions(load_memory_prompt(after_turn=ctx.memory_after_turn)))
+        # Its timing rides with the conversation's context (`memory_timing_prompt`).
+        hooks.append(Instructions(load_memory_prompt(timing=False)))
     # The platform is the run's: none for a run asked in Lemma.
     if ctx.surface_platform and platform_is_known(ctx.surface_platform):
         hooks.append(
@@ -184,6 +250,50 @@ def _run_hooks(ctx: ToolContext) -> list[AgentCapability[ToolContext]]:
             )
         )
     return hooks
+
+
+def _arm(
+    groups: list[list[ToolSpec]],
+    profile: ToolProfile,
+    *,
+    defers: bool,
+    natively: bool,
+) -> tuple[list[list[ToolSpec]], list[list[ToolSpec]]]:
+    """The tools in view and behind search, for the run's tool profile."""
+    if profile is ToolProfile.DIRECT:
+        return _split(groups, defers=False)
+    if profile in (ToolProfile.CORE_CLI, ToolProfile.CORE_NATIVE):
+        core = [[spec for spec in group if spec.policy.core] for group in groups]
+        rest = [[spec for spec in group if not spec.policy.core] for group in groups]
+        # Behind the provider's own search, where the array never changes;
+        # elsewhere, and on core_cli, the rest is the CLI's.
+        keeps_rest = profile is ToolProfile.CORE_NATIVE and natively
+        return (
+            [group for group in core if group],
+            [group for group in rest if group] if keeps_rest else [],
+        )
+    return _split(groups, defers=defers)
+
+
+def _split(
+    groups: list[list[ToolSpec]], *, defers: bool
+) -> tuple[list[list[ToolSpec]], list[list[ToolSpec]]]:
+    """Each group's tools in view, and its deferrable ones behind search.
+
+    By tool, not by group: one group can hold a tool every run should see
+    beside advanced ones it rarely needs (``delegate`` beside the sub-agent
+    controls). A group of only deferrable tools is deferred whole, as before.
+    """
+    shown: list[list[ToolSpec]] = []
+    deferred: list[list[ToolSpec]] = []
+    for group in groups:
+        hidden = [spec for spec in group if defers and spec.policy.deferrable]
+        visible = [spec for spec in group if spec not in hidden]
+        if visible:
+            shown.append(visible)
+        if hidden:
+            deferred.append(hidden)
+    return shown, deferred
 
 
 def _groups(specs: Iterable[ToolSpec]) -> list[list[ToolSpec]]:

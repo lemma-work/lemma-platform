@@ -26,6 +26,7 @@ built, which is what makes a burst of bubbles arrive as one turn.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
@@ -38,12 +39,29 @@ from app.modules.agent.domain.entities import Message
 
 logger = get_logger(__name__)
 
+#: Claims what was sent to a run since it last looked: committed, and in the
+#: order it was sent. The database's claim, and its live frame, unless a caller
+#: hands in another -- which then tells the client itself.
+ClaimSteered = Callable[[UUID], Awaitable[list[Message]]]
+#: Told the ids of the rows steered in, so the run log marks them carried.
+OnSteered = Callable[[list[UUID]], None]
+
 
 class PendingUserMessagesCapability(AbstractCapability[object]):
     """Steers messages that arrived mid-run into the run that is answering."""
 
-    def __init__(self, *, agent_run_id: UUID) -> None:
+    def __init__(
+        self,
+        *,
+        agent_run_id: UUID,
+        claim: ClaimSteered | None = None,
+        on_steered: OnSteered | None = None,
+        due: Callable[[], bool] | None = None,
+    ) -> None:
         self._agent_run_id = agent_run_id
+        self._claim_from = claim
+        self._on_steered = on_steered
+        self._due = due
 
     def get_serialization_name(self) -> str | None:  # pragma: no cover - metadata
         return "pending_user_messages"
@@ -51,16 +69,24 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
     async def before_node_run(self, ctx: RunContext[Any], *, node: Any) -> Any:
         """Claim anything the person has said since, and hand it to the model.
 
-        One indexed statement per node, which is normally an update matching no
-        rows -- the person is usually not typing while the agent works.
+        One indexed statement, only when ``due`` says so: a message queued to
+        the run signals it (``services/run_signals``); with no ``due``, before
+        every node.
 
         The claim is one statement, so a database error is the whole of what it
         can fail with, and losing it must not lose the turn already in hand: the
         rows stay unclaimed and the completion backstop answers them. Anything
         else raised here is a bug and is left to surface.
         """
+        if self._due is not None and not self._due():
+            # Nothing was signalled to this run: no statement.
+            return node
         try:
-            messages = await self._claim()
+            messages = await (
+                self._claim_from(self._agent_run_id)
+                if self._claim_from is not None
+                else self._claim()
+            )
         except SQLAlchemyError:
             logger.warning(
                 "agent.pending_user_messages.claim_failed.degraded",
@@ -80,12 +106,15 @@ class PendingUserMessagesCapability(AbstractCapability[object]):
 
         for message in messages:
             ctx.enqueue(timed_user_prompt_text(message))
+        if self._on_steered is not None:
+            self._on_steered([message.id for message in messages])
         # The claim is committed and the prompts are in the run: the frame only
         # tells the client. Failing it must not cost the turn the messages it
         # just took -- a reload reads the same claim. Publishing already
         # swallows transport errors; what is left is building the frame.
         try:
-            await self._announce(messages)
+            if self._claim_from is None:
+                await self._announce(messages)
         except TypeError, ValueError:
             logger.warning(
                 "agent.pending_user_messages.announce_failed.degraded",

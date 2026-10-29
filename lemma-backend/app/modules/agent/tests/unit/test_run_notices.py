@@ -87,32 +87,32 @@ async def _deliver(capability, messages):
 
 async def test_a_notice_arrives_before_the_users_turn():
     """A model answers the last user message. A notice after it competes with
-    the actual instruction; consecutive requests merge in order, so sitting in
-    front of it costs nothing and changes nothing about what is being asked."""
+    the actual instruction, so it goes in front of it, in the same request."""
     notices = RunNotices()
     notices.post("you are near the limit")
     history = [_assistant("thinking"), _user("please continue")]
 
     delivered = await _deliver(RunNoticeCapability(notices), history)
 
-    assert _texts(delivered[-1]) == ["please continue"], "the ask stays last"
-    assert _texts(delivered[-2]) == ["you are near the limit"]
+    assert _texts(delivered[-1]) == ["you are near the limit", "please continue"]
 
 
-async def test_a_notice_is_its_own_message_and_edits_nothing():
-    """The cache is a prefix. Appending a part to the last request rewrites a
-    message the provider has already read, so everything from there is read
-    again; a new message at the tail leaves all of it untouched."""
+async def test_a_notice_rides_in_the_request_about_to_be_sent():
+    """Never a request of its own: pydantic-ai merges consecutive requests, so
+    one would be logged as sent and then replaced by the merged one. The
+    trailing request is the one nothing has sent yet; the notice goes after
+    what it carries, and nothing before it is rebuilt."""
     notices = RunNotices()
     notices.post("compaction is coming")
+    calling = _assistant("calling a tool")
     returns = _tool_returns("a big tool result")
-    history = [_assistant("calling a tool"), returns]
+    history = [calling, returns]
 
     delivered = await _deliver(RunNoticeCapability(notices), history)
 
-    assert delivered[:2] == history, "not one earlier message was rebuilt"
-    assert delivered[1] is returns, "the same object, not a copy"
-    assert _texts(delivered[-1]) == ["compaction is coming"]
+    assert len(delivered) == 2 and delivered[0] is calling
+    assert delivered[1] is returns, "the same object, as the run log knows it"
+    assert _texts(delivered[-1])[-1] == "compaction is coming"
 
 
 async def test_a_notice_is_delivered_once():
@@ -122,10 +122,9 @@ async def test_a_notice_is_delivered_once():
     notices = RunNotices()
     notices.post("said once")
     capability = RunNoticeCapability(notices)
-    history = [_user("go on")]
 
-    first = await _deliver(capability, history)
-    second = await _deliver(capability, history)
+    first = await _deliver(capability, [_user("go on")])
+    second = await _deliver(capability, [_user("go on")])
 
     assert any("said once" in t for m in first for t in _texts(m))
     assert not any("said once" in t for m in second for t in _texts(m))
@@ -266,7 +265,7 @@ async def test_a_notice_stays_in_the_history_whatever_is_registered_after_it():
 
 
 async def test_the_run_context_part_is_where_the_history_has_it():
-    """Moved to the tail on every request, and kept there in the run's history,
+    """Placed once before the turn, and kept there in the run's history,
     whatever is registered after it."""
     context = "<run_context>\nnow\n</run_context>"
     seen: list[list[ModelMessage]] = []
@@ -278,4 +277,6 @@ async def test_the_run_context_part_is_where_the_history_has_it():
 
     kept = [t for m in result.all_messages() for t in _texts(m)]
     assert kept.count(context) == 1
-    assert _texts(seen[1][-1])[-1] == context
+    assert kept.index(context) == kept.index("hello") - 1
+    second = [t for m in seen[1] for t in _texts(m)]
+    assert second.index(context) == second.index("hello") - 1

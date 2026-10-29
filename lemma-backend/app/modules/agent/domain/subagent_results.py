@@ -79,6 +79,32 @@ def result_message(
     return f"{who} finished. Its result:\n\n{text}"
 
 
+def combined_results(messages: list[str]) -> str:
+    """Several results as the one message that delivers them, cut to fit:
+    the message is replayed on every later turn of the parent."""
+    if len(messages) == 1:
+        return messages[0]
+    share = max(2_000, MAX_RESULT_CHARS // len(messages))
+    parts = [
+        message
+        if len(message) <= share
+        else message[:share] + "\n\n[Cut here. Read the rest with query_subagents.]"
+        for message in messages
+    ]
+    return f"{len(messages)} sub-agents finished.\n\n" + "\n\n---\n\n".join(parts)
+
+
+def combined_metadata(metadata: list[dict[str, object]]) -> dict[str, object]:
+    """The first result's metadata, naming every child the message carries."""
+    first = dict(metadata[0])
+    if len(metadata) > 1:
+        first["subagent_run_ids"] = [item["subagent_run_id"] for item in metadata]
+        first["subagent_conversation_ids"] = [
+            item["subagent_conversation_id"] for item in metadata
+        ]
+    return first
+
+
 def result_metadata(
     *, child_conversation_id: UUID, child_run_id: UUID
 ) -> dict[str, object]:

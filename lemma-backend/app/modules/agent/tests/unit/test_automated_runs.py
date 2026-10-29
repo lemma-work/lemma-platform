@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.application.automation import start as automation_start
 from app.modules.agent.application.automation.outcome import AutomatedRunOutcome
 from app.modules.agent.contracts.automation import build_agent_control_adapter
@@ -32,9 +33,13 @@ def _driver(agent):
     starts = driver.starts
     starts.organization_of = AsyncMock(return_value=uuid4())
     starts.default_runtime = AsyncMock(return_value=None)
+    starts.runtime_check = AsyncMock()
+    starts.usage_service = None
     starts.conversations = starts.runs = starts.messages = Mock(
         create_conversation=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
-        create_agent_run=AsyncMock(return_value=SimpleNamespace(id=uuid4())),
+        create_agent_run=AsyncMock(
+            return_value=SimpleNamespace(id=uuid4(), state=RunState())
+        ),
         append_message=AsyncMock(),
         collect_events=Mock(),
     )

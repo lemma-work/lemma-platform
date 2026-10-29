@@ -17,6 +17,7 @@ from app.modules.agent.application.pauses.supersede import SupersedeStalePauses
 from app.modules.agent.services.turn_staging import stage_agent_turn, turn_for
 from app.modules.agent.domain.entities import AgentRun, Conversation, Message
 from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.domain.run_kind import RunKind
 from app.modules.agent.domain.run_state import RunState
 from app.modules.agent.domain.value_objects import (
     AgentRunStatus,
@@ -239,6 +240,11 @@ class StartQueuedFollowUp:
             agent_runtime=agent_runtime,
             state=RunState(
                 trigger=RunTrigger.FOLLOW_UP,
+                # What a person said while the run worked: their turn, even in
+                # an automation's conversation.
+                kind=(
+                    completed_run.state.kind if completed_run else RunKind.CHAT
+                ).continuing(by_a_person=True),
                 queued_behind_run_id=answering,
                 # One kind per run: a note's answer stays in Lemma.
                 private_note=notes,
@@ -259,9 +265,7 @@ class StartQueuedFollowUp:
         # an agent for.
         await stage_agent_turn(
             self.uow,
-            turn_for(
-                conversation, run_id=followup_run.id, user_id=conversation.user_id
-            ),
+            turn_for(conversation, followup_run, user_id=conversation.user_id),
         )
         await self.uow.commit()
         return followup_run.id, [*superseded_returns, *claimed]
