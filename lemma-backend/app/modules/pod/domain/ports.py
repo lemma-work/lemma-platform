@@ -23,6 +23,10 @@ class PodRepositoryPort(Protocol):
 
     async def get(self, id: UUID) -> Optional[PodEntity]: ...
 
+    #: Hold the pod's row for the rest of the transaction, before a
+    #: read-modify-write of its config.
+    async def lock(self, id: UUID) -> None: ...
+
     #: The pod row whether or not it has been deleted. Only deletion itself
     #: wants this: every other read means the live pod, which is why `get`
     #: filters and this is the exception that has to say so in its name.

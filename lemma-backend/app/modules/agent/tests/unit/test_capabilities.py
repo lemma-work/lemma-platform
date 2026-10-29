@@ -879,6 +879,7 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "pod_search_files",
     "pod_get_file_url",
     "pod_view_document_pages",
+    "set_what_you_own",
 }
 
 
@@ -967,6 +968,9 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     assert {"say", "listen", "list_voices"} <= captured["deferred"]
     assert "Speaking and transcribing" in hint
     assert "pod_tables" not in hint
+    # The whole pod toolset is in view, setting what the pod owns included.
+    assert "set_what_you_own" not in captured["deferred"]
+    assert "`set_what_you_own`" not in hint
 
 
 @pytest.mark.anyio

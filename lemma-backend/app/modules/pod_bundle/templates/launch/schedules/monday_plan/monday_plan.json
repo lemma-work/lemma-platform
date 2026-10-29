@@ -1,0 +1,10 @@
+{
+  "name": "monday_plan",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 10 * * 1",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Post this week's plan for the launch: the steps due this week with their owners, and anything behind. Keep it to one short message."
+}

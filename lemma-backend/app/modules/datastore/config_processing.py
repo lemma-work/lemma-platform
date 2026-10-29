@@ -1,4 +1,5 @@
-"""Document-processing budgets, limits and the storage-layout switch.
+"""Document-processing budgets, limits and the storage-layout switch, and how
+often what a pod owns is measured.
 
 Split from ``config.py`` to keep it under the size ratchet; ``DatastoreSettings``
 inherits these, so the environment variables and ``datastore_settings`` are
@@ -10,6 +11,17 @@ from pydantic_settings import BaseSettings
 
 
 class DocumentWorkSettings(BaseSettings):
+    # What a pod owns: its measure is read on this interval into the week's row
+    # of `pod_outcome_weeks`, and a week keeps its last reading.
+    datastore_outcome_read_interval_minutes: int = Field(
+        default=60,
+        ge=5,
+        description=(
+            "How often every pod's measure of what it owns is read into that "
+            "week's row. A week keeps its last reading, so this is also how long "
+            "before the week ends its closing number may have been read."
+        ),
+    )
     document_processing_max_attempts: int = Field(
         default=3,
         description=(

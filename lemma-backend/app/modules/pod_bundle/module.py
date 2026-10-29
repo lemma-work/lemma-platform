@@ -21,14 +21,30 @@ def _routers():
     from app.modules.pod_bundle.api.controllers.publish_controller import (
         router as publish_router,
     )
+    from app.modules.pod_bundle.api.controllers.start_controller import (
+        router as start_router,
+    )
+    from app.modules.pod_bundle.api.controllers.template_controller import (
+        router as template_router,
+    )
 
-    return [import_router, export_router, publish_router]
+    # Templates first: `/pods/bundle/templates` must not be read as a pod id.
+    return [
+        template_router,
+        start_router,
+        import_router,
+        export_router,
+        publish_router,
+    ]
 
 
 def _register_work() -> None:
     # Every process: the API writes the job items with the job's state row,
     # the worker runs them. The bodies are imported when an item runs.
     import app.modules.pod_bundle.events.work  # noqa: F401
+
+    # Every process too: starting a Lemma from a template (API) writes it.
+    import app.modules.pod_bundle.events.template_setup  # noqa: F401
 
 
 def _register_periodic_work() -> None:

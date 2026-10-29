@@ -84,6 +84,22 @@ class PodRepository(PodRepositoryPort):
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
 
+    async def lock(self, id: UUID) -> None:
+        """Hold the pod's row until this transaction ends, and read it afresh.
+
+        For a read-modify-write of the pod's config: without the lock, two
+        writers each put back the whole blob as they read it, and one undoes
+        the other. ``populate_existing`` refreshes a row this session loaded
+        before the lock was granted, which ``get`` would otherwise hand back as
+        it was then.
+        """
+        await self.session.execute(
+            select(Pod)
+            .where(Pod.id == id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+
     async def get_even_if_deleted(self, id: UUID) -> Optional[PodEntity]:
         stmt = select(Pod).where(Pod.id == id)
         result = await self.session.execute(stmt)

@@ -12,6 +12,7 @@ from ..types import UNSET, Unset
 if TYPE_CHECKING:
     from ..models.agent_runtime_config import AgentRuntimeConfig
     from ..models.pod_contact_settings import PodContactSettings
+    from ..models.pod_outcome import PodOutcome
     from ..models.pod_recipe import PodRecipe
     from ..models.pod_trigger_settings import PodTriggerSettings
 
@@ -28,6 +29,7 @@ class PodConfig:
         default_profile_id (None | str | Unset):
         default_runtime (AgentRuntimeConfig | None | Unset):
         join_policy (PodJoinPolicy | Unset): Who may self-join a pod, ordered from closed to open.
+        outcome (None | PodOutcome | Unset):
         recipes (list[PodRecipe] | Unset):
         triggers (None | PodTriggerSettings | Unset):
     """
@@ -36,6 +38,7 @@ class PodConfig:
     default_profile_id: None | str | Unset = UNSET
     default_runtime: AgentRuntimeConfig | None | Unset = UNSET
     join_policy: PodJoinPolicy | Unset = UNSET
+    outcome: None | PodOutcome | Unset = UNSET
     recipes: list[PodRecipe] | Unset = UNSET
     triggers: None | PodTriggerSettings | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -43,6 +46,7 @@ class PodConfig:
     def to_dict(self) -> dict[str, Any]:
         from ..models.agent_runtime_config import AgentRuntimeConfig
         from ..models.pod_contact_settings import PodContactSettings
+        from ..models.pod_outcome import PodOutcome
         from ..models.pod_trigger_settings import PodTriggerSettings
 
         contacts: dict[str, Any] | None | Unset
@@ -71,6 +75,14 @@ class PodConfig:
         if not isinstance(self.join_policy, Unset):
             join_policy = self.join_policy.value
 
+        outcome: dict[str, Any] | None | Unset
+        if isinstance(self.outcome, Unset):
+            outcome = UNSET
+        elif isinstance(self.outcome, PodOutcome):
+            outcome = self.outcome.to_dict()
+        else:
+            outcome = self.outcome
+
         recipes: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.recipes, Unset):
             recipes = []
@@ -97,6 +109,8 @@ class PodConfig:
             field_dict["default_runtime"] = default_runtime
         if join_policy is not UNSET:
             field_dict["join_policy"] = join_policy
+        if outcome is not UNSET:
+            field_dict["outcome"] = outcome
         if recipes is not UNSET:
             field_dict["recipes"] = recipes
         if triggers is not UNSET:
@@ -108,6 +122,7 @@ class PodConfig:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.agent_runtime_config import AgentRuntimeConfig
         from ..models.pod_contact_settings import PodContactSettings
+        from ..models.pod_outcome import PodOutcome
         from ..models.pod_recipe import PodRecipe
         from ..models.pod_trigger_settings import PodTriggerSettings
 
@@ -165,6 +180,23 @@ class PodConfig:
         else:
             join_policy = PodJoinPolicy(_join_policy)
 
+        def _parse_outcome(data: object) -> None | PodOutcome | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                outcome_type_0 = PodOutcome.from_dict(data)
+
+                return outcome_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | PodOutcome | Unset, data)
+
+        outcome = _parse_outcome(d.pop("outcome", UNSET))
+
         _recipes = d.pop("recipes", UNSET)
         recipes: list[PodRecipe] | Unset = UNSET
         if _recipes is not UNSET:
@@ -196,6 +228,7 @@ class PodConfig:
             default_profile_id=default_profile_id,
             default_runtime=default_runtime,
             join_policy=join_policy,
+            outcome=outcome,
             recipes=recipes,
             triggers=triggers,
         )

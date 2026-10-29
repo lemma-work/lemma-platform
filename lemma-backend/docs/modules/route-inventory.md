@@ -250,6 +250,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/public-rows` | `table.public_rows.get` | Who Outside May Add Rows |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records` | `record.list` | List Records |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.get` | Get Record |
+| GET | `/pods/{pod_id}/outcome/history` | `outcome.history` | Where the pod has stood, week by week |
+| GET | `/pods/{pod_id}/outcome/standing` | `outcome.standing` | Where the pod stands |
 | PATCH | `/pods/{pod_id}/datastore/files/by-path` | `file.update` | Update File |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.update` | Update Table |
 | PATCH | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.update` | Update Record |
@@ -347,6 +349,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}` | `pod.delete` | Delete Pod |
 | DELETE | `/pods/{pod_id}/members/{pod_member_id}` | `pod.member.remove` | Remove Pod Member |
+| DELETE | `/pods/{pod_id}/outcome` | `outcome.clear` | Clear what the pod owns |
 | DELETE | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.delete` | Delete Resource Access Grant |
 | DELETE | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.delete` | Delete Pod Role |
 | GET | `/organizations/{organization_id}/pods` | `pod.list` | List Pods by Organization |
@@ -372,6 +375,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/members` | `pod.member.add` | Add Pod Member |
 | POST | `/pods/{pod_id}/roles` | `pod.roles.create` | Create Pod Role |
 | PUT | `/pods/{pod_id}` | `pod.update` | Update Pod |
+| PUT | `/pods/{pod_id}/outcome` | `outcome.set` | Set what the pod owns |
 | PUT | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.replace` | Replace Resource Access Grant |
 | PUT | `/pods/{pod_id}/roles/{role_name}/permissions` | `pod.role.permissions.replace` | Replace Pod Role Permissions |
 
@@ -381,11 +385,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.cancel` | Cancel Pod Import |
 | GET | `/pods/bundle/download` | `pod.bundle.download` | Download A Bundle Archive |
+| GET | `/pods/bundle/templates` | `pod.bundle.templates` | Templates to start a Lemma from |
 | GET | `/pods/{pod_id}/bundle/exports/{export_id}` | `pod.bundle.export.get` | Get Pod Export Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}` | `pod.bundle.import.get` | Get Pod Import Status |
 | GET | `/pods/{pod_id}/bundle/imports/{import_id}/events` | `pod.bundle.import.events` | Stream Pod Import Progress |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}` | `pod.bundle.publish.get` | Get Pod Publish Status |
 | GET | `/pods/{pod_id}/bundle/publishes/{publish_id}/events` | `pod.bundle.publish.events` | Stream Pod Publish Progress |
+| POST | `/pods/start` | `pod.start` | Start a Lemma |
 | POST | `/pods/{pod_id}/bundle/exports` | `pod.bundle.export.start` | Start Pod Export |
 | POST | `/pods/{pod_id}/bundle/imports` | `pod.bundle.import.start` | Start Pod Import |
 | POST | `/pods/{pod_id}/bundle/imports/{import_id}/apply` | `pod.bundle.import.apply` | Apply Pod Import |

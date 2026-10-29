@@ -1,0 +1,10 @@
+{
+  "name": "friday_number",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 16 * * 5",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Write this week's number to a page named after the week: how many customers heard back within a day out of how many wrote, the ones still waiting, and who holds each. Say what was different from last week in two sentences."
+}

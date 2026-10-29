@@ -29,6 +29,7 @@ from app.modules.agent.tools.pod.pod_data_access import (
     empty_data_error,
 )
 from app.modules.agent.tools.pod.pod_common import has_meaningful_data, run_pod_tool
+from app.modules.agent.tools.pod.pod_outcome_tool import set_what_you_own
 from app.modules.agent.tools.pod.pod_file_tools import (
     pod_edit_file,
     pod_get_file_url,
@@ -299,5 +300,12 @@ pod_toolset = FunctionToolset[BaseAgentContext](
         pod_view_document_pages,
         pod_get_file_url,
         pod_search_files,
+        # Visible, not deferred: only the pod default runs with ToolSearch, so a
+        # named agent with POD never saw a deferred tool or a hint that it was
+        # there, while the brief told it to call it. And on a provider without
+        # native tool search a reveal rewrites the tool list mid-run, which
+        # costs the cached prompt more than one stable schema does. In this
+        # toolset so it reaches the pod MCP surface and every agent with POD.
+        set_what_you_own,
     ]
 )

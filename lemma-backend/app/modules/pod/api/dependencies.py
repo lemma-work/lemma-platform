@@ -6,6 +6,8 @@ from fastapi import Depends
 from app.core.api.dependencies import UoWDep
 from app.core.authorization.dependencies import pod_from_path, require_action
 from app.core.plan_limits import build_plan_limits
+from app.core.ports.outcome_measures import OutcomeMeasures
+from app.modules.pod.services.pod_outcome_service import PodOutcomeService
 from app.modules.pod.services.pod_service import PodService
 from app.modules.pod.services.pod_member_service import PodMemberService
 from app.modules.pod.services.pod_join_request_service import PodJoinRequestService
@@ -60,6 +62,29 @@ def get_pod_member_service(
 
 PodServiceDep = Annotated[PodService, Depends(get_pod_service)]
 PodMemberServiceDep = Annotated[PodMemberService, Depends(get_pod_member_service)]
+
+
+def get_pod_outcome_service(uow: UoWDep) -> PodOutcomeService:
+    return PodOutcomeService(PodRepository(uow), uow)
+
+
+def get_outcome_measures(uow: UoWDep) -> OutcomeMeasures:
+    """Bind the port `pod` checks a measure through to the module that reads one.
+
+    `pod` names `OutcomeMeasures` and nothing about `datastore`; `datastore`
+    publishes a factory and nothing about `pod`. Imported here, at the one
+    place the two meet, and late, so importing `pod`'s API does not import
+    the datastore's services.
+    """
+    from app.modules.datastore.contracts.outcome_measures import (
+        build_outcome_measures,
+    )
+
+    return build_outcome_measures(uow)
+
+
+PodOutcomeServiceDep = Annotated[PodOutcomeService, Depends(get_pod_outcome_service)]
+OutcomeMeasuresDep = Annotated[OutcomeMeasures, Depends(get_outcome_measures)]
 
 
 def get_pod_role_service(uow: UoWDep) -> PodRoleService:

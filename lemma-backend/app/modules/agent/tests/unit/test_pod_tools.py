@@ -99,7 +99,22 @@ def test_pod_toolset_exposes_exactly_these_tools():
         "pod_view_document_pages",
         "pod_get_file_url",
         "pod_search_files",
+        # In view like the rest: only the pod default runs with ToolSearch, so a
+        # deferred tool was out of reach of every named agent with POD. Here
+        # rather than in a toolset of its own so it reaches the pod MCP surface.
+        "set_what_you_own",
     }
+
+
+def test_nothing_in_the_pod_toolset_is_deferred():
+    """A named agent with POD runs with no ToolSearch, so a deferred tool here is
+    one it can never reach, and that nothing tells it exists."""
+    deferred = {
+        name
+        for name, tool in pod_adapter.pod_toolset.tools.items()
+        if tool.defer_loading
+    }
+    assert deferred == set()
 
 
 @pytest.mark.asyncio

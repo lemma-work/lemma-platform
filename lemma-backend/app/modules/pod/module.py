@@ -22,6 +22,9 @@ def _routers():
     from app.modules.pod.api.controllers.pod_join_request_controller import (
         router as join_request,
     )
+    from app.modules.pod.api.controllers.pod_outcome_controller import (
+        router as outcome,
+    )
 
     return [
         pod,
@@ -32,6 +35,7 @@ def _routers():
         resource_preview,
         role,
         join_request,
+        outcome,
     ]
 
 

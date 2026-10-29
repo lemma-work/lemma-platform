@@ -212,6 +212,9 @@ def _routers():
     from app.modules.datastore.api.controllers.processing_controller import (
         router as processing,
     )
+    from app.modules.datastore.api.controllers.outcome_controller import (
+        router as outcome,
+    )
 
     # `signed_link` before `file`, and the order is load-bearing: routes match
     # in registration order, and `file` owns `/files/{file_id}` — which happily
@@ -227,6 +230,7 @@ def _routers():
         public_file,
         signed_file,
         changes,
+        outcome,
     ]
 
 
@@ -243,6 +247,10 @@ def _register_work() -> None:
     import app.modules.datastore.events.contact_merged_work  # noqa: F401
     import app.modules.datastore.events.pod_provision_work  # noqa: F401
 
+    # Every process: setting what a pod owns (API) writes `datastore.outcome_week`
+    # through the `PodOutcomeChanged` fact this module subscribes it to.
+    import app.modules.datastore.events.outcome_week_work  # noqa: F401
+
     # Every process: a schedule or MCP subscription change (API) writes
     # `changes.sync_subscribers`; the worker claims every change-log kind.
     import app.modules.datastore.changes.horizon  # noqa: F401
@@ -253,6 +261,7 @@ def _register_work() -> None:
 def _register_periodic_work() -> None:
     import app.modules.datastore.events.handlers  # noqa: F401
     import app.modules.datastore.events.orphan_schema_tasks  # noqa: F401
+    import app.modules.datastore.events.outcome_week_sweep  # noqa: F401
 
     # Work-runtime kinds, registered here so the worker's dispatchers can
     # claim them; the API registers ``file_work`` by importing the repository

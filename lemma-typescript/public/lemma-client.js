@@ -16060,6 +16060,47 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Clear what the pod owns
+     * Let the pod's outcome go. Nothing else about the pod changes, and the weeks its measure was read in are kept: setting the same measure again brings back every week no other measure has been read in since.
+     * @param podId
+     * @returns void
+     * @throws ApiError
+     */
+    static outcomeClear(podId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/outcome",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Set what the pod owns
+     * Set what the pod owns, replacing what it had: a bar held every week (kind=week) or a finish line by a date (kind=date), with the target and unit it is held to and the measure that counts it. A measure is one read-only SQL query over the pod's tables that answers a single number, read for every member alike; a new or changed one is read once before it is kept, and refused when the caller cannot read every row it counts (403), names a table that is not there (404), or does not answer one number (422).
+     * @param podId
+     * @param requestBody
+     * @returns OutcomeSetResponse Successful Response
+     * @throws ApiError
+     */
+    static outcomeSet(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/outcome",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/pods.ts
@@ -21436,6 +21477,48 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Where the pod has stood, week by week
+     * The last `weeks` weeks of the pod's measure, each on its last reading. The measure is read on a schedule and when it is set; a week it was never read in has a null value.
+     * @param podId
+     * @param weeks
+     * @returns OutcomeHistoryResponse Successful Response
+     * @throws ApiError
+     */
+    static outcomeHistory(podId, weeks = 8) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/outcome/history",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "weeks": weeks
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Where the pod stands
+     * What the pod owns and what its measure answers now. The measure is read over every row of the tables it names, so every member sees the same number, including members who cannot open some of those rows; only someone who can read all of them may set it. A measure that cannot be read comes back as a `problem` rather than an error.
+     * @param podId
+     * @returns OutcomeStandingResponse Successful Response
+     * @throws ApiError
+     */
+    static outcomeStanding(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/outcome/standing",
+        path: {
+          "pod_id": podId
+        },
         errors: {
           422: `Validation Error`
         }

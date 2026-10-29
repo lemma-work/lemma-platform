@@ -58,6 +58,11 @@ OVERRIDES: dict[str, dict[str, Any]] = {
     # A POST that stores nothing: asking a decision changes no resource, so no
     # cached query is stale afterwards.
     "decision.make": {"invalidates": []},
+    # What a pod owns is on its config, so a pod read is stale after either.
+    "outcome.set": {"invalidates": ["outcome", "pod"]},
+    "outcome.clear": {"invalidates": ["outcome", "pod"]},
+    # Makes a pod and opens a conversation in it.
+    "pod.start": {"invalidates": ["pod", "agent.conversation"]},
 }
 
 

@@ -1,0 +1,32 @@
+{
+  "format_version": 3,
+  "name": "Partners",
+  "description": "Signs design partners by a date, and chases every conversation that goes quiet.",
+  "lemma": {
+    "position": 6,
+    "face": "peak",
+    "place": "HubSpot",
+    "brings": [
+      "A table of every company you are talking to",
+      "A chase for anything quiet five days",
+      "Who signed, and who is close, every Friday"
+    ],
+    "plan": {
+      "how": [
+        "Every company you are talking to is a row in partners, with its next step and when",
+        "A company quiet for five days gets a chase to its owner"
+      ],
+      "never": [
+        "Count a partner as signed before the agreement is"
+      ]
+    }
+  },
+  "outcome": {
+    "sentence": "20 design partners signed by {due}.",
+    "kind": "date",
+    "target": 20,
+    "unit": "partners",
+    "measure": "SELECT count(*) FROM partners WHERE signed"
+  },
+  "variables": {}
+}

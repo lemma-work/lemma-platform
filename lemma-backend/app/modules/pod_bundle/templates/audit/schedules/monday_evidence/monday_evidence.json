@@ -1,0 +1,10 @@
+{
+  "name": "monday_evidence",
+  "schedule_type": "TIME",
+  "config": {
+    "cron": "0 9 * * 1",
+    "timezone": "UTC"
+  },
+  "agent_name": "POD_DEFAULT",
+  "instruction": "Read the controls table. List controls with no owner, controls past their date, and evidence older than 90 days, and ask each owner for what is missing."
+}

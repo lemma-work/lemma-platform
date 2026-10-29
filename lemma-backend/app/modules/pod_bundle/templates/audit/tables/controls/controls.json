@@ -1,0 +1,41 @@
+{
+  "name": "controls",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "config": {
+    "description": "Every control the audit checks: who owns it, its evidence, and whether it is ready."
+  },
+  "columns": [
+    {
+      "name": "id",
+      "type": "UUID",
+      "required": true,
+      "auto": true
+    },
+    {
+      "name": "control",
+      "type": "TEXT",
+      "required": true
+    },
+    {
+      "name": "owner",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "evidence_link",
+      "type": "TEXT",
+      "required": false
+    },
+    {
+      "name": "due_on",
+      "type": "DATE",
+      "required": false
+    },
+    {
+      "name": "ready",
+      "type": "BOOLEAN",
+      "required": false
+    }
+  ]
+}

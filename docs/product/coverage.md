@@ -14,9 +14,9 @@ only a promise marked `covered` with no test is.
 | `covered` | 176 |
 | `gap` | 4 |
 | `manual` | 24 |
-| `planned` | 24 |
+| `planned` | 28 |
 | `withdrawn` | 0 |
-| **total** | **228** |
+| **total** | **232** |
 
 Scenario tests declaring a promise: 454.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 259 | 364 |
+| OpenAPI operations | 259 | 370 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -129,6 +129,10 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-POD-050` Deleting a pod stops the work it was doing | `covered` | `test_deleting_a_pod_removes_it`, `test_a_deleted_pods_name_is_reusable`, `test_a_repeated_deletion_still_reports_success`, `test_a_non_admin_cannot_delete_the_pod` |
 | `PS-POD-051` Deletion does not take unrelated things with it | `covered` | `test_deleting_one_pod_spares_the_others`, `test_deleting_one_pod_leaves_the_others_working` |
 | `PS-POD-060` An empty place says what belongs there and offers a way to start | `manual` | — |
+| `PS-POD-070` A person starts a pod that owns something, in one step | `planned` | — |
+| `PS-POD-071` Everyone in a pod sees the same number, week by week | `planned` | — |
+| `PS-POD-072` Only someone who can read every row a measure counts may set it | `planned` | — |
+| `PS-POD-073` A pod's agent knows what the pod owns and can set its measure | `planned` | — |
 
 ## [Connectors and accounts](journeys/connectors-and-accounts.md)
 

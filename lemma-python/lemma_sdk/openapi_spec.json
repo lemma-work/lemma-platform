@@ -3540,10 +3540,11 @@
         "type": "object"
       },
       "BundleSourceKind": {
-        "description": "Where an imported bundle comes from \u2014 a CAPS wire enum.\n\n``URL`` covers any lemma-origin signed download URL (an export or an\nuploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public\nrepo fetched via the connector path.",
+        "description": "Where an imported bundle comes from \u2014 a CAPS wire enum.\n\n``URL`` covers any lemma-origin signed download URL (an export or an\nuploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public\nrepo fetched via the connector path; ``TEMPLATE`` is a bundle that ships\nwith the backend under ``pod_bundle/templates/``, named rather than located.",
         "enum": [
           "URL",
-          "GITHUB"
+          "GITHUB",
+          "TEMPLATE"
         ],
         "title": "BundleSourceKind",
         "type": "string"
@@ -12282,7 +12283,7 @@
       },
       "ImportStartRequest": {
         "additionalProperties": false,
-        "description": "Body for starting a URL-based import.",
+        "description": "Body for starting an import.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -12300,7 +12301,7 @@
           },
           "kind": {
             "$ref": "#/components/schemas/BundleSourceKind",
-            "description": "URL (a lemma signed download URL) or GITHUB (a public repo)."
+            "description": "URL (a lemma signed download URL), GITHUB (a public repo), or TEMPLATE (a template that ships with Lemma, by name)."
           },
           "owner": {
             "anyOf": [
@@ -12337,6 +12338,19 @@
             ],
             "description": "GITHUB repo name.",
             "title": "Repo"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For TEMPLATE: the template's name, e.g. 'support'. Required with TEMPLATE and refused with any other kind.",
+            "title": "Template"
           },
           "url": {
             "anyOf": [
@@ -15197,6 +15211,348 @@
         "title": "OrganizationUpdateRequest",
         "type": "object"
       },
+      "OutcomeHistoryResponse": {
+        "properties": {
+          "weeks": {
+            "description": "Oldest first, ending with this week. Only the weeks read by the pod's current measure: changing the measure starts a new history.",
+            "items": {
+              "$ref": "#/components/schemas/OutcomeWeekResponse"
+            },
+            "title": "Weeks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "weeks"
+        ],
+        "title": "OutcomeHistoryResponse",
+        "type": "object"
+      },
+      "OutcomeInput": {
+        "description": "What the pod owns, as a person or its agent sets it.\n\nThe fields are the front matter of the plan file the workspace keeps at\n``/plan.md`` -- ``outcome`` (here ``sentence``), ``kind``, ``target``,\n``unit``, ``due`` and ``measure`` -- held here so there is one copy of\nthem. The plan's prose (what must be true, how the work is done, who holds\nwhat, what never happens) stays in the file.",
+        "properties": {
+          "due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The finish line's date. Required for kind=date, refused for week.",
+            "title": "Due"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OutcomeKind",
+            "description": "week: a bar held every week. date: a finish line by `due`."
+          },
+          "measure": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One read-only SQL query over the pod's tables that answers a single number: one row, one column. Counted for every member alike, so only someone who can read every row it touches may set it.",
+            "title": "Measure"
+          },
+          "sentence": {
+            "description": "What it owns, as one sentence a person can check.",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Sentence",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The number the measure is held to: 90 with unit '%' for a share, 22 for a finish line of 22 steps. Unset while it is still being worked out.",
+            "title": "Target"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "maxLength": 24,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'%' when the measure answers a share from 0 to 100; otherwise what it counts, such as 'steps' or 'posts'.",
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "sentence",
+          "kind"
+        ],
+        "title": "OutcomeInput",
+        "type": "object"
+      },
+      "OutcomeKind": {
+        "description": "The two shapes of what a pod owns.\n\n``week`` is a bar held every week, which never finishes (\"Every customer\nhears back within a day\"). ``date`` is a finish line, reached once by its\n``due`` date (\"The launch ships by the date it is due\"). The values are the plan\nfile's own (``kind: week`` in ``/plan.md``), so a plan a person or the\npod's agent wrote reads straight across.",
+        "enum": [
+          "week",
+          "date"
+        ],
+        "title": "OutcomeKind",
+        "type": "string"
+      },
+      "OutcomeSetResponse": {
+        "properties": {
+          "measured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When `value` was read; null when it was not.",
+            "title": "Measured At"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/PodOutcome"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What a new or changed measure answered when it was checked; null when it answered null, or was not read because it did not change.",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "OutcomeSetResponse",
+        "type": "object"
+      },
+      "OutcomeStandingResponse": {
+        "properties": {
+          "measured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured At"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the pod owns, or null when it owns nothing yet."
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the measure could not be read, in plain words.",
+            "title": "Problem"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What its measure answers now, counted over every row for everyone in the pod alike. Null with no measure, when it answers null, or when it could not be read (see `problem`).",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "OutcomeStandingResponse",
+        "type": "object"
+      },
+      "OutcomeTemplateCard": {
+        "description": "One Lemma a person can start, as the shelf shows it.",
+        "properties": {
+          "brings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Brings",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "face": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which character's face it wears.",
+            "title": "Face"
+          },
+          "id": {
+            "description": "The template's name, passed as `template` to start one.",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OutcomeKind"
+          },
+          "name": {
+            "description": "The short name a Lemma made from it starts with.",
+            "title": "Name",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TemplateOutcome",
+            "description": "What it owns once started, with {due} filled in."
+          },
+          "place": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where its work usually happens.",
+            "title": "Place"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/TemplatePlan"
+          },
+          "position": {
+            "default": 100,
+            "title": "Position",
+            "type": "integer"
+          },
+          "sentence": {
+            "description": "What it owns. A finish line's carries {due}.",
+            "title": "Sentence",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "sentence",
+          "kind",
+          "outcome"
+        ],
+        "title": "OutcomeTemplateCard",
+        "type": "object"
+      },
+      "OutcomeWeekResponse": {
+        "properties": {
+          "measured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When `value` was read; null when it never was.",
+            "title": "Measured At"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why its last reading could not be taken.",
+            "title": "Problem"
+          },
+          "starts_on": {
+            "description": "The Monday the week starts on (UTC).",
+            "format": "date",
+            "title": "Starts On",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The target when the week was read.",
+            "title": "Target"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The week's last reading. Null for a week it was not read in, or that answered null.",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "starts_on"
+        ],
+        "title": "OutcomeWeekResponse",
+        "type": "object"
+      },
       "OutreachDelivery": {
         "properties": {
           "id": {
@@ -15960,6 +16316,16 @@
           "join_policy": {
             "$ref": "#/components/schemas/PodJoinPolicy",
             "default": "INVITE_ONLY"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "recipes": {
             "items": {
@@ -16983,6 +17349,101 @@
           "roles"
         ],
         "title": "PodMemberUpdateRoleRequest",
+        "type": "object"
+      },
+      "PodOutcome": {
+        "description": "What the pod owns, as stored on its config.",
+        "properties": {
+          "due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The finish line's date. Required for kind=date, refused for week.",
+            "title": "Due"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OutcomeKind",
+            "description": "week: a bar held every week. date: a finish line by `due`."
+          },
+          "measure": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One read-only SQL query over the pod's tables that answers a single number: one row, one column. Counted for every member alike, so only someone who can read every row it touches may set it.",
+            "title": "Measure"
+          },
+          "row_security_checked": {
+            "description": "The tables with row security the measure counts that were checked when it was set, by id: whoever set it administers each. Set by the server. A measure that counts a table with row security not listed here is not read until someone who administers that table sets it again.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Row Security Checked",
+            "type": "array"
+          },
+          "sentence": {
+            "description": "What it owns, as one sentence a person can check.",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Sentence",
+            "type": "string"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the pod took this on: set by the server when it is first set, and kept while only its wording, target or measure change.",
+            "title": "Since"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The number the measure is held to: 90 with unit '%' for a share, 22 for a finish line of 22 steps. Unset while it is still being worked out.",
+            "title": "Target"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "maxLength": 24,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'%' when the measure answers a share from 0 to 100; otherwise what it counts, such as 'steps' or 'posts'.",
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "sentence",
+          "kind"
+        ],
+        "title": "PodOutcome",
         "type": "object"
       },
       "PodPermissionCatalogResponse": {
@@ -20340,6 +20801,186 @@
         "title": "SourceUpdateRequest",
         "type": "object"
       },
+      "StartLemmaRequest": {
+        "description": "Body for starting a Lemma: from a template, or from its own words.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it is for. A template's own when omitted.",
+            "title": "Description"
+          },
+          "due": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a template that is a finish line: the date it is due by.",
+            "title": "Due"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its short name: the template's when omitted, and required without one. A name already taken in the organization gets a number after it.",
+            "title": "Name"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutcomeInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What it owns, for a Lemma started without a template. Without a measure: nothing it could count exists yet, so its agent sets one once it has built what it counts."
+          },
+          "template": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A template from GET /pods/bundle/templates. It decides what the Lemma owns and brings the tables, skill and schedules that count it.",
+            "title": "Template"
+          }
+        },
+        "required": [
+          "organization_id"
+        ],
+        "title": "StartLemmaRequest",
+        "type": "object"
+      },
+      "StartLemmaResponse": {
+        "properties": {
+          "conversation_id": {
+            "description": "The chat where its agent sets itself up, opened with the person's first message. From a template, its first turn starts once the template is applied.",
+            "format": "uuid",
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "import_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The template's import, readable at GET /pods/{pod_id}/bundle/imports/{import_id} while it is applied; null without a template.",
+            "title": "Import Id"
+          },
+          "pod": {
+            "$ref": "#/components/schemas/StartedPodResponse"
+          }
+        },
+        "required": [
+          "pod",
+          "conversation_id"
+        ],
+        "title": "StartLemmaResponse",
+        "type": "object"
+      },
+      "StartedPodResponse": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "icon_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon Url"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name it got, numbered when the one asked for was taken.",
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PodOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "organization_id",
+          "name"
+        ],
+        "title": "StartedPodResponse",
+        "type": "object"
+      },
       "StepRecordResponse": {
         "properties": {
           "completed_at": {
@@ -22041,6 +22682,79 @@
           "expires_at"
         ],
         "title": "TelegramManagedBotSetupResponse",
+        "type": "object"
+      },
+      "TemplateOutcome": {
+        "description": "What a template's Lemma owns, before its date is known: a finish\nline's sentence still carries ``{due}``.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/OutcomeKind"
+          },
+          "measure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Counts rows of the tables the template brings.",
+            "title": "Measure"
+          },
+          "sentence": {
+            "title": "Sentence",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "sentence",
+          "kind"
+        ],
+        "title": "TemplateOutcome",
+        "type": "object"
+      },
+      "TemplatePlan": {
+        "description": "The first lines of the plan a Lemma made from this template starts with.",
+        "properties": {
+          "how": {
+            "items": {
+              "type": "string"
+            },
+            "title": "How",
+            "type": "array"
+          },
+          "never": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Never",
+            "type": "array"
+          }
+        },
+        "title": "TemplatePlan",
         "type": "object"
       },
       "ThreadResponse": {
@@ -31052,6 +31766,92 @@
         }
       }
     },
+    "/pods/bundle/templates": {
+      "get": {
+        "description": "The templates that ship with this server, one card each: what a Lemma made from it owns and how that is counted, its face, where its work happens, what it brings and the first lines of its plan. Start one with POST /pods/start.",
+        "operationId": "pod.bundle.templates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OutcomeTemplateCard"
+                  },
+                  "title": "Response Pod.Bundle.Templates",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Templates to start a Lemma from",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.bundle",
+          "result": "entity",
+          "verb": "templates"
+        }
+      }
+    },
+    "/pods/start": {
+      "post": {
+        "description": "Make a pod that owns something, in one transaction: the pod, what it owns, a first /plan.md, and the chat where its agent sets itself up, opened with the caller's first message. From a template (`template`, with `due` for a finish line) it also brings the template's tables, skill and schedules, applied by a worker, and its agent starts once they are in; from the caller's own words (`outcome` and `name`) its agent starts at once. A failure leaves nothing behind. 404 for a template that is not here; 403 outside the organization; 409 when its name collides with one made at the same moment.",
+        "operationId": "pod.start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartLemmaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartLemmaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start a Lemma",
+        "tags": [
+          "Pod Bundle"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod",
+            "agent.conversation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
     "/pods/{pod_id}": {
       "delete": {
         "description": "Delete a pod",
@@ -32787,7 +33587,7 @@
     },
     "/pods/{pod_id}/bundle/imports": {
       "post": {
-        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST \u2026/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo. Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
+        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST \u2026/bundle/uploads); kind=GITHUB takes a repo (repo_url or owner+repo), fetched through the pod's `github` connector as the importer, or anonymously for a public repo; kind=TEMPLATE takes the name of a template that ships with Lemma (404 when there is none by that name). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
         "operationId": "pod.bundle.import.start",
         "parameters": [
           {
@@ -44733,6 +45533,231 @@
           "resource": "pod.member",
           "result": "entity",
           "verb": "update_roles"
+        }
+      }
+    },
+    "/pods/{pod_id}/outcome": {
+      "delete": {
+        "description": "Let the pod's outcome go. Nothing else about the pod changes, and the weeks its measure was read in are kept: setting the same measure again brings back every week no other measure has been read in since.",
+        "operationId": "outcome.clear",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear what the pod owns",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "outcome",
+            "pod"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "outcome",
+          "result": "void",
+          "verb": "clear"
+        }
+      },
+      "put": {
+        "description": "Set what the pod owns, replacing what it had: a bar held every week (kind=week) or a finish line by a date (kind=date), with the target and unit it is held to and the measure that counts it. A measure is one read-only SQL query over the pod's tables that answers a single number, read for every member alike; a new or changed one is read once before it is kept, and refused when the caller cannot read every row it counts (403), names a table that is not there (404), or does not answer one number (422).",
+        "operationId": "outcome.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutcomeInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeSetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set what the pod owns",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "outcome",
+            "pod"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "outcome",
+          "result": "entity",
+          "verb": "set"
+        }
+      }
+    },
+    "/pods/{pod_id}/outcome/history": {
+      "get": {
+        "description": "The last `weeks` weeks of the pod's measure, each on its last reading. The measure is read on a schedule and when it is set; a week it was never read in has a null value.",
+        "operationId": "outcome.history",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "weeks",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "maximum": 52,
+              "minimum": 1,
+              "title": "Weeks",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Where the pod has stood, week by week",
+        "tags": [
+          "query"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "outcome",
+          "result": "entity",
+          "verb": "history"
+        }
+      }
+    },
+    "/pods/{pod_id}/outcome/standing": {
+      "get": {
+        "description": "What the pod owns and what its measure answers now. The measure is read over every row of the tables it names, so every member sees the same number, including members who cannot open some of those rows; only someone who can read all of them may set it. A measure that cannot be read comes back as a `problem` rather than an error.",
+        "operationId": "outcome.standing",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeStandingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Where the pod stands",
+        "tags": [
+          "query"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "outcome",
+          "result": "entity",
+          "verb": "standing"
         }
       }
     },
