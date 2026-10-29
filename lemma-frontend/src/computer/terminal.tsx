@@ -17,6 +17,14 @@ type Phase = "starting" | "live" | "exited" | "failed";
    appearances — so its ground is the stage's own, read from the token. */
 const THEME = { foreground: "#e8e6ef", cursor: "#e8e6ef", selectionBackground: "#3a3747" };
 
+/** The face code is set in. `--code`, not `--mono`: inside a workspace
+ *  `--mono` is moved onto the text face, and a proportional face in xterm's
+ *  fixed grid spread every prompt out letter by letter. */
+function codeFace(host: HTMLElement): string {
+    const style = getComputedStyle(host);
+    return style.getPropertyValue("--code").trim() || style.getPropertyValue("--mono").trim();
+}
+
 /** A shell on one machine.
  *
  *  Starts `bash -l` in a terminal sized to this box, streams it over the
@@ -61,9 +69,9 @@ export function Terminal({ machineRef, session, onRestart }: {
             if (cancelled) return;
             term = new XTermClass({
                 cursorBlink: true,
-                /* A canvas cannot read a custom property, so the app's mono
+                /* A canvas cannot read a custom property, so the app's code
                    face is looked up once and handed over by name. */
-                fontFamily: [getComputedStyle(host).getPropertyValue("--mono").trim(), "ui-monospace", "Menlo", "monospace"].filter(Boolean).join(", "),
+                fontFamily: [codeFace(host), "ui-monospace", "Menlo", "monospace"].filter(Boolean).join(", "),
                 fontSize: 12.5,
                 theme: { ...THEME, background: getComputedStyle(host).getPropertyValue("--screen-ground").trim() || "#0e0f12" },
                 scrollback: 5_000,
