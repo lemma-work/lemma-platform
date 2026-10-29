@@ -186,11 +186,6 @@ fails halfway.
 | Agent tools | `exec_command`, `manage_process`, `execute_python` (each takes `machine`), `list_machines`, `expose_port`, `sync_files`, `reset_machine` |
 | Bundle | `machines/<name>/<name>.json`, and an agent's `machine` field |
 
-The pre-machines names are deprecated shims over `/machines/me`:
-
-- `/workspace/*` and `/workspace-ports` (deprecated: use `/machines/me/...`);
-- `/public/workspace-ports` (deprecated: use `/public/machine-ports`);
-- the TypeScript SDK's `client.workspace` (deprecated: use `client.machines`).
-
-Each response carries an `X-Lemma-Deprecation` header naming its replacement,
-and the OpenAPI document marks them deprecated. New code uses the machine routes.
+There is one API. The routes from before machines, and the TypeScript SDK's
+`client.workspace` alias, are removed; the caller's own machine is the ref
+`me`, and a port grant opens under `/public/machine-ports`.

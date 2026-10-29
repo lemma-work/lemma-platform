@@ -13,15 +13,6 @@ lemma-backend/migrations/versions/*  # migrations are history and never edited a
 desktop/agent-host/tests/fixtures/acp/*  # recorded ACP transcripts: what an adapter actually sent, its paths included
 lemma-skills/browser/references/agent-browser-core.md:agent-sandbox  # vendored verbatim from agent-browser; "the eve sandbox" is upstream prose about a different product
 
-# The deprecated /workspace shims: code that serves the old names on top of
-# /machines until they are retired. Callers and docs may not use them.
-lemma-backend/app/modules/workspace/api/controllers/workspace_shims_controller.py  # serves the deprecated /workspace/* routes over /machines/me
-lemma-backend/app/modules/workspace/api/controllers/browser_view_controller.py:old-route  # serves the deprecated /workspace/browser/view socket
-lemma-backend/app/modules/workspace/api/controllers/port_proxy_controller.py:old-route  # serves the deprecated /workspace-ports alias of /public/machine-ports
-lemma-backend/app/core/auth_exemptions.py:old-route  # lists the deprecated aliases so the route-class test can date them
-lemma-typescript/src/namespaces/workspace.ts  # the deprecated lemma.workspace alias over lemma.machines
-
 # The legacy /workspace path, named because recognising it is the point.
 desktop/agent-host/src/conversation_directory.rs:workspace-path  # test that a cwd at the legacy /workspace root is refused before anything is created
-lemma-backend/app/core/authorization/tests/e2e/test_app_person_only_e2e.py:workspace-path  # selects the deprecated /workspace/* shim routes by prefix, to prove an app cannot reach them
 lemma-backend/app/modules/agent/tests/e2e/test_agent_host_session_binding_e2e.py:workspace-path  # a conversation stamped with a legacy /workspace cwd keeps it across a rebind

@@ -21759,8 +21759,7 @@ var LemmaClient = (() => {
     return `/pods/${encodeURIComponent(podId)}/machines`;
   }
 
-  // src/namespaces/workspace.ts
-  var ME = "me";
+  // src/namespaces/web-logins.ts
   var WebLoginsNamespace = class {
     constructor(http) {
       __publicField(this, "http", http);
@@ -21814,102 +21813,6 @@ var LemmaClient = (() => {
         `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
         { body: { signed_in: options.signedIn } }
       );
-    }
-  };
-  function deprecated(use, replacement) {
-    noteDeprecation(
-      new Headers({
-        "x-lemma-deprecation": `${use} is deprecated: use ${replacement}.`
-      })
-    );
-  }
-  var WorkspaceNamespace = class {
-    constructor(http, machines) {
-      __publicField(this, "machines");
-      this.machines = machines != null ? machines : new MachinesNamespace(http);
-    }
-    /** @deprecated Use `machines.files.list("me", options)`. */
-    listFiles(options = {}) {
-      deprecated("workspace.listFiles", 'machines.files.list("me")');
-      return this.machines.files.list(
-        ME,
-        options
-      );
-    }
-    /** @deprecated Use `machines.files.stat("me", path)`. */
-    statFile(path) {
-      deprecated("workspace.statFile", 'machines.files.stat("me", path)');
-      return this.machines.files.stat(
-        ME,
-        path
-      );
-    }
-    /**
-     * A signed, short-lived URL for the live browser view.
-     *
-     * @deprecated Use `machines.browser.access("me", { ttlSeconds })`, which
-     * answers without the `app` field: there is only ever the browser.
-     */
-    async browserAccess(ttlSeconds = 1800) {
-      deprecated("workspace.browserAccess", 'machines.browser.access("me")');
-      const access = await this.machines.browser.access(ME, { ttlSeconds });
-      return {
-        app: "browser",
-        url: access.url,
-        expires_at: access.expires_at
-      };
-    }
-    /**
-     * Whether this person's computer is ready, without starting anything.
-     *
-     * @deprecated Use `machines.startup("me")`.
-     */
-    async status() {
-      var _a;
-      deprecated("workspace.status", 'machines.startup("me")');
-      const startup = await this.machines.startup(ME);
-      return {
-        state: startup.state,
-        detail: (_a = startup.detail) != null ? _a : null,
-        done_mb: startup.done_mb,
-        total_mb: startup.total_mb
-      };
-    }
-    /** @deprecated Use `machines.browser.status("me")`. */
-    async browserStatus() {
-      var _a;
-      deprecated("workspace.browserStatus", 'machines.browser.status("me")');
-      const status = await this.machines.browser.status(ME);
-      return { state: status.state, detail: (_a = status.detail) != null ? _a : null };
-    }
-    /** @deprecated Use `machines.browser.currentPageUrl("me", origin)`. */
-    browserCurrentPageUrl(origin) {
-      deprecated(
-        "workspace.browserCurrentPageUrl",
-        'machines.browser.currentPageUrl("me", origin)'
-      );
-      return this.machines.browser.currentPageUrl(ME, origin);
-    }
-    /** @deprecated Use `machines.browser.display("me", { width, height })`. */
-    browserResizeDisplay(width, height) {
-      deprecated(
-        "workspace.browserResizeDisplay",
-        'machines.browser.display("me", size)'
-      );
-      return this.machines.browser.display(ME, { width, height });
-    }
-    /** @deprecated Use `machines.files.read("me", path, options)`. */
-    readFile(path, options = {}) {
-      deprecated("workspace.readFile", 'machines.files.read("me", path)');
-      return this.machines.files.read(ME, path, options);
-    }
-    /** @deprecated Use `machines.files.readWhole("me", path, sizeBytes, chunk)`. */
-    readWholeFile(path, sizeBytes = 0, chunk) {
-      deprecated(
-        "workspace.readWholeFile",
-        'machines.files.readWhole("me", path)'
-      );
-      return this.machines.files.readWhole(ME, path, sizeBytes, chunk);
     }
   };
 
@@ -22464,8 +22367,6 @@ var LemmaClient = (() => {
       __publicField(this, "widgets");
       /** The computers a person and their pods run commands, files and a browser on. */
       __publicField(this, "machines");
-      /** @deprecated Use {@link machines} with the ref `"me"`; removed next minor release. */
-      __publicField(this, "workspace");
       __publicField(this, "webLogins");
       __publicField(this, "connectors");
       __publicField(this, "resourceAccess");
@@ -22530,7 +22431,6 @@ var LemmaClient = (() => {
         hostOrigin: hostOriginOf(this._config.authUrl),
         bearerToken: () => this.auth.getBearerToken()
       });
-      this.workspace = new WorkspaceNamespace(this._http, this.machines);
       this.webLogins = new WebLoginsNamespace(this._http);
       this.connectors = new ConnectorsNamespace(this._generated, this._http, podIdFn);
       this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);

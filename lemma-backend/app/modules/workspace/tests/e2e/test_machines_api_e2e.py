@@ -4,7 +4,7 @@ The routes a person, the CLI, the SDK and an app (with its viewer's yes) use
 to work on a machine: run a process and read its output, type into it, watch
 it over the stream socket, stop it; write, read, move and delete files, and
 be refused the browser's profile; copy files to and from the pod; clean up by
-scope. And the old `/workspace/*` path still answering, saying it is old.
+scope.
 """
 
 from __future__ import annotations
@@ -303,15 +303,3 @@ async def test_cleaning_up_by_scope_and_the_home_needs_a_yes(machine) -> None:
 
     unconfirmed = await client.post("/machines/me:reset", json={"scopes": ["home"]})
     assert unconfirmed.status_code == status.HTTP_409_CONFLICT, unconfirmed.text
-
-
-async def test_the_old_workspace_route_still_answers_and_says_it_is_old(
-    machine,
-) -> None:
-    old = await machine["client"].get("/workspace/files", params={"wake": True})
-    new = await machine["client"].get("/machines/me/files", params={"wake": True})
-
-    assert old.status_code == status.HTTP_200_OK, old.text
-    assert old.json()["entries"] == new.json()["entries"]
-    assert "GET /machines/me/files" in old.headers["X-Lemma-Deprecation"]
-    assert "X-Lemma-Deprecation" not in new.headers

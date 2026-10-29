@@ -628,7 +628,7 @@ From `0.2.39` onward:
 
 After `0.9.0`:
 
-- `client.workspace` is deprecated in favour of `client.machines` with the ref `"me"` (`workspace.status()` is `machines.startup("me")`, `workspace.browserAccess()` is `machines.browser.access("me")`, and so on). The alias calls the `/machines/me` routes and is removed in the next minor release.
+- `client.workspace` is removed: use `client.machines` with the ref `"me"` (`machines.startup("me")`, `machines.browser.access("me")`, `machines.files.list("me")`, and so on).
 
 ## Local Development
 

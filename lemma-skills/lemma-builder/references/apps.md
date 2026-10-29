@@ -226,8 +226,6 @@ itself consent, and the viewer can revoke it in Settings. With consent the app
 gets processes, files and previews; the browser, its logins and a `home` reset
 stay the person's own. A pod machine the app reaches as its viewer — with
 whatever the viewer may do there — and only in the app's own pod.
-`client.workspace` is a deprecated alias for `client.machines` on `"me"` — do not
-write new code with it.
 
 ## Calling the API well — fetch once, subscribe, don't re-render the world
 
