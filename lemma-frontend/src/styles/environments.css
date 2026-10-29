@@ -319,6 +319,14 @@
     white-space: nowrap;
     color: var(--ink-2);
 }
+/* Pinned to the strip's end: five tabs overflow a phone's width, and the
+   toggle after them scrolled out of reach -- an open sheet nobody could shut. */
+.computer-view .envdock__toggle {
+    position: sticky;
+    right: 0;
+    margin-left: auto;
+    background: var(--paper);
+}
 .computer-view .envdock__tab:hover:not(:disabled),
 .computer-view .envdock__toggle:hover {
     background: var(--accent-soft);
@@ -564,11 +572,21 @@
         box-shadow: var(--shadow-lift);
         padding-bottom: env(safe-area-inset-bottom);
     }
+    /* Open, the sheet takes its place in the column instead of lying over
+       the stage: a sheet over 72% of a stage whose picture is centred in it
+       left a phone with a black strip and the browser behind the sheet. */
     .envdock--open {
-        height: 72%;
+        position: relative;
+        height: 55%;
+        min-height: 0;
+        border-radius: 0;
+        box-shadow: none;
     }
     .envs__stage {
         margin-bottom: 46px;
+    }
+    .envs__main:has(.envdock--open) .envs__stage {
+        margin-bottom: 0;
     }
 }
 /* The rail overlay, opened from the bar. A sibling selector rather than a

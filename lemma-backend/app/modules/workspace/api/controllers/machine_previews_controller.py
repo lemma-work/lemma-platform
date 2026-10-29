@@ -24,8 +24,9 @@ from app.modules.workspace.api.controllers.machine_dependencies import (
     caller_for,
 )
 from app.modules.workspace.api.controllers.machines_controller import machines_enabled
+from app.modules.workspace.domain.machine import Machine, MachineKind
 from app.modules.workspace.domain.machine_access import MachineAccess
-from app.modules.workspace.domain.machine_errors import MachineNotFound
+from app.modules.workspace.domain.machine_errors import MachineConflict, MachineNotFound
 from app.modules.workspace.services.machine_previews import (
     AUTH_PATH,
     MachinePreviews,
@@ -93,6 +94,7 @@ async def create_preview(
     resolved: UseMachine,
     uow_factory: UowFactoryDep,
 ) -> PreviewResponse:
+    _refuse_the_machines_own_port(resolved.machine, body.port)
     preview = await MachinePreviews(uow_factory).create(
         resolved.machine.id,
         port=body.port,
@@ -101,6 +103,24 @@ async def create_preview(
         created_by=acting_user(request, resolved),
     )
     return _response(preview)
+
+
+def _refuse_the_machines_own_port(machine: Machine, port: int) -> None:
+    """The runtime, the browser relay, VNC and the streamer are not previews.
+
+    A preview of 8080 reached the workspace runtime -- which asked for its own
+    credential, so nothing leaked, but a URL that can only ever answer 401 is a
+    preview nobody can use. A connected machine is somebody's own computer, and
+    there 8080 is as likely as not the dev server they meant.
+    """
+    from sandbox_runtime.workspace.port_relay import RESERVED_PORTS
+
+    if machine.kind is not MachineKind.CONNECTED and port in RESERVED_PORTS:
+        raise MachineConflict(
+            f"Port {port} is one the machine itself uses. Run the server on "
+            "another port and preview that.",
+            code="MACHINE_PORT_RESERVED",
+        )
 
 
 @router.get(

@@ -137,6 +137,8 @@ class MachineProcesses:
     ) -> ProcessRecord:
         from sandbox_runtime.protocol import WorkloadKind
 
+        if request.service:
+            await self._refuse_a_second(machine_id, request.service)
         operation_id = uuid4()
         now = datetime.now(timezone.utc)
         lifetime = (
@@ -178,6 +180,28 @@ class MachineProcesses:
         )
         await self._registry.put(machine_id, record)
         return record
+
+    async def _refuse_a_second(self, machine_id: UUID, service: str) -> None:
+        """A service is one process by its name, so a second is refused.
+
+        Two `web` services both running left the Processes dock listing the
+        same name twice, a restart-on-resume starting both, and nobody able to
+        say which one a preview was pointing at. One paused under a resume
+        (state unknown) is not running and does not count.
+        """
+        from app.modules.workspace.domain.machine_errors import MachineConflict
+
+        for view in await self.list(machine_id):
+            if (
+                view.record.service == service
+                and view.state is not ProcessState.UNKNOWN
+                and not has_stopped(view)
+            ):
+                raise MachineConflict(
+                    f"A service named {service!r} is already running "
+                    f"(process {view.record.process_id}). Stop it first.",
+                    code="MACHINE_SERVICE_RUNNING",
+                )
 
     async def list(self, machine_id: UUID) -> list[ProcessView]:
         """What is running, joined with what Lemma knows about each process.

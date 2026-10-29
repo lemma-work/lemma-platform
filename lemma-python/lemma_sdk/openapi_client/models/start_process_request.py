@@ -21,7 +21,8 @@ class StartProcessRequest:
     """
     Attributes:
         command (str):
-        cwd (None | str | Unset): Absolute, inside the machine's home. Defaults to ~/lemma.
+        cwd (None | str | Unset): Inside the machine's home: absolute, `~/...`, or relative to ~/lemma. Defaults to
+            ~/lemma.
         env (StartProcessRequestEnv | Unset):
         restart_on_resume (bool | Unset): With `service`: start it again after a pause. Default: False.
         run_id (None | str | Unset): Stop it when this run ends (pod machines tag agent work this way).
