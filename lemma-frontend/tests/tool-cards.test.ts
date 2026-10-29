@@ -910,6 +910,23 @@ test("task says what the sub-agent was sent to do and what it said", () => {
     assert.equal(host("task", {}), null);
 });
 
+test("delegate shows the tasks, then each child's report", () => {
+    const args = { tasks: [{ brief: "Vendor A pricing" }, { brief: "Vendor B pricing" }] };
+    const waiting = parseToolCard({ toolName: "delegate", args, answered: false });
+    assert.equal(waiting?.kind, "task");
+    if (waiting?.kind !== "task") return;
+    assert.equal(waiting.description, "Delegated 2 tasks");
+    assert.equal(waiting.pending, true);
+    const woke = parseToolCard({
+        toolName: "delegate",
+        args,
+        answered: true,
+        result: { results: [{ agent: "researcher", status: "COMPLETED", report: "A: $10" }, { agent: "researcher", status: "FAILED", error: "blocked" }] },
+    });
+    assert.equal(woke?.kind === "task" && woke.output, "researcher (COMPLETED): A: $10\n\nresearcher (FAILED): blocked");
+    assert.equal(parseToolCard({ toolName: "delegate", args: {}, answered: false }), null);
+});
+
 test("a local agent's web_search reads its canonical output", () => {
     const prose = host("web_search", { query: "Agent Client Protocol" }, { output: "ACP standardizes editors and agents." });
     assert.equal(prose?.kind === "sources" && prose.text, "ACP standardizes editors and agents.");
