@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from app.core.api.deprecation import deprecated_route
+from app.core.api.deprecation import DEPRECATION_HEADER, deprecated_route
 from app.modules.workspace.api.controllers import (
     machine_browser_controller,
     machine_files_controller,
@@ -123,13 +123,14 @@ async def stat_workspace_file(
 async def read_workspace_file(
     resolved: OwnMachine,
     files: FilesDep,
+    response: Response,
     path: str = Query(min_length=1, max_length=4096),
     offset: int = Query(default=0, ge=0),
     length: int | None = Query(default=None, ge=1, le=8 * 1024 * 1024),
     range_header: Annotated[str | None, Header(alias="Range")] = None,
     if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
 ) -> Response:
-    return await machine_files_controller.read_file(
+    answer = await machine_files_controller.read_file(
         resolved,
         files,
         path=path,
@@ -138,6 +139,13 @@ async def read_workspace_file(
         range_header=range_header,
         if_none_match=if_none_match,
     )
+    # A route that returns its own Response gets none of the headers its
+    # dependencies set, so the deprecation notice is carried over by hand --
+    # it was the one shim answering without it.
+    for name in ("Deprecation", "Sunset", DEPRECATION_HEADER):
+        if name in response.headers:
+            answer.headers[name] = response.headers[name]
+    return answer
 
 
 @router.get(

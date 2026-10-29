@@ -142,6 +142,18 @@ _STRIPPED = frozenset(
 )
 
 
+def _target(base: str, path: str) -> httpx.URL:
+    """The visitor's path under the endpoint's own.
+
+    Appended, not substituted: an endpoint can carry a path of its own -- a
+    Docker machine's port is reached through the runtime at `/ports/<port>` --
+    and replacing it sent every request to the runtime's root instead.
+    """
+    url = httpx.URL(base)
+    prefix = url.path.rstrip("/")
+    return url.copy_with(path=f"{prefix}/" + quote(path.lstrip("/"), safe="/"))
+
+
 def _upstream(headers, fabric) -> dict[str, str]:
     forwarded = {k: v for k, v in headers.items() if k.lower() not in _STRIPPED}
     if cookie := _forwarded_cookie(headers.get("cookie")):
@@ -209,9 +221,7 @@ async def proxy_preview(label: str, request: Request, path: str = "") -> Respons
             status_code=status.HTTP_502_BAD_GATEWAY,
             media_type="text/plain",
         )
-    target = httpx.URL(endpoint.url).copy_with(
-        path="/" + quote(path.lstrip("/"), safe="/")
-    )
+    target = _target(endpoint.url, path)
     headers = _upstream(request.headers, endpoint.headers)
     content = None
     if request.headers.get("content-length") not in (None, "", "0") or (
@@ -277,11 +287,8 @@ async def proxy_preview_socket(
     if endpoint is None:
         await websocket.close(code=1011)
         return
-    base = httpx.URL(endpoint.url)
-    upstream_url = base.copy_with(
-        path="/" + quote(path.lstrip("/"), safe="/"),
-        scheme="wss" if base.scheme == "https" else "ws",
-    )
+    target = _target(endpoint.url, path)
+    upstream_url = target.copy_with(scheme="wss" if target.scheme == "https" else "ws")
     query = websocket.url.query
     headers = dict(endpoint.headers)
     if cookie := _forwarded_cookie(websocket.headers.get("cookie")):

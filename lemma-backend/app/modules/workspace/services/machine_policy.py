@@ -19,8 +19,10 @@ from app.modules.workspace.domain.machine import (
     DEFAULT_MACHINE_SIZE,
     KNOWN_SIZES,
     TEMPLATE_SIZES,
+    MachineFabric,
     MachineSize,
     MachineTemplate,
+    template_builds_on,
 )
 from app.modules.workspace.domain.machine_errors import MachinePolicyRefused
 
@@ -63,8 +65,17 @@ class EffectivePolicy:
             )
 
 
-def effective(policy: MachinePolicy | None) -> EffectivePolicy:
+def effective(
+    policy: MachinePolicy | None, *, fabric: MachineFabric | None = None
+) -> EffectivePolicy:
+    """The plan's policy, narrowed to what this deployment's fabric can build.
+
+    A plan may sell `workspace-docker`; a deployment on Docker still cannot
+    make one, and offering it there is a machine that says it has Docker and
+    has none.
+    """
     stated = policy or MachinePolicy()
+    on = fabric or _deployment_fabric()
     return EffectivePolicy(
         default_size=_size(stated.default_size, DEFAULT_MACHINE_SIZE),
         max_size=_size(stated.max_size, KNOWN_SIZES[-1]),
@@ -72,11 +83,21 @@ def effective(policy: MachinePolicy | None) -> EffectivePolicy:
             template
             for template in MachineTemplate
             if template.value in stated.allowed_templates
+            and template_builds_on(template, on)
         ),
         max_pod_machines=stated.max_pod_machines,
         max_connected_machines=stated.max_connected_machines,
         max_running=stated.max_running,
     )
+
+
+def _deployment_fabric() -> MachineFabric:
+    from app.modules.workspace.config import workspace_settings
+
+    try:
+        return MachineFabric(workspace_settings.provider)
+    except ValueError:
+        return MachineFabric.DOCKER
 
 
 def _size(label: str, fallback: MachineSize) -> MachineSize:

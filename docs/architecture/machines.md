@@ -16,10 +16,12 @@ machine come from `lemma-backend/sandbox_runtime/paths.py` and nowhere else.
 | Kind | What it is | Ref | Owner | Compute counts against |
 |---|---|---|---|---|
 | Default machine | One per person, created on first use, 2 vCPU / 4 GB | `me` | The person | The person |
-| Pod machine | Shared by a pod's agents; created by its editors and admins within the plan's policy; templates `workspace` and `workspace-docker` (has Docker) | `pod:<name>` in the pod, `pod:<pod>/<name>` from outside | The pod — it outlives whoever created it | The organization |
+| Pod machine | Shared by a pod's agents; created by its editors and admins within the plan's policy; templates `workspace` and `workspace-docker` (has Docker; E2B only) | `pod:<name>` in the pod, `pod:<pod>/<name>` or `pod:<pod>:<name>` from outside | The pod — it outlives whoever created it | The organization |
 | Connected machine | A person's own laptop or VM joined with the CLI | `mine:<name>` | The person | — |
 
-Any machine can also be named by its id. `services/machine_resolver.py` is the
+The API's `ref` field uses the colon form, `pod:<pod>:<name>`, because a
+slash cannot sit in a URL path segment; both forms parse. Any machine can also
+be named by its id. `services/machine_resolver.py` is the
 only thing that turns a ref into a machine, and it decides access on the way
 (`domain/machine_access.py`). A machine a caller may not reach is reported as
 not found, so a `restricted` machine's name does not leak.
@@ -109,9 +111,17 @@ reload and root-absolute assets work as they do on `localhost`.
 - Either can be revoked; a revoked preview answers 404 at once.
 - With `MACHINE_PREVIEW_DOMAIN` unset, previews are off and the API says so.
 - On Docker the API has to reach the port. With `WORKSPACE_DOCKER_PRIVATE_NETWORK`
-  set (the compose deployment) every port is reachable; without it, as on a
-  laptop, only the ports the container publishes are, and a preview of any
-  other port answers 502.
+  set (the compose deployment) every port is reachable by address; without it,
+  as on a laptop, a port the container did not publish is reached through the
+  workspace runtime's `/ports/{port}` relay (`sandbox_runtime/workspace/port_relay.py`),
+  behind the runtime credential, which the relay strips before forwarding.
+- The machine's own ports -- the runtime (8080), the agent-browser dashboard
+  (4848), the browser relay (4850), VNC (5900/5901) and the streamer (4860) --
+  are refused as previews (`MACHINE_PORT_RESERVED`), except on a connected
+  machine, where 8080 is somebody's dev server. The relay also refuses
+  Chrome's DevTools port, which takes a `localhost` request at its word.
+- `make dev` turns previews on at `machines.localhost:<backend port>`, over
+  plain http; `*.localhost` resolves without DNS setup.
 
 Agents make one with `expose_port`, people with `lemma machine preview create`
 or the Environments screen, apps and functions through the SDK.

@@ -69,7 +69,10 @@ class StartProcessRequest(BaseModel):
     command: str = Field(min_length=1, max_length=64 * 1024)
     cwd: str | None = Field(
         default=None,
-        description="Absolute, inside the machine's home. Defaults to ~/lemma.",
+        description=(
+            "Inside the machine's home: absolute, `~/...`, or relative to "
+            "~/lemma. Defaults to ~/lemma."
+        ),
     )
     env: dict[str, str] = Field(default_factory=dict)
     tty: TerminalSizeModel | None = Field(
@@ -162,13 +165,20 @@ def _response(view: ProcessView) -> ProcessResponse:
 def _cwd(machine: Machine, cwd: str | None) -> str:
     """Inside the machine's home: a person's ~/lemma unless they say otherwise.
 
+    A relative directory is read from ~/lemma, the way the file API reads a
+    relative path, and `~` is the home. Refusing `qa/site` while the file API
+    had just written `qa/site/index.html` was the same place named two ways.
+
     A connected machine's home is wherever its owner rooted it, so the check
     is against the machine's home rather than the sandbox one.
     """
     default = WORKSPACE_ROOT if machine.home == HOME_ROOT else f"{machine.home}/lemma"
-    target = posixpath.normpath(cwd or default)
+    asked = (cwd or "").strip() or default
+    if asked == "~" or asked.startswith("~/"):
+        asked = machine.home + asked[1:]
+    target = posixpath.normpath(posixpath.join(default, asked))
     inside = target == machine.home or target.startswith(f"{machine.home}/")
-    if not target.startswith("/") or not inside:
+    if not inside:
         raise MachineConflict(
             f"A process's directory must be inside {machine.home}.",
             code="MACHINE_PATH_OUTSIDE_HOME",

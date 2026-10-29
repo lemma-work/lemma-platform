@@ -6,7 +6,7 @@ import type { TerminalSizeModel } from './TerminalSizeModel.js';
 export type StartProcessRequest = {
     command: string;
     /**
-     * Absolute, inside the machine's home. Defaults to ~/lemma.
+     * Inside the machine's home: absolute, `~/...`, or relative to ~/lemma. Defaults to ~/lemma.
      */
     cwd?: (string | null);
     env?: Record<string, string>;
