@@ -404,6 +404,7 @@ async def _run(
     script: list[ModelResponse],
     trigger_tokens: int,
     tools: Sequence[ToolSpec] = _TOOLS,
+    **ctx_fields: object,
 ) -> list[AgentEvent]:
     model.run += 1
     model.script = list(script)
@@ -417,6 +418,7 @@ async def _run(
         run_context=f"{_RUN_CONTEXT}\nrun {model.run}\n</run_context>",
         context_brief=model.brief,
         is_pod_default_agent=model.pod_default,
+        **ctx_fields,
     )
     harness = PydanticAIHarness(
         model=FunctionModel(model.summarize, stream_function=model.stream),

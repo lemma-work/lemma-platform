@@ -18,6 +18,7 @@ from app.modules.agent.domain.prompt.templates import (
     FRAGMENT_BY_TOOLSET,
     load_memory_pass_prompt,
     load_memory_prompt,
+    memory_timing_prompt,
 )
 from app.modules.agent.domain.value_objects import AgentToolset
 
@@ -147,4 +148,9 @@ async def test_the_assembled_run_is_told_the_contract_its_context_chose(after_tu
         for cap in capabilities
         if type(cap) is Instructions and "AGENTS.md" in cap.get_instructions()
     ]
-    assert taught == [load_memory_prompt(after_turn=after_turn)]
+    # The contract is the same either way; its timing rides with the
+    # conversation's context, after the agent's instruction.
+    assert taught == [load_memory_prompt(timing=False)]
+    timing = memory_timing_prompt(after_turn=after_turn)
+    assert ("memory pass" in timing) is after_turn
+    assert timing.splitlines()[0] not in load_memory_prompt(timing=False)

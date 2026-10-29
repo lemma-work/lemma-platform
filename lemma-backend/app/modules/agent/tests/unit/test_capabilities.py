@@ -289,7 +289,8 @@ def test_the_memory_contract_is_written_down_exactly_once():
 def test_the_memory_contract_is_appended_only_when_memory_is_enabled():
     def has_memory(capabilities: list[object]) -> bool:
         return any(
-            type(c) is Instructions and c.get_instructions() == load_memory_prompt()
+            type(c) is Instructions
+            and c.get_instructions() == load_memory_prompt(timing=False)
             for c in capabilities
         )
 

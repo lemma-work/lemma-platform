@@ -236,7 +236,8 @@ def _run_hooks(
             )
         )
     if ctx.memory_enabled:
-        hooks.append(Instructions(load_memory_prompt(after_turn=ctx.memory_after_turn)))
+        # Its timing rides with the conversation's context (`memory_timing_prompt`).
+        hooks.append(Instructions(load_memory_prompt(timing=False)))
     # The platform is the run's: none for a run asked in Lemma.
     if ctx.surface_platform and platform_is_known(ctx.surface_platform):
         hooks.append(

@@ -205,7 +205,7 @@ def load_user_interaction_prompt() -> str:
     return _read_required_prompt(_USER_INTERACTION_PROMPT_PATH)
 
 
-def load_memory_prompt(*, after_turn: bool = False) -> str:
+def load_memory_prompt(*, after_turn: bool = False, timing: bool = True) -> str:
     """The memory contract: where durable facts live and how AGENTS.md is used.
 
     One file, read by both harnesses -- the remote one through
@@ -219,8 +219,17 @@ def load_memory_prompt(*, after_turn: bool = False) -> str:
     pass keeps once it ends (``memory_kept_after_turn``). Only that section
     differs, so what is worth keeping and how it is written cannot drift
     between the two.
+
+    Without ``timing`` that section is left out: the in-process harness sends
+    it after the agent's instruction (``memory_timing_prompt``), so a run with
+    and a run without a pass after it -- a parent and its sub-agent -- share
+    every byte of the contract.
     """
     contract = _read_required_prompt(_MEMORY_PROMPT_PATH)
+    if not timing:
+        sections = _memory_sections(contract)
+        sections.pop(_MEMORY_TIMING_SECTION)
+        return "\n\n".join(body.strip() for body in sections.values())
     if not after_turn:
         return contract
     return _replace_section(
@@ -230,6 +239,26 @@ def load_memory_prompt(*, after_turn: bool = False) -> str:
     )
 
 
+def memory_timing_prompt(*, after_turn: bool) -> str:
+    """The contract's ``When to write`` section on its own, as a run is told it.
+
+    The one part of the memory contract that depends on the run rather than
+    the agent, so it goes where the conversation's own context does.
+    """
+    section = _memory_sections(load_memory_prompt(after_turn=after_turn))[
+        _MEMORY_TIMING_SECTION
+    ]
+    body = section.split("\n", 1)[1].strip()
+    return f"## Memory: {_MEMORY_TIMING_SECTION.lower()}\n\n{body}"
+
+
+def _memory_sections(contract: str) -> dict[str, str]:
+    sections = _prompt_sections(contract, heading=_MEMORY_SECTION_HEADING)
+    if _MEMORY_TIMING_SECTION not in sections:
+        raise ValueError(f"memory.md has no '{_MEMORY_TIMING_SECTION}' section")
+    return sections
+
+
 def load_memory_pass_prompt() -> str:
     """What the memory pass is told: its own framing, then the contract.
 
@@ -237,12 +266,7 @@ def load_memory_pass_prompt() -> str:
     agent in the middle of a turn. The pass runs once the turn is over, and
     keeps memory by the same rules the agent itself writes it by.
     """
-    sections = _prompt_sections(
-        _read_required_prompt(_MEMORY_PROMPT_PATH), heading=_MEMORY_SECTION_HEADING
-    )
-    if sections.pop(_MEMORY_TIMING_SECTION, None) is None:
-        raise ValueError(f"memory.md has no '{_MEMORY_TIMING_SECTION}' section")
-    rules = "\n\n".join(body.strip() for body in sections.values())
+    rules = load_memory_prompt(timing=False)
     return f"{_read_required_prompt(_MEMORY_PASS_PROMPT_PATH)}\n\n{rules}"
 
 
@@ -417,6 +441,12 @@ def build_agent_instruction_parts(
         # person. Here, after everything a parent's request also carries, so a
         # child of the same agent reuses its parent's cached prefix up to this.
         sections.append(_read_required_prompt(_SUBAGENT_CHILD_PROMPT_PATH))
+    if not include_toolset_prompts and getattr(ctx, "memory_enabled", False):
+        # The in-process contract leaves its timing out (``load_memory_prompt``):
+        # whether a pass keeps memory after this run is the run's, not the agent's.
+        sections.append(
+            memory_timing_prompt(after_turn=getattr(ctx, "memory_after_turn", False))
+        )
     sections.extend(
         _directory_sections(
             ctx=ctx,

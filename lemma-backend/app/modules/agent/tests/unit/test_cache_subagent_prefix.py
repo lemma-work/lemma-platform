@@ -62,7 +62,9 @@ def _ctx(conversation: Conversation) -> ToolContext:
     )
 
 
-async def _first_request(agent: Agent, conversation: Conversation, text: str) -> Sent:
+async def _first_request(
+    agent: Agent, conversation: Conversation, text: str, **ctx_fields: object
+) -> Sent:
     tools = await specs_for(
         agent=agent,
         conversation=conversation,
@@ -82,6 +84,7 @@ async def _first_request(agent: Agent, conversation: Conversation, text: str) ->
         script=[_text("Done.")],
         trigger_tokens=10**6,
         tools=tools,
+        **ctx_fields,
     )
     return model.sent[0]
 
@@ -100,8 +103,22 @@ async def test_a_child_shares_every_byte_of_its_parents_prefix_up_to_its_framing
         reports_to_parent=True,
     )
 
-    parent = await _first_request(agent, parent_conversation, "Plan Oslo.")
-    child = await _first_request(agent, child_conversation, "Find hotels in Oslo.")
+    # A person's run has its memory kept by a pass after it; a child's does
+    # not, and is told to write it itself -- after the framing, not before.
+    parent = await _first_request(
+        agent,
+        parent_conversation,
+        "Plan Oslo.",
+        memory_enabled=True,
+        memory_after_turn=True,
+    )
+    child = await _first_request(
+        agent,
+        child_conversation,
+        "Find hotels in Oslo.",
+        memory_enabled=True,
+        memory_after_turn=False,
+    )
 
     assert child.tools == parent.tools
     assert parent.instructions is not None and child.instructions is not None
@@ -111,6 +128,8 @@ async def test_a_child_shares_every_byte_of_its_parents_prefix_up_to_its_framing
     # Everything before the framing: the deployment's prompt and the agent's
     # own instruction, which is most of what the parent cached.
     assert "Plan trips." in child.instructions[:framing]
+    assert "AGENTS.md" in child.instructions[:framing]
+    assert "## Memory: when to write" in child.instructions[framing:]
     assert await _wire(child.messages, protocol) != await _wire(
         parent.messages, protocol
     )
