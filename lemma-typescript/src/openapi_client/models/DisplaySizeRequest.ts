@@ -12,5 +12,6 @@
  */
 export type DisplaySizeRequest = {
     height: number;
+    viewer?: (string | null);
     width: number;
 };

@@ -9,6 +9,9 @@ def _routers():
     from app.modules.workspace.api.controllers.machine_browser_controller import (
         router as browser,
     )
+    from app.modules.workspace.api.controllers.browser_stream_controller import (
+        router as browser_stream,
+    )
     from app.modules.workspace.api.controllers.machine_browser_view_controller import (
         router as browser_view,
     )
@@ -43,6 +46,7 @@ def _routers():
         processes,
         files,
         browser,
+        browser_stream,
         browser_view,
         preview_proxy,
         port_proxy,

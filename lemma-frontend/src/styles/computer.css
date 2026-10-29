@@ -269,3 +269,42 @@
   .connect-pair{grid-template-columns:minmax(0,1fr) 30px}
   .connect-pair input:nth-child(2){grid-column:1 / -1}
 }
+
+/* ── the live screen over WebRTC, and what both transports share ─────
+   The picture is scaled to the pane here, locally, whatever shape the pane
+   is: the machine's display only changes when somebody picks a preset. */
+.screen-view{position:absolute;inset:0}
+.screen-video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;transform-origin:center;touch-action:none}
+.screen-live--rtc{touch-action:none;user-select:none;-webkit-user-select:none}
+/* The last picture of the page, dimmed so nobody takes it for the live one. */
+.screen-last{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:.45;filter:saturate(.6);pointer-events:none}
+.screen-pointer{position:absolute;z-index:1;pointer-events:none;image-rendering:pixelated}
+/* The keyboard's target: present, focusable, and invisible. Off-screen would
+   stop a phone raising its keyboard, so it sits on the picture at no size. */
+.screen-keys{position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;resize:none;caret-color:transparent;font-size:16px}
+
+/* The bar above the screen: a browser window's own controls, on the screen's
+   dark surface rather than the page's. Wraps on a narrow pane; the address
+   takes whatever is left. */
+.screen-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;background:#1d1b26;border-bottom:1px solid rgb(255 255 255 / 0.08);color:rgb(255 255 255 / 0.85);font-size:12.5px}
+.computer-view .screen-bar__btn{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:7px;color:rgb(255 255 255 / 0.8);background:transparent;cursor:pointer}
+.computer-view .screen-bar__btn:hover:not(:disabled){background:rgb(255 255 255 / 0.1)}
+.computer-view .screen-bar__btn:disabled{opacity:.35;cursor:default}
+.screen-bar__address{flex:1 1 180px;min-width:0;display:flex}
+.screen-bar__address input{flex:1;min-width:0;height:28px;padding:0 10px;border-radius:999px;border:1px solid rgb(255 255 255 / 0.12);background:rgb(0 0 0 / 0.35);color:rgb(255 255 255 / 0.9);font:inherit;font-size:16px}
+@media (min-width:700px){.screen-bar__address input{font-size:12.5px}}
+.screen-bar__address input:focus{outline:2px solid rgb(255 255 255 / 0.45);outline-offset:1px}
+.screen-bar__size{height:28px;border-radius:7px;border:1px solid rgb(255 255 255 / 0.12);background:rgb(0 0 0 / 0.35);color:rgb(255 255 255 / 0.85);font:inherit;font-size:12px;padding:0 6px}
+.screen-bar__tabs{position:relative}
+.screen-bar__tabs summary{list-style:none;display:inline-flex;align-items:center;gap:4px;height:28px;padding:0 8px;border-radius:7px;cursor:pointer}
+.screen-bar__tabs summary::-webkit-details-marker{display:none}
+.screen-bar__tabs ul{position:absolute;z-index:5;top:32px;left:0;min-width:240px;max-width:min(420px,80vw);margin:0;padding:4px;list-style:none;border-radius:10px;background:#1d1b26;border:1px solid rgb(255 255 255 / 0.12);box-shadow:var(--shadow-soft)}
+.screen-bar__tabs li{display:flex;align-items:center;gap:4px}
+.computer-view .screen-bar__tabs li button{padding:6px 8px;border-radius:6px;color:rgb(255 255 255 / 0.85);background:transparent;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.computer-view .screen-bar__tabs li button:first-child{flex:1;min-width:0}
+.computer-view .screen-bar__tabs li button:hover:not(:disabled){background:rgb(255 255 255 / 0.1)}
+.screen-bar__agent,.screen-bar__watching{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;background:rgb(255 255 255 / 0.1);white-space:nowrap}
+.screen-bar__agent{background:rgb(255 200 80 / 0.18);color:rgb(255 225 160 / 0.95)}
+.computer-view .screen-bar__control{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:999px;cursor:pointer;color:rgb(255 255 255 / 0.85);background:rgb(255 255 255 / 0.1)}
+.computer-view .screen-bar__control--take{color:#14131a;background:rgb(255 255 255 / 0.9)}
+.screen-bar__note{flex-basis:100%;margin:0;font-size:12px;color:rgb(255 255 255 / 0.65)}

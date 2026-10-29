@@ -12,6 +12,7 @@
 - [Lifecycle state model](lifecycle-state-model.md)
 - [Provider adapters](provider-adapters.md)
 - [Function execution](function-execution.md)
+- [Live browser view](live-browser-view.md)
 - [Testing strategy](testing-strategy.md)
 - [Verification and rollout](verification-and-rollout.md)
 

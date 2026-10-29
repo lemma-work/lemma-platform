@@ -484,6 +484,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/pods/{pod_id}/machines/{name}` | `machine.pod.update` | Rename, resize or change who sees a pod machine |
 | POST | `/machine-consents` | `machine.consent.grant` | Let an app run code on your machine |
 | POST | `/machines/{ref}/browser:access` | `machine.browser.access` | A signed link to a machine's browser |
+| POST | `/machines/{ref}/browser:beacon` | `machine.browser.beacon` | Report how a live screen session went |
+| POST | `/machines/{ref}/browser:command` | `machine.browser.command` | Steer a machine's browser from the screen's toolbar |
 | POST | `/machines/{ref}/browser:display` | `machine.browser.display` | Set the size of a machine's browser display |
 | POST | `/machines/{ref}/browser:navigate` | `machine.browser.navigate` | Open a page in a machine's browser |
 | POST | `/machines/{ref}/files:move` | `machine.files.move` | Move or rename a path on a machine |

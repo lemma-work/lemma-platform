@@ -142,7 +142,7 @@ def _api_main(args: argparse.Namespace) -> None:
 
     import uvicorn
 
-    from app.core.server_limits import WS_MAX_BYTES
+    from app.core.server_limits import WS_MAX_BYTES, WS_PER_MESSAGE_DEFLATE
     from app.modules.datastore.changes import reader
 
     counts = {"read_after": 0, "fetch_rows": 0, "current_horizon": 0}
@@ -171,6 +171,7 @@ def _api_main(args: argparse.Namespace) -> None:
         port=args.port,
         ws="websockets-sansio",
         ws_max_size=WS_MAX_BYTES,
+        ws_per_message_deflate=WS_PER_MESSAGE_DEFLATE,
         log_level="warning",
     )
 

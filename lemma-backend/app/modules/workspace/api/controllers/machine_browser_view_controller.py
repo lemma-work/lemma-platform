@@ -18,6 +18,8 @@ needs use of the machine; watching needs to see it.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from uuid import UUID
 
 import asyncio
@@ -25,7 +27,7 @@ import contextlib
 import httpx
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, WebSocket, status
+from fastapi import APIRouter, Depends, Query, Request, WebSocket, status
 from pydantic import BaseModel, Field
 from app.modules.workspace.api.controllers.machine_socket_auth import (
     allowed_origin_pattern,
@@ -36,6 +38,7 @@ from app.modules.workspace.api.controllers.machine_socket_auth import (
 from app.modules.workspace.api.controllers.machine_dependencies import (
     SeeMachine,
     UseMachine,
+    acting_user,
 )
 from app.modules.workspace.api.controllers.machines_controller import machines_enabled
 from app.modules.workspace.domain.machine_access import MachineAccess
@@ -48,10 +51,13 @@ from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
 )
 from app.modules.workspace.api.controllers.browser_view_session import (
+    VIEWER_PATTERN,
     UserIdResolver,
     session_user_id,
     user_id_resolver,
+    viewer_name,
 )
+from app.modules.workspace.providers.base import ProviderGone
 from app.modules.workspace.api.controllers.browser_view_hangup import (
     collect as _collect,
     hang_up as _hang_up,
@@ -67,13 +73,17 @@ from app.modules.workspace.services.browser_view_service import (
     BrowserViewService,
 )
 from app.modules.workspace.services.ws_bridge import (
-    bridge,
-    connect_upstream,
     origin_is_allowed,
     origin_refusal_hint,
 )
 from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxError
 from sandbox_runtime.errors import SandboxUnavailable
+
+if TYPE_CHECKING:
+    from app.modules.workspace.api.controllers.browser_view_stream import (
+        PreparedRtc,
+    )
+    from app.modules.workspace.services.browser_view_service import ViewUpstream
 
 logger = get_logger(__name__)
 
@@ -127,6 +137,14 @@ class BrowserStatusResponse(BaseModel):
 
     state: str
     detail: str | None = None
+    #: The rest is present once a browser runs; see `browser_stream_status`.
+    transport: str | None = None
+    density: int | None = None
+    size: str | None = None
+    presets: dict[str, str] | None = None
+    lease: str | None = None
+    watching: list[dict[str, str]] = Field(default_factory=list)
+    agent_driving: bool = False
 
 
 def _engine_error() -> type[Exception]:
@@ -148,16 +166,17 @@ def browser_view_service() -> BrowserViewService:
     summary="Whether a machine's browser can be watched",
 )
 async def browser_status(
+    request: Request,
     resolved: SeeMachine,
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
 ) -> BrowserStatusResponse:
     try:
-        found = await service.status(resolved.machine.id)
+        found = await service.status(
+            resolved.machine.id, viewer=acting_user(request, resolved)
+        )
     finally:
         await service.close()
-    return BrowserStatusResponse(
-        state=found.get("state", "unavailable"), detail=found.get("detail")
-    )
+    return BrowserStatusResponse.model_validate({"state": "unavailable", **found})
 
 
 class CurrentPageUrlResponse(BaseModel):
@@ -201,12 +220,17 @@ class DisplaySizeRequest(BaseModel):
 
     width: int = Field(ge=320, le=4096)
     height: int = Field(ge=240, le=4096)
+    #: The pane asking, as named on its view socket (the resize lease).
+    viewer: str | None = Field(default=None, pattern=VIEWER_PATTERN)
 
 
 class DisplaySizeResponse(BaseModel):
     #: What the display ended up as. Not always what was asked for, and the
     #: pane is told so rather than left to assume.
     size: str | None = None
+    #: Why it did not change, in a sentence for the pane: somebody else
+    #: holds the size, the screen is being recorded.
+    reason: str | None = None
 
 
 @router.post(
@@ -216,6 +240,7 @@ class DisplaySizeResponse(BaseModel):
     summary="Set the size of a machine's browser display",
 )
 async def resize_display(
+    http: Request,
     resolved: UseMachine,
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
     request: DisplaySizeRequest,
@@ -239,7 +264,10 @@ async def resize_display(
     # trace anywhere of why. A degraded path still has to say it degraded.
     try:
         size = await service.resize_display(
-            resolved.machine.id, width=request.width, height=request.height
+            resolved.machine.id,
+            width=request.width,
+            height=request.height,
+            viewer=viewer_name(acting_user(http, resolved), request.viewer),
         )
     except SandboxCapabilityUnsupported:
         logger.warning(
@@ -255,7 +283,7 @@ async def resize_display(
             height=request.height,
             error_type=type(exc).__name__,
         )
-        return DisplaySizeResponse()
+        return DisplaySizeResponse(reason=str(exc) or None)
     except (OSError, httpx.HTTPError, _engine_error()) as exc:
         logger.warning(
             "workspace.browser_view.resize_failed.degraded",
@@ -288,8 +316,9 @@ async def _keep_awake(service: BrowserViewService, user_id: UUID) -> None:
 
 
 def _speaks(mode: str, transport: str) -> bool:
-    """A mode this socket knows, over the one transport it serves today."""
-    return mode in (MODE_VIEW, MODE_CONTROL) and transport == "vnc"
+    """A mode and a transport this socket knows: the VNC picture, or
+    WebRTC's signalling (`browser_view_stream`)."""
+    return mode in (MODE_VIEW, MODE_CONTROL) and transport in ("vnc", "rtc")
 
 
 async def _refused_origin(websocket: WebSocket, origins: tuple[str, ...]) -> bool:
@@ -336,14 +365,17 @@ async def browser_view(
     origin: str | None = Query(default=None),
     conversation: UUID | None = Query(default=None),
     transport: str = Query(
-        default="vnc", description="`vnc` today; `rtc` arrives with the streamer."
+        default="vnc", description="`vnc` carries the picture; `rtc` WebRTC signalling."
     ),
+    viewer: str | None = Query(default=None, pattern=VIEWER_PATTERN),
 ) -> None:
     """One person, watching or driving their own browser, over VNC.
 
     Every refusal goes through `_refuse`, which accepts the socket before
     closing it. That is the opposite of what it should be, and is the only way
     a browser is ever told which refusal happened -- see `_refuse`.
+    Once the caller and the machine are known, the socket is accepted
+    outright, before the slow part -- see the comment there.
 
     `origin`, when given, means a sign-in: it steers the browser to that site
     before attaching, in a session named for it. `conversation`, when given
@@ -383,9 +415,26 @@ async def browser_view(
         return
     machine_id = resolved.machine.id
 
+    # Accepted now, before anything slow, and that is for the *other* sockets
+    # on this page. A browser lets one WebSocket per host be CONNECTING at a
+    # time (RFC 6455 section 4.1), and everything below -- starting the
+    # browser, WebRTC's setup -- can take a cold start's worth of seconds. Held
+    # in the handshake that long, this socket queued the terminal's stream and
+    # the pod's live socket behind it: a Terminal tab stuck on "Starting a
+    # shell..." beside a screen saying "Connecting to the screen...". Every
+    # refusal from here on goes through `_refuse`, which closes an accepted
+    # socket with its code just as well, so nothing is lost by answering
+    # early -- the pane still hears which refusal it was.
+    await websocket.accept()
+
     try:
-        upstream_url, headers = await service.open_vnc_session(
-            machine_id, mode=mode, origin=origin, conversation_id=conversation
+        target = await service.open_vnc_session(
+            machine_id,
+            mode=mode,
+            origin=origin,
+            conversation_id=conversation,
+            viewer=viewer_name(UUID(user_id), viewer),
+            transport=transport,
         )
     except SandboxCapabilityUnsupported:
         logger.warning("workspace.browser_view.unsupported.denied")
@@ -420,9 +469,11 @@ async def browser_view(
         await _refuse(websocket, CLOSE_NO_BROWSER)
         await service.close()
         return
-    except SandboxUnavailable as exc:
-        # Still starting (an image downloading, a port not published yet): the
-        # pane waits and retries instead of reporting "the connection dropped".
+    except (SandboxUnavailable, ProviderGone) as exc:
+        # Still starting (an image downloading, a port not published yet), or
+        # its container went away under us and the next attempt makes another:
+        # the pane waits and retries instead of reporting "the connection
+        # dropped". Uncaught, a gone container reached the pane as a bare 500.
         logger.warning(
             "workspace.browser_view.sandbox_unavailable.degraded", reason=str(exc)
         )
@@ -452,7 +503,36 @@ async def browser_view(
         await service.close()
         return
 
-    await websocket.accept()
+    # Not at module scope: WebRTC's setup -- TURN, tickets -- loads only for
+    # the sockets that use this route at all.
+    from app.modules.workspace.api.controllers.browser_view_stream import (
+        setup_rtc,
+    )
+
+    refused, rtc = await setup_rtc(
+        websocket,
+        service,
+        target,
+        transport=transport,
+        user_id=user_id,
+        mode=mode,
+        viewer=viewer,
+        may_control=resolved.access >= MachineAccess.USE,
+    )
+    if refused:
+        return
+
+    await _watch(websocket, service, target, rtc, machine_id)
+
+
+async def _watch(
+    websocket: WebSocket,
+    service: BrowserViewService,
+    target: ViewUpstream,
+    rtc: PreparedRtc | None,
+    machine_id: UUID,
+) -> None:
+    """Carry the accepted socket, keeping the machine awake meanwhile."""
     # Held awake for as long as somebody is looking. The idle sweep measures
     # from the last time a caller asked for the sandbox, and watching is not a
     # tool call -- so a person reading a page, or working through a sign-in,
@@ -465,14 +545,15 @@ async def browser_view(
         _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
-        async with await connect_upstream(upstream_url, headers=headers) as upstream:
-            await bridge(websocket, upstream, name="workspace.browser_view")
+        from app.modules.workspace.api.controllers.browser_view_stream import carry
+
+        code = await carry(websocket, target, rtc)
         # The relay refuses with these same 44xx codes, and they mean the same
         # things on both sides of the sandbox wall -- so pass the reason on
         # rather than replacing it with 1011. Told 1011, the pane says "the
         # connection dropped" and reconnects for ever; told 4409 it says the
         # browser is not running, which is the truth and is not a failure.
-        if (code := getattr(upstream, "close_code", None)) and 4400 <= code <= 4499:
+        if code and 4400 <= code <= 4499:
             with contextlib.suppress(RuntimeError):
                 await websocket.close(code=code)
             return

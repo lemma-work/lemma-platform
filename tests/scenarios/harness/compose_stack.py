@@ -201,6 +201,8 @@ def _commands(spec: StackSpec) -> dict[str, list[str]]:
             "8000",
             "--ws-max-size",
             "1048576",
+            "--ws-per-message-deflate",
+            "false",
         ]
     if spec.worker != default.worker:
         commands["worker"] = ["python", *spec.worker]

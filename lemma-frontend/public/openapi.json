@@ -3477,9 +3477,77 @@
         "title": "BrowserAccessResponse",
         "type": "object"
       },
+      "BrowserCommandRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "discriminator": {
+              "mapping": {
+                "activate": "#/components/schemas/TabCommand",
+                "back": "#/components/schemas/HistoryCommand",
+                "close": "#/components/schemas/TabCommand",
+                "forward": "#/components/schemas/HistoryCommand",
+                "navigate": "#/components/schemas/NavigateCommand",
+                "reload": "#/components/schemas/HistoryCommand",
+                "tabs": "#/components/schemas/TabsCommand"
+              },
+              "propertyName": "command"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NavigateCommand"
+              },
+              {
+                "$ref": "#/components/schemas/HistoryCommand"
+              },
+              {
+                "$ref": "#/components/schemas/TabsCommand"
+              },
+              {
+                "$ref": "#/components/schemas/TabCommand"
+              }
+            ],
+            "title": "Action"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "BrowserCommandRequest",
+        "type": "object"
+      },
+      "BrowserCommandResponse": {
+        "properties": {
+          "tabs": {
+            "items": {
+              "$ref": "#/components/schemas/BrowserTab"
+            },
+            "title": "Tabs",
+            "type": "array"
+          }
+        },
+        "title": "BrowserCommandResponse",
+        "type": "object"
+      },
       "BrowserStatusResponse": {
         "description": "What the pane can say without waking anything.\n\n`asleep` the computer is paused or was never started; `stopped` it is up but\nthe browser is not (the resting state after five idle minutes); `running` a\nbrowser is there now; `unavailable` the relay did not answer, which on an\nolder image is permanent until it is replaced; `unsupported` this fabric\ncannot reach a port at all.",
         "properties": {
+          "agent_driving": {
+            "default": false,
+            "title": "Agent Driving",
+            "type": "boolean"
+          },
+          "density": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density"
+          },
           "detail": {
             "anyOf": [
               {
@@ -3491,15 +3559,95 @@
             ],
             "title": "Detail"
           },
+          "lease": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease"
+          },
+          "presets": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Presets"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
           "state": {
             "title": "State",
             "type": "string"
+          },
+          "transport": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transport"
+          },
+          "watching": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Watching",
+            "type": "array"
           }
         },
         "required": [
           "state"
         ],
         "title": "BrowserStatusResponse",
+        "type": "object"
+      },
+      "BrowserTab": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "url"
+        ],
+        "title": "BrowserTab",
         "type": "object"
       },
       "BulkCreateRecordsRequest": {
@@ -8759,6 +8907,18 @@
             "title": "Height",
             "type": "integer"
           },
+          "viewer": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9-]{1,40}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Viewer"
+          },
           "width": {
             "maximum": 4096,
             "minimum": 320,
@@ -8775,6 +8935,17 @@
       },
       "DisplaySizeResponse": {
         "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
           "size": {
             "anyOf": [
               {
@@ -12118,6 +12289,25 @@
         "title": "HarnessKind",
         "type": "string"
       },
+      "HistoryCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "enum": [
+              "back",
+              "forward",
+              "reload"
+            ],
+            "title": "Command",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "title": "HistoryCommand",
+        "type": "object"
+      },
       "HistoryMessage": {
         "properties": {
           "client_nonce": {
@@ -14636,6 +14826,28 @@
           "warning_percent"
         ],
         "title": "MyUsageLimitsResponse",
+        "type": "object"
+      },
+      "NavigateCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "const": "navigate",
+            "title": "Command",
+            "type": "string"
+          },
+          "url": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "url"
+        ],
+        "title": "NavigateCommand",
         "type": "object"
       },
       "NavigateRequest": {
@@ -21719,6 +21931,147 @@
         "title": "StepStatus",
         "type": "string"
       },
+      "StreamBeacon": {
+        "additionalProperties": false,
+        "description": "What one viewing session got, from the viewer's side.\n\nBounded everywhere: it comes from a browser and ends up in a log line.",
+        "properties": {
+          "codec": {
+            "anyOf": [
+              {
+                "enum": [
+                  "h264",
+                  "vp8"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codec"
+          },
+          "density": {
+            "anyOf": [
+              {
+                "maximum": 2,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Density"
+          },
+          "fallback": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ice-timeout",
+                  "ice-failed",
+                  "no-streamer",
+                  "no-turn",
+                  "unsupported",
+                  "error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback"
+          },
+          "first_frame_ms": {
+            "anyOf": [
+              {
+                "maximum": 600000,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Frame Ms"
+          },
+          "fps": {
+            "anyOf": [
+              {
+                "maximum": 240,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fps"
+          },
+          "kbps": {
+            "anyOf": [
+              {
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kbps"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "maximum": 60000,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "relay": {
+            "anyOf": [
+              {
+                "enum": [
+                  "udp",
+                  "tcp",
+                  "tls"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relay"
+          },
+          "seconds": {
+            "maximum": 86400,
+            "minimum": 0,
+            "title": "Seconds",
+            "type": "number"
+          },
+          "transport": {
+            "enum": [
+              "vnc",
+              "webrtc"
+            ],
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transport",
+          "seconds"
+        ],
+        "title": "StreamBeacon",
+        "type": "object"
+      },
       "SurfaceAdminConsentInfo": {
         "description": "Admin-consent state for surfaces that require an OAuth grant (Teams).",
         "properties": {
@@ -22896,6 +23249,30 @@
         "title": "SyncResponse",
         "type": "object"
       },
+      "TabCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "enum": [
+              "activate",
+              "close"
+            ],
+            "title": "Command",
+            "type": "string"
+          },
+          "target": {
+            "pattern": "^[A-Fa-f0-9]{8,64}$",
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "target"
+        ],
+        "title": "TabCommand",
+        "type": "object"
+      },
       "TableColumn": {
         "properties": {
           "description": {
@@ -23237,6 +23614,21 @@
           "updated_at"
         ],
         "title": "TableSummaryResponse",
+        "type": "object"
+      },
+      "TabsCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "const": "tabs",
+            "title": "Command",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "title": "TabsCommand",
         "type": "object"
       },
       "TelegramLinkRequest": {
@@ -28756,6 +29148,130 @@
           "resource": "machine.browser",
           "result": "entity",
           "verb": "access"
+        }
+      }
+    },
+    "/machines/{ref}/browser:beacon": {
+      "post": {
+        "operationId": "machine.browser.beacon",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StreamBeacon"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report how a live screen session went",
+        "tags": [
+          "Machine Browser"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.browser"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.browser",
+          "result": "void",
+          "verb": "beacon"
+        }
+      }
+    },
+    "/machines/{ref}/browser:command": {
+      "post": {
+        "description": "One toolbar command; the open tabs as they are afterwards.\n\n409 with a sentence when the browser cannot do it right now -- it is not\nrunning, the tab has closed -- because the toolbar shows it, and 422 for\nan address that is not a web address.",
+        "operationId": "machine.browser.command",
+        "parameters": [
+          {
+            "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "Which machine: `me`, `pod:<pod>:<name>` (or `pod:<name>` for the pod in context), `mine:<name>`, or its id.",
+              "maxLength": 256,
+              "title": "Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserCommandResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Steer a machine's browser from the screen's toolbar",
+        "tags": [
+          "Machine Browser"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "machine.browser"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "machine.browser",
+          "result": "entity",
+          "verb": "command"
         }
       }
     },

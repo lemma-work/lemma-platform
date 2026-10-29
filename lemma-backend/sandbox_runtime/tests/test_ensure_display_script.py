@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import socket
+import os
 import subprocess
 
 import pytest
@@ -564,3 +565,49 @@ class TestLoopbackFallsThroughToTheHost:
         assert config["proxy"] == "http://residential.invalid:9091"
         assert "127.0.0.1:4851" not in config["args"]
         assert "loopback" not in config["args"]
+
+
+class TestAProfileLockFromAnotherContainer:
+    """The home volume outlives its container; Chrome's lock names the host.
+
+    A lock naming another host is one Chrome will not call stale -- it puts a
+    "profile in use on another computer" dialog on the display and never
+    starts -- so it goes. One naming this host is Chrome's own business.
+    """
+
+    def _locked(self, tmp_path: Path, vnc_port: int, owner: str):
+        environment, _ = _workspace(tmp_path, browser_live=True, vnc_port=vnc_port)
+        _stub(tmp_path / "bin", "hostname", "echo this-container")
+        profile = Path(environment["AGENT_BROWSER_PROFILE"])
+        login = tmp_path / "login-github.com"
+        login.mkdir()
+        for directory in (profile, login):
+            (directory / "SingletonLock").symlink_to(owner)
+            (directory / "SingletonSocket").symlink_to("/tmp/gone/SingletonSocket")
+            (directory / "SingletonCookie").symlink_to("123")
+        return environment, (profile, login)
+
+    def test_a_lock_naming_another_host_is_cleared_in_every_profile(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment, profiles = self._locked(tmp_path, vnc_port, "old-container-3924")
+
+        result = _run(environment)
+
+        assert result.returncode == 0, result.stderr
+        for profile in profiles:
+            assert not os.path.lexists(profile / "SingletonLock")
+            assert not os.path.lexists(profile / "SingletonSocket")
+            assert not os.path.lexists(profile / "SingletonCookie")
+        assert (profiles[0] / "DevToolsActivePort").exists()
+
+    def test_a_lock_naming_this_host_is_left_for_chrome(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment, profiles = self._locked(tmp_path, vnc_port, "this-container-77")
+
+        result = _run(environment)
+
+        assert result.returncode == 0, result.stderr
+        for profile in profiles:
+            assert os.path.lexists(profile / "SingletonLock")

@@ -16,7 +16,7 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init streamer-test dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         observability-up observability-down observability-open \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-sandbox-images _wait-backend \
         _ensure-native-connectors _desktop-verify-dist-app _desktop-ensure-sidecars \
@@ -847,9 +847,9 @@ _run-backend:
 	@cd $(BACKEND_DIR) && rm -f $(notdir $(BACKEND_PID_FILE)) && \
 		$(COMMON_DEV_ENV) $(BACKEND_DEV_ENV) $(WORKSPACE_DEV_ENV) $(OTEL_DEV_ENV) $(LLM_OTEL_DEV_ENV) \
 		bash -c "if [ '$(RELOAD)' = '1' ]; then \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --ws-per-message-deflate false --reload & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		else \
-			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
+			uv run --extra local uvicorn local_app:app --host 0.0.0.0 --port $(DEV_BACKEND_PORT) --ws-max-size 1048576 --ws-per-message-deflate false & echo \$$! > $(notdir $(BACKEND_PID_FILE)); \
 		fi; wait"
 
 _run-frontend:
@@ -2139,6 +2139,12 @@ QUALITY_GATES := \
 .PHONY: quality $(QUALITY_GATES)
 
 QUALITY_JOBS ?=
+
+# The browser streamer's Go tests, in the builder image the workspace image uses:
+# go vet, go test (encoders included, with cgo), then the binaries into out/.
+streamer-test:
+	@docker build -f lemma-backend/sandbox-images/streamer/Dockerfile --target out \
+		-o type=local,dest=out/streamer lemma-backend/sandbox-images/streamer
 
 quality:
 	@python3 scripts/run_quality_gates.py $(if $(QUALITY_JOBS),--jobs $(QUALITY_JOBS)) $(QUALITY_GATES)

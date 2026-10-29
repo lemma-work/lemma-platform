@@ -101,6 +101,7 @@ Each component has its own setup and its own checks. Run the ones you touched.
 | You changed… | Read | Run before opening a PR |
 |---|---|---|
 | `lemma-backend/` | [backend README](lemma-backend/README.md), [development guidelines](lemma-backend/docs/development.md), [module guide](lemma-backend/docs/modules/README.md) | see below |
+| `lemma-backend/sandbox-images/streamer/` | [streamer README](lemma-backend/sandbox-images/streamer/README.md), [live browser view](docs/architecture/sandbox/live-browser-view.md) | `make streamer-test`, and `integration/run.sh` there for a change to capture, input or signalling |
 | `lemma-frontend/` | [frontend README](lemma-frontend/README.md) | `npm run check && npm test && npm run build` |
 | `lemma-cli/` | [CLI README](lemma-cli/README.md), [conventions](lemma-cli/CONVENTIONS.md) | `make test && make lint` |
 | `lemma-typescript/` | [SDK README](lemma-typescript/README.md) | `npm run build && npm test` |

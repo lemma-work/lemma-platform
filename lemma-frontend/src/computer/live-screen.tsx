@@ -4,7 +4,6 @@ import { handleBrowserKeyDown } from "./keyboard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type RFBClient from "@novnc/novnc";
 import { apiUrl, sessionToken } from "@/session/client";
-import { useBrowserResize } from "./queries";
 import { isSettled, retryDelay, socketUrl, stateFromClose, type LiveState } from "./live";
 import { copyText } from "@/desktop/clipboard";
 
@@ -50,19 +49,7 @@ function sendCtrlV(rfb: RFBClient): void {
     rfb.sendKey(XK_CONTROL_L, "ControlLeft", false);
 }
 
-/** What the display-size route will accept. Clamped here so a pane in an
- *  awkward layout degrades to the nearest size it can have rather than being
- *  refused outright for asking. */
-const MIN_WIDTH = 320;
-const MIN_HEIGHT = 240;
-const MAX_SIDE = 4096;
-
-/** How long the pane has to stop changing size before its display is asked to
- *  match. Dragging a divider emits a resize a frame, and each one costs a mode
- *  change behind a sandbox round trip; only where somebody let go matters. */
-const RESIZE_SETTLE_MS = 250;
-
-export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResize = true, onState }: {
+export function LiveScreen({ mode, origin, conversationId, reopen = 0, viewer, onState }: {
     mode: "view" | "control";
     /** A site to steer the browser to before attaching. Naming one means a
      *  sign-in, and the steer repeats on every connect. */
@@ -76,12 +63,10 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
      *  has long since been retired. Without it a pane stuck on "Opening…"
      *  had nothing to offer but reloading the page. */
     reopen?: number;
-    /** Whether this pane may reshape the sandbox display to its own box.
-     *
-     *  One display serves the machine, so two panes of different shapes both
-     *  asking for a fit would fight, last writer wins, and each would keep
-     *  seeing the other's size. */
-    autoResize?: boolean;
+    /** This pane's name, which the screen's resize lease follows. Sizing is
+     *  the parent's: a preset, asked for once, never this pane's own box —
+     *  the picture is rescaled here, locally, whatever shape the pane is. */
+    viewer?: string | null;
     onState: (state: LiveState) => void;
 }) {
     const holder = useRef<HTMLDivElement>(null);
@@ -97,14 +82,6 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
        somebody who has not clicked yet is told which of the two is true rather
        than left typing into nothing. */
     const [typing, setTyping] = useState(false);
-    /* Whether there is a live connection right now, held here as well as
-       reported outward because the resize below has to re-ask on every one of
-       them — see that effect for what a display forgets when it restarts. */
-    const [connected, setConnected] = useState(false);
-
-    const resize = useBrowserResize();
-    const askSize = useRef(resize.mutate);
-    askSize.current = resize.mutate;
 
     useEffect(() => {
         const container = surfaces.current;
@@ -143,25 +120,35 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
                `.onclose` on whatever channel it is given and would quietly
                replace an assignment made here. */
             const socket = new WebSocket(socketUrl(apiUrl(), {
-                mode, origin, conversationId, accessToken: sessionToken(),
+                mode, origin, conversationId, accessToken: sessionToken(), viewer,
             }));
             let closed = 1000;
             socket.addEventListener("close", (event) => { closed = event.code; });
 
             const rfb = new RFB(surface, socket);
             client.current = rfb;
+            /* The stream bench's probe (`stream-probe.ts`): dev builds only,
+               behind `?streamProbe=1`, and it only watches. The condition is
+               what keeps the module out of a production bundle. */
+            if (process.env.NODE_ENV !== "production") {
+                const socketAt = performance.timeOrigin + performance.now();
+                void import("./stream-probe").then((probe) => {
+                    if (probe.streamProbeAsked()) probe.attachStreamProbe({ socket, surface, socketAt });
+                });
+            }
             rfb.viewOnly = mode === "view";
             rfb.scaleViewport = true;
             rfb.background = "transparent";
-            /* Text on a web page is what people read here, and noVNC's default
-               JPEG quality (6) smears it. Highest quality, light compression:
-               more bytes, but a page that is legible. */
-            rfb.qualityLevel = 9;
-            rfb.compressionLevel = 2;
+            /* Quality 6, compression 6, from the stream bench: quality 9
+               doubled the bytes of every frame for text that reads the same
+               at 6, and on any network short of a LAN those bytes are the
+               frame rate. Compression barely moves the bytes (JPEG decides
+               them) and costs little. */
+            rfb.qualityLevel = 6;
+            rfb.compressionLevel = 6;
             rfb.addEventListener("connect", () => {
                 if (stopped) return;
                 attempt = 0;
-                setConnected(true);
                 report.current("live");
                 /* Now, and not before: everything else in here is the previous
                    attempt's picture, which was worth keeping right up to the
@@ -190,7 +177,6 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
                 if (container.children.length > 1) surface.remove();
                 if (stopped) return;
                 setTyping(false);
-                setConnected(false);
                 const state = stateFromClose(closed);
                 report.current(state);
                 if (!isSettled(state)) timer = setTimeout(connect, retryDelay(attempt++));
@@ -213,56 +199,14 @@ export function LiveScreen({ mode, origin, conversationId, reopen = 0, autoResiz
             container.removeEventListener("focusin", focused);
             container.removeEventListener("focusout", blurred);
             if (timer) clearTimeout(timer);
-            /* Here as well as in `disconnect`, and it has to be: a teardown
-               nulls the ref first, so the event this socket eventually fires
-               is guarded out. Without this a re-steer would keep `connected`
-               true across the swap, the resize below would never re-run, and
-               the new connection would inherit the old one's "already asked
-               for that". */
-            setConnected(false);
             /* Disconnecting is the whole point of this teardown: the socket is
                what holds the machine awake, so a pane left connected after
                nobody is looking runs a sandbox for nothing. */
             try { client.current?.disconnect(); } catch { /* already gone */ }
             client.current = null;
         };
-    }, [mode, origin, conversationId, reopen]);
+    }, [mode, origin, conversationId, reopen, viewer]);
 
-
-    useEffect(() => {
-        const container = holder.current;
-        if (!container || !autoResize || !connected) return;
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        let asked = "";
-
-        const fit = (width: number, height: number) => {
-            const wanted = width + "x" + height;
-            if (wanted === asked) return;
-            asked = wanted;
-            askSize.current({ width, height }, { onError: () => { asked = ""; } });
-        };
-        const clamp = (box: { width: number; height: number }) => ({
-            width: Math.round(Math.min(Math.max(box.width, MIN_WIDTH), MAX_SIDE)),
-            height: Math.round(Math.min(Math.max(box.height, MIN_HEIGHT), MAX_SIDE)),
-        });
-
-        /* Straight away rather than on the next resize: this is the connect
-           case, where the box is whatever it already was and nothing is about
-           to change it. */
-        const now = clamp(container.getBoundingClientRect());
-        fit(now.width, now.height);
-
-        const watcher = new ResizeObserver(([entry]) => {
-            const box = entry?.contentRect;
-            if (!box) return;
-            const next = clamp(box);
-            if (next.width + "x" + next.height === asked) return;
-            if (timer) clearTimeout(timer);
-            timer = setTimeout(() => fit(next.width, next.height), RESIZE_SETTLE_MS);
-        });
-        watcher.observe(container);
-        return () => { watcher.disconnect(); if (timer) clearTimeout(timer); };
-    }, [autoResize, connected]);
 
     const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
         handleBrowserKeyDown(event, client.current);

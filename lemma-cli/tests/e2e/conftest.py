@@ -279,6 +279,8 @@ def backend_server(postgres_container, redis_container, supertokens_container):
                 str(port),
                 "--ws-max-size",
                 "1048576",
+                "--ws-per-message-deflate",
+                "false",
                 "--log-level",
                 "warning",
             ],

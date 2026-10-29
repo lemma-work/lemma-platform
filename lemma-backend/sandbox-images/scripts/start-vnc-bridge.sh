@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 # The viewing half of the display stack, brought up when somebody looks.
 #
-# x11vnc and websockify exist for a person watching the sandbox, and most of
+# The VNC server is TigerVNC's scraping server (`X0tigervnc`) where the image
+# has it, and x11vnc where it does not. The stream bench measured x11vnc topping
+# out near 35 fps whatever it was told -- it polls the screen and serves one
+# pull at a time -- while TigerVNC on the same display kept up with a 60 fps
+# page for less CPU. Both are looked for rather than one assumed, because this
+# script ships in the runtime overlay and so runs on images built before
+# TigerVNC was in them.
+#
+# The VNC server and websockify exist for a person watching the sandbox, and most of
 # the time nobody is: an agent doing research holds the display, the browser
 # and the relay and would pay for these two as well. Measured by starting one
 # process at a time in a 2 GB sandbox -- Xvfb 21 MiB, matchbox 9, x11vnc 27,
@@ -27,7 +35,7 @@
 # paths call, and the whole point is that they do not pay for this.
 set -euo pipefail
 
-#: Two budgets, because the two processes are not alike. x11vnc is a C
+#: Two budgets, because the two processes are not alike. The VNC server is a C
 #: binary, measured binding in 55-117 ms; websockify is a Python program
 #: whose cold start pays for an interpreter and its imports, measured at
 #: 57-158 ms. Both numbers come from an idle machine with a warm page
@@ -41,7 +49,7 @@ set -euo pipefail
 #: has to be large enough that a slow start is never mistaken for a broken
 #: one again, and nobody waits it out except a sandbox that is genuinely
 #: failing.
-X11VNC_WAIT_SECONDS=5
+VNC_SERVER_WAIT_SECONDS=5
 WEBSOCKIFY_WAIT_SECONDS=30
 TICK=0.05
 
@@ -49,7 +57,7 @@ DISPLAY_VALUE="${DISPLAY:-:99}"
 VNC_PORT="${LEMMA_BROWSER_VNC_PORT:-5900}"
 VNC_WS_PORT="${LEMMA_BROWSER_VNC_WS_PORT:-5901}"
 
-X11VNC_LOG=/tmp/lemma-x11vnc.log
+VNC_LOG=/tmp/lemma-vnc-server.log
 WEBSOCKIFY_LOG=/tmp/lemma-websockify.log
 
 # Answers "would a viewer get through to this port", which is the only
@@ -97,26 +105,48 @@ if port_answers "$VNC_PORT" && port_answers "$VNC_WS_PORT"; then
   exit 0
 fi
 
-if ! port_answers "$VNC_PORT" && ! pgrep -x x11vnc >/dev/null 2>&1; then
-  # `-noshm`: MIT-SHM attach fails under this container's X server and takes
-  # x11vnc down with it moments after a clean-looking start -- proven by
-  # running it without the flag, not assumed. `setsid`, so it outlives the
-  # request that started it.
-  # `-xrandr resize`: follow the display when it changes size instead of
-  # serving the geometry it saw at startup. Without it a `/display:resize`
-  # leaves x11vnc describing a screen that no longer exists, and the viewer
-  # gets a picture that does not match the framebuffer behind it.
-  setsid nohup x11vnc -display "$DISPLAY_VALUE" -noshm -forever -shared -nopw \
-    -rfbport "$VNC_PORT" -listen 127.0.0.1 -noxdamage -quiet -xrandr resize \
-    >"$X11VNC_LOG" 2>&1 < /dev/null &
+# `X0tigervnc` by name rather than the `x0vncserver` wrapper, which is a Perl
+# script that wants a PID file and PAM. pgrep matches the first 15 characters
+# of the program name, and both names fit.
+vnc_server_running() {
+  pgrep -x X0tigervnc >/dev/null 2>&1 || pgrep -x x11vnc >/dev/null 2>&1
+}
+
+if ! port_answers "$VNC_PORT" && ! vnc_server_running; then
+  if command -v X0tigervnc >/dev/null 2>&1; then
+    VNC_SERVER=X0tigervnc
+    # `-AcceptSetDesktopSize=0`: the display is resized by the relay's
+    # `/display:resize`, under the resize lease, and never by whichever
+    # viewer's noVNC asks. `-UseBlacklist=0`, because every viewer arrives
+    # from 127.0.0.1 through websockify, and one host blacklisted is all of
+    # them. It follows a RandR resize on its own, telling viewers through
+    # ExtendedDesktopSize, so there is no `-xrandr` to pass.
+    setsid nohup X0tigervnc -display "$DISPLAY_VALUE" -rfbport "$VNC_PORT" \
+      -localhost -interface 127.0.0.1 -SecurityTypes None -AlwaysShared \
+      -UseBlacklist=0 -AcceptSetDesktopSize=0 -SendPrimary=0 \
+      >"$VNC_LOG" 2>&1 < /dev/null &
+  else
+    VNC_SERVER=x11vnc
+    # `-noshm`: MIT-SHM attach fails under this container's X server and takes
+    # x11vnc down with it moments after a clean-looking start -- proven by
+    # running it without the flag, not assumed. `setsid`, so it outlives the
+    # request that started it.
+    # `-xrandr resize`: follow the display when it changes size instead of
+    # serving the geometry it saw at startup. Without it a `/display:resize`
+    # leaves x11vnc describing a screen that no longer exists, and the viewer
+    # gets a picture that does not match the framebuffer behind it.
+    setsid nohup x11vnc -display "$DISPLAY_VALUE" -noshm -forever -shared -nopw \
+      -rfbport "$VNC_PORT" -listen 127.0.0.1 -noxdamage -quiet -xrandr resize \
+      >"$VNC_LOG" 2>&1 < /dev/null &
+  fi
 fi
 
 # Waited for before websockify starts, and refused here rather than after:
 # websockify will happily bind its own port with no upstream behind it, so a
 # final probe alone would pass while the first viewer gets a connection
 # failure from 5900 and reads it as "the browser is gone".
-if ! await_port "$VNC_PORT" "$X11VNC_WAIT_SECONDS"; then
-  explain "x11vnc is not listening on ${VNC_PORT}" "$X11VNC_LOG" x11vnc
+if ! await_port "$VNC_PORT" "$VNC_SERVER_WAIT_SECONDS"; then
+  explain "the VNC server is not listening on ${VNC_PORT}" "$VNC_LOG" "${VNC_SERVER:-X0tigervnc}"
   exit 1
 fi
 

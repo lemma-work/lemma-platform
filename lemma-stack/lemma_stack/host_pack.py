@@ -252,6 +252,8 @@ def build_manifest(
                     "websockets-sansio",
                     "--ws-max-size",
                     "1048576",
+                    "--ws-per-message-deflate",
+                    "false",
                 ],
                 "cwd": str(backend_dir),
                 "env": backend_env,

@@ -38,7 +38,7 @@ test("connecting, focusing and replacing the browser never removes React's hint"
     const root = createRoot(container);
     const errors: unknown[] = [];
     dom.window.addEventListener("error", event => { errors.push(event.error); event.preventDefault(); });
-    const render = (reopen: number) => createElement(LiveScreen, { mode: "control", autoResize: false, reopen, onState: () => {} });
+    const render = (reopen: number) => createElement(LiveScreen, { mode: "control", reopen, onState: () => {} });
     try {
         await act(async () => { root.render(render(0)); });
         const first = BrowserTransport.clients.at(-1)!;

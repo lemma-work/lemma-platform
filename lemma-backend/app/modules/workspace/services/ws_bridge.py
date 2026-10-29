@@ -64,6 +64,11 @@ async def connect_upstream(
         additional_headers=dict(headers or {}),
         subprotocols=list(subprotocols) if subprotocols else None,
         max_size=MAX_FRAME_BYTES,
+        # Not offered. The library's default is to ask for permessage-deflate,
+        # and the relay used to agree: every VNC frame -- already JPEG or zlib
+        # -- was deflated in the sandbox and inflated here, at a measured half
+        # a core of the sandbox's CPU and tens of milliseconds a frame.
+        compression=None,
         # A dead peer that never closes leaves a task pinned to a socket that
         # will never speak again; the ping is what notices.
         ping_interval=20,

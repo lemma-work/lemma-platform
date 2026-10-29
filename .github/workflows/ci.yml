@@ -340,6 +340,23 @@ jobs:
       # hermetic and fast. The full suite stays advisory in e2e.yml.
       - name: DB connection scope (runtime)
         run: make test-connection-scope
+      # The browser streamer is Go, and nothing in `make quality` builds Go.
+      # Here rather than in a job of its own: it is a backend change's code,
+      # it takes a minute, and the job count is what CI pays for. cgo, with the
+      # same x264 and libvpx the image links, so the encoder tests run for real.
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: lemma-backend/sandbox-images/streamer/go.mod
+          cache-dependency-path: lemma-backend/sandbox-images/streamer/go.sum
+      - name: Browser streamer (go vet, go test, fuzz)
+        working-directory: lemma-backend/sandbox-images/streamer
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libx264-dev libvpx-dev
+          go vet ./...
+          go test ./...
+          go test ./internal/input -run '^$' -fuzz FuzzParse -fuzztime 20s
+          go test ./internal/ticket -run '^$' -fuzz FuzzVerify -fuzztime 10s
 
   backend-migration:
     name: lemma-backend migration upgrade/downgrade
