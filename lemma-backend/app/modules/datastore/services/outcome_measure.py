@@ -12,13 +12,19 @@ must be able to read every table it names, and administer every table with
 row security, whose rows they would otherwise see only their own of. A
 measure nobody could have read in full is never kept, and a count over rows a
 member cannot open shows them that count and nothing more.
+
+Row security can be turned on for a table after a measure counting it is set,
+and the check that stood for it never covered that. So the check answers the
+tables with row security it covered, the pod keeps them with the measure, and
+a reading refuses a table with row security that is not among them: no number,
+until someone who administers that table sets the measure again.
 """
 
 from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -27,11 +33,13 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.log.log import get_logger
-from app.core.ports.outcome_measures import MeasureReading
+from app.core.ports.outcome_measures import CheckedMeasure, MeasureReading
+from app.modules.datastore.domain.datastore_entities import DatastoreTableEntity
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
     DatastoreDomainError,
     DatastoreMeasureError,
+    DatastoreMeasureUncheckedError,
     DatastoreQueryError,
     DatastoreTableNotFoundError,
 )
@@ -89,13 +97,21 @@ class OutcomeMeasureService:
         self._authz = authz
         self._clock = clock
 
-    async def check(self, *, pod_id: UUID, sql: str, ctx: Context) -> MeasureReading:
-        """Read ``sql`` once for ``ctx``, who is about to set it, or refuse it."""
+    async def check(self, *, pod_id: UUID, sql: str, ctx: Context) -> CheckedMeasure:
+        """Read ``sql`` once for ``ctx``, who is about to set it, or refuse it.
+
+        Answers the tables with row security it covered, which the pod keeps
+        with the measure for ``read`` to hold it to.
+        """
         names = tables_counted(sql)
         tables = await self._tables.get_tables(pod_id, sorted(names), ctx)
+        covered: set[UUID] = set()
         for name in sorted(tables):
             table = tables[name]
-            if table.enable_rls and not await self._authz.can_admin_table(
+            if not table.enable_rls:
+                continue
+            covered.add(table.id)
+            if not await self._authz.can_admin_table(
                 pod_id=pod_id,
                 table_id=table.id,
                 ctx=ctx,
@@ -106,24 +122,67 @@ class OutcomeMeasureService:
                     f"pod, and you can read only your own rows there. Someone "
                     f"who administers {name} can set it."
                 )
-        return await self._read(pod_id, sql)
+        return CheckedMeasure(
+            reading=await self._read(pod_id, sql),
+            row_security_checked=frozenset(covered),
+        )
 
-    async def read(self, *, pod_id: UUID, sql: str) -> MeasureResult:
+    async def unchecked(
+        self, *, pod_id: UUID, sql: str, checked: Collection[UUID]
+    ) -> frozenset[UUID]:
+        """The tables ``sql`` counts with row security now that ``checked``
+        does not cover. Nothing for a measure that no longer resolves: reading
+        it says what is wrong, and a new check would only say it again."""
+        try:
+            found = await self._counted(pod_id, sql)
+        except DatastoreDomainError:
+            return frozenset()
+        return frozenset(table.id for table in _unchecked(found, checked))
+
+    async def refusal(
+        self, *, pod_id: UUID, sql: str, checked: Collection[UUID]
+    ) -> MeasureResult | None:
+        """Why the measure may not be read for everyone now, or ``None``.
+
+        Cheaper than ``read`` -- it looks at the tables, not their rows -- so
+        a cached number is never served past the moment row security is
+        turned on under it.
+        """
+        try:
+            found = await self._counted(pod_id, sql)
+        except DatastoreDomainError:
+            return None  # `read` says what is wrong with it
+        unchecked = _unchecked(found, checked)
+        if not unchecked:
+            return None
+        return MeasureResult(
+            reading=None,
+            problem=_problem(DatastoreMeasureUncheckedError(unchecked[0].name)),
+        )
+
+    async def read(
+        self, *, pod_id: UUID, sql: str, checked: Collection[UUID]
+    ) -> MeasureResult:
         """What the measure answers now, for everyone in the pod.
 
+        ``checked`` is what the check that let it be set covered: a table it
+        counts with row security outside it is refused, unread.
+
         Never raises for the measure's own sake: a table dropped since it was
-        set, a query that now takes too long, an answer that is no longer one
-        number -- each comes back as a ``problem`` the page can say, so one
-        broken measure costs its pod a number and nothing else.
+        set, row security turned on since, a query that now takes too long, an
+        answer that is no longer one number -- each comes back as a
+        ``problem`` the page can say, so one broken measure costs its pod a
+        number and nothing else.
         """
         try:
             names = tables_counted(sql)
-            found = await self._table_repository.get_many_by_datastore_and_names(
-                pod_id, sorted(names)
-            )
+            found = await self._counted(pod_id, sql)
             missing = sorted(names - found.keys())
             if missing:
                 raise DatastoreTableNotFoundError(f"Table '{missing[0]}' not found")
+            unchecked = _unchecked(found, checked)
+            if unchecked:
+                raise DatastoreMeasureUncheckedError(unchecked[0].name)
             return MeasureResult(reading=await self._read(pod_id, sql))
         except DatastoreDomainError as exc:
             logger.warning(
@@ -134,11 +193,29 @@ class OutcomeMeasureService:
             )
             return MeasureResult(reading=None, problem=_problem(exc))
 
+    async def _counted(self, pod_id: UUID, sql: str) -> dict[str, DatastoreTableEntity]:
+        names = tables_counted(sql)
+        return await self._table_repository.get_many_by_datastore_and_names(
+            pod_id, sorted(names)
+        )
+
     async def _read(self, pod_id: UUID, sql: str) -> MeasureReading:
         rows, _count, _truncated = await self._records.execute_readonly_query(
             pod_id, sql, RowPrincipal.every_row()
         )
         return MeasureReading(value=the_number(rows), measured_at=self._clock())
+
+
+def _unchecked(
+    found: Mapping[str, DatastoreTableEntity], checked: Collection[UUID]
+) -> list[DatastoreTableEntity]:
+    """Tables with row security, by name, that no check of the measure covered."""
+    covered = set(checked)
+    return [
+        found[name]
+        for name in sorted(found)
+        if found[name].enable_rls and found[name].id not in covered
+    ]
 
 
 def tables_counted(sql: str) -> frozenset[str]:
@@ -216,7 +293,7 @@ _PROBLEMS: dict[str, str] = {
 
 
 def _problem(exc: DatastoreDomainError) -> str:
-    if isinstance(exc, DatastoreMeasureError):
+    if isinstance(exc, DatastoreMeasureError | DatastoreMeasureUncheckedError):
         return exc.message
     return _PROBLEMS.get(exc.code, "The measure could not be read just now.")
 

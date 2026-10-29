@@ -209,9 +209,16 @@ every member sees the same number, and the weekly reading has nobody to read as.
 So the reader is checked when the measure is set, not when it is read:
 `OutcomeMeasureService.check` requires `DATASTORE_TABLE_READ` on every table it
 names and administration of every table with row security, and that it answers
-one row of one number (or null). Reading it later never raises for the
-measure's sake: a dropped table, a query now too costly, or an answer that is no
-longer a number comes back as a `problem` in words for the pod.
+one row of one number (or null). It answers the ids of the tables with row
+security it covered, which the pod keeps as the outcome's
+`row_security_checked`. Row security can be turned on for a table after that,
+so every read is held to it: a counted table with row security outside it is
+refused unread (`DATASTORE_MEASURE_UNCHECKED`), before the standing cache is
+asked, until someone who administers that table sets the measure again. A
+stored outcome without the field covered nothing. Reading it later never raises
+for the measure's sake: a dropped table, row security turned on since, a query
+now too costly, or an answer that is no longer a number comes back as a
+`problem` in words for the pod.
 
 A reading is kept as its week's (`pod_outcome_weeks`, keyed by pod and the UTC Monday);
 a later one replaces it, and one that fails keeps the week's number and records

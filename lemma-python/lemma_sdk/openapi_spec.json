@@ -17384,6 +17384,15 @@
             "description": "One read-only SQL query over the pod's tables that answers a single number: one row, one column. Counted for every member alike, so only someone who can read every row it touches may set it.",
             "title": "Measure"
           },
+          "row_security_checked": {
+            "description": "The tables with row security the measure counts that were checked when it was set, by id: whoever set it administers each. Set by the server. A measure that counts a table with row security not listed here is not read until someone who administers that table sets it again.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Row Security Checked",
+            "type": "array"
+          },
           "sentence": {
             "description": "What it owns, as one sentence a person can check.",
             "maxLength": 200,

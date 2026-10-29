@@ -12,12 +12,18 @@ the pod sees the same number and the same weeks behind it, including members
 who cannot open some of the rows it counts. The check is what keeps that from
 being a way to read rows out a number at a time: nobody can define a count over
 rows they could not read themselves.
+
+The check runs once, so what it covered is kept with the measure: the tables
+with row security it was checked against. Row security turned on for a table
+after that is one the check never covered, and the measure is not read again
+until somebody who administers that table sets it again.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from collections.abc import Collection
 from typing import Protocol
 from uuid import UUID
 
@@ -34,10 +40,20 @@ class MeasureReading:
     measured_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class CheckedMeasure:
+    """What a measure answered when it was checked, and what the check covered."""
+
+    reading: MeasureReading
+    #: The tables it counts that had row security when it was checked, by id:
+    #: the person setting it administers each of them.
+    row_security_checked: frozenset[UUID]
+
+
 class OutcomeMeasures(Protocol):
     """Checks a measure for the person about to set it."""
 
-    async def check(self, *, pod_id: UUID, sql: str, ctx: Context) -> MeasureReading:
+    async def check(self, *, pod_id: UUID, sql: str, ctx: Context) -> CheckedMeasure:
         """Read ``sql`` once and answer what it counts, or refuse it.
 
         Refused with the datastore's own errors, each carrying its status: a
@@ -47,5 +63,12 @@ class OutcomeMeasures(Protocol):
         """
         ...
 
+    async def unchecked(
+        self, *, pod_id: UUID, sql: str, checked: Collection[UUID]
+    ) -> frozenset[UUID]:
+        """The tables ``sql`` counts that have row security now and are not in
+        ``checked``: what a check has to cover before it is read again."""
+        ...
 
-__all__ = ["MeasureReading", "OutcomeMeasures"]
+
+__all__ = ["CheckedMeasure", "MeasureReading", "OutcomeMeasures"]

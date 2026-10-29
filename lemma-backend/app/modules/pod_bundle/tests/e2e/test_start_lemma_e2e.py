@@ -159,6 +159,9 @@ async def test_from_a_template_the_agent_starts_once_the_template_is_in(
     outcome = started["pod"]["outcome"]
     assert outcome["kind"] == "date" and outcome["due"] == due.isoformat()
     assert outcome["measure"] and "{due}" not in outcome["sentence"]
+    # Kept unread, so no table is recorded as checked: it reads only while
+    # the tables it counts have no row security, as the template brings them.
+    assert outcome["row_security_checked"] == []
     run_id = await _run_of(started["conversation_id"])
 
     # Held: while the template job is queued, the agent's turn is not.

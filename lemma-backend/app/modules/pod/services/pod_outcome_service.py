@@ -64,8 +64,10 @@ class PodOutcomeService:
 
         A new or changed measure is checked for ``ctx`` first; one that is
         unchanged is not, so somebody who may move the target or reword the
-        sentence does not also need to read every row the measure counts.
-        Answers what is kept, and what the measure answered when checked.
+        sentence does not also need to read every row the measure counts --
+        unless it counts a table whose row security its last check did not
+        cover, which is what setting it again is for. Answers what is kept,
+        and what the measure answered when checked.
         """
         await self._pods.lock(pod_id)
         pod = await self._pods.get(pod_id)
@@ -78,14 +80,27 @@ class PodOutcomeService:
         reading: MeasureReading | None = None
         kept: PodOutcome | None = None
         if outcome is not None:
-            if outcome.measure is not None and not same_query(
-                before.measure if before is not None else None, outcome.measure
-            ):
-                reading = await measures.check(
-                    pod_id=pod_id, sql=outcome.measure, ctx=ctx
-                )
+            checked: list[UUID] = []
+            if outcome.measure is not None:
+                if before is not None and same_query(before.measure, outcome.measure):
+                    checked = list(before.row_security_checked)
+                    must_check = bool(
+                        await measures.unchecked(
+                            pod_id=pod_id, sql=outcome.measure, checked=checked
+                        )
+                    )
+                else:
+                    must_check = True
+                if must_check:
+                    result = await measures.check(
+                        pod_id=pod_id, sql=outcome.measure, ctx=ctx
+                    )
+                    reading = result.reading
+                    checked = sorted(result.row_security_checked)
             kept = PodOutcome(
-                **outcome.model_dump(), since=self._since(before, outcome)
+                **outcome.model_dump(),
+                since=self._since(before, outcome),
+                row_security_checked=checked,
             )
         if kept == before:
             return kept, reading
@@ -106,6 +121,12 @@ class PodOutcomeService:
         one its maker passes by construction -- they made the pod, administer
         it, and own every table the template adds. No reading is asked for
         either, for the same reason: the sweep reads it once it can.
+
+        Nothing is recorded as checked, so the measure is read only while the
+        tables it counts have no row security -- which is how every shipped
+        template brings them (``test_outcome_templates`` holds them to it).
+        A table given row security later is one its maker sets the measure
+        again for, like any other pod's.
         """
         await self._pods.lock(pod_id)
         pod = await self._pods.get(pod_id)

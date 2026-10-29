@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.core.ports.outcome_measures import MeasureReading
+from app.core.ports.outcome_measures import CheckedMeasure, MeasureReading
 from app.modules.pod.contracts.members import say_what_it_owns
 from app.modules.pod.domain.errors import PodConflictError
 from app.modules.pod.domain.pod_entities import (
@@ -135,19 +135,44 @@ class _Editor:
 
 
 class _Measures:
-    """Answers every check with ``value``, or refuses every one."""
+    """Answers every check with ``value``, or refuses every one.
 
-    def __init__(self, *, value: float | None = 87.5, refuse: bool = False) -> None:
+    ``row_secured`` is every table with row security the measure counts now:
+    a check covers them all, and any a stored measure was not checked against
+    is ``unchecked``.
+    """
+
+    def __init__(
+        self,
+        *,
+        value: float | None = 87.5,
+        refuse: bool = False,
+        row_secured: frozenset[UUID] = frozenset(),
+    ) -> None:
         self.value = value
         self.refuse = refuse
+        self.row_secured = row_secured
+        self.checks = 0
 
-    async def check(self, *, pod_id: UUID, sql: str, ctx: object) -> MeasureReading:
+    async def check(self, *, pod_id: UUID, sql: str, ctx: object) -> CheckedMeasure:
         del pod_id, sql, ctx
+        self.checks += 1
         if self.refuse:
             raise PermissionError("cannot read every row it counts")
-        return MeasureReading(
-            value=self.value, measured_at=datetime(2026, 10, 21, tzinfo=timezone.utc)
+        return CheckedMeasure(
+            reading=MeasureReading(
+                value=self.value,
+                measured_at=datetime(2026, 10, 21, tzinfo=timezone.utc),
+            ),
+            row_security_checked=self.row_secured,
         )
+
+    async def unchecked(
+        self, *, pod_id: UUID, sql: str, checked: object
+    ) -> frozenset[UUID]:
+        del pod_id, sql
+        assert isinstance(checked, list)
+        return self.row_secured - set(checked)
 
 
 def _service(outcome: PodOutcome | None = None) -> tuple[PodOutcomeService, _Pods]:
@@ -244,3 +269,46 @@ async def test_a_starting_outcome_keeps_a_templates_measure_without_reading_it()
         await service.set_starting_outcome(
             pods.pod.id, OutcomeInput.model_validate(BAR), _Editor()
         )
+
+
+@pytest.mark.asyncio
+async def test_a_measure_keeps_the_tables_with_row_security_its_check_covered():
+    leads = uuid4()
+    service, pods = _service()
+    kept, _ = await service.set_outcome(
+        pods.pod.id,
+        OutcomeInput.model_validate(BAR),
+        _Editor(),
+        measures=_Measures(row_secured=frozenset({leads})),
+    )
+    assert kept is not None and kept.row_security_checked == [leads]
+    moved, reading = await service.set_outcome(
+        pods.pod.id,
+        OutcomeInput.model_validate({**BAR, "target": 95}),
+        _Editor(),
+        measures=_Measures(refuse=True, row_secured=frozenset({leads})),
+    )
+    assert reading is None, "covered already, so not checked again"
+    assert moved is not None and moved.row_security_checked == [leads]
+
+
+@pytest.mark.asyncio
+async def test_row_security_turned_on_since_makes_the_same_measure_checked_again():
+    before = PodOutcome.model_validate(BAR)
+    assert before.row_security_checked == [], "stored before it was recorded"
+    leads = uuid4()
+    service, pods = _service(before)
+    with pytest.raises(PermissionError):
+        await service.set_outcome(
+            pods.pod.id,
+            OutcomeInput.model_validate({**BAR, "target": 95}),
+            _Editor(),
+            measures=_Measures(refuse=True, row_secured=frozenset({leads})),
+        )
+    assert pods.pod.config.outcome == before
+    measures = _Measures(row_secured=frozenset({leads}))
+    kept, reading = await service.set_outcome(
+        pods.pod.id, OutcomeInput.model_validate(BAR), _Editor(), measures=measures
+    )
+    assert measures.checks == 1 and reading is not None
+    assert kept is not None and kept.row_security_checked == [leads]

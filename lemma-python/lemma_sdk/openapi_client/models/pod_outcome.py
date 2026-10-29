@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 from collections.abc import Mapping
 from typing import Any, TypeVar, cast
+from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
@@ -30,6 +31,9 @@ class PodOutcome:
         due (datetime.date | None | Unset): The finish line's date. Required for kind=date, refused for week.
         measure (None | str | Unset): One read-only SQL query over the pod's tables that answers a single number: one
             row, one column. Counted for every member alike, so only someone who can read every row it touches may set it.
+        row_security_checked (list[UUID] | Unset): The tables with row security the measure counts that were checked
+            when it was set, by id: whoever set it administers each. Set by the server. A measure that counts a table with
+            row security not listed here is not read until someone who administers that table sets it again.
         since (datetime.date | None | Unset): When the pod took this on: set by the server when it is first set, and
             kept while only its wording, target or measure change.
         target (float | None | Unset): The number the measure is held to: 90 with unit '%' for a share, 22 for a finish
@@ -42,6 +46,7 @@ class PodOutcome:
     sentence: str
     due: datetime.date | None | Unset = UNSET
     measure: None | str | Unset = UNSET
+    row_security_checked: list[UUID] | Unset = UNSET
     since: datetime.date | None | Unset = UNSET
     target: float | None | Unset = UNSET
     unit: None | str | Unset = UNSET
@@ -65,6 +70,13 @@ class PodOutcome:
             measure = UNSET
         else:
             measure = self.measure
+
+        row_security_checked: list[str] | Unset = UNSET
+        if not isinstance(self.row_security_checked, Unset):
+            row_security_checked = []
+            for row_security_checked_item_data in self.row_security_checked:
+                row_security_checked_item = str(row_security_checked_item_data)
+                row_security_checked.append(row_security_checked_item)
 
         since: None | str | Unset
         if isinstance(self.since, Unset):
@@ -98,6 +110,8 @@ class PodOutcome:
             field_dict["due"] = due
         if measure is not UNSET:
             field_dict["measure"] = measure
+        if row_security_checked is not UNSET:
+            field_dict["row_security_checked"] = row_security_checked
         if since is not UNSET:
             field_dict["since"] = since
         if target is not UNSET:
@@ -140,6 +154,15 @@ class PodOutcome:
 
         measure = _parse_measure(d.pop("measure", UNSET))
 
+        _row_security_checked = d.pop("row_security_checked", UNSET)
+        row_security_checked: list[UUID] | Unset = UNSET
+        if _row_security_checked is not UNSET:
+            row_security_checked = []
+            for row_security_checked_item_data in _row_security_checked:
+                row_security_checked_item = UUID(row_security_checked_item_data)
+
+                row_security_checked.append(row_security_checked_item)
+
         def _parse_since(data: object) -> datetime.date | None | Unset:
             if data is None:
                 return data
@@ -180,6 +203,7 @@ class PodOutcome:
             sentence=sentence,
             due=due,
             measure=measure,
+            row_security_checked=row_security_checked,
             since=since,
             target=target,
             unit=unit,

@@ -209,6 +209,16 @@ class PodOutcome(OutcomeInput):
             "set, and kept while only its wording, target or measure change."
         ),
     )
+    row_security_checked: list[UUID] = Field(
+        default_factory=list,
+        description=(
+            "The tables with row security the measure counts that were checked "
+            "when it was set, by id: whoever set it administers each. Set by "
+            "the server. A measure that counts a table with row security not "
+            "listed here is not read until someone who administers that table "
+            "sets it again."
+        ),
+    )
 
 
 class PodConfig(BaseModel):

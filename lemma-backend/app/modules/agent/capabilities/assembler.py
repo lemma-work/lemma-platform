@@ -355,7 +355,7 @@ async def _build_lemma_harness_tooling(
         # ...and a static hint so the model knows those tools exist to search for.
         # `deferred_hint` sorts its tool names specifically to keep it
         # byte-identical between runs.
-        hint = build_deferred_tools_hint(extra, visible_toolsets=core)
+        hint = build_deferred_tools_hint(extra)
         if hint:
             capabilities.append(DeferredToolsHintCapability(hint))
 

@@ -4,7 +4,8 @@ The number now is the measure read as the page asks for it. The weeks are
 what the measure answered in each of them, kept by ``record_week`` -- every
 reading replaces its week's, so a week shows the last one it got. Both read
 every row of the pod, so everyone in it sees the same number; who may set a
-measure is decided when it is set (``outcome_measure``).
+measure is decided when it is set (``outcome_measure``), and a measure counting
+a table whose row security that decision never covered is not read at all.
 """
 
 from __future__ import annotations
@@ -158,12 +159,27 @@ class OutcomeStandingService:
         outcome = await self._outcomes(pod_id)
         if outcome is None or outcome.measure is None:
             return OutcomeStanding(outcome=outcome)
+        # Before the cache: a number read while the measure's tables had no
+        # row security is not served once one of them has it.
+        refused = await self._measures.refusal(
+            pod_id=pod_id,
+            sql=outcome.measure,
+            checked=outcome.row_security_checked,
+        )
+        if refused is not None:
+            return OutcomeStanding(
+                outcome=outcome, reading=refused.reading, problem=refused.problem
+            )
         key = f"{pod_id}:{measure_digest(outcome.measure)}"
         readings = self._readings or _standings()
         async with connection_released(self._session):
             result = await _cached(readings, key)
         if result is None:
-            result = await self._measures.read(pod_id=pod_id, sql=outcome.measure)
+            result = await self._measures.read(
+                pod_id=pod_id,
+                sql=outcome.measure,
+                checked=outcome.row_security_checked,
+            )
             async with connection_released(self._session):
                 await _keep(readings, key, result)
         return OutcomeStanding(
@@ -204,7 +220,9 @@ class OutcomeStandingService:
         outcome = await self._outcomes(pod_id)
         if outcome is None or outcome.measure is None:
             return None
-        result = await self._measures.read(pod_id=pod_id, sql=outcome.measure)
+        result = await self._measures.read(
+            pod_id=pod_id, sql=outcome.measure, checked=outcome.row_security_checked
+        )
         measured_at = result.reading.measured_at if result.reading else self._clock()
         return WeekReading(
             pod_id=pod_id,

@@ -100,12 +100,21 @@ class _MemoryCache:
 
 
 class _Measures:
-    def __init__(self, result: MeasureResult) -> None:
+    def __init__(
+        self, result: MeasureResult, refused: MeasureResult | None = None
+    ) -> None:
         self.result = result
+        self.refused = refused
         self.reads = 0
 
-    async def read(self, *, pod_id: UUID, sql: str) -> MeasureResult:
-        del pod_id, sql
+    async def refusal(
+        self, *, pod_id: UUID, sql: str, checked: object
+    ) -> MeasureResult | None:
+        del pod_id, sql, checked
+        return self.refused
+
+    async def read(self, *, pod_id: UUID, sql: str, checked: object) -> MeasureResult:
+        del pod_id, sql, checked
         self.reads += 1
         return self.result
 
@@ -151,6 +160,7 @@ def _service(
     result: MeasureResult,
     weeks: _Weeks | None = None,
     readings: _MemoryCache | None = None,
+    measures: _Measures | None = None,
 ) -> OutcomeStandingService:
     async def outcome_of(pod_id: UUID) -> PodOutcome | None:
         del pod_id
@@ -158,7 +168,7 @@ def _service(
 
     return OutcomeStandingService(
         outcomes=outcome_of,
-        measures=_Measures(result),  # type: ignore[arg-type]
+        measures=measures or _Measures(result),  # type: ignore[arg-type]
         weeks=weeks or _Weeks(),  # type: ignore[arg-type]
         clock=lambda: NOW,
         readings=readings or _MemoryCache(),
@@ -258,3 +268,18 @@ async def test_the_number_now_is_read_once_for_everyone_asking_within_the_window
     assert first.reading == again.reading
     edited = _service(_owns(MEASURE + " AND true"), _read(4), readings=readings)
     assert (await edited.standing(pod_id)).reading.value == 4
+
+
+@pytest.mark.asyncio
+async def test_a_number_already_cached_is_not_served_once_it_is_refused():
+    """Row security turned on under a measure stops the number at once, not
+    when the cached one runs out."""
+    pod, cache = uuid4(), _MemoryCache()
+    assert (await _service(_owns(), _read(7), readings=cache).standing(pod)).reading
+    refused = MeasureResult(reading=None, problem="Row security is on for posts now")
+    measures = _Measures(_read(7), refused=refused)
+    standing = await _service(
+        _owns(), _read(7), readings=cache, measures=measures
+    ).standing(pod)
+    assert (standing.reading, standing.problem) == (None, refused.problem)
+    assert measures.reads == 0

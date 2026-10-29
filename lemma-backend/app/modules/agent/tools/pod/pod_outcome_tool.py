@@ -3,9 +3,10 @@
 The same path a person's ``PUT /pods/{pod_id}/outcome`` takes, as the agent's
 authority for this call: it must be able to update the pod, and a new or
 changed measure is read once before it is kept, which also means the agent
-can only count rows it can read in full. Deferred, because setting what the
-pod owns happens once in the setup chat and rarely after -- no reason to carry
-the schema on every turn.
+can only count rows it can read in full. Always in view, in the pod toolset
+beside the rest: only the pod's default agent runs with ToolSearch, so a
+deferred tool would be out of reach of every named agent with POD. Its schema
+rides on every turn of every agent with POD.
 """
 
 from __future__ import annotations

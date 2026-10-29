@@ -194,6 +194,54 @@ class TestWhoMaySetAMeasure:
         assert "2 rows" in refused["message"]
 
 
+class TestRowSecurityTurnedOnLater:
+    @pytest.mark.asyncio
+    async def test_a_member_is_not_shown_a_count_its_check_never_covered(
+        self, pod_api: DatastoreApi, async_client, member_users
+    ):
+        """Set while the table had no row security, the measure was checked
+        against none. Once the table has it, nobody who administers it agreed
+        to count every row for everyone, so no member gets the number -- until
+        someone who does sets it again."""
+        editor = DatastoreApi(async_client, pod_api.pod_id, member_users["editor"])
+        table = f"leads_{uuid4().hex[:8]}"
+        await pod_api.create_table(
+            {
+                "name": table,
+                "enable_rls": False,
+                "columns": [{"name": "title", "type": "TEXT"}],
+            }
+        )
+        measure = f"SELECT count(*) FROM {table}"
+        saved = await _put(pod_api, _owns(measure), status.HTTP_200_OK)
+        assert saved["value"] == 0
+        assert saved["outcome"]["row_security_checked"] == []
+
+        # Row security is toggled only on an empty table; the rows it hides
+        # are the ones written after.
+        await pod_api.update_table(table, {"enable_rls": True})
+        await pod_api.create_record(table, {"title": "a"})
+        await pod_api.create_record(table, {"title": "b"})
+        own = await editor.query(f"SELECT count(*) AS n FROM {table}")
+        assert own["items"][0]["n"] == 0
+
+        standing = await _get(editor, "standing")
+        assert standing["value"] is None, "no count over rows they cannot open"
+        assert table in standing["problem"]
+        assert "set the measure again" in standing["problem"]
+        # Nor can the editor clear it by setting the same measure again: that
+        # is a check now, and they read only their own rows there.
+        refused = await _put(
+            editor, _owns(measure, target=80), status.HTTP_403_FORBIDDEN
+        )
+        assert refused["code"] == "DATASTORE_ACCESS_DENIED"
+
+        again = await _put(pod_api, _owns(measure), status.HTTP_200_OK)
+        assert again["value"] == 2
+        assert len(again["outcome"]["row_security_checked"]) == 1
+        assert (await _get(editor, "standing"))["value"] == 2
+
+
 @pytest.mark.drives_work
 class TestTheWeeksBehindIt:
     """Drives the reading items in-process, so the session worker is held."""

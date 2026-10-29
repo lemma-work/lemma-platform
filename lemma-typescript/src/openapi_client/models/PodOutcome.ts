@@ -20,6 +20,10 @@ export type PodOutcome = {
      */
     measure?: (string | null);
     /**
+     * The tables with row security the measure counts that were checked when it was set, by id: whoever set it administers each. Set by the server. A measure that counts a table with row security not listed here is not read until someone who administers that table sets it again.
+     */
+    row_security_checked?: Array<string>;
+    /**
      * What it owns, as one sentence a person can check.
      */
     sentence: string;

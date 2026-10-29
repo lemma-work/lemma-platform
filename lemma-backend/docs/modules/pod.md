@@ -74,10 +74,16 @@ the agent's `set_what_you_own` tool both go through `set_outcome`, which needs
 `POD_UPDATE` and checks a new or changed measure through the `OutcomeMeasures`
 port (`app/core/ports/outcome_measures.py`, implemented by datastore) before
 keeping it. A measure is read for the whole pod, so the check refuses anyone who
-cannot read every row it counts. `PodService.create_pod` and `update_pod` keep
-the stored outcome whatever a request's config says. `set_starting_outcome` is
-the one unchecked path: a Lemma started from a template keeps the template's
-measure before its tables exist, for a pod its caller has just made.
+cannot read every row it counts. The tables with row security a check covered
+are kept as `row_security_checked`; an unchanged measure that now counts a
+table with row security outside them is checked again, so setting it again is
+how someone who administers that table makes it readable. `PodService.create_pod`
+and `update_pod` keep the stored outcome whatever a request's config says.
+`set_starting_outcome` is the one unchecked path: a Lemma started from a
+template keeps the template's measure before its tables exist, for a pod its
+caller has just made, with nothing recorded as checked -- so it reads only
+while its tables have no row security, which is how every shipped template
+brings them.
 
 `since` is stamped the day it is first set and kept while only the wording,
 target or measure change. Every change emits `PodOutcomeChanged`.

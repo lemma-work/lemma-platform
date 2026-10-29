@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
+from app.modules.datastore.services.outcome_measure import tables_counted
 from app.modules.datastore.services.sql_introspection import analyze_query
 from app.modules.pod.contracts.outcome import OutcomeKind
 from app.modules.pod_bundle.infrastructure.outcome_templates import (
@@ -49,6 +50,21 @@ def test_every_measure_is_one_read_only_query_over_the_tables_it_brings():
         assert card.outcome.target is not None, card.id
         counted = analyze_query(card.outcome.measure).tables
         assert counted and counted <= _tables_brought(card.id), card.id
+
+
+def test_no_template_measure_counts_a_table_with_row_security():
+    """Starting a Lemma keeps a template's measure with no table recorded as
+    checked, because none of its tables exists yet. A measure counting a
+    table with row security would then never be read, so a template's
+    counted tables must come without it."""
+    for card in shipped_cards():
+        assert card.outcome.measure, card.id
+        for name in tables_counted(card.outcome.measure):
+            table = TEMPLATES_ROOT / card.id / "tables" / name / f"{name}.json"
+            assert json.loads(table.read_text())["enable_rls"] is False, (
+                card.id,
+                name,
+            )
 
 
 def test_a_finish_line_takes_its_date_into_its_sentence():
