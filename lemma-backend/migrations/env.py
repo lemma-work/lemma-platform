@@ -49,6 +49,11 @@ from app.modules.pod_bundle.infrastructure import models as pod_bundle_models  #
 # Workspace sandboxes (sandboxes, sandbox_instances)
 from app.modules.workspace.infrastructure import models as workspace_models  # noqa: F401
 
+# Connected machines (machine_connections, machine_connection_pairings)
+from app.modules.workspace.infrastructure import (  # noqa: F401
+    machine_connection_models,
+)
+
 # Outside MCP clients (mcp_oauth_clients, mcp_oauth_grants, mcp_oauth_tokens)
 from app.modules.mcp_access.infrastructure import models as mcp_access_models  # noqa: F401
 

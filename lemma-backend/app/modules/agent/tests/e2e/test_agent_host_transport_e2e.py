@@ -29,6 +29,7 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
+    AGENT_HOST_PROTOCOL_VERSION,
     AgentHostCommandKind,
     AgentHostCommandState,
     AgentHostRunCheckpoint,
@@ -294,7 +295,7 @@ async def test_a_protocol_2_poll_marks_the_host_as_needing_an_update(
         )
         assert polled.status_code == status.HTTP_200_OK, polled.text
         assert polled.json() == {
-            "protocol_version": 3,
+            "protocol_version": AGENT_HOST_PROTOCOL_VERSION,
             "host_status": "UPGRADE_REQUIRED",
             "commands": [],
             "poll_after_ms": 30_000,

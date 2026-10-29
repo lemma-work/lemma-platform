@@ -29,6 +29,7 @@ from app.modules.agent.domain.agent_host_link import (
     ControlBody,
     LinkErrorCode,
     ErrorBody,
+    HarnessesBody,
     HostFrameType,
     LinkFrame,
     RefusedUpdate,
@@ -90,7 +91,19 @@ class LinkSocket(Protocol):
 
     async def send_text(self, data: str) -> None: ...
 
+    async def send_bytes(self, data: bytes) -> None: ...
+
     async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
+
+
+#: Serves a link whose first frame names ``role: "compute"`` -- a connected
+#: machine (docs/architecture/connected-machines.md). Given the socket, the
+#: writer, the session's ``stop`` and the first frame; ends by returning or
+#: raising ``LinkClose``. A callable, so the session stays the Agent Host's.
+ComputeHandler = Callable[
+    [LinkSocket, "LinkWriter", Callable[[int, str], None], LinkFrame],
+    Awaitable[None],
+]
 
 
 class LinkClose(Exception):
@@ -286,6 +299,23 @@ class LinkWriter:
             except WebSocketDisconnect, RuntimeError, OSError:
                 self.lost()
 
+    async def send_bytes(self, data: bytes) -> None:
+        """One binary message: a compute link's mux frame.
+
+        Under the same lock as every text frame, so a stream's data never
+        lands inside another frame. Bounded by the mux itself, far below the
+        ceiling. A socket that is gone raises, unlike a text frame: the mux
+        stream writing it must learn its bytes went nowhere.
+        """
+        async with self._lock:
+            if self.peer_gone:
+                raise ConnectionResetError("the link is gone")
+            try:
+                await self._socket.send_bytes(data)
+            except WebSocketDisconnect, RuntimeError, OSError:
+                self.lost()
+                raise ConnectionResetError("the link is gone") from None
+
     def _refused(
         self, frame_type: ServerFrameType, size: int, *, re: str | None, id: str | None
     ) -> str:
@@ -429,6 +459,19 @@ async def answer_request(
         # A tool call that reached its handler may already have acted.
         retryable=not _is_tool_call(frame),
     )
+
+
+def log_skipped_config_options(body: HarnessesBody, *, host_id: UUID) -> None:
+    """Options an agent added that this build cannot offer. Named by their
+    type, never by their content; the rest of each harness stands."""
+    for snapshot in body.harnesses:
+        if snapshot.skipped_config_options:
+            logger.info(
+                "agent.agent_host_link.config_options_skipped",
+                host_id=str(host_id),
+                harness_key=snapshot.harness_key,
+                skipped=sorted(set(snapshot.skipped_config_options)),
+            )
 
 
 def log_host_reported_error(frame: LinkFrame, *, host_id: UUID | None) -> None:

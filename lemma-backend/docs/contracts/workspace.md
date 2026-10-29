@@ -48,6 +48,10 @@ The table below is generated from the committed OpenAPI specification by `script
 | `machine.reset` | POST | `/machines/{ref}:reset` | Clean a machine by scope |
 | `machine.restart` | POST | `/machines/{ref}:restart` | Stop a machine and start it again |
 | `machine.startup` | GET | `/machines/{ref}/startup` | Whether a machine is ready, without waking it |
+| `machine_connections.delete` | DELETE | `/machine-connections/{connection_id}` | Disconnect a machine |
+| `machine_connections.list` | GET | `/machine-connections` | List your connected machines |
+| `machine_connections.pair` | POST | `/machine-connections:pair` | Approve a machine's pairing code |
+| `machine_connections.pairing` | GET | `/machine-connections/pairings/{code}` | What a pairing code asks for |
 
 <!-- /generated:operations -->
 
@@ -110,3 +114,38 @@ renders next to a live picture, so it answers with "nothing to show yet"
 rather than breaking the page. Never wakes a sandbox or starts a browser --
 only a sign-in beginning does that, elsewhere -- so polling it costs nothing
 extra to a session already idle.
+
+## `machine_connections.pairing`
+
+What a machine that ran `lemma machine connect` and is showing `code` calls
+itself, how it will run (`host` as its person's OS user, or `image` in Docker),
+its platform and when the code expires. Any signed-in person may read it: the
+code is what they were shown, and reading changes nothing. An unknown or expired
+code is 404. Off unless `MACHINE_CONNECTIONS_ENABLED`, which is 404 everywhere
+here. Like every route here, a person's own act: closed to agents, functions
+and pod apps by the route policy (`app/core/api/actor_policy.py`).
+
+## `machine_connections.pair`
+
+Approves the code: creates the connection, owned by the caller, under `name`
+(lowercase letters, digits and dashes; defaults to a slug of what the machine
+calls itself) and shared into `pod_id` when given. The machine then claims its
+secret on its own link, presenting a claim key only it holds, so approving
+never reveals a credential. Refuses with 404 for an unknown or expired code, 409
+for a code already approved or a name the caller already uses, 403 past the
+plan's `max_connected_machines` (`MachinePolicy`) or for a pod the caller is not an editor or
+admin of, 422 for a name refs cannot spell. Logs
+`workspace.machine_connection.approved`.
+
+## `machine_connections.list`
+
+The caller's live connections, each with `online` (whether a link holds it now,
+read from the route Redis keeps) and what the machine last reported. Revoked
+machines are not listed.
+
+## `machine_connections.delete`
+
+Revokes one of the caller's machines: its secret stops working at once, its
+live link closes with 4401 wherever it is held, and its name is free again. 404
+for a machine that is not the caller's or is already gone. Logs
+`workspace.machine_connection.revoked`.

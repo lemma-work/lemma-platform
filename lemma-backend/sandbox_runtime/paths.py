@@ -24,12 +24,23 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+#: Where a sandbox's home is. Every fabric Lemma rents puts it here, and it is
+#: the path the backend and agents name: a connected machine whose home is
+#: elsewhere has paths under this one mapped onto its own by the backend's
+#: ``connected`` provider.
+SANDBOX_HOME = "/home/user"
+
+#: The environment variable a connected machine in host mode sets for its
+#: runtime: its ``--root`` (``lemma machine connect``, default
+#: ``~/lemma-machine``). Never set beside the backend or in a sandbox image.
+MACHINE_HOME_ENV = "LEMMA_MACHINE_HOME"
+
 #: The durable root, and the sandbox user's home. Tools put their state in ``~``
 #: whether or not anyone planned for it, so making the home the durable thing is
 #: what stops each one needing to be redirected by hand -- which is how
 #: ``PNPM_HOME`` came to point into the volume on one fabric and into the home
-#: directory on the other.
-HOME_ROOT = "/home/user"
+#: directory on the other. On a connected host-mode machine, its ``--root``.
+HOME_ROOT = os.environ.get(MACHINE_HOME_ENV, "").rstrip("/") or SANDBOX_HOME
 
 #: Where conversations and projects are created. Inside the home, so it inherits
 #: its durability, and named ``lemma`` so that it is the same path on both sides
@@ -148,10 +159,16 @@ def is_browser_private(path: str) -> bool:
     return path == BROWSER_PROFILE_ROOT or path.startswith(f"{BROWSER_PROFILE_ROOT}/")
 
 
+#: The variable a connected host-mode machine names its overlay root with: it
+#: cannot write ``/opt``, so the overlay lives under its ``--root`` instead.
+RUNTIME_OVERLAY_ROOT_ENV = "LEMMA_RUNTIME_OVERLAY_ROOT"
+
 #: Where the backend installs the runtime overlay: Lemma's own sandbox code,
 #: newer than the copy the image bakes. Outside the home on purpose -- platform
 #: code, not the user's files.
-RUNTIME_OVERLAY_ROOT = "/opt/lemma-runtime"
+RUNTIME_OVERLAY_ROOT = (
+    os.environ.get(RUNTIME_OVERLAY_ROOT_ENV, "").rstrip("/") or "/opt/lemma-runtime"
+)
 
 #: Where the runtime overlay puts its commands. Named through ``current``, so
 #: an upgrade is the installer's symlink flip and nothing here moves.
@@ -222,6 +239,9 @@ def sandbox_command(name: str, *, overlay_bin: str = RUNTIME_OVERLAY_BIN) -> str
 
 
 __all__ = [
+    "MACHINE_HOME_ENV",
+    "RUNTIME_OVERLAY_ROOT_ENV",
+    "SANDBOX_HOME",
     "BROWSER_PROFILE",
     "BROWSER_PROFILE_ROOT",
     "CACHE_PATHS",

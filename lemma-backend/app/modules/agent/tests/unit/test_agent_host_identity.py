@@ -5,6 +5,7 @@ import pytest
 from app.modules.agent.domain.agent_host import (
     AGENT_HOST_OFFLINE_AFTER_SECONDS,
     AGENT_HOST_PROTOCOL_VERSION,
+    MIN_AGENT_HOST_PROTOCOL_VERSION,
     AgentHostCapacity,
     AgentHostHarnessCapabilities,
     AgentHostHarnessSnapshot,
@@ -105,7 +106,16 @@ class TestProtocolNegotiation:
         )
         assert hello.negotiate() == AGENT_HOST_PROTOCOL_VERSION
 
-    @pytest.mark.parametrize("version", [1, AGENT_HOST_PROTOCOL_VERSION + 1])
+    def test_a_protocol_3_desktop_keeps_its_link(self) -> None:
+        """Protocol 4 only added the ``compute`` role, so a Desktop released
+        before it negotiates its own version instead of being sent 4426."""
+        hello = HostHello(
+            installation_id="install-1", host_release="0.9.0", protocol_version=3
+        )
+        assert MIN_AGENT_HOST_PROTOCOL_VERSION == 3
+        assert hello.negotiate() == 3
+
+    @pytest.mark.parametrize("version", [2, AGENT_HOST_PROTOCOL_VERSION + 1])
     def test_mismatched_version_is_rejected(self, version: int) -> None:
         hello = HostHello(
             installation_id="install-1",

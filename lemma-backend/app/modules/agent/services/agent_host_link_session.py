@@ -63,6 +63,7 @@ from app.modules.agent.domain.agent_host_link import (
     ServerFrameType,
     WelcomeBody,
 )
+from app.modules.agent.domain.agent_host_link_compute import LinkRole
 from app.modules.agent.infrastructure.agent_host.repository_common import (
     AgentHostNotFound,
     AgentHostProtocolViolation,
@@ -91,6 +92,7 @@ from app.modules.agent.services.agent_host_link_wire import (
     LinkClose,
     LinkRequestError,
     LinkSocket,
+    ComputeHandler,
     LinkWriter,
     OutboundFrameTooLarge,
     SentCommands,
@@ -98,6 +100,7 @@ from app.modules.agent.services.agent_host_link_wire import (
     bearer_secret,
     event_error,
     log_host_reported_error,
+    log_skipped_config_options,
     parse_control_items,
     validation_summary,
 )
@@ -144,6 +147,7 @@ class AgentHostLinkSession:
         max_in_flight: int | None = None,
         max_waits: int | None = None,
         transfers: AgentHostTransferStore | None = None,
+        compute: ComputeHandler | None = None,
     ) -> None:
         # The tunables are read here rather than bound as defaults, so a test
         # that shortens the module's floor reaches the session the route builds.
@@ -153,6 +157,7 @@ class AgentHostLinkSession:
         self._mcp = mcp
         self._channels = channels
         self._registry = registry
+        self._compute = compute
         self._heartbeat_ms = heartbeat_ms
         self._silence_limit = heartbeat_ms * AGENT_HOST_LINK_MISSED_HEARTBEATS / 1000
         self._push_floor_seconds = (
@@ -261,6 +266,10 @@ class AgentHostLinkSession:
         try:
             first = await self._next_frame()
             if first is None:
+                return
+            if first.body.get("role") == LinkRole.COMPUTE and self._compute:
+                self._registry.add(self)  # A deploy drains it like any link.
+                await self._compute(self._socket, self._writer, self.stop, first)
                 return
             if first.type == HostFrameType.PAIR:
                 await self._pair(first)
@@ -435,6 +444,7 @@ class AgentHostLinkSession:
             WelcomeBody(
                 host_id=host.host_id,
                 user_id=host.user_id,
+                protocol_version=body.hello.protocol_version,  # As negotiated.
                 heartbeat_ms=self._heartbeat_ms,
             ),
             re=frame.id,
@@ -527,16 +537,7 @@ class AgentHostLinkSession:
     async def _harnesses(self, frame: LinkFrame) -> None:
         host, _ = self._linked()
         body = HarnessesBody.model_validate(frame.body)
-        for snapshot in body.harnesses:
-            # An option the agent added that this build cannot offer. Named by
-            # its type, never by its content; the rest of the harness stands.
-            if snapshot.skipped_config_options:
-                logger.info(
-                    "agent.agent_host_link.config_options_skipped",
-                    host_id=str(host.host_id),
-                    harness_key=snapshot.harness_key,
-                    skipped=sorted(set(snapshot.skipped_config_options)),
-                )
+        log_skipped_config_options(body, host_id=host.host_id)
         try:
             items = await self._store.publish_harnesses(
                 host_id=host.host_id, snapshots=body.harnesses

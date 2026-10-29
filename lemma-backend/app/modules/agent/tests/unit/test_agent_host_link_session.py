@@ -15,7 +15,10 @@ from uuid import uuid7
 
 import pytest
 
-from app.modules.agent.domain.agent_host import AgentHostCommandKind
+from app.modules.agent.domain.agent_host import (
+    AGENT_HOST_PROTOCOL_VERSION,
+    AgentHostCommandKind,
+)
 from app.modules.agent.domain.agent_host_link import (
     REVOKED_OR_MISSING_REASON,
     LinkCloseCode,
@@ -154,6 +157,17 @@ async def test_an_old_protocol_is_told_to_upgrade():
     assert (await link.ended())[0] == LinkCloseCode.UPGRADE_REQUIRED
 
 
+async def test_a_protocol_3_desktop_is_welcomed_in_its_own_protocol():
+    """Protocol 4 only added the compute role, so a Desktop released before it
+    keeps its link, and is told the protocol the link actually speaks."""
+    link = Link().start()
+    frame_id = link.socket.send("hello", {"hello": hello(protocol_version=3)})
+    welcome = await link.socket.answer_to(frame_id)
+
+    assert welcome["type"] == "welcome"
+    assert welcome["body"]["protocol_version"] == 3
+
+
 async def test_welcome_names_the_host_and_the_heartbeat():
     link = Link()
     welcome = await link.open()
@@ -162,7 +176,7 @@ async def test_welcome_names_the_host_and_the_heartbeat():
     assert welcome["body"] == {
         "host_id": str(link.store.host_id),
         "user_id": str(link.store.user_id),
-        "protocol_version": 3,
+        "protocol_version": AGENT_HOST_PROTOCOL_VERSION,
         "heartbeat_ms": 20_000,
         # The host resends a named tools/call after a drop only when told so.
         "idempotent_tool_calls": True,

@@ -1,5 +1,6 @@
 "use client";
 import { InvitationDecision } from "./invitation";
+import { MachineApproval } from "./machine-approval";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "@/session/session";
@@ -28,6 +29,7 @@ export function Actions(props: ActionProps) {
 }
 function SignedIn(props: ActionProps & { signOut: () => Promise<void> }) {
     if (props.action === "organization") return <CreateOrganization />;
+    if (props.action === "machine") return <MachineApproval />;
     if (props.action === "logout")
         return (
             <button className="btn" onClick={() => void props.signOut()}>

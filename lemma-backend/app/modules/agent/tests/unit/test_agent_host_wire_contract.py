@@ -349,3 +349,56 @@ def test_the_host_execution_capability_rides_on_hello_and_control() -> None:
     frames = {"hello": HelloBody, "control": ControlBody}
     for frame in capability["frames"]:
         assert capability["field"] in frames[frame].model_fields, frame
+
+
+def test_the_oldest_protocol_a_host_may_speak_is_shared() -> None:
+    from app.modules.agent.domain.agent_host import MIN_AGENT_HOST_PROTOCOL_VERSION
+
+    assert MIN_AGENT_HOST_PROTOCOL_VERSION == CONTRACT["min_protocol_version"]
+
+
+def test_the_compute_role_bodies_are_the_ones_the_contract_names() -> None:
+    """A connected machine's frames: the role, every body's fields, and the
+    vocabularies the machine reports in."""
+    from app.modules.agent.domain import agent_host_link_compute as compute
+
+    contract = CONTRACT["compute"]
+    assert compute.LinkRole.COMPUTE.value == contract["role"]
+    assert compute.LinkRole.AGENT_HOST.value == contract["default_role"]
+    assert compute.COMPUTE_MIN_PROTOCOL_VERSION == contract["min_protocol_version"]
+    bodies = {
+        "pair_fields": compute.ComputePairBody,
+        "paired_fields": compute.ComputePairedBody,
+        "hello_fields": compute.ComputeHelloBody,
+        "machine_fields": compute.MachineReport,
+        "welcome_fields": compute.ComputeWelcomeBody,
+        "runtime_fields": compute.RuntimeGrant,
+    }
+    for key, body in bodies.items():
+        assert list(body.model_fields) == contract[key], key
+    assert [mode.value for mode in compute.MachineMode] == contract["modes"]
+    assert list(compute.MachineCapabilities.model_fields) == contract["capabilities"]
+    assert [kind.value for kind in compute.StreamTargetKind] == contract[
+        "stream_targets"
+    ]
+
+
+def test_the_mux_frames_and_bounds_are_shared() -> None:
+    """The machine's agent and this process run the same mux module; the host
+    crate declares the same numbers, so all three agree through the fixture."""
+    from sandbox_runtime.machine_link import mux
+
+    contract = CONTRACT["compute"]["mux"]
+    assert {name: number for number, name in mux.FRAME_TYPES.items()} == contract[
+        "frame_types"
+    ]
+    assert mux.MAX_DATA_BYTES == contract["max_data_bytes"]
+    assert mux.DEFAULT_WINDOW_BYTES == contract["default_window_bytes"]
+    assert mux.MAX_WINDOW_BYTES == contract["max_window_bytes"]
+    assert mux.MAX_STREAMS == contract["max_streams"]
+    assert mux.MAX_CONTROL_BYTES == contract["max_control_bytes"]
+    assert mux.HEADER_BYTES == 5
+    codes = {
+        value for name, value in vars(mux.ResetCode).items() if not name.startswith("_")
+    }
+    assert codes == set(contract["reset_codes"])

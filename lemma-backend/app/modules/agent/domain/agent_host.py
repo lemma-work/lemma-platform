@@ -30,9 +30,16 @@ from app.modules.agent.domain.value_objects import (
 )
 
 
-# 3 is the WebSocket link with normalized run events (see
-# docs/architecture/agent-host.md#the-link); 2 was the HTTP long-poll.
-AGENT_HOST_PROTOCOL_VERSION = 3
+# 4 adds the link's ``compute`` role, which a connected machine speaks (see
+# docs/architecture/connected-machines.md); 3 is the WebSocket link with
+# normalized run events (docs/architecture/agent-host.md#the-link); 2 was the
+# HTTP long-poll.
+AGENT_HOST_PROTOCOL_VERSION = 4
+
+# The oldest protocol a host may still speak. 4 changed nothing a Desktop host
+# sends or reads -- it only added a role -- so a protocol-3 Desktop keeps its
+# link rather than being told to upgrade the day this backend deploys.
+MIN_AGENT_HOST_PROTOCOL_VERSION = 3
 AGENT_HOST_OFFLINE_AFTER_SECONDS = 90
 
 # Conversation metadata key holding the provider session (a Codex rollout, a
@@ -87,12 +94,20 @@ class HostHello(BaseModel):
     host_release: str = Field(min_length=1, max_length=128)
     protocol_version: int = Field(ge=1)
 
-    def negotiate(self, supported: int = AGENT_HOST_PROTOCOL_VERSION) -> int:
-        if self.protocol_version == supported:
-            return supported
+    def negotiate(
+        self,
+        supported: int = AGENT_HOST_PROTOCOL_VERSION,
+        *,
+        oldest: int = MIN_AGENT_HOST_PROTOCOL_VERSION,
+    ) -> int:
+        """The protocol this link speaks: the host's own, while it is one this
+        server still speaks. A host newer than the server is refused too, since
+        the server cannot know what that host expects of it."""
+        if oldest <= self.protocol_version <= supported:
+            return self.protocol_version
         raise ValueError(
-            f"Agent Host protocol {self.protocol_version} does not match "
-            f"server protocol {supported}"
+            f"Agent Host protocol {self.protocol_version} is outside the "
+            f"server's {oldest}..{supported}"
         )
 
 

@@ -48,9 +48,14 @@ def _from_models(table: str) -> set[str]:
     }
 
 
-@pytest.mark.parametrize("table", list(_migration().TABLES))
+def _tables() -> dict[str, tuple[str, ...]]:
+    migration = _migration()
+    return {**migration.TABLES, **migration.CONNECTED_MACHINE_TABLES}
+
+
+@pytest.mark.parametrize("table", list(_tables()))
 def test_the_migration_creates_the_table_the_models_declare(table: str) -> None:
-    created = {_normal(statement) for statement in _migration().TABLES[table]}
+    created = {_normal(statement) for statement in _tables()[table]}
 
     assert created == _from_models(table)
 

@@ -7,6 +7,10 @@ held to ``desktop/agent-host/tests/fixtures/wire_contract.json`` by
 not know is a request that is never answered, so nothing here is renamed without
 changing the fixture in the same commit.
 
+A machine joined with ``lemma machine connect`` speaks the same link in its
+``compute`` role; its bodies are in ``agent_host_link_compute`` and its streams
+travel as binary mux frames (``sandbox_runtime.machine_link.mux``).
+
 Every frame is ``{type, id?, re?, body}``. ``id`` names a request that expects
 an answer and ``re`` on the answer points back at it; pushes carry neither.
 
