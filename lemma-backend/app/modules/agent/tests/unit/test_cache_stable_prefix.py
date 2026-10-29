@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID, uuid4
@@ -48,6 +48,7 @@ from pydantic_ai.messages import (
     TextPart,
     ThinkingPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models import ModelRequestParameters
@@ -58,6 +59,9 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.modules.agent.domain.context import ToolContext
+from app.modules.agent.infrastructure.providers.openai_compatible_model import (
+    OpenAICompatibleChatModel,
+)
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.folded_turns import framed_folds
 from app.modules.agent.domain.harness_options import HarnessOptions
@@ -607,7 +611,7 @@ async def _fixed_tokens(agent: Agent, conversation: Conversation) -> int:
 
 # -- The wire ---------------------------------------------------------------
 
-Protocol = Literal["openai", "openai-reasoning", "anthropic"]
+Protocol = Literal["openai", "openai-reasoning", "openai-compatible", "anthropic"]
 
 #: An OpenAI-compatible reasoning model that takes its thoughts back in their
 #: own field, as DeepSeek and Kimi on Fireworks do.
@@ -615,6 +619,21 @@ _REASONING_FIELD = {
     "openai_chat_thinking_field": "reasoning_content",
     "openai_chat_send_back_thinking_parts": "field",
 }
+
+
+def _streamed_by(provider: str, message: ModelMessage) -> ModelMessage:
+    """``message`` with its thoughts as a provider's reasoning field yields them."""
+    if not isinstance(message, ModelResponse):
+        return message
+    return replace(
+        message,
+        parts=[
+            replace(part, id="reasoning_content", provider_name=provider)
+            if isinstance(part, ThinkingPart)
+            else part
+            for part in message.parts
+        ],
+    )
 
 
 async def _wire(messages: list[ModelMessage], protocol: Protocol) -> list[str]:
@@ -628,6 +647,16 @@ async def _wire(messages: list[ModelMessage], protocol: Protocol) -> list[str]:
                 provider=OpenAIProvider(api_key="unused"),
                 profile={**model.profile, **_REASONING_FIELD},  # type: ignore[typeddict-item]
             )
+        if protocol == "openai-compatible":
+            # Lemma's own model on pydantic-ai's default ("auto") mode, its
+            # thoughts read back as a reasoning endpoint streams them: from its
+            # `reasoning_content` field. A call with no thoughts then goes out
+            # with the field empty, and must still have it once a newer turn
+            # follows.
+            model = OpenAICompatibleChatModel(
+                "reasoner", provider=OpenAIProvider(api_key="unused")
+            )
+            messages = [_streamed_by(model.system, message) for message in messages]
         mapped = await model._map_messages(messages, parameters)
         # The instructions are compared on their own; this is the history.
         return [
@@ -709,7 +738,9 @@ def _is_compaction(played: Played, item: Break) -> bool:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("protocol", ["openai", "openai-reasoning", "anthropic"])
+@pytest.mark.parametrize(
+    "protocol", ["openai", "openai-reasoning", "openai-compatible", "anthropic"]
+)
 async def test_every_request_starts_with_the_one_before(protocol: Protocol) -> None:
     played = await _play()
 
@@ -725,6 +756,34 @@ def _responses(messages: Sequence[ModelMessage]) -> list[str]:
         for message in messages
         if isinstance(message, ModelResponse)
     ]
+
+
+@pytest.mark.anyio
+async def test_a_call_without_thoughts_keeps_its_empty_thinking_field() -> None:
+    """A reasoning endpoint gets its thinking field on a call with no thoughts,
+    empty; a newer turn must not take it away again."""
+    turn_one: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart("Plan Oslo.")]),
+        _thought_call_response(),
+        ModelRequest(
+            parts=[ToolReturnPart("lookup", {"ok": True}, tool_call_id="call_look")]
+        ),
+        _call("book_hotel", '{"city": "Oslo"}', "call_book"),
+    ]
+    turn_two = [
+        *turn_one,
+        ModelRequest(
+            parts=[ToolReturnPart("book_hotel", {"ok": True}, tool_call_id="call_book")]
+        ),
+        _text("Booked."),
+        ModelRequest(parts=[UserPromptPart("And Bergen?")]),
+    ]
+
+    before = await _wire(turn_one, "openai-compatible")
+    after = await _wire(turn_two, "openai-compatible")
+
+    assert json.loads(before[-1])["reasoning_content"] == ""
+    assert after[: len(before)] == before
 
 
 @pytest.mark.anyio

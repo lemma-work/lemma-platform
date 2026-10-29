@@ -254,7 +254,7 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
             #
             # The same flag also puts a non-standard field in the request body,
             # which a strict endpoint rejects outright.
-            # `_UsageOnlyStreamOptionsChatModel` keeps that half off the wire --
+            # `OpenAICompatibleChatModel` keeps that half off the wire --
             # see its docstring for why the two halves have to be separated.
             # The deployment's reasoning effort is not here: it is a catalog
             # default on the models that reason, see

@@ -24,8 +24,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.harness.lemma.run_log import decode, encode
-from app.modules.agent.infrastructure.providers.model_factory import (
-    _UsageOnlyStreamOptionsChatModel,
+from app.modules.agent.infrastructure.providers.openai_compatible_model import (
+    OpenAICompatibleChatModel,
 )
 
 pytestmark = pytest.mark.unit
@@ -106,7 +106,7 @@ class _Gateway:
 
 
 def _model(gateway: _Gateway, base_url: str = _BASE_URL):
-    return _UsageOnlyStreamOptionsChatModel(
+    return OpenAICompatibleChatModel(
         "m",
         provider=OpenAIProvider(
             openai_client=AsyncOpenAI(
