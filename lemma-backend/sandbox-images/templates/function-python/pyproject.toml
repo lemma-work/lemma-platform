@@ -7,7 +7,7 @@ dependencies = [
     "lemma-sdk",
     "opentelemetry-api>=1.42.0",
     "pydantic>=2.14.1",
-    "starlette>=1.9.0",
+    "starlette>=1.10.0",
     "uvicorn>=0.54.0",
 ]
 
