@@ -72,7 +72,6 @@ def test_loads_jsonc_invalid_still_raises():
         loads_jsonc('{"a": }')
 
 def test_strip_jsonc_reports_unterminated_block_comment_location():
-    text = '{\n  "a": 1,\n  /* missing terminator\n}'
+    text = "{" + chr(10) + '  "a": 1,' + chr(10) + "  /* missing terminator" + chr(10) + "}"
     with pytest.raises(ValueError, match=r"line 3, column 3"):
         strip_jsonc(text)
-
