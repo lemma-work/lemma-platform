@@ -206,9 +206,33 @@ class TestSourceEventId:
         assert ids[0] == ids[1]
 
     def test_a_new_push_to_the_same_ref_is_a_new_event(self):
-        base = {"after": "sha-one"}
+        base = {
+            "ref": "refs/heads/main",
+            "before": "sha-zero",
+            "after": "sha-one",
+        }
         assert source_event_id("push", "1", 2, base) != source_event_id(
-            "push", "1", 2, {"after": "sha-two"}
+            "push", "1", 2, {**base, "after": "sha-two"}
+        )
+
+    def test_pushes_to_different_refs_with_the_same_commit_are_distinct(self):
+        base = {
+            "ref": "refs/heads/main",
+            "before": "sha-zero",
+            "after": "sha-one",
+        }
+        assert source_event_id("push", "1", 2, base) != source_event_id(
+            "push", "1", 2, {**base, "ref": "refs/heads/release"}
+        )
+
+    def test_same_ref_and_after_from_different_prior_tips_are_distinct(self):
+        base = {
+            "ref": "refs/heads/main",
+            "before": "sha-zero",
+            "after": "sha-one",
+        }
+        assert source_event_id("push", "1", 2, base) != source_event_id(
+            "push", "1", 2, {**base, "before": "sha-old"}
         )
 
     def test_the_same_event_in_two_installations_is_two_events(self):
