@@ -140,21 +140,43 @@ def _read_export_contents(source_dir: Path) -> dict[str, Any]:
     return contents if isinstance(contents, dict) else {}
 
 
+def _resolve_bundle_file_ref(raw_path: Any, *, base_dir: Path) -> Path:
+    """Resolve a sidecar reference without allowing it to escape its resource.
+
+    Resolve symlinks as well as parent-directory segments before checking
+    containment: lexical path checks alone can be bypassed by a symlink.
+    """
+    if not isinstance(raw_path, str) or not raw_path:
+        raise ValueError("Bundle file reference must be a non-empty path")
+
+    resource_root = base_dir.resolve()
+    resolved = (resource_root / raw_path).resolve(strict=True)
+    try:
+        resolved.relative_to(resource_root)
+    except ValueError:
+        raise ValueError(
+            f"Bundle file reference escapes its resource directory: {raw_path!r}"
+        ) from None
+
+    if not resolved.is_file():
+        raise ValueError(f"Bundle file reference is not a file: {raw_path!r}")
+    return resolved
+
+
 def _resolve_file_refs(value: Any, *, base_dir: Path) -> Any:
     if isinstance(value, list):
         return [_resolve_file_refs(item, base_dir=base_dir) for item in value]
     if not isinstance(value, dict):
         return value
     if set(value.keys()) == {RAW_FILE_REF_KEY}:
-        raw_path = base_dir / str(value[RAW_FILE_REF_KEY])
+        raw_path = _resolve_bundle_file_ref(value[RAW_FILE_REF_KEY], base_dir=base_dir)
         return raw_path.read_text(encoding="utf-8")
     if set(value.keys()) == {JSON_FILE_REF_KEY}:
-        json_path = base_dir / str(value[JSON_FILE_REF_KEY])
+        json_path = _resolve_bundle_file_ref(value[JSON_FILE_REF_KEY], base_dir=base_dir)
         return loads_jsonc(json_path.read_text(encoding="utf-8"))
     return {
         key: _resolve_file_refs(item, base_dir=base_dir) for key, item in value.items()
     }
-
 
 def extract_large_text(
     payload: dict[str, Any],
