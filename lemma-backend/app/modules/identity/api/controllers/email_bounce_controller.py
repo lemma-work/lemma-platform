@@ -31,6 +31,42 @@ router = APIRouter(
 )
 
 
+# Bounce notifications are small event envelopes, not attachment uploads. Bound
+# memory before buffering either the legacy or Resend webhook body.
+MAX_EMAIL_BOUNCE_WEBHOOK_BODY_BYTES = 1_048_576
+
+
+async def _read_bounded_webhook_body(request: Request) -> bytes:
+    """Read an email-bounce webhook body with a strict streaming size limit."""
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        if not content_length.isascii() or not content_length.isdecimal():
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid webhook content length",
+            )
+        normalized_length = content_length.lstrip("0") or "0"
+        maximum_length = str(MAX_EMAIL_BOUNCE_WEBHOOK_BODY_BYTES)
+        if len(normalized_length) > len(maximum_length) or (
+            len(normalized_length) == len(maximum_length)
+            and normalized_length > maximum_length
+        ):
+            raise HTTPException(
+                status_code=413,
+                detail="Webhook payload is too large",
+            )
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_EMAIL_BOUNCE_WEBHOOK_BODY_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Webhook payload is too large",
+            )
+        body.extend(chunk)
+    return bytes(body)
+
+
 class BounceEvent(BaseModel):
     email: EmailStr
     event: Literal["hard_bounce", "soft_bounce"]
@@ -137,17 +173,25 @@ async def _deactivate_email_for_hard_bounce(email_address: str) -> None:
 
 
 @router.post("", include_in_schema=False, status_code=204)
-async def accept_email_bounce(request: Request, event: BounceEvent) -> Response:
+async def accept_email_bounce(request: Request) -> Response:
     secret = reveal_secret(identity_settings.auth_bounce_webhook_secret)
     if not secret:
         raise HTTPException(status_code=404, detail="Not found")
-    body = await request.body()
+    body = await _read_bounded_webhook_body(request)
     verify_bounce_signature(
         timestamp=request.headers.get("x-lemma-timestamp", ""),
         signature=request.headers.get("x-lemma-signature", ""),
         body=body,
         secret=secret,
     )
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload") from exc
+    try:
+        event = BounceEvent.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload") from exc
     if event.event == "hard_bounce":
         await _deactivate_email_for_hard_bounce(str(event.email))
     return Response(status_code=204)
@@ -163,7 +207,7 @@ async def accept_resend_email_bounce(request: Request) -> Response:
     )
     if not secret:
         raise HTTPException(status_code=404, detail="Not found")
-    body = await request.body()
+    body = await _read_bounded_webhook_body(request)
     verify_resend_webhook_signature(
         message_id=request.headers.get("svix-id", ""),
         timestamp=request.headers.get("svix-timestamp", ""),
