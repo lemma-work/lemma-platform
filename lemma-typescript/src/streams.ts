@@ -35,7 +35,9 @@ export async function* readSSE(
       .join("\n")}`;
 
     const next: SseRawEvent = {
-      event: eventName,
+      // An empty event type is the default "message" event; leave the
+      // optional field unset so callers do not dispatch an empty event name.
+      event: eventName || undefined,
       data,
       raw,
     };
