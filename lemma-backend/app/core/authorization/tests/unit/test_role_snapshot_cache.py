@@ -203,3 +203,8 @@ def test_role_snapshot_deserializer_preserves_legacy_missing_deleted_flag():
     del payload["pod_is_deleted"]
 
     assert _deserialize(json.dumps(payload)) == snapshot
+
+
+def test_role_snapshot_deserializer_rejects_non_object_payloads():
+    with pytest.raises(ValueError, match="role snapshot payload"):
+        _deserialize("[]")
