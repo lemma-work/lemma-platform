@@ -20,12 +20,9 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
-# A delivery larger than this is refused before it is read. Nothing legitimate
-# comes close -- GitHub caps its own payloads at 25 MB and the largest real one
-# is a `push` with a long `commits[]` -- and without a cap the body flows into
-# schedule matching, `schedule_runs`, the outbox and Redis on a path whose rate
-# an unauthenticated sender chooses.
-MAX_WEBHOOK_BODY_BYTES = 1_048_576
+# GitHub caps webhook payloads at 25 MB. Keep this ingress ceiling aligned
+# with that provider limit while bounding the body before parsing or verification.
+MAX_WEBHOOK_BODY_BYTES = 25_000_000
 
 
 async def _read_bounded_body(request: Request, *, source: str) -> bytes:
