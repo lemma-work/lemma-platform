@@ -51,6 +51,9 @@ _GRANTS = "pod"
 _FILES = "files"
 #: Long enough to outlive any entry keyed by it; refreshed on every bump.
 _EPOCH_TTL_SECONDS = 30 * 24 * 3600
+# Redis INCR is a signed 64-bit operation. The maximum value itself cannot be
+# incremented, so treat it as needing repair before it reaches a mutation path.
+_MAX_INCREMENTABLE_EPOCH = "9223372036854775807"
 
 
 def _pod_key(pod_id: UUID, part: str = _GRANTS) -> str:
@@ -72,7 +75,13 @@ def _epoch_value(value: bytes | str | None) -> str | None:
             return None
     if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
         return None
-    return value
+    normalized = value.lstrip("0") or "0"
+    if len(normalized) > len(_MAX_INCREMENTABLE_EPOCH) or (
+        len(normalized) == len(_MAX_INCREMENTABLE_EPOCH)
+        and normalized >= _MAX_INCREMENTABLE_EPOCH
+    ):
+        return None
+    return normalized
 
 
 _REPAIR_INVALID_EPOCH = """
