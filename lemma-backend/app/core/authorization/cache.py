@@ -114,6 +114,9 @@ def _serialize(snapshot: RoleSnapshot) -> str:
 
 def _deserialize(payload: str) -> RoleSnapshot:
     d = json.loads(payload)
+    pod_is_deleted = d.get("pod_is_deleted", False)
+    if type(pod_is_deleted) is not bool:
+        raise ValueError("Invalid role snapshot pod_is_deleted flag")
     return RoleSnapshot(
         organization_id=UUID(d["organization_id"]) if d["organization_id"] else None,
         pod_id=UUID(d["pod_id"]) if d["pod_id"] else None,
@@ -128,7 +131,7 @@ def _deserialize(payload: str) -> RoleSnapshot:
         # `.get`, not `[...]`: entries written before this field existed are
         # still in Redis under the same key, and a deploy must not turn them
         # into a KeyError that reads as a cache miss for every warm request.
-        pod_is_deleted=bool(d.get("pod_is_deleted", False)),
+        pod_is_deleted=pod_is_deleted,
     )
 
 
