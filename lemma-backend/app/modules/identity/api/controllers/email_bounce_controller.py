@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from supertokens_python.recipe.session.asyncio import revoke_all_sessions_for_user
 
 from app.core.webhooks.signatures import (
+    constant_time_equals,
     svix_signature_matches,
     timestamp_within_skew,
 )
@@ -71,7 +72,7 @@ def verify_bounce_signature(
         secret.encode(), f"{timestamp}.".encode() + body, hashlib.sha256
     ).hexdigest()
     candidate = signature.removeprefix("sha256=")
-    if not hmac.compare_digest(expected, candidate):
+    if not constant_time_equals(candidate, expected):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
 
