@@ -20,9 +20,13 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
-# GitHub caps webhook payloads at 25 MB. Keep this ingress ceiling aligned
-# with that provider limit while bounding the body before parsing or verification.
-MAX_WEBHOOK_BODY_BYTES = 25_000_000
+# Most schedule sources carry small event envelopes. Keep their limit low so
+# accepting GitHub's larger documented payload ceiling does not widen every
+# public ingress route by 25x.
+MAX_WEBHOOK_BODY_BYTES = 1_048_576
+# GitHub caps webhook payloads at 25 MB. Its push payload may contain up to
+# 2048 commit objects, so it needs a provider-specific ceiling.
+MAX_GITHUB_WEBHOOK_BODY_BYTES = 25_000_000
 
 
 async def _read_bounded_body(request: Request, *, source: str) -> bytes:
@@ -32,6 +36,9 @@ async def _read_bounded_body(request: Request, *, source: str) -> bytes:
     without it, or with a smaller declared length, are still capped as chunks
     arrive. This keeps the memory cost of an unauthenticated delivery bounded.
     """
+    max_body_bytes = (
+        MAX_GITHUB_WEBHOOK_BODY_BYTES if source == "github" else MAX_WEBHOOK_BODY_BYTES
+    )
     content_length = request.headers.get("content-length")
     if content_length is not None:
         if not content_length.isascii() or not content_length.isdecimal():
@@ -40,7 +47,7 @@ async def _read_bounded_body(request: Request, *, source: str) -> bytes:
                 detail="Invalid webhook content length",
             )
         normalized_length = content_length.lstrip("0") or "0"
-        maximum_length = str(MAX_WEBHOOK_BODY_BYTES)
+        maximum_length = str(max_body_bytes)
         if len(normalized_length) > len(maximum_length) or (
             len(normalized_length) == len(maximum_length)
             and normalized_length > maximum_length
@@ -48,7 +55,7 @@ async def _read_bounded_body(request: Request, *, source: str) -> bytes:
             logger.warning(
                 "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
                 source=source,
-                size=MAX_WEBHOOK_BODY_BYTES + 1,
+                size=max_body_bytes + 1,
             )
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -58,7 +65,7 @@ async def _read_bounded_body(request: Request, *, source: str) -> bytes:
     body = bytearray()
     async for chunk in request.stream():
         observed_size = len(body) + len(chunk)
-        if observed_size > MAX_WEBHOOK_BODY_BYTES:
+        if observed_size > max_body_bytes:
             logger.warning(
                 "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
                 source=source,
