@@ -98,6 +98,15 @@ def test_snakeify_normalizes_accented_names():
     assert snakeify("Crème Brûlée") == "creme_brulee"
 
 
+def test_unsupported_unicode_characters_remain_name_separators():
+    assert slugify("east—west") == "east-west"
+    assert snakeify("east—west") == "east_west"
+
+
+def test_snakeify_avoids_python_keywords_after_transliteration():
+    assert snakeify("déf") == "def_"
+
+
 def test_name_helpers_reject_names_without_ascii_identifier_characters():
     with pytest.raises(ScaffoldError):
         slugify("東京")
@@ -151,10 +160,11 @@ def test_init_pod_creates_parsable_bundle(tmp_path: Path):
 
     readme_text = (root / "README.md").read_text(encoding="utf-8")
     assert "lemma auth login" in readme_text
-    assert "lemma orgs select --save-default" in readme_text
-    assert "lemma pods select --save-default" in readme_text
-    assert "lemma pods import ./demo-ops --dry-run" in readme_text
-    assert "lemma pods import ./demo-ops" in readme_text
+    assert 'eval "$(lemma orgs select --save-default -x)"' in readme_text
+    assert "# lemma pods create demo-ops" in readme_text
+    assert 'eval "$(lemma pods select --save-default -x)"' in readme_text
+    assert "lemma pods import . --dry-run" in readme_text
+    assert "lemma pods import ." in readme_text
 
 
 def test_init_pod_without_starter_creates_bare_bundle(tmp_path: Path):
@@ -213,6 +223,15 @@ def test_init_function_headers_match_folder(tmp_path: Path):
     header_lines = [ln for ln in code.splitlines() if ln.startswith("#")][:3]
     assert "#function_name: score_the_lead" in header_lines
     assert "#input_type_name: ScoreTheLeadInput" in header_lines
+
+
+def test_init_function_uses_transliterated_valid_class_name(tmp_path: Path):
+    result = init_resource("function", "é2", root=tmp_path)
+    code = (tmp_path / "functions" / result.name / "code.py").read_text()
+    ast.parse(code)
+    assert result.name == "e2"
+    assert "class E2Input" in code
+    assert "#input_type_name: E2Input" in code
 
 
 def test_init_table_shared_flag(tmp_path: Path):
