@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Request, status
 
 from app.core.log.log import get_logger
 from app.modules.schedule.api.dependencies import (
@@ -127,31 +127,3 @@ async def handle_webhook(
     return {
         "message": "Webhook received",
     }
-
-
-@router.get(
-    "/{source}/verify",
-    operation_id="webhook.verify",
-    summary="Verify Webhook",
-    description="Webhook verification endpoint for platforms that require it",
-)
-async def verify_webhook(
-    source: str,
-    request: Request,
-) -> Response:
-    """Verify webhook (for platforms like WhatsApp, etc.)."""
-    params = request.query_params
-
-    if source == "whatsapp":
-        mode = params.get("hub.mode")
-        challenge = params.get("hub.challenge")
-
-        if mode == "subscribe" and challenge:
-            logger.debug(
-                "schedule.webhook_controller.verified_whatsapp_webhook.observed"
-            )
-            return Response(content=challenge, media_type="text/plain")
-
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN, detail="Verification failed"
-    )
