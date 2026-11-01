@@ -42,6 +42,8 @@ def strip_jsonc(text: str) -> str:
             continue
         if ch == "/" and i + 1 < n and text[i + 1] == "*":
             comment_start = i
+            out.append("  ")
+            i += 2
             while i < n and not (text[i] == "*" and i + 1 < n and text[i + 1] == "/"):
                 out.append("\n" if text[i] == "\n" else " ")
                 i += 1
