@@ -89,7 +89,7 @@ def _access_for(token: str, widget: WebWidget) -> VisitorAccess:
     return access
 
 
-async def _resolve_visitor(
+async def resolve_visitor(
     request: Request,
     token: str,
     widget: WebWidget,
@@ -134,7 +134,7 @@ async def public_visitor(
     token = _bearer(request)
     if token is None:
         raise refused("Sign in to this chat again", 401, "bad_token")
-    return await _resolve_visitor(request, token, widget, session, uow_factory)
+    return await resolve_visitor(request, token, widget, session, uow_factory)
 
 
 async def optional_visitor(
@@ -148,7 +148,7 @@ async def optional_visitor(
     token = _bearer(request)
     if token is None:
         return None
-    return await _resolve_visitor(request, token, widget, session, uow_factory)
+    return await resolve_visitor(request, token, widget, session, uow_factory)
 
 
 PublicVisitorDep = Annotated[Visitor, Depends(public_visitor)]
