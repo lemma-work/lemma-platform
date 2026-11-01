@@ -79,16 +79,16 @@ router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
 # Surface webhooks are public ingress points. The global request limit is sized
 # for uploads, not for small signed event envelopes, so keep webhook buffering
 # independently bounded before JSON parsing or signature verification.
-MAX_SURFACE_WEBHOOK_BODY_BYTES = 25 * 1024 * 1024
+MAX_SURFACE_WEBHOOK_BODY_BYTES = 1_048_576
 
 
 async def _read_surface_webhook_body(request: Request, *, endpoint: str) -> bytes:
     """Read a bounded webhook body without trusting Content-Length.
 
-    Resend sends attachment metadata in its inbound event; the attachment bytes
-    are retrieved separately. A 25 MiB ceiling leaves room for large message
-    bodies while avoiding the global upload-sized request allowance on public
-    webhook routes.
+    Provider callbacks carry event envelopes, not uploaded attachment bytes.
+    Resend's inbound webhook, for example, sends attachment metadata and the
+    content is retrieved separately. A 1 MiB ceiling leaves room for structured
+    event payloads without exposing public ingress to upload-sized buffering.
     """
     content_length = request.headers.get("content-length")
     if content_length is not None:
