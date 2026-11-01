@@ -218,6 +218,31 @@ async def test_a_first_anonymous_row_opens_a_contact_and_keeps_the_same_visitor(
     assert await _contact_of(db_session, conversation_id) == contact_id
 
 
+async def test_a_contacts_only_table_refuses_a_first_write_without_a_session(
+    authenticated_client: AsyncClient, test_pod
+):
+    pod_id = test_pod["id"]
+    table = await _signups(
+        authenticated_client,
+        pod_id,
+        "first_contact_write",
+        contact_owned=True,
+        contact_columns=["full_name", "track"],
+    )
+    opened = await _open(authenticated_client, pod_id, table, audience="contacts")
+    assert opened.status_code == 200, opened.text
+    widget = await _widget(authenticated_client, pod_id, name="First contact write door")
+    key = widget["public_key"]
+
+    refused = await authenticated_client.post(
+        f"/public/web/{key}/rows",
+        json={"table": table, "values": {"full_name": "Ana", "track": "Code"}},
+        headers=_page(),
+    )
+    assert refused.status_code == 403, refused.text
+    assert refused.json()["code"] == "needs_contact"
+
+
 async def test_a_table_opens_only_in_a_way_that_can_work(
     authenticated_client: AsyncClient, test_pod
 ):
