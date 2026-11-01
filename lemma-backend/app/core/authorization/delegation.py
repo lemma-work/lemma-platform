@@ -188,7 +188,9 @@ def _coerce_scope(value: Any) -> list[str]:
         return []
     if isinstance(value, str):
         return [value]
-    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+    if isinstance(value, list) and all(
+        isinstance(v, str) and v.strip() for v in value
+    ):
         return value
     raise DelegationClaimsError("Invalid delegated scope")
 
@@ -223,12 +225,20 @@ def parse_delegation_claims(payload: dict[str, Any]) -> DelegationClaims | None:
     except Exception as exc:
         raise DelegationClaimsError("Invalid UUID in delegated claims") from exc
 
+    session_id = payload[CLAIM_SESSION_ID]
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise DelegationClaimsError("Invalid delegated session id")
+
+    actor_name_raw = payload.get(CLAIM_ACTOR_NAME)
+    if actor_name_raw not in (None, "") and not isinstance(actor_name_raw, str):
+        raise DelegationClaimsError("Invalid delegated actor name")
+
     scope = _coerce_scope(payload.get(CLAIM_SCOPE))
-    version_raw = payload.get(CLAIM_DELEGATION_VERSION, DELEGATION_VERSION)
-    try:
-        version = int(version_raw)
-    except Exception as exc:
-        raise DelegationClaimsError("Invalid delegation version") from exc
+    version = payload.get(CLAIM_DELEGATION_VERSION, DELEGATION_VERSION)
+    # bool is an int subclass in Python, and int(1.9) silently truncates.
+    # Delegation versions are protocol identifiers, not values to coerce.
+    if type(version) is not int:
+        raise DelegationClaimsError("Invalid delegation version")
 
     if version != DELEGATION_VERSION:
         raise DelegationClaimsError("Unsupported delegation version")
@@ -236,13 +246,9 @@ def parse_delegation_claims(payload: dict[str, Any]) -> DelegationClaims | None:
     return DelegationClaims(
         actor_type=parsed_actor_type,
         actor_id=parsed_actor_id,
-        actor_name=(
-            str(payload[CLAIM_ACTOR_NAME])
-            if payload.get(CLAIM_ACTOR_NAME) not in (None, "")
-            else None
-        ),
+        actor_name=actor_name_raw or None,
         pod_id=parsed_pod_id,
-        session_id=str(payload[CLAIM_SESSION_ID]),
+        session_id=session_id,
         scope=scope,
         invoked_by_user_id=invoked_by_user_id,
         delegation_version=version,
