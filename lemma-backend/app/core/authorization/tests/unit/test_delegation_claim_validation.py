@@ -47,7 +47,7 @@ def test_rejects_non_string_or_blank_session_ids(session_id: object) -> None:
         parse_delegation_claims(payload)
 
 
-@pytest.mark.parametrize("actor_name", [1, True, [], {}])
+@pytest.mark.parametrize("actor_name", [1, True, [], {}, "   "])
 def test_rejects_non_string_actor_names(actor_name: object) -> None:
     payload = _payload()
     payload[CLAIM_ACTOR_NAME] = actor_name
