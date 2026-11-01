@@ -39,7 +39,12 @@ export async function* readSSE(
     return next;
   };
 
-  const fieldValue = (line: string, field: string): string => {\n    const value = line.slice(field.length + 1);\n    return value.startsWith(" ") ? value.slice(1) : value;\n  };\n\n  const processLine = (line: string): SseRawEvent | null => {
+  const fieldValue = (line: string, field: string): string => {
+    const value = line.slice(field.length + 1);
+    return value.startsWith(" ") ? value.slice(1) : value;
+  };
+
+  const processLine = (line: string): SseRawEvent | null => {
     const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line;
 
     if (trimmed === "") {
@@ -77,8 +82,7 @@ export async function* readSSE(
   // TextDecoder may still hold a partial UTF-8 code point from the final chunk.
   buffer += decoder.decode();
 
-  // SSE permits the stream to end without a trailing line feed. Process that
-  // final line before dispatching the event at EOF.
+  // Process a final line that was not terminated by a line feed.
   if (buffer !== "") {
     const event = processLine(buffer);
     if (event) {
