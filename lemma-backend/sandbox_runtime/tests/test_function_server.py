@@ -401,7 +401,6 @@ async def test_a_gateway_outside_the_allowlist_is_refused(monkeypatch) -> None:
             assert response.status_code == status, gateway
 
 
-
 def _streaming_request(chunks: list[bytes], *, headers=None):
     calls = 0
 
