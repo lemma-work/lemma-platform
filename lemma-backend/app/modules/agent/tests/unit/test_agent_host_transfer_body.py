@@ -35,14 +35,24 @@ def _request(chunks: list[bytes], *, content_length: str | None = None) -> Reque
         else []
     )
     return Request(
-        {"type": "http", "method": "PUT", "path": "/agent-host/transfers/test", "headers": headers},
+        {
+            "type": "http",
+            "method": "PUT",
+            "path": "/agent-host/transfers/test",
+            "headers": headers,
+        },
         receive,
     )
 
 
 async def test_agent_host_body_rejects_oversized_chunk_before_extending(monkeypatch):
+    instances = []
+
     class TrackingBuffer(bytearray):
-        extend_calls = 0
+        def __init__(self, *args):
+            super().__init__(*args)
+            self.extend_calls = 0
+            instances.append(self)
 
         def extend(self, value):
             self.extend_calls += 1
@@ -54,7 +64,7 @@ async def test_agent_host_body_rejects_oversized_chunk_before_extending(monkeypa
         await controller._body(_request([b"x" * 9]), 8)
 
     assert rejected.value.refusal is TransferRefusal.TOO_LARGE
-    assert TrackingBuffer.extend_calls == 0
+    assert instances[0].extend_calls == 0
 
 
 @pytest.mark.parametrize("content_length", ["²", "+8", "8x", ""])
