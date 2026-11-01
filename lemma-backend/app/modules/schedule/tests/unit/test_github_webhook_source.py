@@ -243,6 +243,30 @@ class TestSourceEventId:
         assert source_event_id("unknown_event", "1", 2, {"after": "x"}) is None
 
 
+    def test_a_rerequested_check_suite_is_distinct_from_a_redelivery(self):
+        def suite(updated_at: str) -> dict:
+            return {
+                "action": "rerequested",
+                "check_suite": {
+                    "id": 118578147,
+                    "status": "queued",
+                    "conclusion": None,
+                    "updated_at": updated_at,
+                },
+            }
+
+        first = source_event_id("check_suite", "1", 2, suite("2026-11-01T10:00:00Z"))
+        redelivery = source_event_id(
+            "check_suite", "1", 2, suite("2026-11-01T10:00:00Z")
+        )
+        second_request = source_event_id(
+            "check_suite", "1", 2, suite("2026-11-01T10:05:00Z")
+        )
+
+        assert first == redelivery
+        assert first != second_request
+
+
 # What a pod reviewing pull requests reacts to: a person's review, a comment on
 # one line of the diff, and one CI job finishing. The payloads below follow the
 # shapes in GitHub's webhook documentation, trimmed to what a reader needs.
