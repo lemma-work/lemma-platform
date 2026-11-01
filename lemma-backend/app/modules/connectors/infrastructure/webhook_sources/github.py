@@ -62,6 +62,20 @@ _PULL_REQUEST_EVENTS = frozenset(
 )
 
 
+def _required_text(value: object) -> str | None:
+    """Return a nonblank string identity component without coercing other types."""
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _required_id(value: object) -> str | None:
+    """Accept GitHub's integer IDs (or nonblank string forms), never bool/None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value) if value > 0 else None
+    return _required_text(value)
+
+
 def _push_key(payload: WebhookPayload) -> str | None:
     # A push is a ref transition, not just a commit. Two branches can point at
     # the same `after` SHA, and the same ref can reach that SHA from different
@@ -77,8 +91,12 @@ def _push_key(payload: WebhookPayload) -> str | None:
 
 def _pull_request_key(payload: WebhookPayload) -> str | None:
     pull_request = payload.get("pull_request") or {}
-    head_sha = (pull_request.get("head") or {}).get("sha")
-    return f"{pull_request.get('id')}:{payload.get('action')}:{head_sha}"
+    pull_request_id = _required_id(pull_request.get("id"))
+    action = _required_text(payload.get("action"))
+    head_sha = _required_text((pull_request.get("head") or {}).get("sha"))
+    if not all((pull_request_id, action, head_sha)):
+        return None
+    return f"{pull_request_id}:{action}:{head_sha}"
 
 
 def _review_key(payload: WebhookPayload) -> str | None:
@@ -87,28 +105,47 @@ def _review_key(payload: WebhookPayload) -> str | None:
     # review carries no `updated_at`. Without it the second edit would collapse
     # onto the first and never fire.
     review = payload.get("review") or {}
-    return (
-        f"{review.get('id')}:{payload.get('action')}:{review.get('state')}"
-        f":{review.get('body')}"
-    )
+    review_id = _required_id(review.get("id"))
+    action = _required_text(payload.get("action"))
+    state = _required_text(review.get("state"))
+    body = review.get("body")
+    if not all((review_id, action, state)) or (
+        body is not None and not isinstance(body, str)
+    ):
+        return None
+    return f"{review_id}:{action}:{state}:{body}"
 
 
 def _review_comment_key(payload: WebhookPayload) -> str | None:
     # `updated_at` moves on every edit, so each edit is its own event, while a
     # redelivery -- the same payload, byte for byte -- names the same instant.
     comment = payload.get("comment") or {}
-    return f"{comment.get('id')}:{payload.get('action')}:{comment.get('updated_at')}"
+    comment_id = _required_id(comment.get("id"))
+    action = _required_text(payload.get("action"))
+    updated_at = _required_text(comment.get("updated_at"))
+    if not all((comment_id, action, updated_at)):
+        return None
+    return f"{comment_id}:{action}:{updated_at}"
 
 
 def _issue_key(payload: WebhookPayload) -> str | None:
     # `issue_comment` carries both; the comment is the thing that happened.
     subject = payload.get("comment") or payload.get("issue") or {}
-    return f"{subject.get('id')}:{payload.get('action')}"
+    subject_id = _required_id(subject.get("id"))
+    action = _required_text(payload.get("action"))
+    if not subject_id or not action:
+        return None
+    return f"{subject_id}:{action}"
 
 
 def _workflow_run_key(payload: WebhookPayload) -> str | None:
     run = payload.get("workflow_run") or {}
-    return f"{run.get('id')}:{run.get('status')}"
+    run_id = _required_id(run.get("id"))
+    action = _required_text(payload.get("action"))
+    status = _required_text(run.get("status"))
+    if not all((run_id, action, status)):
+        return None
+    return f"{run_id}:{action}:{status}"
 
 
 def _check_suite_key(payload: WebhookPayload) -> str | None:
@@ -144,16 +181,25 @@ def _check_run_key(payload: WebhookPayload) -> str | None:
     # conclusion it had before; `completed_at` is what tells that second
     # completion from a redelivery of the first.
     run = payload.get("check_run") or {}
+    run_id = _required_id(run.get("id"))
+    action = _required_text(payload.get("action"))
+    status = _required_text(run.get("status"))
+    if not all((run_id, action, status)):
+        return None
     button = (payload.get("requested_action") or {}).get("identifier")
     return (
-        f"{run.get('id')}:{payload.get('action')}:{run.get('status')}"
+        f"{run_id}:{action}:{status}"
         f":{run.get('conclusion')}:{run.get('completed_at')}:{button}"
     )
 
 
 def _release_key(payload: WebhookPayload) -> str | None:
     release = payload.get("release") or {}
-    return f"{release.get('id')}:{payload.get('action')}"
+    release_id = _required_id(release.get("id"))
+    action = _required_text(payload.get("action"))
+    if not release_id or not action:
+        return None
+    return f"{release_id}:{action}"
 
 
 # Dict dispatch rather than a chain of `if event == ...`: one function per event
@@ -193,10 +239,17 @@ def source_event_id(
     key = _EVENT_KEYS.get(event)
     if key is None:
         return None
+    normalized_installation = _required_id(installation_id)
+    normalized_repository = _required_id(repository_id)
+    if not normalized_installation or not normalized_repository:
+        return None
     event_key = key(payload)
     if not event_key:
         return None
-    material = f"github:{event}:{installation_id}:{repository_id}:{event_key}"
+    material = (
+        f"github:{event}:{normalized_installation}:"
+        f"{normalized_repository}:{event_key}"
+    )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
