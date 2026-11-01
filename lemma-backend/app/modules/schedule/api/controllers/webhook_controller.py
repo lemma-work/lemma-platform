@@ -51,7 +51,7 @@ async def _read_bounded_body(request: Request, *, source: str) -> bytes:
             logger.warning(
                 "schedule.webhook_controller.rejecting_oversized_delivery.degraded",
                 source=source,
-                size=normalized_length,
+                size=MAX_WEBHOOK_BODY_BYTES + 1,
             )
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
