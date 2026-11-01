@@ -286,8 +286,9 @@ lemma pods select --save-default
 
 ## Build loop
 
-Run the validation first. It checks the bundle without applying changes. Then import
-it to create or update resources in the selected pod.
+Run these commands from the directory containing `__NAME__`. The validation
+checks the bundle without applying changes; the import creates or updates
+resources in the selected pod.
 
 ```bash
 lemma pods import ./__NAME__ --dry-run
