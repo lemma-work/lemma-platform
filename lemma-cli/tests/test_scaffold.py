@@ -135,6 +135,60 @@ def test_init_pod_creates_parsable_bundle(tmp_path: Path):
     assert any(g["resource_name"] == "items" for g in grants)
     # instruction.md resolved via $file ref into a string
     assert isinstance(agent["instruction"], str) and agent["instruction"].strip()
+    # The starter agent's advertised operations must be backed by the table
+    # scaffold: its columns are part of the starter's usable contract.
+    table = load_resource_payload(root / "tables" / "items", "items")
+    columns = {column["name"]: column for column in table["columns"]}
+    assert {"title", "status"} <= columns.keys()
+    assert columns["title"]["type"] == "TEXT"
+    assert columns["title"]["required"] is True
+    assert columns["status"]["type"] == "ENUM"
+    assert columns["status"]["default"] == "open"
+    assert columns["status"]["options"] == ["open", "in_progress", "done"]
+
+    readme_text = (root / "README.md").read_text(encoding="utf-8")
+    assert "lemma auth login" in readme_text
+    assert "lemma orgs select --save-default" in readme_text
+    assert "lemma pods select --save-default" in readme_text
+    assert "lemma pods import ./demo-ops --dry-run" in readme_text
+    assert "lemma pods import ./demo-ops" in readme_text
+
+
+def test_init_pod_without_starter_creates_bare_bundle(tmp_path: Path):
+    root = tmp_path / "bare"
+    result = init_pod(root, "Bare Pod", with_starter=False)
+
+    assert result.name == "bare-pod"
+    assert {path.name for path in result.files} == {
+        "pod.json",
+        "README.md",
+        "AGENTS.md",
+    }
+    assert (root / "pod.json").is_file()
+    assert (root / "README.md").is_file()
+    assert (root / "AGENTS.md").is_file()
+    assert not (root / "tables").exists()
+    assert not (root / "agents").exists()
+
+
+def test_init_pod_force_overwrites_partial_bundle_and_preserves_unrelated_files(
+    tmp_path: Path,
+):
+    root = tmp_path / "partial"
+    root.mkdir()
+    (root / "pod.json").write_text("stale manifest", encoding="utf-8")
+    (root / "README.md").write_text("stale readme", encoding="utf-8")
+    unrelated = root / "notes.txt"
+    unrelated.write_text("keep this file", encoding="utf-8")
+
+    result = init_pod(root, "Fresh Pod", force=True)
+
+    assert result.name == "fresh-pod"
+    assert '"name": "fresh-pod"' in (root / "pod.json").read_text(encoding="utf-8")
+    assert "# fresh-pod" in (root / "README.md").read_text(encoding="utf-8")
+    assert (root / "tables" / "items" / "items.json").is_file()
+    assert (root / "agents" / "hello" / "hello.json").is_file()
+    assert unrelated.read_text(encoding="utf-8") == "keep this file"
 
 
 def test_init_pod_refuses_existing_without_force(tmp_path: Path):
