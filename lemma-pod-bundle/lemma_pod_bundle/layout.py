@@ -169,10 +169,10 @@ def _resolve_file_refs(value: Any, *, base_dir: Path) -> Any:
     if not isinstance(value, dict):
         return value
     if set(value.keys()) == {RAW_FILE_REF_KEY}:
-        raw_path = _resolve_bundle_file_ref(value[RAW_FILE_REF_KEY], base_dir=base_dir)
+        raw_path = _resolve_bundle_file_ref(\n            value[RAW_FILE_REF_KEY], base_dir=base_dir\n        )
         return raw_path.read_text(encoding="utf-8")
     if set(value.keys()) == {JSON_FILE_REF_KEY}:
-        json_path = _resolve_bundle_file_ref(value[JSON_FILE_REF_KEY], base_dir=base_dir)
+        json_path = _resolve_bundle_file_ref(\n            value[JSON_FILE_REF_KEY], base_dir=base_dir\n        )
         return loads_jsonc(json_path.read_text(encoding="utf-8"))
     return {
         key: _resolve_file_refs(item, base_dir=base_dir) for key, item in value.items()
