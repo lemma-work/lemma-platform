@@ -121,3 +121,26 @@ describe("readSSE", () => {
     expect(parseSSEJson(events[0])).toBeNull();
   });
 });
+
+
+describe("readSSE reader lifecycle", () => {
+  it("releases the stream reader after full consumption", async () => {
+    const stream = readable([new TextEncoder().encode("data: done\\n\\n")]);
+
+    await collect(readSSE(stream));
+
+    expect(() => stream.getReader()).not.toThrow();
+  });
+
+  it("releases the stream reader when the consumer stops early", async () => {
+    const stream = readable([
+      new TextEncoder().encode("data: first\\n\\ndata: second\\n\\n"),
+    ]);
+    const iterator = readSSE(stream);
+
+    expect((await iterator.next()).value?.data).toBe("first");
+    await iterator.return();
+
+    expect(() => stream.getReader()).not.toThrow();
+  });
+});
