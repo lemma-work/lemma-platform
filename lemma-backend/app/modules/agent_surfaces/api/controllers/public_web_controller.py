@@ -28,14 +28,20 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts.visitor_stream import visitor_frames
 from app.modules.agent_surfaces.api import kept_chats
 from app.modules.agent_surfaces.api.public_dependencies import (
+    AuthorizerSession,
     OptionalVisitorDep,
     PublicVisitorDep,
     PublicWidgetDep,
     VisitorAddressDep,
+    resolve_visitor,
     web_chat,
 )
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.web_widgets import WebChatRefused, refused
+from app.modules.agent_surfaces.domain.web_widgets import (
+    WebChatRefused,
+    WidgetAnswer,
+    refused,
+)
 from app.modules.agent_surfaces.services.outsider_limits import WebWidgetLimiter
 from app.modules.agent_surfaces.services.web_chat import MAX_MESSAGE_CHARS, WebChat
 from app.modules.agent_surfaces.services.web_visitors import (
@@ -91,6 +97,10 @@ class MessageRequest(BaseModel):
 
 class Accepted(BaseModel):
     ok: bool = True
+
+
+class RowAccepted(Accepted):
+    session: SessionResponse | None = None
 
 
 class HistoryMessage(BaseModel):
@@ -157,6 +167,11 @@ class PublicRowsResponse(BaseModel):
 class RowRequest(BaseModel):
     table: str = Field(max_length=255)
     values: dict[str, object] = Field(default_factory=dict)
+    altcha: str | None = Field(
+        default=None,
+        max_length=4096,
+        description="The solved session challenge when this row starts a visitor session.",
+    )
 
 
 def _visitors(
@@ -451,17 +466,51 @@ async def web_read_rows(
     "/{public_key}/rows",
     operation_id="public.web.row.add",
     status_code=201,
-    response_model=Accepted,
+    response_model=RowAccepted,
+    response_model_exclude_none=True,
 )
 async def web_add_row(
     body: RowRequest,
+    request: Request,
     widget: PublicWidgetDep,
     visitor: OptionalVisitorDep,
     address: VisitorAddressDep,
+    session: AuthorizerSession,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+    visitors: WebVisitors = Depends(_visitors),
     chat: WebChat = Depends(web_chat),
-) -> Accepted:
-    """Add one row to a table the pod opened to visitors. Nothing is read back."""
+) -> RowAccepted:
+    """Add a row, opening a visitor session when this is their first write.
+
+    A form can be used without the chat widget or a prior session. In that
+    case the row itself is the visitor's first write: create the anonymous
+    session first, then hand its secret and access token back so later messages
+    continue as the same contact.
+    """
+    started: StartedSession | None = None
+    if visitor is None:
+        if widget.answer is WidgetAnswer.KNOWN:
+            raise refused("This is for existing customers only", 403, "not_a_contact")
+        _opened, contacts_only = await chat.visitor_table(widget, table=body.table)
+        if contacts_only:
+            raise refused("Confirm your email first", 403, "needs_contact")
+        started = await visitors.start_visitor_session(
+            widget,
+            secret=None,
+            host_token=None,
+            altcha=body.altcha,
+            address=address,
+        )
+        visitor = await resolve_visitor(
+            request,
+            started.access_token,
+            widget,
+            session,
+            uow_factory,
+        )
     await chat.add_visitor_row(
         widget, visitor, table=body.table, answers=body.values, address=address
     )
-    return Accepted()
+    return RowAccepted(
+        session=_session_response(started, title=None) if started is not None else None
+    )
