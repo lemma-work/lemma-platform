@@ -140,21 +140,16 @@ async def test_non_boolean_flag_is_a_cache_miss(
 ) -> None:
     """Never coerce malformed JSON values into an authorization decision."""
     user_id = uuid4()
-    payload = {
+    values = {
         "is_active": "true",
         "is_verified": "true",
         "is_deleted": "false",
     }
-    payload[flag] = invalid_value
-    fake_cache.store[str(user_id)] = (
-        '{"is_active":' + (
-            invalid_value if flag == "is_active" else '"true"'
-        ) + ',"is_verified":' + (
-            invalid_value if flag == "is_verified" else '"true"'
-        ) + ',"is_deleted":' + (
-            invalid_value if flag == "is_deleted" else '"false"'
-        ) + '}'
-    )
+    values[flag] = invalid_value
+    payload = "{" + ",".join(
+        f'"{key}":{value}' for key, value in values.items()
+    ) + "}"
+    fake_cache.store[str(user_id)] = payload
 
     assert await get_account_standing(user_id) is None
 
