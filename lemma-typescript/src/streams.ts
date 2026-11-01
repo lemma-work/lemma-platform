@@ -64,7 +64,10 @@ export async function* readSSE(
     const value = colon === -1 ? "" : fieldValue(line, field);
 
     if (field === "event") {
-      eventName = value;
+      // The WHATWG algorithm ignores event fields containing U+0000.
+      if (!value.includes("\0")) {
+        eventName = value;
+      }
     } else if (field === "data") {
       dataLines.push(value);
     }
