@@ -80,6 +80,28 @@ def test_pascalify():
     assert pascalify("my-func") == "MyFunc"
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("  Crème Brûlée  ", "creme-brulee"),
+        ("München Ops", "munchen-ops"),
+    ],
+)
+def test_slugify_normalizes_accented_names(raw, expected):
+    assert slugify(raw) == expected
+
+
+def test_snakeify_normalizes_accented_names():
+    assert snakeify("Crème Brûlée") == "creme_brulee"
+
+
+def test_name_helpers_reject_names_without_ascii_identifier_characters():
+    with pytest.raises(ScaffoldError):
+        slugify("東京")
+    with pytest.raises(ScaffoldError):
+        snakeify("東京")
+
+
 def test_name_helpers_reject_empty():
     with pytest.raises(ScaffoldError):
         slugify("!!!")
