@@ -35,12 +35,12 @@ describe("readSSE", () => {
   });
 
   it("treats fields without colons as fields with empty values", async () => {
-    const input = new TextEncoder().encode("data: first\\ndata\\n\\n");
+    const input = new TextEncoder().encode("data: first\ndata\n\n");
 
     const events = await collect(readable([input]));
 
     expect(events).toHaveLength(1);
-    expect(events[0].data).toBe("first\\n");
+    expect(events[0].data).toBe("first\n");
   });
 
   it("does not dispatch an event with an empty data buffer", async () => {
