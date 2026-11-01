@@ -84,77 +84,6 @@ def test_resend_webhook_signature_is_timestamped_and_tamper_evident():
     assert tampered.value.status_code == 401
 
 
-def _signed_resend_request(body: bytes, secret: str) -> Request:
-    timestamp = str(int(time.time()))
-    message_id = "msg_test"
-    raw_secret = base64.b64decode(secret.removeprefix("whsec_"))
-    signature = base64.b64encode(
-        hmac.new(
-            raw_secret,
-            f"{message_id}.{timestamp}.".encode() + body,
-            hashlib.sha256,
-        ).digest()
-    ).decode()
-
-    async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
-
-    return Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/auth/email/bounces/resend",
-            "headers": [
-                (b"svix-id", message_id.encode()),
-                (b"svix-timestamp", timestamp.encode()),
-                (b"svix-signature", f"v1,{signature}".encode()),
-            ],
-        },
-        receive,
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("bounce_type", "expected"),
-    [("Permanent", ["person@example.com"]), ("Temporary", [])],
-)
-async def test_resend_bounce_deactivates_only_permanent_failures(
-    monkeypatch, bounce_type, expected
-):
-    from app.core.config import settings
-    from app.modules.identity.api.controllers import email_bounce_controller
-
-    raw_secret = b"resend-webhook-secret"
-    secret = f"whsec_{base64.b64encode(raw_secret).decode()}"
-    monkeypatch.setattr(settings, "resend_webhook_secret", secret)
-    deactivated: list[str] = []
-
-    async def deactivate(email: str):
-        deactivated.append(email)
-
-    monkeypatch.setattr(
-        email_bounce_controller, "_deactivate_email_for_hard_bounce", deactivate
-    )
-    body = json.dumps(
-        {
-            "type": "email.bounced",
-            "data": {
-                "to": ["person@example.com"],
-                "bounce": {"type": bounce_type},
-            },
-        },
-        separators=(",", ":"),
-    ).encode()
-
-    response = await email_bounce_controller.accept_resend_email_bounce(
-        _signed_resend_request(body, secret)
-    )
-
-    assert response.status_code == 204
-    assert deactivated == expected
-
-
 def _streaming_request(
     chunks: list[bytes], *, headers: list[tuple[bytes, bytes]] | None = None
 ):
@@ -252,3 +181,75 @@ async def test_email_bounce_body_limit_rejects_invalid_content_length():
 
     assert rejected.value.status_code == 400
     assert receive_calls() == 0
+
+
+def _signed_resend_request(body: bytes, secret: str) -> Request:
+    timestamp = str(int(time.time()))
+    message_id = "msg_test"
+    raw_secret = base64.b64decode(secret.removeprefix("whsec_"))
+    signature = base64.b64encode(
+        hmac.new(
+            raw_secret,
+            f"{message_id}.{timestamp}.".encode() + body,
+            hashlib.sha256,
+        ).digest()
+    ).decode()
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/auth/email/bounces/resend",
+            "headers": [
+                (b"svix-id", message_id.encode()),
+                (b"svix-timestamp", timestamp.encode()),
+                (b"svix-signature", f"v1,{signature}".encode()),
+            ],
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bounce_type", "expected"),
+    [("Permanent", ["person@example.com"]), ("Temporary", [])],
+)
+async def test_resend_bounce_deactivates_only_permanent_failures(
+    monkeypatch, bounce_type, expected
+):
+    from app.core.config import settings
+    from app.modules.identity.api.controllers import email_bounce_controller
+
+    raw_secret = b"resend-webhook-secret"
+    secret = f"whsec_{base64.b64encode(raw_secret).decode()}"
+    monkeypatch.setattr(settings, "resend_webhook_secret", secret)
+    deactivated: list[str] = []
+
+    async def deactivate(email: str):
+        deactivated.append(email)
+
+    monkeypatch.setattr(
+        email_bounce_controller, "_deactivate_email_for_hard_bounce", deactivate
+    )
+    body = json.dumps(
+        {
+            "type": "email.bounced",
+            "data": {
+                "to": ["person@example.com"],
+                "bounce": {"type": bounce_type},
+            },
+        },
+        separators=(",", ":"),
+    ).encode()
+
+    response = await email_bounce_controller.accept_resend_email_bounce(
+        _signed_resend_request(body, secret)
+    )
+
+    assert response.status_code == 204
+    assert deactivated == expected
+
