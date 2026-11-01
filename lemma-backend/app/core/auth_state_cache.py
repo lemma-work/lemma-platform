@@ -56,10 +56,17 @@ def _get_cache() -> ResilientJsonCache | None:
 
 def _decode(payload: str) -> AccountStanding:
     decoded = json.loads(payload)
+    if not isinstance(decoded, dict):
+        raise ValueError("Invalid account-standing cache payload")
+
+    flags = ("is_active", "is_verified", "is_deleted")
+    if any(type(decoded.get(flag)) is not bool for flag in flags):
+        raise ValueError("Invalid account-standing cache payload")
+
     return AccountStanding(
-        is_active=bool(decoded["is_active"]),
-        is_verified=bool(decoded["is_verified"]),
-        is_deleted=bool(decoded["is_deleted"]),
+        is_active=decoded["is_active"],
+        is_verified=decoded["is_verified"],
+        is_deleted=decoded["is_deleted"],
     )
 
 
@@ -92,8 +99,8 @@ async def invalidate_auth_state(user_id: UUID) -> None:
     """Drop one account's cached standing, after that standing changed.
 
     Called wherever ``is_active``/``is_verified``/``is_deleted`` move, so a
-    deactivation takes effect on the next request rather than at the end of the
-    TTL. The TTL remains the backstop for anything that forgets to call this.
+    deactivation takes effect on the next request rather than at the TTL. The
+    TTL remains the backstop for anything that forgets to call this.
     """
     cache = _get_cache()
     if cache is None:
