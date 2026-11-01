@@ -78,3 +78,10 @@ def test_strip_jsonc_reports_unterminated_block_comment_location():
         strip_jsonc(text)
     assert excinfo.value.lineno == 3
     assert excinfo.value.colno == 3
+
+
+def test_strip_jsonc_does_not_treat_comment_opener_as_closer():
+    text = '{"a": 1 /*/ }'
+    with pytest.raises(json.JSONDecodeError, match="Unterminated block comment") as excinfo:
+        strip_jsonc(text)
+    assert excinfo.value.pos == text.index("/*")
