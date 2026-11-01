@@ -9,7 +9,6 @@ from app.modules.connectors.infrastructure.webhook_sources.composio import (
 )
 
 from app.modules.schedule.api.controllers.webhook_controller import (
-    MAX_WEBHOOK_BODY_BYTES,
     _read_bounded_body,
     router,
 )
@@ -195,10 +194,13 @@ def _streaming_request(
 
 
 @pytest.mark.asyncio
-async def test_webhook_body_limit_rejects_declared_oversize_before_reading():
+async def test_webhook_body_limit_rejects_declared_oversize_before_reading(monkeypatch):
+    from app.modules.schedule.api.controllers import webhook_controller
+
+    monkeypatch.setattr(webhook_controller, "MAX_WEBHOOK_BODY_BYTES", 8)
     request, receive_calls = _streaming_request(
-        [b"x" * (MAX_WEBHOOK_BODY_BYTES + 1)],
-        headers=[(b"content-length", str(MAX_WEBHOOK_BODY_BYTES + 1).encode())],
+        [b"x" * 9],
+        headers=[(b"content-length", b"9")],
     )
 
     with pytest.raises(HTTPException) as rejected:
@@ -209,9 +211,12 @@ async def test_webhook_body_limit_rejects_declared_oversize_before_reading():
 
 
 @pytest.mark.asyncio
-async def test_webhook_body_limit_also_bounds_underreported_bodies():
+async def test_webhook_body_limit_also_bounds_underreported_bodies(monkeypatch):
+    from app.modules.schedule.api.controllers import webhook_controller
+
+    monkeypatch.setattr(webhook_controller, "MAX_WEBHOOK_BODY_BYTES", 8)
     request, receive_calls = _streaming_request(
-        [b"x" * MAX_WEBHOOK_BODY_BYTES, b"y", b"unread"],
+        [b"x" * 8, b"y", b"unread"],
         headers=[(b"content-length", b"1")],
     )
 
@@ -223,8 +228,11 @@ async def test_webhook_body_limit_also_bounds_underreported_bodies():
 
 
 @pytest.mark.asyncio
-async def test_webhook_body_limit_accepts_exact_limit():
-    payload = b"x" * MAX_WEBHOOK_BODY_BYTES
+async def test_webhook_body_limit_accepts_exact_limit(monkeypatch):
+    from app.modules.schedule.api.controllers import webhook_controller
+
+    monkeypatch.setattr(webhook_controller, "MAX_WEBHOOK_BODY_BYTES", 8)
+    payload = b"x" * 8
     request, _ = _streaming_request(
         [payload],
         headers=[(b"content-length", str(len(payload)).encode())],
