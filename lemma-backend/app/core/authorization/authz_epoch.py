@@ -117,7 +117,7 @@ async def _repair_invalid_epoch(
 
 
 async def _epoch_of(keys: list[str]) -> str | None:
-    redis = get_redis(url=settings.redis_url)
+    redis = get_redis(url=settings.redis_url, decode_responses=False)
     try:
         values = await redis.mget(keys)
         for index, value in enumerate(values):
@@ -165,7 +165,7 @@ async def pod_grants_epoch(pod_id: UUID) -> str | None:
 
 
 async def _bump(key: str, pod_id: UUID | None) -> None:
-    redis = get_redis(url=settings.redis_url)
+    redis = get_redis(url=settings.redis_url, decode_responses=False)
     try:
         await redis.set(key, _seed(), ex=_EPOCH_TTL_SECONDS, nx=True)
         # The read path can repair a malformed counter, but invalidations are
