@@ -39,6 +39,25 @@ export async function* readSSE(
     return next;
   };
 
+  const processLine = (line: string): SseRawEvent | null => {
+    const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line;
+
+    if (trimmed === "") {
+      return flush();
+    }
+
+    if (trimmed.startsWith("event:")) {
+      eventName = trimmed.slice("event:".length).trim();
+      return null;
+    }
+
+    if (trimmed.startsWith("data:")) {
+      dataLines.push(trimmed.slice("data:".length).trim());
+    }
+
+    return null;
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -48,24 +67,22 @@ export async function* readSSE(
     buffer = lines.pop() || "";
 
     for (const line of lines) {
-      const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line;
-
-      if (trimmed === "") {
-        const event = flush();
-        if (event) {
-          yield event;
-        }
-        continue;
+      const event = processLine(line);
+      if (event) {
+        yield event;
       }
+    }
+  }
 
-      if (trimmed.startsWith("event:")) {
-        eventName = trimmed.slice("event:".length).trim();
-        continue;
-      }
+  // TextDecoder may still hold a partial UTF-8 code point from the final chunk.
+  buffer += decoder.decode();
 
-      if (trimmed.startsWith("data:")) {
-        dataLines.push(trimmed.slice("data:".length).trim());
-      }
+  // SSE permits the stream to end without a trailing line feed. Process that
+  // final line before dispatching the event at EOF.
+  if (buffer !== "") {
+    const event = processLine(buffer);
+    if (event) {
+      yield event;
     }
   }
 
