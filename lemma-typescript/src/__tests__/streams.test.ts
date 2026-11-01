@@ -125,7 +125,7 @@ describe("readSSE", () => {
 
 describe("readSSE reader lifecycle", () => {
   it("releases the stream reader after full consumption", async () => {
-    const stream = readable([new TextEncoder().encode("data: done\\n\\n")]);
+    const stream = readable([new TextEncoder().encode("data: done\n\n")]);
 
     await collect(readSSE(stream));
 
@@ -134,7 +134,7 @@ describe("readSSE reader lifecycle", () => {
 
   it("releases the stream reader when the consumer stops early", async () => {
     const stream = readable([
-      new TextEncoder().encode("data: first\\n\\ndata: second\\n\\n"),
+      new TextEncoder().encode("data: first\n\ndata: second\n\n"),
     ]);
     const iterator = readSSE(stream);
 
