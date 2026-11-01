@@ -267,6 +267,14 @@ class TestSourceEventId:
         assert first != second_request
 
 
+    def test_a_check_suite_without_its_update_timestamp_has_no_stable_id(self):
+        payload = {
+            "action": "rerequested",
+            "check_suite": {"id": 118578147, "status": "queued"},
+        }
+        assert source_event_id("check_suite", "1", 2, payload) is None
+
+
 # What a pod reviewing pull requests reacts to: a person's review, a comment on
 # one line of the diff, and one CI job finishing. The payloads below follow the
 # shapes in GitHub's webhook documentation, trimmed to what a reader needs.
