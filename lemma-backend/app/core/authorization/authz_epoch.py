@@ -33,7 +33,7 @@ import time
 from uuid import UUID
 
 from redis.asyncio import Redis
-from redis.exceptions import RedisError
+from redis.exceptions import RedisError, ResponseError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -168,8 +168,35 @@ async def _bump(key: str, pod_id: UUID | None) -> None:
     redis = get_redis(url=settings.redis_url)
     try:
         await redis.set(key, _seed(), ex=_EPOCH_TTL_SECONDS, nx=True)
-        await redis.incr(key)
-        await redis.expire(key, _EPOCH_TTL_SECONDS)
+        # The read path can repair a malformed counter, but invalidations are
+        # also allowed to run before any reader has inspected that key. Repair
+        # here as well so a permission mutation cannot get stuck behind a bad
+        # Redis value. The compare-and-set repair never overwrites a concurrent
+        # valid increment.
+        for _attempt in range(3):
+            current = await redis.get(key)
+            if _epoch_value(current) is None:
+                await _repair_invalid_epoch(redis, key, current)
+                current = await redis.get(key)
+                if _epoch_value(current) is None:
+                    continue
+            try:
+                await redis.incr(key)
+            except ResponseError as exc:
+                # Another worker can advance max-1 to max after our read. Redis
+                # refuses the next INCR; repair only that observed terminal
+                # value, then retry against the fresh counter.
+                if "overflow" not in str(exc).lower():
+                    raise
+                current = await redis.get(key)
+                if _epoch_value(current) is not None:
+                    raise
+                await _repair_invalid_epoch(redis, key, current)
+                continue
+            await redis.expire(key, _EPOCH_TTL_SECONDS)
+            _incident.record_success()
+            return
+        raise RedisError("Authorization epoch remained invalid during repair")
     except (RedisError, OSError) as exc:
         # Entries keyed by the old epoch live out their TTL, and live hubs
         # re-check their readers on a timer as well as when the epoch moves:
@@ -183,7 +210,6 @@ async def _bump(key: str, pod_id: UUID | None) -> None:
             exc_info=True,
         )
         return
-    _incident.record_success()
 
 
 async def bump_pod_authz_epoch(pod_id: UUID | None) -> None:
