@@ -39,7 +39,7 @@ export async function* readSSE(
     return next;
   };
 
-  const processLine = (line: string): SseRawEvent | null => {
+  const fieldValue = (line: string, field: string): string => {\n    const value = line.slice(field.length + 1);\n    return value.startsWith(" ") ? value.slice(1) : value;\n  };\n\n  const processLine = (line: string): SseRawEvent | null => {
     const trimmed = line.endsWith("\r") ? line.slice(0, -1) : line;
 
     if (trimmed === "") {
@@ -47,12 +47,12 @@ export async function* readSSE(
     }
 
     if (trimmed.startsWith("event:")) {
-      eventName = trimmed.slice("event:".length).trim();
+      eventName = fieldValue(trimmed, "event");
       return null;
     }
 
     if (trimmed.startsWith("data:")) {
-      dataLines.push(trimmed.slice("data:".length).trim());
+      dataLines.push(fieldValue(trimmed, "data"));
     }
 
     return null;
