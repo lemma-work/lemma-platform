@@ -153,3 +153,102 @@ async def test_resend_bounce_deactivates_only_permanent_failures(
 
     assert response.status_code == 204
     assert deactivated == expected
+
+
+def _streaming_request(
+    chunks: list[bytes], *, headers: list[tuple[bytes, bytes]] | None = None
+):
+    calls = 0
+
+    async def receive():
+        nonlocal calls
+        index = calls
+        calls += 1
+        if index >= len(chunks):
+            return {"type": "http.disconnect"}
+        return {
+            "type": "http.request",
+            "body": chunks[index],
+            "more_body": index < len(chunks) - 1,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/auth/email/bounces/resend",
+            "headers": headers or [],
+        },
+        receive,
+    )
+    return request, lambda: calls
+
+
+@pytest.mark.asyncio
+async def test_email_bounce_body_limit_rejects_declared_oversize_before_reading(
+    monkeypatch,
+):
+    from app.modules.identity.api.controllers import email_bounce_controller
+
+    monkeypatch.setattr(
+        email_bounce_controller, "MAX_EMAIL_BOUNCE_WEBHOOK_BODY_BYTES", 8
+    )
+    request, receive_calls = _streaming_request(
+        [b"123456789"],
+        headers=[(b"content-length", b"9")],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await email_bounce_controller._read_bounded_webhook_body(request)
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 0
+
+
+@pytest.mark.asyncio
+async def test_email_bounce_body_limit_bounds_underreported_chunked_requests(
+    monkeypatch,
+):
+    from app.modules.identity.api.controllers import email_bounce_controller
+
+    monkeypatch.setattr(
+        email_bounce_controller, "MAX_EMAIL_BOUNCE_WEBHOOK_BODY_BYTES", 8
+    )
+    request, receive_calls = _streaming_request(
+        [b"12345678", b"9", b"unread"],
+        headers=[(b"content-length", b"1")],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await email_bounce_controller._read_bounded_webhook_body(request)
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 2
+
+
+@pytest.mark.asyncio
+async def test_email_bounce_body_limit_accepts_exact_boundary(monkeypatch):
+    from app.modules.identity.api.controllers import email_bounce_controller
+
+    monkeypatch.setattr(
+        email_bounce_controller, "MAX_EMAIL_BOUNCE_WEBHOOK_BODY_BYTES", 8
+    )
+    request, _ = _streaming_request([b"1234", b"5678"])
+
+    assert await email_bounce_controller._read_bounded_webhook_body(request) == b"12345678"
+
+
+@pytest.mark.asyncio
+async def test_email_bounce_body_limit_rejects_invalid_content_length():
+    from app.modules.identity.api.controllers import email_bounce_controller
+
+    request, receive_calls = _streaming_request(
+        [b"{}"],
+        headers=[(b"content-length", b"8x")],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await email_bounce_controller._read_bounded_webhook_body(request)
+
+    assert rejected.value.status_code == 400
+    assert receive_calls() == 0
