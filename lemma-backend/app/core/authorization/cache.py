@@ -114,6 +114,8 @@ def _serialize(snapshot: RoleSnapshot) -> str:
 
 def _deserialize(payload: str) -> RoleSnapshot:
     d = json.loads(payload)
+    if not isinstance(d, dict):
+        raise ValueError("Invalid role snapshot payload")
     pod_is_deleted = d.get("pod_is_deleted", False)
     if type(pod_is_deleted) is not bool:
         raise ValueError("Invalid role snapshot pod_is_deleted flag")
