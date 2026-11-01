@@ -126,6 +126,8 @@ async def test_bump_repairs_overflow_created_by_a_concurrent_increment(monkeypat
     await redis.set(key, "9223372036854775806")
 
     class _ConcurrentFinalIncrement:
+        first_increment = True
+
         async def set(self, *args, **kwargs):
             return await redis.set(*args, **kwargs)
 
@@ -133,9 +135,10 @@ async def test_bump_repairs_overflow_created_by_a_concurrent_increment(monkeypat
             return await redis.get(*args, **kwargs)
 
         async def incr(self, target):
-            # Another worker wins the final legal increment after our GET.
-            await redis.incr(target)
-            # This call must overflow exactly as it would in real Redis.
+            if self.first_increment:
+                self.first_increment = False
+                # Another worker wins the final legal increment after our GET.
+                await redis.incr(target)
             return await redis.incr(target)
 
         async def eval(self, *args, **kwargs):
