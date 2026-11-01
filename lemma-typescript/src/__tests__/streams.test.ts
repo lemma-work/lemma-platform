@@ -87,6 +87,17 @@ describe("readSSE", () => {
     expect(events[0].data).toBe("  indented  ");
   });
 
+  it("ignores event fields containing a NUL character", async () => {
+    const input = new TextEncoder().encode(
+      "event: first\nevent: invalid\\u0000name\\ndata: ready\\n\\n",
+    );
+
+    const events = await collect(readable([input]));
+
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toBe("first");
+  });
+
   it("decodes a UTF-8 code point split across chunks", async () => {
     const input = new TextEncoder().encode("data: café\n\n");
     const splitAt = input.indexOf(0xc3) + 1;
