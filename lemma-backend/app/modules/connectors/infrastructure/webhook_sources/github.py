@@ -163,19 +163,12 @@ def _workflow_run_key(payload: WebhookPayload) -> str | None:
 
 
 def _check_suite_key(payload: WebhookPayload) -> str | None:
-    suite = payload.get("check_suite") or {}
-    action = payload.get("action")
-    status = suite.get("status")
-    updated_at = suite.get("updated_at")
-    if (
-        not suite_id
-        or not isinstance(action, str)
-        or not action
-        or not isinstance(status, str)
-        or not status
-        or not isinstance(updated_at, str)
-        or not updated_at
-    ):
+    suite = _mapping(payload.get("check_suite"))
+    suite_id = _required_id(suite.get("id"))
+    action = _required_text(payload.get("action"))
+    status = _required_text(suite.get("status"))
+    updated_at = _required_text(suite.get("updated_at"))
+    if not all((suite_id, action, status, updated_at)):
         return None
     # A GitHub App can receive requested/rerequested check_suite actions. A
     # rerequest resets status to queued on the same suite id; updated_at moves
@@ -184,7 +177,6 @@ def _check_suite_key(payload: WebhookPayload) -> str | None:
         f"{suite_id}:{action}:{status}"
         f":{suite.get('conclusion')}:{updated_at}"
     )
-
 
 def _check_run_key(payload: WebhookPayload) -> str | None:
     # Unlike a suite, a run's status is not enough on its own: `rerequested`
