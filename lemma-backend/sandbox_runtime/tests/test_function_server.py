@@ -8,6 +8,8 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
 
 from sandbox_runtime.function.runtime_models import (
     FunctionSchemaSet,
@@ -17,7 +19,11 @@ from sandbox_runtime.function.runtime_models import (
     SchemaInspection,
     TerminalReport,
 )
-from sandbox_runtime.function.server import FunctionRuntimeService, create_app
+from sandbox_runtime.function.server import (
+    FunctionRuntimeService,
+    _read_bounded_invocation_body,
+    create_app,
+)
 
 
 pytestmark = pytest.mark.asyncio
@@ -393,3 +399,117 @@ async def test_a_gateway_outside_the_allowlist_is_refused(monkeypatch) -> None:
                 json=_invocation(function_id).model_dump(mode="json"),
             )
             assert response.status_code == status, gateway
+
+
+
+def _streaming_request(chunks: list[bytes], *, headers=None):
+    calls = 0
+
+    async def receive():
+        nonlocal calls
+        index = calls
+        calls += 1
+        if index >= len(chunks):
+            return {"type": "http.disconnect"}
+        return {
+            "type": "http.request",
+            "body": chunks[index],
+            "more_body": index < len(chunks) - 1,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/functions/test/runs/test",
+            "headers": headers or [],
+        },
+        receive,
+    )
+    return request, lambda: calls
+
+
+async def test_invocation_body_limit_rejects_declared_oversize_before_reading(
+    monkeypatch,
+):
+    import sandbox_runtime.function.server as server
+
+    monkeypatch.setattr(server, "_MAX_INPUT_BYTES", 8)
+    request, receive_calls = _streaming_request(
+        [b"123456789"],
+        headers=[(b"content-length", b"9")],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await _read_bounded_invocation_body(request)
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 0
+
+
+async def test_invocation_body_limit_bounds_underreported_streams(monkeypatch):
+    import sandbox_runtime.function.server as server
+
+    monkeypatch.setattr(server, "_MAX_INPUT_BYTES", 8)
+    request, receive_calls = _streaming_request(
+        [b"12345678", b"9", b"unread"],
+        headers=[(b"content-length", b"1")],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await _read_bounded_invocation_body(request)
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 2
+
+
+async def test_invocation_body_limit_accepts_exact_boundary(monkeypatch):
+    import sandbox_runtime.function.server as server
+
+    monkeypatch.setattr(server, "_MAX_INPUT_BYTES", 8)
+    request, _ = _streaming_request([b"1234", b"5678"])
+
+    assert await _read_bounded_invocation_body(request) == b"12345678"
+
+
+async def test_invocation_body_limit_rejects_malformed_content_length():
+    request, receive_calls = _streaming_request(
+        [b"{}"],
+        headers=[(b"content-length", b"8x")],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await _read_bounded_invocation_body(request)
+
+    assert rejected.value.status_code == 400
+    assert receive_calls() == 0
+
+
+async def test_oversized_function_invocation_returns_413_without_runtime_work():
+    invoked = []
+
+    class _Runtime:
+        async def invoke(self, **kwargs):
+            invoked.append(kwargs)
+            return _report()
+
+        async def close(self):
+            return None
+
+    app = create_app(max_workers=1, max_cached_revisions=1)
+    app.state.runtime = _Runtime()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://runtime.test"
+    ) as client:
+        response = await client.post(
+            f"/functions/{uuid4()}/runs/{uuid4()}",
+            headers={
+                "Authorization": "Bearer delegated-function-token",
+                "If-Match": f'"sha256:{"a" * 64}"',
+                "X-Lemma-Gateway-Url": "https://gateway.lemma.test",
+            },
+            content=b"x" * (1024 * 1024 + 1),
+        )
+
+    assert response.status_code == 413
+    assert invoked == []
