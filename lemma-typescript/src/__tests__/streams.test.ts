@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSSEJson, readSSE } from "../streams.js";
+import { parseSSEJson, readSSE, type SseRawEvent } from "../streams.js";
 
 function readable(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -15,7 +15,7 @@ function readable(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
 
 async function collect(
   stream: ReadableStream<Uint8Array>,
-): Promise<Awaited<ReturnType<typeof Array.from<SseRawEvent[]>>>> {
+): Promise<SseRawEvent[]> {
   const events = [];
   for await (const event of readSSE(stream)) {
     events.push(event);
