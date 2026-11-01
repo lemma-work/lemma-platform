@@ -5,7 +5,14 @@ import pytest
 from app.modules.connectors.infrastructure.webhook_sources.composio import (
     _reshape as _normalize_composio_payload,
 )
-from app.modules.schedule.api.controllers.webhook_controller import router
+from fastapi import HTTPException
+from starlette.requests import Request
+
+from app.modules.schedule.api.controllers.webhook_controller import (
+    MAX_WEBHOOK_BODY_BYTES,
+    _read_bounded_body,
+    router,
+)
 
 
 def test_direct_schedule_webhook_route_is_removed():
@@ -156,3 +163,69 @@ def test_the_published_verification_is_async_so_it_can_offload() -> None:
     from app.modules.connectors.contracts.triggers import verify_webhook
 
     assert inspect.iscoroutinefunction(verify_webhook)
+
+
+def _streaming_request(chunks: list[bytes], *, headers: list[tuple[bytes, bytes]] | None = None):
+    calls = 0
+
+    async def receive():
+        nonlocal calls
+        index = calls
+        calls += 1
+        if index >= len(chunks):
+            return {"type": "http.disconnect"}
+        return {
+            "type": "http.request",
+            "body": chunks[index],
+            "more_body": index < len(chunks) - 1,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/webhooks/composio",
+            "headers": headers or [],
+        },
+        receive,
+    )
+    return request, lambda: calls
+
+
+@pytest.mark.asyncio
+async def test_webhook_body_limit_rejects_declared_oversize_before_reading():
+    request, receive_calls = _streaming_request(
+        [b"x" * (MAX_WEBHOOK_BODY_BYTES + 1)],
+        headers=[(b"content-length", str(MAX_WEBHOOK_BODY_BYTES + 1).encode())],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await _read_bounded_body(request, source="composio")
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 0
+
+
+@pytest.mark.asyncio
+async def test_webhook_body_limit_also_bounds_chunked_or_underreported_bodies():
+    request, receive_calls = _streaming_request(
+        [b"x" * MAX_WEBHOOK_BODY_BYTES, b"y", b"unread"],
+        headers=[(b"content-length", b"1")],
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await _read_bounded_body(request, source="composio")
+
+    assert rejected.value.status_code == 413
+    assert receive_calls() == 2
+
+
+@pytest.mark.asyncio
+async def test_webhook_body_limit_accepts_exact_limit():
+    payload = b"x" * MAX_WEBHOOK_BODY_BYTES
+    request, _ = _streaming_request(
+        [payload],
+        headers=[(b"content-length", str(len(payload)).encode())],
+    )
+
+    assert await _read_bounded_body(request, source="composio") == payload
