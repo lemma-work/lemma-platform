@@ -77,38 +77,42 @@ export async function* readSSE(
     return null;
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    // Keep a trailing CR until the next chunk determines whether it is CRLF.
-    buffer = buffer.replace(/\r\n/g, "\n").replace(/\r(?!$)/g, "\n");
-
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+  
+      buffer += decoder.decode(value, { stream: true });
+      // Keep a trailing CR until the next chunk determines whether it is CRLF.
+      buffer = buffer.replace(/\r\n/g, "\n").replace(/\r(?!$)/g, "\n");
+  
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+  
+      for (const line of lines) {
+        const event = processLine(line);
+        if (event) {
+          yield event;
+        }
+      }
+    }
+  
+    // Finish decoding and accept a final standalone CR as a line ending. Any
+    // remaining non-terminated line/event is intentionally discarded: SSE
+    // dispatch requires a terminating blank line.
+    buffer += decoder.decode();
+    buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const finalLines = buffer.split("\n");
+    buffer = finalLines.pop() || "";
+  
+    for (const line of finalLines) {
       const event = processLine(line);
       if (event) {
         yield event;
       }
     }
-  }
-
-  // Finish decoding and accept a final standalone CR as a line ending. Any
-  // remaining non-terminated line/event is intentionally discarded: SSE
-  // dispatch requires a terminating blank line.
-  buffer += decoder.decode();
-  buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const finalLines = buffer.split("\n");
-  buffer = finalLines.pop() || "";
-
-  for (const line of finalLines) {
-    const event = processLine(line);
-    if (event) {
-      yield event;
-    }
+  } finally {
+    reader.releaseLock();
   }
 }
 
