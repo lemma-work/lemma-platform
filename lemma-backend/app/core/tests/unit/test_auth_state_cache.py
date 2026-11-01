@@ -133,6 +133,40 @@ async def test_a_corrupt_payload_reads_as_a_miss(fake_cache: _FakeRedis) -> None
     assert await get_account_standing(user_id) is None
 
 
+@pytest.mark.parametrize("flag", ["is_active", "is_verified", "is_deleted"])
+@pytest.mark.parametrize("invalid_value", ['"false"', "0", "1", "null", "[]", "{}"])
+async def test_non_boolean_flag_is_a_cache_miss(
+    fake_cache: _FakeRedis, flag: str, invalid_value: str
+) -> None:
+    """Never coerce malformed JSON values into an authorization decision."""
+    user_id = uuid4()
+    payload = {
+        "is_active": "true",
+        "is_verified": "true",
+        "is_deleted": "false",
+    }
+    payload[flag] = invalid_value
+    fake_cache.store[str(user_id)] = (
+        '{"is_active":' + (
+            invalid_value if flag == "is_active" else '"true"'
+        ) + ',"is_verified":' + (
+            invalid_value if flag == "is_verified" else '"true"'
+        ) + ',"is_deleted":' + (
+            invalid_value if flag == "is_deleted" else '"false"'
+        ) + '}'
+    )
+
+    assert await get_account_standing(user_id) is None
+
+
+async def test_non_object_payload_is_a_cache_miss(fake_cache: _FakeRedis) -> None:
+    """A top-level JSON array must not be interpreted as standing."""
+    user_id = uuid4()
+    fake_cache.store[str(user_id)] = '["true", "true", "false"]'
+
+    assert await get_account_standing(user_id) is None
+
+
 async def test_disabled_cache_never_stores(monkeypatch: pytest.MonkeyPatch) -> None:
     """TTL 0 means the database is consulted on every request, by design."""
     monkeypatch.setattr(auth_state_cache, "_get_cache", lambda: None)
