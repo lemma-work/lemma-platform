@@ -117,3 +117,39 @@ async def test_bump_increments_a_valid_counter_without_reseeding(monkeypatch):
 
     assert await redis.get(key) == b"124"
     await redis.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bump_repairs_overflow_created_by_a_concurrent_increment(monkeypatch):
+    key = "authz:epoch:global"
+    redis = fakeredis.FakeAsyncRedis()
+    await redis.set(key, "9223372036854775806")
+
+    class _ConcurrentFinalIncrement:
+        async def set(self, *args, **kwargs):
+            return await redis.set(*args, **kwargs)
+
+        async def get(self, *args, **kwargs):
+            return await redis.get(*args, **kwargs)
+
+        async def incr(self, target):
+            # Another worker wins the final legal increment after our GET.
+            await redis.incr(target)
+            # This call must overflow exactly as it would in real Redis.
+            return await redis.incr(target)
+
+        async def eval(self, *args, **kwargs):
+            return await redis.eval(*args, **kwargs)
+
+        async def expire(self, *args, **kwargs):
+            return await redis.expire(*args, **kwargs)
+
+    monkeypatch.setattr(
+        authz_epoch, "get_redis", lambda **kwargs: _ConcurrentFinalIncrement()
+    )
+    monkeypatch.setattr(authz_epoch, "_seed", lambda: "123456789")
+
+    await authz_epoch._bump(key, None)
+
+    assert await redis.get(key) == b"123456790"
+    await redis.aclose()
