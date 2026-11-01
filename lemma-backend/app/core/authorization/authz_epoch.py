@@ -32,6 +32,7 @@ from __future__ import annotations
 import time
 from uuid import UUID
 
+from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,6 +75,33 @@ def _epoch_value(value: bytes | str | None) -> str | None:
     return value
 
 
+_REPAIR_INVALID_EPOCH = """
+local current = redis.call('GET', KEYS[1])
+if current == ARGV[1] then
+    redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
+    return 1
+end
+return 0
+"""
+
+
+async def _repair_invalid_epoch(
+    redis: Redis, key: str, observed: bytes | str | None
+) -> None:
+    """Repair only the exact value observed, never a concurrent valid bump."""
+    if observed is None:
+        await redis.set(key, _seed(), ex=_EPOCH_TTL_SECONDS, nx=True)
+        return
+    await redis.eval(
+        _REPAIR_INVALID_EPOCH,
+        1,
+        key,
+        observed,
+        _seed(),
+        _EPOCH_TTL_SECONDS,
+    )
+
+
 async def _epoch_of(keys: list[str]) -> str | None:
     redis = get_redis(url=settings.redis_url)
     try:
@@ -92,7 +120,7 @@ async def _epoch_of(keys: list[str]) -> str | None:
             # A non-decimal value cannot be advanced by Redis INCR. Replace it
             # with a fresh, time-derived epoch so old cache entries are retired
             # and subsequent permission mutations can invalidate normally.
-            await redis.set(keys[index], _seed(), ex=_EPOCH_TTL_SECONDS)
+            await _repair_invalid_epoch(redis, keys[index], values[index])
         if invalid_indexes:
             logger.warning(
                 "authorization.epoch_value_repaired.degraded",
